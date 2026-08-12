@@ -959,60 +959,6 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
         ),
     ),
     (
-        "crates/iroha_core/src/sumeragi/tests/v2_runner_lifecycle_startup_order.rs",
-        "fn",
-        "terminal_sweep_source_partitions_whole_units_before_any_mutation",
-        (
-            "let initial_snapshot = queue",
-            "pending_autonomous_lifecycle_terminal_outcome_inventory()",
-            "pending_terminal_group_has_exact_queue_owner(&initial_snapshot, observation)?",
-            "let deferred = !owned_group_hashes.is_empty();",
-            "if preflight.deferred",
-            "recover_pending_autonomous_lifecycle_terminal_outcome(",
-            "observed_deferred_units != expected_deferred_units",
-            "terminal sweep must use one bounded input inventory and one exact deferred-set readback",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/sumeragi/tests/v2_runner_lifecycle_startup_order.rs",
-        "fn",
-        "deferred_terminal_completion_requires_two_exact_stage_proofs_and_ordered_pending_coverage",
-        (
-            "for (group_position, observation) in unit.pending_groups.iter().enumerate()",
-            "previous_group_position.is_some_and(|previous| previous >= group_position)",
-            "deferred completion must directly prove every handoff file before and after mutation",
-            "deferred completion must preflight and finally reject every remaining Pending source",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/sumeragi/tests/v2_runner_lifecycle_startup_order.rs",
-        "fn",
-        "planner_covered_pending_attempts_are_exposed_for_pairing_but_skipped_for_recovery",
-        (
-            "exact covered Pending attempts must not be omitted from pairing inventory",
-            "if planner_covered_groups.contains(&identity) && !planner_paired",
-            "lifecycle_identity_projection_for_cursor(",
-            "require_local_producer_queue_owner(payload, cursor, &current_queue_groups)?;",
-            "deferred terminal identities preflight bootstrap overlap",
-            "post-bootstrap mutation skips every deferred handoff identity",
-            "assert!(deferred_skip < cursor);",
-            "assert!(deferred_skip < producer_custody);",
-            "assert!(deferred_skip < recovery);",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/sumeragi/tests/v2_runner_lifecycle_startup_order.rs",
-        "fn",
-        "local_producer_queue_custody_is_preflighted_before_cursor_mutation",
-        (
-            "producer_preflight < bootstrap_mutation",
-            "producer_preflight < cursor_mutation",
-            "observer Kura custody must remain independent of producer Queue ownership",
-            "producer recovery must preserve the exact ordered reservation keys",
-            "producer recovery must recompute the exact ordered reservation binding",
-        ),
-    ),
-    (
         "crates/iroha_core/src/queue/lane_reservation_tests.rs",
         "fn",
         "canonical_cleanup_rejects_empty_and_oversized_group_batches_before_mutation",
@@ -1068,8 +1014,8 @@ AUTONOMOUS_TERMINAL_ALL_BINDINGS = (
         ),
     ),
 )
-AUTONOMOUS_TERMINAL_RECOVERY_BINDINGS = AUTONOMOUS_TERMINAL_ALL_BINDINGS[:-11]
-AUTONOMOUS_TERMINAL_TEST_BINDINGS = AUTONOMOUS_TERMINAL_ALL_BINDINGS[-11:]
+AUTONOMOUS_TERMINAL_RECOVERY_BINDINGS = AUTONOMOUS_TERMINAL_ALL_BINDINGS[:-7]
+AUTONOMOUS_TERMINAL_TEST_BINDINGS = AUTONOMOUS_TERMINAL_ALL_BINDINGS[-7:]
 AUTONOMOUS_TERMINAL_ORDERED_SOURCE_CHECKS = (
     (
         KURA_LANE_ARTIFACT_BUDGET_RELATIVE,

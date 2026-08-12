@@ -25,6 +25,7 @@ def budget(**exceptions: int):
         test_limit=3_000,
         excluded_prefixes=("vendor/",),
         exceptions=exceptions,
+        aggregate_rust=None,
     )
 
 
@@ -76,6 +77,46 @@ def test_evaluate_requires_exact_ratcheting_baselines() -> None:
     )[0].message
 
 
+def test_evaluate_enforces_the_optional_aggregate_rust_ceiling() -> None:
+    aggregate = MODULE.AggregateRustBudget(
+        baseline=1_000,
+        ceiling=900,
+        ratchet_ceiling=950,
+        working_target=850,
+    )
+    configured = MODULE.Budget(
+        production_limit=5_000,
+        test_limit=3_000,
+        excluded_prefixes=("vendor/",),
+        exceptions={},
+        aggregate_rust=aggregate,
+    )
+    counts = {
+        "crates/a/src/lib.rs": 600,
+        "crates/b/tests/cases.rs": 301,
+        "scripts/helper.py": 10,
+    }
+    assert MODULE.evaluate(counts, configured) == []
+    finding = MODULE.evaluate(
+        {
+            "crates/a/src/lib.rs": 650,
+            "crates/b/tests/cases.rs": 301,
+            "scripts/helper.py": 10,
+        },
+        configured,
+    )
+    assert [(item.path, item.message) for item in finding] == [
+        (
+            "<aggregate Rust>",
+            "951 lines exceeds the aggregate ratchet 950",
+        )
+    ]
+    assert MODULE.evaluate(
+        {"crates/a/src/lib.rs": 599, "crates/b/tests/cases.rs": 301},
+        configured,
+    ) == []
+
+
 def test_evaluate_rejects_stale_and_missing_exceptions() -> None:
     findings = MODULE.evaluate(
         {"crates/core/src/stale.rs": 100},
@@ -118,6 +159,12 @@ def test_load_budget_validates_and_normalizes(tmp_path: Path) -> None:
                 "limits": {"production": 5_000, "test": 3_000},
                 "excluded_prefixes": ["vendor", "target/"],
                 "exceptions": {"crates/core/src/lib.rs": 6_000},
+                "aggregate_rust": {
+                    "baseline": 10_000,
+                    "ceiling": 9_000,
+                    "ratchet_ceiling": 10_250,
+                    "working_target": 8_500,
+                },
             }
         ),
         encoding="utf-8",
@@ -125,6 +172,92 @@ def test_load_budget_validates_and_normalizes(tmp_path: Path) -> None:
     parsed = MODULE.load_budget(path)
     assert parsed.excluded_prefixes == ("target/", "vendor/")
     assert parsed.exceptions == {"crates/core/src/lib.rs": 6_000}
+    assert parsed.aggregate_rust == MODULE.AggregateRustBudget(
+        baseline=10_000,
+        ceiling=9_000,
+        ratchet_ceiling=10_250,
+        working_target=8_500,
+    )
+
+
+def test_load_budget_requires_the_aggregate_rust_contract(tmp_path: Path) -> None:
+    path = tmp_path / "budget.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "limits": {"production": 5_000, "test": 3_000},
+                "excluded_prefixes": [],
+                "exceptions": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="aggregate_rust.*mandatory"):
+        MODULE.load_budget(path)
+
+
+def test_baseline_payload_preserves_aggregate_targets() -> None:
+    aggregate = MODULE.AggregateRustBudget(
+        baseline=10_000,
+        ceiling=9_000,
+        ratchet_ceiling=10_250,
+        working_target=8_500,
+    )
+    payload = MODULE.baseline_payload(
+        {"crates/core/src/lib.rs": 5_001},
+        production_limit=5_000,
+        test_limit=3_000,
+        excluded_prefixes=("vendor/",),
+        aggregate_rust=aggregate,
+    )
+    assert payload["aggregate_rust"] == {
+        "baseline": 10_000,
+        "ceiling": 9_000,
+        "ratchet_ceiling": 10_250,
+        "working_target": 8_500,
+    }
+
+
+@pytest.mark.parametrize(
+    ("aggregate", "message"),
+    [
+        (
+            {
+                "baseline": 10_000,
+                "ceiling": 9_001,
+                "ratchet_ceiling": 10_250,
+            },
+            "at least a 10% reduction",
+        ),
+        (
+            {
+                "baseline": 10_000,
+                "ceiling": 9_000,
+                "ratchet_ceiling": 8_999,
+            },
+            "ratchet_ceiling must not be below",
+        ),
+    ],
+)
+def test_load_budget_rejects_invalid_aggregate_contract(
+    tmp_path: Path, aggregate: dict[str, int], message: str
+) -> None:
+    path = tmp_path / "budget.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "limits": {"production": 5_000, "test": 3_000},
+                "excluded_prefixes": [],
+                "exceptions": {},
+                "aggregate_rust": aggregate,
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=message):
+        MODULE.load_budget(path)
 
 
 def test_source_line_count_uses_logical_lines_and_rejects_symlinks(

@@ -264,6 +264,7 @@ impl ToriiRoutedReadMemoryBudget {
     /// moves the initialized prefix, and only then releases the old layout.
     /// The old allocation during that transfer fits in the second accumulator
     /// phase because it is no larger than the newly admitted allocation.
+    #[allow(unsafe_code)]
     fn ensure_retained_vec_capacity<T>(
         &mut self,
         values: &mut Vec<T>,
@@ -379,7 +380,7 @@ impl ToriiRoutedReadMemoryBudget {
     fn canonical_json_candidate(&self, value: &Value) -> Result<Vec<u8>, Response> {
         let limit = self.canonical_remaining()?;
         norito::json::to_json_bounded_boxed(value, limit)
-            .map(Box::<[u8]>::into_vec)
+            .map(Vec::from)
             .map_err(|_| torii_routed_read_json_encode_response())
     }
 
@@ -436,6 +437,7 @@ impl ToriiRoutedReadMemoryBudget {
 /// and charging that excess after allocation is too late for a strict peak
 /// proof, so routed-read retained and merge vectors use the allocator directly
 /// after their complete byte request has been admitted.
+#[allow(unsafe_code)]
 fn torii_routed_read_exact_vec<T>(
     capacity: usize,
     label: &'static str,

@@ -1355,9 +1355,9 @@ mod tests {
         use super::*;
 
         pub fn serialize(value: &u64, output: &mut String) {
-            output.push_str("\"");
+            output.push('"');
             output.push_str(&value.to_string());
-            output.push_str("\"");
+            output.push('"');
         }
 
         pub fn serialize_bounded(

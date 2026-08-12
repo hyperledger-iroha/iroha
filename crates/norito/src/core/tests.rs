@@ -9,49 +9,39 @@ use crate::{
     NoritoDeserialize, NoritoSerialize, codec,
     codec::{encode_adaptive, encode_with_header_flags},
 };
-
 #[test]
 fn encoder_sink_paths_produce_identical_bytes() {
     let value = 0xA1B2_C3D4_E5F6_0718_u64;
-
     let mut buffered = Vec::new();
     serialize_to_buffer(&value, &mut buffered).expect("serialize through buffer sink");
-
     let mut erased = Vec::new();
     serialize_to_writer(&value, &mut erased).expect("serialize through erased writer sink");
-
     let mut byte_sink = ByteSink::with_headroom(8, 0);
     let mut encoder = Encoder::for_byte_sink(&mut byte_sink);
     value
         .serialize(&mut encoder)
         .expect("serialize through checksum sink");
     let checksummed = byte_sink.into_inner();
-
     assert_eq!(buffered, value.to_le_bytes());
     assert_eq!(erased, buffered);
     assert_eq!(checksummed, buffered);
 }
-
 #[test]
 fn encoder_erased_sink_propagates_write_errors() {
     struct FailingWriter;
-
     impl Write for FailingWriter {
         fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
             Err(std::io::Error::other("intentional encoder failure"))
         }
-
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
     }
-
     let mut writer = FailingWriter;
     let error = serialize_to_writer(&7_u8, &mut writer)
         .expect_err("the writer error must cross the encoder boundary");
     assert!(matches!(error, Error::Io(_)));
 }
-
 #[test]
 fn fixed_array_decode_builds_in_place_without_heap_staging() {
     reset_decode_state();
@@ -59,29 +49,23 @@ fn fixed_array_decode_builds_in_place_without_heap_staging() {
     let mut bytes = Vec::new();
     serialize_to_buffer(&value, &mut bytes).expect("serialize fixed array payload");
     let limits = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
-
     let (decoded, usage) = with_decode_limits_measured(limits, || {
         <[u16; 2] as DecodeFromSlice>::decode_from_slice(&bytes)
     });
-
     assert_eq!(decoded.expect("fixed array decode").0, value);
     assert_eq!(usage.total_allocated_bytes(), 0);
     reset_decode_state();
 }
-
 #[test]
 fn fixed_array_initializer_drops_completed_elements_after_an_error() {
     static DROPS: AtomicUsize = AtomicUsize::new(0);
-
     #[derive(Debug)]
     struct DropProbe;
-
     impl Drop for DropProbe {
         fn drop(&mut self) {
             DROPS.fetch_add(1, Ordering::Relaxed);
         }
     }
-
     DROPS.store(0, Ordering::Relaxed);
     let mut calls = 0;
     let error = try_decode_array::<DropProbe, 4>(|| {
@@ -93,17 +77,14 @@ fn fixed_array_initializer_drops_completed_elements_after_an_error() {
         }
     })
     .expect_err("third element must fail");
-
     assert!(matches!(error, Error::LengthMismatch));
     assert_eq!(DROPS.load(Ordering::Relaxed), 2);
 }
-
 #[test]
 fn owned_pointer_decoders_charge_their_wrapper_allocations() {
     fn limits_below(bytes: usize) -> DecodeLimits {
         DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes - 1, usize::MAX)
     }
-
     reset_decode_state();
     // Use an alignment-one payload so this regression isolates the owned
     // wrapper allocation rather than also charging a field realignment copy.
@@ -119,7 +100,6 @@ fn owned_pointer_decoders_charge_their_wrapper_allocations() {
         Error::TotalAllocationExceeded { attempted, limit }
             if attempted == box_bytes as u64 && limit == (box_bytes - 1) as u64
     ));
-
     bytes.clear();
     serialize_to_buffer(&Rc::new(7_u8), &mut bytes).expect("serialize Rc");
     let rc_bytes = owned_rc_allocation_bytes::<u8>().expect("Rc layout must fit");
@@ -135,7 +115,6 @@ fn owned_pointer_decoders_charge_their_wrapper_allocations() {
         ),
         "unexpected Rc allocation error: {error:?}; wrapper bytes: {rc_bytes}"
     );
-
     bytes.clear();
     serialize_to_buffer(&Arc::new(7_u8), &mut bytes).expect("serialize Arc");
     let arc_bytes = owned_arc_allocation_bytes::<u8>().expect("Arc layout must fit");
@@ -150,7 +129,6 @@ fn owned_pointer_decoders_charge_their_wrapper_allocations() {
     ));
     reset_decode_state();
 }
-
 #[test]
 fn owned_value_decode_depth_guard_is_bounded_and_restores() {
     let guards = (0..MAX_OWNED_VALUE_DECODE_DEPTH)
@@ -164,11 +142,9 @@ fn owned_value_decode_depth_guard_is_bounded_and_restores() {
             context: "owned Norito value",
         }) if depth == MAX_OWNED_VALUE_DECODE_DEPTH + 1
     ));
-
     drop(guards);
     OwnedValueDecodeDepthGuard::enter().expect("failed guard must restore decode depth");
 }
-
 #[test]
 fn crc64_matches_digest() {
     let data = b"123456789";
@@ -176,7 +152,6 @@ fn crc64_matches_digest() {
     digest.write(data);
     assert_eq!(crc64(data), digest.sum64());
 }
-
 #[test]
 fn packed_offsets_are_bounded_by_the_supplied_payload() {
     let mut valid = Vec::new();
@@ -184,14 +159,12 @@ fn packed_offsets_are_bounded_by_the_supplied_payload() {
         valid.extend_from_slice(&offset.to_le_bytes());
     }
     valid.extend_from_slice(&[0xAA, 0xBB, 0xCC]);
-
     let (offsets, header_len, data_len, tail_len) =
         decode_packed_offsets_slice(&valid, 2).expect("bounded offsets");
     assert_eq!(offsets, [0, 1, 3]);
     assert_eq!(header_len, 24);
     assert_eq!(data_len, 3);
     assert_eq!(tail_len, 0);
-
     let mut out_of_bounds = valid;
     out_of_bounds[16..24].copy_from_slice(&4_u64.to_le_bytes());
     assert!(matches!(
@@ -199,7 +172,6 @@ fn packed_offsets_are_bounded_by_the_supplied_payload() {
         Err(Error::LengthMismatch)
     ));
 }
-
 #[test]
 fn copy_from_payload_allows_zero_len() {
     let mut out = 0u8;
@@ -207,7 +179,6 @@ fn copy_from_payload_allows_zero_len() {
     let res = unsafe { copy_from_payload(ptr, &mut out as *mut u8, 0) };
     assert!(res.is_ok());
 }
-
 #[cfg(feature = "compression")]
 #[test]
 fn payload_stream_reads_zstd_payload() {
@@ -222,7 +193,6 @@ fn payload_stream_reads_zstd_payload() {
     Read::read_to_end(&mut stream, &mut decoded).expect("read zstd payload");
     assert_eq!(decoded, payload);
 }
-
 #[test]
 fn decode_field_canonical_reports_scalar_consumed() {
     reset_decode_state();
@@ -232,19 +202,16 @@ fn decode_field_canonical_reports_scalar_consumed() {
     assert_eq!(value, 0xDEADBEEF);
     assert_eq!(used, buf.len());
 }
-
 #[test]
 fn decode_field_canonical_rejects_trailing_bytes() {
     reset_decode_state();
     let mut bytes = Vec::new();
     serialize_to_buffer(&7_u32, &mut bytes).expect("encode scalar");
     bytes.push(0xFF);
-
     let error = decode_field_canonical::<u32>(&bytes)
         .expect_err("canonical field decode must consume the complete payload");
     assert!(matches!(error, Error::LengthMismatch));
 }
-
 #[test]
 fn decode_field_prefix_allows_trailing_bytes_and_reports_consumption() {
     reset_decode_state();
@@ -253,19 +220,16 @@ fn decode_field_prefix_allows_trailing_bytes_and_reports_consumption() {
     serialize_to_buffer(&expected, &mut encoded).expect("encode string");
     let encoded_len = encoded.len();
     encoded.extend_from_slice(&[0xAA, 0xBB]);
-
     let (decoded, used) = decode_field_prefix::<String>(&encoded).expect("decode string prefix");
     assert_eq!(decoded, expected);
     assert_eq!(used, encoded_len);
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
 struct PrefixRecord {
     label: String,
     count: u32,
 }
-
 #[test]
 fn decode_field_prefix_allows_trailing_bytes_after_a_struct() {
     reset_decode_state();
@@ -276,10 +240,8 @@ fn decode_field_prefix_allows_trailing_bytes_after_a_struct() {
     let mut encoded = encode_adaptive(&expected);
     let encoded_len = encoded.len();
     encoded.extend_from_slice(&[0xAA, 0xBB]);
-
     let (decoded, used) =
         decode_field_prefix::<PrefixRecord>(&encoded).expect("decode struct prefix");
-
     assert_eq!(decoded, expected);
     assert_eq!(used, encoded_len);
     assert!(matches!(
@@ -287,7 +249,6 @@ fn decode_field_prefix_allows_trailing_bytes_after_a_struct() {
         Err(Error::LengthMismatch)
     ));
 }
-
 #[test]
 fn isolated_frame_decode_resets_and_restores_the_prefix_boundary() {
     reset_decode_state();
@@ -303,7 +264,6 @@ fn isolated_frame_decode_resets_and_restores_the_prefix_boundary() {
     payload.push(0xAA);
     let frame = frame_bare_with_header_flags::<PrefixRecord>(&payload, flags)
         .expect("frame struct payload with a nonzero tail");
-
     let _prefix_boundary = FieldDecodeBoundaryGuard::enter(FieldDecodeBoundary::Prefix);
     assert!(matches!(
         decode_from_bytes::<PrefixRecord>(&frame),
@@ -311,7 +271,6 @@ fn isolated_frame_decode_resets_and_restores_the_prefix_boundary() {
     ));
     assert!(FIELD_DECODE_BOUNDARY.with(|slot| slot.get() == FieldDecodeBoundary::Prefix));
 }
-
 #[test]
 fn slice_frame_decode_rejects_a_nonzero_logical_tail() {
     reset_decode_state();
@@ -327,65 +286,53 @@ fn slice_frame_decode_rejects_a_nonzero_logical_tail() {
     );
     let frame = frame_bare_with_header_flags::<PrefixRecord>(&payload, flags)
         .expect("frame short struct payload with a nonzero tail");
-
     assert!(matches!(
         decode_from_bytes::<PrefixRecord>(&frame),
         Err(Error::LengthMismatch)
     ));
 }
-
 static FIELD_SLOT_DROPS: AtomicUsize = AtomicUsize::new(0);
-
 #[derive(Debug)]
 struct DropAfterLengthMismatch;
-
 impl Drop for DropAfterLengthMismatch {
     fn drop(&mut self) {
         FIELD_SLOT_DROPS.fetch_add(1, Ordering::Relaxed);
     }
 }
-
 impl NoritoSerialize for DropAfterLengthMismatch {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&[0])?;
         Ok(())
     }
 }
-
 impl<'de> NoritoDeserialize<'de> for DropAfterLengthMismatch {
     fn deserialize(_archived: &'de Archived<Self>) -> Self {
         Self
     }
 }
-
 #[test]
 fn erased_field_slot_drops_value_after_consumption_error() {
     FIELD_SLOT_DROPS.store(0, Ordering::Relaxed);
-
     let error = decode_field_canonical::<DropAfterLengthMismatch>(&[0, 1])
         .expect_err("recomputed canonical length must reject trailing data");
     assert!(matches!(error, Error::LengthMismatch));
     assert_eq!(FIELD_SLOT_DROPS.load(Ordering::Relaxed), 1);
 }
-
 #[cfg(feature = "strict-safe")]
 #[test]
 fn erased_field_decoder_preserves_panic_type_name() {
     #[derive(Debug)]
     struct PanicDuringFieldDecode;
-
     impl NoritoSerialize for PanicDuringFieldDecode {
         fn serialize(&self, _encoder: &mut Encoder<'_>) -> Result<(), Error> {
             Ok(())
         }
     }
-
     impl<'de> NoritoDeserialize<'de> for PanicDuringFieldDecode {
         fn deserialize(_archived: &'de Archived<Self>) -> Self {
             panic!("intentional field decode panic")
         }
     }
-
     let error = decode_field_canonical::<PanicDuringFieldDecode>(&[0])
         .expect_err("strict-safe field decode must suppress the panic");
     assert!(matches!(
@@ -394,14 +341,12 @@ fn erased_field_decoder_preserves_panic_type_name() {
             if context == core::any::type_name::<PanicDuringFieldDecode>()
     ));
 }
-
 #[test]
 fn decode_archived_field_owns_realigns_and_installs_payload_context() {
     reset_decode_state();
     let expected = String::from("shared archived field helper");
     let mut encoded = Vec::new();
     serialize_to_buffer(&expected, &mut encoded).expect("encode string");
-
     let mut storage = Vec::with_capacity(encoded.len() + 1);
     storage.push(0xAA);
     storage.extend_from_slice(&encoded);
@@ -411,19 +356,15 @@ fn decode_archived_field_owns_realigns_and_installs_payload_context() {
         0,
         "test payload must exercise the realignment path"
     );
-
     let decoded = decode_archived_field::<String>(misaligned).expect("decode archived field copy");
     assert_eq!(decoded, expected);
 }
-
 #[test]
 fn decode_archived_field_uses_one_charged_overaligned_copy() {
     static DECODED_ADDRESS: AtomicUsize = AtomicUsize::new(0);
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[repr(C, align(64))]
     struct OveralignedField([u8; 64]);
-
     impl<'de> NoritoDeserialize<'de> for OveralignedField {
         fn deserialize(archived: &'de Archived<Self>) -> Self {
             DECODED_ADDRESS.store(
@@ -440,21 +381,18 @@ fn decode_archived_field_uses_one_charged_overaligned_copy() {
             Self(field)
         }
     }
-
     assert_eq!(archived_payload_size::<OveralignedField>(), 64);
     let bytes = [0xA5_u8; 64];
     let limits = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes.len(), usize::MAX);
     let decoded = with_decode_limits(limits, || decode_archived_field::<OveralignedField>(&bytes))
         .expect("one exactly budgeted aligned copy should decode");
     let decoded_address = DECODED_ADDRESS.load(Ordering::Relaxed);
-
     assert_eq!(decoded, OveralignedField(bytes));
     assert_ne!(decoded_address, bytes.as_ptr() as usize);
     assert_eq!(
         decoded_address % archived_payload_align::<OveralignedField>(),
         0
     );
-
     DECODED_ADDRESS.store(0, Ordering::Relaxed);
     let limits = DecodeLimits::new(
         usize::MAX,
@@ -476,38 +414,31 @@ fn decode_archived_field_uses_one_charged_overaligned_copy() {
         "budget rejection must happen before deserialization"
     );
 }
-
 #[test]
 fn decode_archived_field_preserves_deserializer_errors() {
     #[derive(Debug)]
     struct Rejected;
-
     impl<'de> NoritoDeserialize<'de> for Rejected {
         fn deserialize(_archived: &'de Archived<Self>) -> Self {
             unreachable!("the fallible implementation is used by the helper")
         }
-
         fn try_deserialize(_archived: &'de Archived<Self>) -> Result<Self, Error> {
             Err(Error::LengthMismatch)
         }
     }
-
     let error = decode_archived_field::<Rejected>(&[0])
         .expect_err("fallible archived decoder must reject the payload");
     assert!(matches!(error, Error::LengthMismatch));
 }
-
 #[test]
 fn decode_archived_field_contains_deserializer_panics() {
     #[derive(Debug)]
     struct PanicDuringArchivedFieldDecode;
-
     impl<'de> NoritoDeserialize<'de> for PanicDuringArchivedFieldDecode {
         fn deserialize(_archived: &'de Archived<Self>) -> Self {
             panic!("intentional archived-field panic")
         }
     }
-
     let error = decode_archived_field::<PanicDuringArchivedFieldDecode>(&[])
         .expect_err("strict-safe archived-field decoding must contain panics");
     assert!(matches!(
@@ -516,7 +447,6 @@ fn decode_archived_field_contains_deserializer_panics() {
             if context == core::any::type_name::<PanicDuringArchivedFieldDecode>()
     ));
 }
-
 #[test]
 fn decode_vec_from_slice_serial_reports_prefix_used() {
     reset_decode_state();
@@ -524,15 +454,12 @@ fn decode_vec_from_slice_serial_reports_prefix_used() {
     let bytes = encode_adaptive(&value);
     let mut with_tail = bytes.clone();
     with_tail.extend_from_slice(&[0xAA, 0xBB]);
-
     let (decoded, used) =
         decode_vec_from_slice_serial::<u16>(&with_tail).expect("decode sequence prefix");
-
     assert_eq!(decoded, value);
     assert_eq!(used, bytes.len());
     reset_decode_state();
 }
-
 #[cfg(feature = "parallel-decode")]
 #[test]
 fn sequence_parallel_decode_threshold_requires_large_plans() {
@@ -542,26 +469,22 @@ fn sequence_parallel_decode_threshold_requires_large_plans() {
         used: PARALLEL_DECODE_MIN_BYTES,
     };
     assert!(should_decode_sequence_parallel(&large_plan));
-
     let small_bytes = SequencePlan {
         used: PARALLEL_DECODE_MIN_BYTES - 1,
         ..large_plan.clone()
     };
     assert!(!should_decode_sequence_parallel(&small_bytes));
-
     let small_count = SequencePlan {
         spans: vec![SequenceSpan { start: 0, end: 8 }; PARALLEL_DECODE_MIN_ELEMENTS - 1],
         used: PARALLEL_DECODE_MIN_BYTES,
     };
     assert!(!should_decode_sequence_parallel(&small_count));
 }
-
 #[test]
 fn decode_field_canonical_propagates_access_to_parent_ctx() {
     reset_decode_state();
     let mut buf = Vec::new();
     serialize_to_buffer(&0xAABBCCDDu32, &mut buf).unwrap();
-
     let _outer = PayloadCtxGuard::enter(&buf);
     let (value, used) = decode_field_canonical::<u32>(&buf).expect("scalar decode");
     assert_eq!(value, 0xAABBCCDD);
@@ -572,13 +495,11 @@ fn decode_field_canonical_propagates_access_to_parent_ctx() {
         "outer payload ctx must observe canonical consumption"
     );
 }
-
 #[test]
 fn decode_field_canonical_propagates_access_from_misaligned_copy() {
     reset_decode_state();
     let mut buf = Vec::new();
     serialize_to_buffer(&0xDEADBEEFu32, &mut buf).unwrap();
-
     let mut storage = Vec::with_capacity(buf.len() + 1);
     storage.push(0xAA);
     storage.extend_from_slice(&buf);
@@ -588,7 +509,6 @@ fn decode_field_canonical_propagates_access_from_misaligned_copy() {
         0,
         "expected misaligned scalar payload"
     );
-
     let _outer = PayloadCtxGuard::enter(misaligned);
     let (value, used) =
         decode_field_canonical::<u32>(misaligned).expect("decode misaligned scalar");
@@ -600,20 +520,16 @@ fn decode_field_canonical_propagates_access_from_misaligned_copy() {
         "outer payload ctx must observe canonical consumption from misaligned decode"
     );
 }
-
 static PANIC_ON_SERIALIZE: AtomicBool = AtomicBool::new(false);
-
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct CanonicalStruct {
     a: u32,
     b: Vec<u64>,
     c: Option<Vec<u8>>,
 }
-
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CanonicalStructNoRecompute(CanonicalStruct);
-
 impl NoritoSerialize for CanonicalStructNoRecompute {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         if PANIC_ON_SERIALIZE.load(Ordering::Relaxed) {
@@ -621,59 +537,48 @@ impl NoritoSerialize for CanonicalStructNoRecompute {
         }
         self.0.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for CanonicalStructNoRecompute {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("CanonicalStructNoRecompute decode")
     }
-
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
         let value = CanonicalStruct::try_deserialize(archived.cast::<CanonicalStruct>())?;
         Ok(Self(value))
     }
 }
-
 #[test]
 fn decode_field_canonical_does_not_recompute_for_derived_struct() {
     PANIC_ON_SERIALIZE.store(false, Ordering::Relaxed);
     reset_decode_state();
-
     let value = CanonicalStructNoRecompute(CanonicalStruct {
         a: 0xAABBCCDD,
         b: vec![1, 2, 3, 4, 5],
         c: Some(vec![9, 8, 7]),
     });
     let encoded = encode_adaptive(&value);
-
     PANIC_ON_SERIALIZE.store(true, Ordering::Relaxed);
     let (decoded, used) =
         decode_field_canonical::<CanonicalStructNoRecompute>(&encoded).expect("decode struct");
     assert_eq!(used, encoded.len());
     assert_eq!(decoded, value);
-
     PANIC_ON_SERIALIZE.store(false, Ordering::Relaxed);
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum CanonicalEnum {
     Unit,
     One(u32),
     Many { a: u32, b: Vec<u8> },
 }
-
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CanonicalEnumNoRecompute(CanonicalEnum);
-
 impl NoritoSerialize for CanonicalEnumNoRecompute {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         if PANIC_ON_SERIALIZE.load(Ordering::Relaxed) {
@@ -681,52 +586,42 @@ impl NoritoSerialize for CanonicalEnumNoRecompute {
         }
         self.0.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for CanonicalEnumNoRecompute {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("CanonicalEnumNoRecompute decode")
     }
-
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
         let value = CanonicalEnum::try_deserialize(archived.cast::<CanonicalEnum>())?;
         Ok(Self(value))
     }
 }
-
 #[test]
 fn decode_field_canonical_does_not_recompute_for_derived_enum() {
     PANIC_ON_SERIALIZE.store(false, Ordering::Relaxed);
     reset_decode_state();
-
     let value = CanonicalEnumNoRecompute(CanonicalEnum::Many {
         a: 0x01020304,
         b: vec![0xAA, 0xBB, 0xCC],
     });
     let encoded = encode_adaptive(&value);
-
     PANIC_ON_SERIALIZE.store(true, Ordering::Relaxed);
     let (decoded, used) =
         decode_field_canonical::<CanonicalEnumNoRecompute>(&encoded).expect("decode enum");
     assert_eq!(used, encoded.len());
     assert_eq!(decoded, value);
-
     PANIC_ON_SERIALIZE.store(false, Ordering::Relaxed);
 }
-
 #[test]
 fn decode_field_canonical_handles_misaligned_payload() {
     let value: Vec<Vec<u64>> = vec![vec![1, 2, 3], vec![], vec![4, 5]];
     let encoded = encode_adaptive(&value);
-
     let mut storage = Vec::with_capacity(encoded.len() + 1);
     storage.push(0xAA);
     storage.extend_from_slice(&encoded);
@@ -736,13 +631,11 @@ fn decode_field_canonical_handles_misaligned_payload() {
         0,
         "expected misaligned test payload"
     );
-
     let (decoded, used) =
         decode_field_canonical::<Vec<Vec<u64>>>(misaligned).expect("decode misaligned field");
     assert_eq!(decoded, value);
     assert_eq!(used, encoded.len());
 }
-
 #[test]
 fn context_field_helpers_decode_framed_fields_and_require_full_consumption() {
     reset_decode_state();
@@ -752,13 +645,11 @@ fn context_field_helpers_decode_framed_fields_and_require_full_consumption() {
     let mut second_bytes = Vec::new();
     serialize_to_buffer(&first, &mut first_bytes).expect("encode first");
     serialize_to_buffer(&second, &mut second_bytes).expect("encode second");
-
     let mut payload = Vec::new();
     write_len(&mut payload, first_bytes.len() as u64).expect("frame first");
     payload.extend_from_slice(&first_bytes);
     write_len(&mut payload, second_bytes.len() as u64).expect("frame second");
     payload.extend_from_slice(&second_bytes);
-
     let _guard = PayloadCtxGuard::enter(&payload);
     let mut offset = 0;
     assert_eq!(
@@ -775,14 +666,12 @@ fn context_field_helpers_decode_framed_fields_and_require_full_consumption() {
         Err(Error::LengthMismatch)
     ));
 }
-
 #[test]
 fn context_field_helpers_bound_declared_lengths_before_decoding() {
     reset_decode_state();
     let mut payload = Vec::new();
     write_len(&mut payload, 1024).expect("write oversized field length");
     payload.push(0xAA);
-
     let _guard = PayloadCtxGuard::enter(&payload);
     let mut offset = 0;
     assert!(matches!(
@@ -791,7 +680,6 @@ fn context_field_helpers_bound_declared_lengths_before_decoding() {
     ));
     assert_eq!(offset, 0, "a rejected frame must not consume input");
     drop(_guard);
-
     let mut malformed = Vec::new();
     write_len(&mut malformed, 1).expect("write short field length");
     malformed.push(0xAA);
@@ -805,7 +693,6 @@ fn context_field_helpers_bound_declared_lengths_before_decoding() {
         "a framed value that fails typed decoding must not consume input"
     );
 }
-
 #[test]
 fn context_field_prefix_and_fixed_array_helpers_advance_exactly() {
     reset_decode_state();
@@ -815,7 +702,6 @@ fn context_field_prefix_and_fixed_array_helpers_advance_exactly() {
     serialize_to_buffer(&first, &mut payload).expect("encode first string");
     serialize_to_buffer(&second, &mut payload).expect("encode second string");
     payload.extend_from_slice(&[1, 2, 3, 4]);
-
     let _guard = PayloadCtxGuard::enter(&payload);
     let mut offset = 0;
     assert_eq!(
@@ -834,7 +720,6 @@ fn context_field_prefix_and_fixed_array_helpers_advance_exactly() {
     );
     finish_context_fields(payload.as_ptr(), offset).expect("consume payload");
 }
-
 #[test]
 fn note_payload_access_updates_max_access() {
     reset_decode_state();
@@ -843,7 +728,6 @@ fn note_payload_access_updates_max_access() {
     note_payload_access(&payload, payload.len());
     assert_eq!(payload_ctx_max_access().unwrap(), payload.len());
 }
-
 #[test]
 fn decode_field_canonical_from_slice_reads_value() {
     let mut buf = Vec::new();
@@ -852,7 +736,6 @@ fn decode_field_canonical_from_slice_reads_value() {
     assert_eq!(value, 0xAABBCCDD);
     assert_eq!(used, buf.len());
 }
-
 #[test]
 fn decode_field_canonical_slice_reads_value() {
     let mut buf = Vec::new();
@@ -861,7 +744,6 @@ fn decode_field_canonical_slice_reads_value() {
     assert_eq!(value, 0xDEADBEEF);
     assert_eq!(used, buf.len());
 }
-
 #[test]
 fn decode_field_canonical_from_slice_rejects_trailing_bytes() {
     let mut buf = Vec::new();
@@ -870,7 +752,6 @@ fn decode_field_canonical_from_slice_rejects_trailing_bytes() {
     let err = decode_field_canonical_from_slice::<u32>(&buf).expect_err("trailing bytes");
     assert!(matches!(err, Error::LengthMismatch));
 }
-
 #[test]
 fn to_bytes_in_matches_to_bytes() {
     let value: Vec<u64> = vec![1, 2, 3, 4];
@@ -878,12 +759,10 @@ fn to_bytes_in_matches_to_bytes() {
     to_bytes_in(&value, &mut out).expect("encode to buffer");
     let expected = to_bytes(&value).expect("encode expected");
     assert_eq!(out, expected);
-
     let cap = out.capacity();
     to_bytes_in(&value, &mut out).expect("encode to buffer again");
     assert!(out.capacity() >= cap);
 }
-
 #[test]
 fn byte_sink_with_headroom_from_preserves_capacity() {
     let mut buf = Vec::with_capacity(2048);
@@ -893,25 +772,20 @@ fn byte_sink_with_headroom_from_preserves_capacity() {
     assert_eq!(sink.buf.len(), Header::SIZE);
     assert!(sink.buf.capacity() >= cap);
 }
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct BadExactLen(u32);
-
 impl crate::NoritoSerialize for BadExactLen {
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
         crate::NoritoSerialize::serialize(&self.0, encoder)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         Some(1)
     }
 }
-
 impl<'de> crate::NoritoDeserialize<'de> for BadExactLen {
     fn deserialize(archived: &'de Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("BadExactLen decode must succeed")
     }
-
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let payload = payload_slice_from_ptr(ptr)?;
@@ -919,19 +793,15 @@ impl<'de> crate::NoritoDeserialize<'de> for BadExactLen {
         Ok(BadExactLen(value))
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for BadExactLen {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (value, used) = decode_field_canonical::<u32>(bytes)?;
         Ok((BadExactLen(value), used))
     }
 }
-
 const HOSTILE_GROWTH_CHUNK_BYTES: usize = 4 * 1024;
 const HOSTILE_GROWTH_WRITES: usize = 256;
-
 struct HostileGrowingSecondPass(std::cell::Cell<usize>);
-
 impl NoritoSerialize for HostileGrowingSecondPass {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let pass = self.0.get();
@@ -945,9 +815,7 @@ impl NoritoSerialize for HostileGrowingSecondPass {
         Ok(())
     }
 }
-
 struct HostileBadExactLen;
-
 impl NoritoSerialize for HostileBadExactLen {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&[0x11])?;
@@ -956,12 +824,10 @@ impl NoritoSerialize for HostileBadExactLen {
         }
         Ok(())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         Some(1)
     }
 }
-
 #[test]
 fn decode_field_canonical_ignores_bad_encoded_len_exact() {
     let value = BadExactLen(0xAABBCCDD);
@@ -971,7 +837,6 @@ fn decode_field_canonical_ignores_bad_encoded_len_exact() {
     assert_eq!(decoded, value);
     assert_eq!(used, encoded.len());
 }
-
 #[test]
 fn encoded_frame_len_ignores_bad_encoded_len_exact() {
     let value = BadExactLen(0xAABBCCDD);
@@ -980,7 +845,6 @@ fn encoded_frame_len_ignores_bad_encoded_len_exact() {
         to_bytes(&value).expect("encode canonical frame").len()
     );
 }
-
 #[test]
 fn encoded_payload_len_ignores_bad_encoded_len_exact() {
     let value = BadExactLen(0xAABBCCDD);
@@ -989,7 +853,6 @@ fn encoded_payload_len_ignores_bad_encoded_len_exact() {
         core::mem::size_of::<u32>()
     );
 }
-
 #[test]
 fn bounded_frame_matches_canonical_bytes_at_exact_limit() {
     let value = vec![1_u64, 2, 3, 5, 8, 13];
@@ -999,13 +862,11 @@ fn bounded_frame_matches_canonical_bytes_at_exact_limit() {
     assert_eq!(bounded, canonical);
     assert_eq!(bounded.capacity(), bounded.len());
 }
-
 #[test]
 fn bounded_frame_rejects_one_byte_below_real_count_before_second_pass() {
     use std::cell::Cell;
 
     struct CountCalls(Cell<usize>);
-
     impl NoritoSerialize for CountCalls {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             self.0.set(self.0.get() + 1);
@@ -1013,7 +874,6 @@ fn bounded_frame_rejects_one_byte_below_real_count_before_second_pass() {
             Ok(())
         }
     }
-
     let value = CountCalls(Cell::new(0));
     let exact = Header::SIZE + payload_alignment_padding_for::<CountCalls>() + 1;
     assert!(matches!(
@@ -1029,13 +889,11 @@ fn bounded_frame_rejects_one_byte_below_real_count_before_second_pass() {
         "oversized frames must not run an output pass"
     );
 }
-
 #[test]
 fn bounded_frame_rejects_second_pass_growth_past_counted_capacity() {
     use std::cell::Cell;
 
     struct GrowingSecondPass(Cell<usize>);
-
     impl NoritoSerialize for GrowingSecondPass {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let pass = self.0.get();
@@ -1044,7 +902,6 @@ fn bounded_frame_rejects_second_pass_growth_past_counted_capacity() {
             Ok(())
         }
     }
-
     let value = GrowingSecondPass(Cell::new(0));
     let exact = Header::SIZE + payload_alignment_padding_for::<GrowingSecondPass>() + 1;
     assert!(matches!(
@@ -1053,13 +910,11 @@ fn bounded_frame_rejects_second_pass_growth_past_counted_capacity() {
     ));
     assert_eq!(value.0.get(), 2);
 }
-
 #[test]
 fn bounded_frame_rejects_second_pass_shrinkage() {
     use std::cell::Cell;
 
     struct ShrinkingSecondPass(Cell<usize>);
-
     impl NoritoSerialize for ShrinkingSecondPass {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let pass = self.0.get();
@@ -1068,7 +923,6 @@ fn bounded_frame_rejects_second_pass_shrinkage() {
             Ok(())
         }
     }
-
     let value = ShrinkingSecondPass(Cell::new(0));
     let exact = Header::SIZE + payload_alignment_padding_for::<ShrinkingSecondPass>() + 2;
     assert!(matches!(
@@ -1077,7 +931,6 @@ fn bounded_frame_rejects_second_pass_shrinkage() {
     ));
     assert_eq!(value.0.get(), 2);
 }
-
 #[test]
 fn write_len_prefixed_uses_actual_length() {
     let value = BadExactLen(0xDEADBEEF);
@@ -1088,18 +941,15 @@ fn write_len_prefixed_uses_actual_length() {
     let (len, hdr) = read_len_from_slice(&out).expect("read len");
     assert_eq!(len, out.len() - hdr);
 }
-
 #[test]
 fn write_len_prefixed_does_not_materialize_an_unhinted_field() {
     struct UnhintedField(Vec<u8>);
-
     impl NoritoSerialize for UnhintedField {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             writer.write_all(&self.0)?;
             Ok(())
         }
     }
-
     let value = UnhintedField(vec![0x5a; DERIVE_SMALLBUF_SIZE * 4]);
     let mut out = Vec::new();
     let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
@@ -1113,7 +963,6 @@ fn write_len_prefixed_does_not_materialize_an_unhinted_field() {
         "count-first direct serialization must not retain a field-sized spill buffer"
     );
 }
-
 #[test]
 fn write_len_prefixed_rejects_a_changed_second_pass() {
     let value = HostileGrowingSecondPass(std::cell::Cell::new(0));
@@ -1132,13 +981,11 @@ fn write_len_prefixed_rejects_a_changed_second_pass() {
     assert_eq!(&out[header_bytes..], &[0x11]);
     assert_eq!(out.capacity(), initial_capacity);
 }
-
 #[test]
 fn serialize_to_writer_exact_rejects_growth_before_forwarding_it() {
     let value = HostileGrowingSecondPass(std::cell::Cell::new(0));
     let expected = encoded_payload_len(&value).expect("count hostile payload");
     assert_eq!(expected, 1);
-
     let mut out = Vec::with_capacity(8);
     let initial_capacity = out.capacity();
     assert!(matches!(
@@ -1149,7 +996,6 @@ fn serialize_to_writer_exact_rejects_growth_before_forwarding_it() {
     assert_eq!(out, [0x11]);
     assert_eq!(out.capacity(), initial_capacity);
 }
-
 #[test]
 fn write_len_prefixed_exact_caps_an_incorrect_exact_implementation() {
     let mut out = Vec::with_capacity(32);
@@ -1166,7 +1012,6 @@ fn write_len_prefixed_exact_caps_an_incorrect_exact_implementation() {
     assert_eq!(&out[header_bytes..], &[0x11]);
     assert_eq!(out.capacity(), initial_capacity);
 }
-
 #[test]
 fn write_len_prefixed_exact_matches_buffered_output() {
     let value = vec![1u64, 2, 3, 5, 8, 13];
@@ -1179,17 +1024,14 @@ fn write_len_prefixed_exact_matches_buffered_output() {
     write_len_prefixed_exact(&mut exact_encoder, &value, &mut tmp).expect("write exact");
     assert_eq!(exact, buffered);
 }
-
 #[derive(Clone, Debug, PartialEq, crate::Encode, crate::Decode)]
 struct BadExactWrapper {
     inner: BadExactLen,
 }
-
 #[derive(Clone, Debug, PartialEq, crate::Encode, crate::Decode)]
 enum BadExactEnum {
     One(BadExactLen),
 }
-
 #[test]
 fn derived_struct_rejects_incorrect_exact_field_length() {
     let value = BadExactWrapper {
@@ -1197,20 +1039,17 @@ fn derived_struct_rejects_incorrect_exact_field_length() {
     };
     assert!(matches!(to_bytes(&value), Err(Error::LengthMismatch)));
 }
-
 #[test]
 fn derived_enum_rejects_incorrect_exact_field_length() {
     let value = BadExactEnum::One(BadExactLen(0x11223344));
     assert!(matches!(to_bytes(&value), Err(Error::LengthMismatch)));
 }
-
 #[test]
 fn truncated_derived_enum_tag_is_a_length_error() {
     let error = decode_archived_field::<BadExactEnum>(&[])
         .expect_err("an enum archive without its four-byte tag must be rejected");
     assert!(matches!(error, Error::LengthMismatch));
 }
-
 #[test]
 fn truncated_derived_struct_bitset_is_a_length_error() {
     #[derive(Clone, Debug, PartialEq, Eq, crate::Encode, crate::Decode)]
@@ -1218,7 +1057,6 @@ fn truncated_derived_struct_bitset_is_a_length_error() {
         code: u8,
         digest: [u8; 32],
     }
-
     let flags =
         header_flags::PACKED_STRUCT | header_flags::FIELD_BITSET | header_flags::COMPACT_LEN;
     let _flags = DecodeFlagsGuard::enter(flags);
@@ -1226,7 +1064,6 @@ fn truncated_derived_struct_bitset_is_a_length_error() {
         .expect_err("a packed struct archive without its bitset must be rejected");
     assert!(matches!(error, Error::LengthMismatch));
 }
-
 #[test]
 fn result_uses_actual_length_prefix() {
     let value: Result<BadExactLen, BadExactLen> = Ok(BadExactLen(0x01020304));
@@ -1235,29 +1072,23 @@ fn result_uses_actual_length_prefix() {
         codec::decode_adaptive(&bytes).expect("decode result");
     assert_eq!(decoded, value);
 }
-
 #[derive(Clone, Copy)]
 struct RootAware(u32);
-
 impl crate::NoritoSerialize for RootAware {
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
         crate::NoritoSerialize::serialize(&self.0, encoder)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         crate::NoritoSerialize::encoded_len_hint(&self.0)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         crate::NoritoSerialize::encoded_len_exact(&self.0)
     }
 }
-
 impl<'de> crate::NoritoDeserialize<'de> for RootAware {
     fn deserialize(archived: &'de Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("RootAware decode must succeed")
     }
-
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let payload = payload_slice_from_ptr(ptr)?;
@@ -1265,7 +1096,6 @@ impl<'de> crate::NoritoDeserialize<'de> for RootAware {
         Ok(RootAware(value))
     }
 }
-
 #[test]
 fn decode_field_canonical_installs_root_span() {
     let (payload, flags) = encode_with_header_flags(&RootAware(99));
@@ -1274,26 +1104,21 @@ fn decode_field_canonical_installs_root_span() {
     assert_eq!(used, payload.len());
     assert_eq!(decoded.0, 99);
 }
-
 #[test]
 fn archived_from_slice_rejects_truncated_payload() {
     let bytes = [0_u8; core::mem::size_of::<u128>() - 1];
-
     let error = match archived_from_slice::<u128>(&bytes) {
         Ok(_) => panic!("undersized archived payload must be rejected"),
         Err(error) => error,
     };
-
     assert!(matches!(error, Error::LengthMismatch));
 }
-
 #[test]
 fn archived_cast_is_an_opaque_address_marker_and_cannot_bypass_bounds() {
     assert_eq!(core::mem::size_of::<Archived<u8>>(), 0);
     assert_eq!(core::mem::size_of::<Archived<[u8; 4096]>>(), 0);
     assert_eq!(core::mem::align_of::<Archived<u8>>(), 1);
     assert_eq!(core::mem::align_of::<Archived<[u128; 8]>>(), 1);
-
     let payload = [0xA5_u8];
     let archived = archived_from_slice::<u8>(&payload).expect("one-byte archive");
     let retagged = archived.cast::<u64>();
@@ -1301,17 +1126,14 @@ fn archived_cast_is_an_opaque_address_marker_and_cannot_bypass_bounds() {
         core::ptr::from_ref(archived.archived()).cast::<u8>(),
         core::ptr::from_ref(retagged).cast::<u8>()
     );
-
     let missing =
         <u64 as NoritoDeserialize>::try_deserialize(retagged).expect_err("context is required");
     assert!(matches!(missing, Error::MissingPayloadContext));
-
     let _payload = PayloadCtxGuard::enter(archived.bytes());
     let bounded = <u64 as NoritoDeserialize>::try_deserialize(retagged)
         .expect_err("a cast cannot enlarge the active payload");
     assert!(matches!(bounded, Error::LengthMismatch));
     drop(_payload);
-
     let empty = archived_from_slice::<()>(&[]).expect("empty archive marker");
     let option = empty.cast::<Option<u64>>();
     let missing = <Option<u64> as NoritoDeserialize>::try_deserialize(option)
@@ -1322,7 +1144,6 @@ fn archived_cast_is_an_opaque_address_marker_and_cannot_bypass_bounds() {
         .expect_err("an opaque empty marker cannot provide an option tag");
     assert!(matches!(bounded, Error::LengthMismatch));
 }
-
 #[test]
 fn archived_from_slice_propagates_realign_allocation_limit() {
     let align = archived_payload_align::<u128>();
@@ -1334,12 +1155,10 @@ fn archived_from_slice_propagates_realign_allocation_limit() {
     let end = offset + core::mem::size_of::<u128>();
     let misaligned = &storage[offset..end];
     let limits = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
-
     let error = with_decode_limits(limits, || {
         archived_from_slice::<u128>(misaligned).map(|_| ())
     })
     .expect_err("realignment must honor the active allocation limit");
-
     assert!(matches!(
         error,
         Error::TotalAllocationExceeded {
@@ -1348,7 +1167,6 @@ fn archived_from_slice_propagates_realign_allocation_limit() {
         } if attempted == core::mem::size_of::<u128>() as u64
     ));
 }
-
 #[test]
 fn archived_from_slice_realigns_payload() {
     #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize)]
@@ -1356,13 +1174,11 @@ fn archived_from_slice_realigns_payload() {
     struct AlignSensitive {
         data: Vec<u128>,
     }
-
     reset_decode_state();
     let value = AlignSensitive {
         data: vec![11_u128, 22, 33, 44],
     };
     let (payload, flags) = encode_with_header_flags(&value);
-
     let mut storage = Vec::with_capacity(payload.len() + 1);
     storage.push(0u8);
     storage.extend_from_slice(&payload);
@@ -1377,7 +1193,6 @@ fn archived_from_slice_realigns_payload() {
         0,
         "expected misaligned payload for test coverage"
     );
-
     let archived =
         archived_from_slice::<AlignSensitive>(misaligned).expect("realign archived payload");
     let _flags = DecodeFlagsGuard::enter_with_hint(flags, flags);
@@ -1387,20 +1202,17 @@ fn archived_from_slice_realigns_payload() {
     assert_eq!(decoded, value);
     reset_decode_state();
 }
-
 #[test]
 fn decode_vec_recovers_from_zero_length_element_header() {
     let original: Vec<(String, Vec<u8>)> = vec![("kind".to_owned(), vec![1, 2, 3, 4])];
     let framed = to_bytes(&original).expect("serialize vec");
     let flags = framed[Header::SIZE - 1];
     let mut payload = framed[Header::SIZE..].to_vec();
-
     let (len, seq_hdr) = {
         let _guard = DecodeFlagsGuard::enter(flags);
         read_seq_len_slice(&payload).expect("sequence header")
     };
     assert_eq!(len, original.len());
-
     let elem_hdr_len = {
         let _guard = DecodeFlagsGuard::enter(flags);
         let (_, hdr) = read_len_dyn_slice(&payload[seq_hdr..]).expect("element length header");
@@ -1413,7 +1225,6 @@ fn decode_vec_recovers_from_zero_length_element_header() {
     for byte in &mut payload[seq_hdr..seq_hdr + elem_hdr_len] {
         *byte = 0;
     }
-
     let decoded = {
         let _guard = DecodeFlagsGuard::enter(flags);
         let (value, used) =
@@ -1424,7 +1235,6 @@ fn decode_vec_recovers_from_zero_length_element_header() {
     reset_decode_state();
     assert_eq!(decoded, original);
 }
-
 #[test]
 fn payload_slice_from_ptr_cannot_escape_the_active_field() {
     reset_decode_state();
@@ -1433,18 +1243,15 @@ fn payload_slice_from_ptr_cannot_escape_the_active_field() {
     let ctx = &payload[8..24];
     let guard = PayloadCtxGuard::enter(ctx);
     let ptr = payload[48..].as_ptr();
-
     assert!(matches!(
         payload_slice_from_ptr(ptr),
         Err(Error::LengthMismatch)
     ));
     assert_eq!(payload_ctx_max_access().unwrap(), 0);
-
     drop(guard);
     clear_decode_root();
     reset_decode_state();
 }
-
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 #[norito(decode_from_slice)]
@@ -1455,7 +1262,6 @@ struct PackedProof {
     issued_at: String,
     nonce: String,
 }
-
 #[test]
 fn option_roundtrip_respects_compact_flags() {
     reset_decode_state();
@@ -1486,7 +1292,6 @@ fn option_roundtrip_respects_compact_flags() {
     };
     assert_eq!(decoded, payload);
 }
-
 #[test]
 fn payload_without_padding_preserves_aligned_slice() {
     let payload = vec![0xAA, 0xBB, 0xCC, 0xDD];
@@ -1494,7 +1299,6 @@ fn payload_without_padding_preserves_aligned_slice() {
         payload_without_leading_padding(payload.as_slice(), payload.len(), 0).expect("aligned");
     assert_eq!(view, payload.as_slice());
 }
-
 #[test]
 fn payload_without_padding_trims_alignment_prefix() {
     let padded = vec![0, 0, 0, 1, 2, 3, 4];
@@ -1502,7 +1306,6 @@ fn payload_without_padding_trims_alignment_prefix() {
         payload_without_leading_padding(&padded, 4, 3).expect("padding trimmed successfully");
     assert_eq!(view, &padded[3..]);
 }
-
 #[test]
 fn payload_without_padding_rejects_nonzero_prefix() {
     let padded = vec![1, 0, 0, 1, 2, 3, 4];
@@ -1510,7 +1313,6 @@ fn payload_without_padding_rejects_nonzero_prefix() {
         .expect_err("nonzero padding should be rejected");
     assert!(matches!(err, Error::LengthMismatch));
 }
-
 #[test]
 fn payload_without_padding_exact_accepts_expected_padding() {
     let padded = vec![0, 0, 0xAA, 0xBB];
@@ -1518,7 +1320,6 @@ fn payload_without_padding_exact_accepts_expected_padding() {
         payload_without_leading_padding_exact(&padded, 2, 2).expect("exact padding should trim");
     assert_eq!(view, &padded[2..]);
 }
-
 #[test]
 fn payload_without_padding_exact_rejects_nonzero_padding() {
     let padded = vec![1, 0, 0xAA, 0xBB];
@@ -1526,14 +1327,12 @@ fn payload_without_padding_exact_rejects_nonzero_padding() {
         .expect_err("nonzero padding should be rejected");
     assert!(matches!(err, Error::LengthMismatch));
 }
-
 #[test]
 fn payload_without_padding_rejects_short_slice() {
     let data = vec![1, 2];
     let err = payload_without_leading_padding(&data, 3, 0).expect_err("length mismatch");
     matches!(err, Error::LengthMismatch);
 }
-
 #[test]
 fn payload_without_padding_rejects_excess_prefix() {
     let payload = vec![9u8, 8, 7, 6];
@@ -1541,12 +1340,10 @@ fn payload_without_padding_rejects_excess_prefix() {
     let mut with_prefix = Vec::new();
     with_prefix.extend_from_slice(&padded);
     with_prefix.extend_from_slice(&payload);
-
     let err = payload_without_leading_padding(&with_prefix, payload.len(), 4)
         .expect_err("excess padding should be rejected");
     assert!(matches!(err, Error::LengthMismatch));
 }
-
 #[test]
 fn from_bytes_rejects_excess_padding() {
     let value: u64 = 0x1122_3344_5566_7788;
@@ -1556,11 +1353,9 @@ fn from_bytes_rejects_excess_padding() {
     mutated.extend_from_slice(&bytes[..insert_at]);
     mutated.extend_from_slice(&[0u8; 2]); // extra padding beyond alignment
     mutated.extend_from_slice(&bytes[insert_at..]);
-
     let result = from_bytes::<u64>(&mutated);
     assert!(matches!(result, Err(Error::LengthMismatch)));
 }
-
 #[test]
 fn decode_from_bytes_rejects_excess_padding() {
     let value: u64 = 0x1122_3344_5566_7788;
@@ -1570,28 +1365,23 @@ fn decode_from_bytes_rejects_excess_padding() {
     mutated.extend_from_slice(&bytes[..insert_at]);
     mutated.extend_from_slice(&[0u8; 2]); // extra padding beyond alignment
     mutated.extend_from_slice(&bytes[insert_at..]);
-
     let result = crate::decode_from_bytes::<u64>(&mutated);
     assert!(matches!(result, Err(Error::LengthMismatch)));
 }
-
 #[test]
 fn from_bytes_rejects_trailing_bytes() {
     let value: u64 = 0xCAFEBABE_DEADBEEF;
     let mut bytes = to_bytes(&value).expect("encode header-framed payload");
     bytes.push(0);
-
     let result = from_bytes::<u64>(&bytes);
     assert!(matches!(result, Err(Error::LengthMismatch)));
 }
-
 #[test]
 fn from_bytes_rejects_invalid_flag_combo() {
     reset_decode_state();
     let value: u64 = 0xABCD_EF01_2345_6789;
     let mut bytes = to_bytes(&value).expect("encode header-framed payload");
     bytes[Header::SIZE - 1] = header_flags::FIELD_BITSET;
-
     let result = from_bytes::<u64>(&bytes);
     assert!(matches!(
         result,
@@ -1599,17 +1389,14 @@ fn from_bytes_rejects_invalid_flag_combo() {
     ));
     reset_decode_state();
 }
-
 #[test]
 fn from_compressed_bytes_rejects_trailing_bytes() {
     let value: u64 = 0x1111_2222_3333_4444;
     let mut bytes = to_bytes(&value).expect("encode header-framed payload");
     bytes.push(0);
-
     let result = from_compressed_bytes::<u64>(&bytes);
     assert!(matches!(result, Err(Error::LengthMismatch)));
 }
-
 #[cfg(feature = "compression")]
 #[test]
 fn from_compressed_bytes_rejects_trailing_compressed_bytes() {
@@ -1617,11 +1404,9 @@ fn from_compressed_bytes_rejects_trailing_compressed_bytes() {
     let mut bytes =
         to_compressed_bytes(&value, Some(CompressionConfig::default())).expect("encode");
     bytes.extend_from_slice(&[0xAA, 0xBB]);
-
     let result = from_compressed_bytes::<Vec<u8>>(&bytes);
     assert!(matches!(result, Err(Error::LengthMismatch)));
 }
-
 #[test]
 fn from_compressed_bytes_accepts_aligned_padding() {
     let value: u64 = 0xDEAD_BEEF_DEAD_BEEFu64;
@@ -1630,7 +1415,6 @@ fn from_compressed_bytes_accepts_aligned_padding() {
     let decoded = u64::deserialize(&archived);
     assert_eq!(decoded, value);
 }
-
 #[cfg(feature = "compression")]
 #[test]
 fn from_compressed_bytes_rejects_length_mismatch() {
@@ -1643,15 +1427,12 @@ fn from_compressed_bytes_rejects_length_mismatch() {
     let len = u64::from_le_bytes(len_bytes);
     let new_len = len.saturating_sub(1);
     bytes[len_offset..len_offset + 8].copy_from_slice(&new_len.to_le_bytes());
-
     let result = from_compressed_bytes::<Vec<u8>>(&bytes);
     assert!(matches!(result, Err(Error::LengthMismatch)));
 }
-
 #[allow(dead_code)]
 #[repr(align(64))]
 struct Align64(u8);
-
 #[test]
 fn archived_box_aligns_payload() {
     let archived = ArchivedBox::<Align64>::from_payload(vec![0xAA]);
@@ -1659,7 +1440,6 @@ fn archived_box_aligns_payload() {
     assert_eq!(ptr % archived_payload_align::<Align64>(), 0);
     assert_eq!(archived.bytes(), &[0xAA]);
 }
-
 #[test]
 fn frame_bare_with_default_header_prefers_recorded_flags() {
     reset_decode_state();
@@ -1672,7 +1452,6 @@ fn frame_bare_with_default_header_prefers_recorded_flags() {
     let stored = take_last_header_flags().expect("recorded flags should be present");
     assert_eq!(stored, expected);
     record_last_header_flags(stored);
-
     let framed =
         frame_bare_with_default_header::<Vec<u32>>(&bare).expect("frame payload with header");
     assert_eq!(framed[Header::SIZE - 1], expected,);
@@ -1684,7 +1463,6 @@ fn frame_bare_with_default_header_prefers_recorded_flags() {
         expected,
     );
 }
-
 #[test]
 fn write_bare_frame_with_header_flags_matches_vec_framer() {
     reset_decode_state();
@@ -1695,10 +1473,8 @@ fn write_bare_frame_with_header_flags_matches_vec_framer() {
     let mut actual = Vec::new();
     write_bare_frame_with_header_flags::<Vec<u32>, _>(&mut actual, &bare, flags)
         .expect("frame payload into writer");
-
     assert_eq!(actual, expected);
 }
-
 #[test]
 fn frame_current_payload_preserves_active_flags() {
     reset_decode_state();
@@ -1707,7 +1483,6 @@ fn frame_current_payload_preserves_active_flags() {
     let original_flags = bytes[Header::SIZE - 1];
     let archived = from_bytes::<Vec<u64>>(&bytes).expect("decode header-framed payload");
     let _ = archived;
-
     let reframed =
         frame_current_payload_with_default_header::<Vec<u64>>().expect("reframe current payload");
     let mut cursor = std::io::Cursor::new(&reframed);
@@ -1715,7 +1490,6 @@ fn frame_current_payload_preserves_active_flags() {
     assert_eq!(header.flags, original_flags);
     reset_decode_state();
 }
-
 #[test]
 fn frame_bare_with_default_header_requires_layout_metadata() {
     reset_decode_state();
@@ -1725,7 +1499,6 @@ fn frame_bare_with_default_header_requires_layout_metadata() {
         .expect_err("missing flags should surface an error");
     matches!(err, Error::MissingLayoutFlags);
 }
-
 #[test]
 fn frame_current_payload_requires_negotiated_flags() {
     reset_decode_state();
@@ -1735,7 +1508,6 @@ fn frame_current_payload_requires_negotiated_flags() {
         .expect_err("payload context without flags should fail");
     matches!(err, Error::MissingLayoutFlags);
 }
-
 #[test]
 fn encode_with_header_flags_exposes_recorded_layout() {
     reset_decode_state();
@@ -1747,7 +1519,6 @@ fn encode_with_header_flags_exposes_recorded_layout() {
     let header = Header::read(&mut cursor).expect("read header");
     assert_eq!(header.flags, flags);
 }
-
 #[test]
 fn encode_with_header_flags_respects_decode_guard() {
     reset_decode_state();
@@ -1757,7 +1528,6 @@ fn encode_with_header_flags_respects_decode_guard() {
     assert_ne!(flags & header_flags::PACKED_SEQ, 0);
     reset_decode_state();
 }
-
 #[test]
 fn read_len_readers_honor_compact_flags() {
     let flags = header_flags::COMPACT_LEN;
@@ -1772,14 +1542,12 @@ fn read_len_readers_honor_compact_flags() {
         let (len_slice, hdr_slice) = read_len_dyn_slice(&bytes).expect("slice length header");
         assert_eq!(len_slice, 3);
         assert_eq!(hdr_slice, 1, "varint header should consume one byte");
-
         let _payload_guard = PayloadCtxGuard::enter(&bytes);
         let (len_ptr, hdr_ptr) =
             read_len_dyn_at_ptr(bytes.as_ptr()).expect("pointer length header");
         assert_eq!(len_ptr, 3);
         assert_eq!(hdr_ptr, 1);
     }
-
     // Sequence headers are fixed-width in v1.
     let mut seq_fixed = Vec::new();
     seq_fixed.extend_from_slice(&3u64.to_le_bytes());
@@ -1798,7 +1566,6 @@ fn read_len_readers_honor_compact_flags() {
         assert_eq!(seq_hdr_ptr, 8);
     }
 }
-
 #[test]
 fn decode_flags_guard_clears_hint_between_payloads() {
     if (default_encode_flags() & header_flags::PACKED_SEQ) == 0 {
@@ -1815,12 +1582,10 @@ fn decode_flags_guard_clears_hint_between_payloads() {
         assert!(use_packed_seq());
         assert!(use_compact_len());
     }
-
     assert!(!decode_flags_active());
     assert_eq!(get_decode_flags(), 0);
     assert!(!use_packed_seq());
     assert!(!use_compact_len());
-
     {
         let _neutral = DecodeFlagsGuard::enter(0);
         assert!(decode_flags_active());
@@ -1828,10 +1593,8 @@ fn decode_flags_guard_clears_hint_between_payloads() {
         assert!(!use_packed_seq());
         assert!(!use_compact_len());
     }
-
     reset_decode_state();
 }
-
 #[test]
 fn decode_flags_guard_overrides_active_payload_context() {
     reset_decode_state();
@@ -1848,13 +1611,11 @@ fn decode_flags_guard_overrides_active_payload_context() {
     }
     reset_decode_state();
 }
-
 #[derive(Debug, PartialEq, iroha_schema::IntoSchema, NoritoSerialize, NoritoDeserialize)]
 struct StringAndNumber {
     first: String,
     second: u64,
 }
-
 #[test]
 fn canonical_string_field_preserves_following_values() {
     let input = StringAndNumber {
@@ -1866,7 +1627,6 @@ fn canonical_string_field_preserves_following_values() {
     let decoded = StringAndNumber::deserialize(archived);
     assert_eq!(decoded, input);
 }
-
 #[test]
 fn archive_marker_accepts_short_valid_variable_payload() {
     let input = String::from("ok");
@@ -1875,7 +1635,6 @@ fn archive_marker_accepts_short_valid_variable_payload() {
     let decoded = String::try_deserialize(archived).expect("decode bounded short string payload");
     assert_eq!(decoded, input);
 }
-
 #[test]
 fn archive_marker_defers_fixed_payload_bounds_to_fallible_decode() {
     let bytes = frame_bare_with_header_flags::<u64>(&[0_u8; 7], 0)
@@ -1887,7 +1646,6 @@ fn archive_marker_defers_fixed_payload_bounds_to_fallible_decode() {
         Err(Error::LengthMismatch)
     ));
 }
-
 #[test]
 fn primitive_roundtrip() {
     let value: u32 = 42;
@@ -1895,7 +1653,6 @@ fn primitive_roundtrip() {
     let decoded: u32 = decode_from_bytes(&bytes).unwrap();
     assert_eq!(value, decoded);
 }
-
 #[test]
 fn signed_primitive_roundtrip() {
     let value: i64 = -42;
@@ -1903,7 +1660,6 @@ fn signed_primitive_roundtrip() {
     let decoded: i64 = decode_from_bytes(&bytes).unwrap();
     assert_eq!(value, decoded);
 }
-
 #[test]
 fn btreemap_entry_slices_returns_expected_windows() {
     let keys = [1u8, 2, 3, 4];
@@ -1913,7 +1669,6 @@ fn btreemap_entry_slices_returns_expected_windows() {
     assert_eq!(key_slice, &[2, 3]);
     assert_eq!(value_slice, &[10, 11]);
 }
-
 #[test]
 fn btreemap_entry_slices_detects_out_of_bounds() {
     let keys = [1u8, 2];
@@ -1922,7 +1677,6 @@ fn btreemap_entry_slices_detects_out_of_bounds() {
         .expect_err("slice bounds check");
     assert!(matches!(err, Error::LengthMismatch));
 }
-
 #[test]
 fn packed_maps_keep_key_then_value_payload_layout() {
     fn read_u64_at(bytes: &[u8], offset: usize) -> u64 {
@@ -1930,13 +1684,11 @@ fn packed_maps_keep_key_then_value_payload_layout() {
         buf.copy_from_slice(&bytes[offset..offset + 8]);
         u64::from_le_bytes(buf)
     }
-
     reset_decode_state();
     let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
     let mut tree = std::collections::BTreeMap::new();
     tree.insert(0x0102_u16, 0x0304_0506_u32);
     tree.insert(0x0708_u16, 0x090A_0B0C_u32);
-
     let mut bytes = Vec::new();
     serialize_to_buffer(&tree, &mut bytes).expect("serialize packed map");
     assert_eq!(read_u64_at(&bytes, 0), 2);
@@ -1952,13 +1704,11 @@ fn packed_maps_keep_key_then_value_payload_layout() {
             0x02, 0x01, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x0C, 0x0B, 0x0A, 0x09
         ]
     );
-
     let (decoded_tree, used) =
         <std::collections::BTreeMap<u16, u32> as DecodeFromSlice>::decode_from_slice(&bytes)
             .expect("decode packed btree map");
     assert_eq!(used, bytes.len());
     assert_eq!(decoded_tree, tree);
-
     let mut hash = std::collections::HashMap::new();
     hash.insert(0x0708_u16, 0x090A_0B0C_u32);
     hash.insert(0x0102_u16, 0x0304_0506_u32);
@@ -1972,7 +1722,6 @@ fn packed_maps_keep_key_then_value_payload_layout() {
     assert_eq!(decoded_hash, hash);
     reset_decode_state();
 }
-
 #[test]
 fn collection_decoders_handle_u8_element_sequences_directly() {
     use std::collections::{BTreeSet, BinaryHeap, HashSet, LinkedList, VecDeque};
@@ -1989,7 +1738,6 @@ fn collection_decoders_handle_u8_element_sequences_directly() {
         .expect("decode vecdeque");
     assert_eq!(used, deque_bytes.len());
     assert_eq!(decoded_deque, deque);
-
     let list = LinkedList::from([4_u8, 5, 6]);
     let mut list_bytes = Vec::new();
     serialize_to_buffer(&list, &mut list_bytes).expect("serialize linked list");
@@ -1997,7 +1745,6 @@ fn collection_decoders_handle_u8_element_sequences_directly() {
         .expect("decode linked list");
     assert_eq!(used, list_bytes.len());
     assert_eq!(decoded_list, list);
-
     let heap = BinaryHeap::from([7_u8, 8, 9]);
     let mut heap_bytes = Vec::new();
     serialize_to_buffer(&heap, &mut heap_bytes).expect("serialize heap");
@@ -2005,7 +1752,6 @@ fn collection_decoders_handle_u8_element_sequences_directly() {
         <BinaryHeap<u8> as DecodeFromSlice>::decode_from_slice(&heap_bytes).expect("decode heap");
     assert_eq!(used, heap_bytes.len());
     assert_eq!(decoded_heap.into_sorted_vec(), heap.into_sorted_vec());
-
     let btree = BTreeSet::from([10_u8, 11, 12]);
     let mut btree_bytes = Vec::new();
     serialize_to_buffer(&btree, &mut btree_bytes).expect("serialize btree set");
@@ -2013,7 +1759,6 @@ fn collection_decoders_handle_u8_element_sequences_directly() {
         .expect("decode btree set");
     assert_eq!(used, btree_bytes.len());
     assert_eq!(decoded_btree, btree);
-
     let hash = HashSet::from([13_u8, 14, 15]);
     let mut hash_bytes = Vec::new();
     serialize_to_buffer(&hash, &mut hash_bytes).expect("serialize hash set");
@@ -2023,20 +1768,17 @@ fn collection_decoders_handle_u8_element_sequences_directly() {
     assert_eq!(decoded_hash, hash);
     reset_decode_state();
 }
-
 #[test]
 fn collection_and_map_encoded_lengths_match_payloads() {
     use std::collections::{
         BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque,
     };
-
     fn assert_lengths<T: NoritoSerialize>(value: &T) {
         let mut bytes = Vec::new();
         serialize_to_buffer(value, &mut bytes).expect("serialize value");
         assert_eq!(value.encoded_len_hint(), Some(bytes.len()));
         assert_eq!(value.encoded_len_exact(), Some(bytes.len()));
     }
-
     reset_decode_state();
     assert_lengths(&VecDeque::from([1_u16, 2, 3]));
     assert_lengths(&LinkedList::from([4_u16, 5, 6]));
@@ -2045,7 +1787,6 @@ fn collection_and_map_encoded_lengths_match_payloads() {
     assert_lengths(&HashSet::from([13_u16, 14, 15]));
     assert_lengths(&BTreeMap::from([(1_u16, 2_u32), (3, 4)]));
     assert_lengths(&HashMap::from([(5_u16, 6_u32), (7, 8)]));
-
     let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
     assert_lengths(&VecDeque::from([1_u16, 2, 3]));
     assert_lengths(&LinkedList::from([4_u16, 5, 6]));
@@ -2056,127 +1797,107 @@ fn collection_and_map_encoded_lengths_match_payloads() {
     assert_lengths(&HashMap::from([(5_u16, 6_u32), (7, 8)]));
     reset_decode_state();
 }
-
 #[test]
 fn array_and_tuple_serialization_use_compact_element_lengths() {
     let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
-
     let array = [5_u8, 7];
     let mut array_bytes = Vec::new();
     serialize_to_buffer(&array, &mut array_bytes).expect("serialize array");
     assert_eq!(array_bytes, [1, 5, 1, 7]);
     assert_eq!(array.encoded_len_hint(), Some(array_bytes.len()));
     assert_eq!(array.encoded_len_exact(), Some(array_bytes.len()));
-
     let mut tuple_bytes = Vec::new();
     let tuple = (5_u8, 7_u8);
     serialize_to_buffer(&tuple, &mut tuple_bytes).expect("serialize tuple");
     assert_eq!(tuple_bytes, [1, 5, 1, 7]);
     assert_eq!(tuple.encoded_len_hint(), Some(tuple_bytes.len()));
     assert_eq!(tuple.encoded_len_exact(), Some(tuple_bytes.len()));
-
     reset_decode_state();
 }
-
 #[test]
 fn string_and_result_lengths_match_compact_payloads() {
     use std::{borrow::Cow, rc::Rc, sync::Arc};
 
     let _guard = DecodeFlagsGuard::enter(header_flags::COMPACT_LEN);
-
     let value = String::from("ok");
     let mut string_bytes = Vec::new();
     serialize_to_buffer(&value, &mut string_bytes).expect("serialize string");
     assert_eq!(string_bytes, [2, b'o', b'k']);
     assert_eq!(value.encoded_len_hint(), Some(string_bytes.len()));
     assert_eq!(value.encoded_len_exact(), Some(string_bytes.len()));
-
     let borrowed = "ok";
     let mut borrowed_bytes = Vec::new();
     serialize_to_buffer(&borrowed, &mut borrowed_bytes).expect("serialize &str");
     assert_eq!(borrowed_bytes, string_bytes);
     assert_eq!(borrowed.encoded_len_hint(), Some(borrowed_bytes.len()));
     assert_eq!(borrowed.encoded_len_exact(), Some(borrowed_bytes.len()));
-
     let cow: Cow<'_, str> = Cow::Borrowed("ok");
     let mut cow_bytes = Vec::new();
     serialize_to_buffer(&cow, &mut cow_bytes).expect("serialize cow str");
     assert_eq!(cow_bytes, string_bytes);
     assert_eq!(cow.encoded_len_hint(), Some(cow_bytes.len()));
     assert_eq!(cow.encoded_len_exact(), Some(cow_bytes.len()));
-
     let boxed_str = String::from("ok").into_boxed_str();
     let mut boxed_str_bytes = Vec::new();
     serialize_to_buffer(&boxed_str, &mut boxed_str_bytes).expect("serialize box str");
     assert_eq!(boxed_str_bytes, string_bytes);
     assert_eq!(boxed_str.encoded_len_hint(), Some(boxed_str_bytes.len()));
     assert_eq!(boxed_str.encoded_len_exact(), Some(boxed_str_bytes.len()));
-
     let boxed = Box::new(String::from("ok"));
     let mut boxed_bytes = Vec::new();
     serialize_to_buffer(&boxed, &mut boxed_bytes).expect("serialize boxed string");
     assert_eq!(boxed_bytes, [3, 2, b'o', b'k']);
     assert_eq!(boxed.encoded_len_hint(), Some(boxed_bytes.len()));
     assert_eq!(boxed.encoded_len_exact(), Some(boxed_bytes.len()));
-
     let rc = Rc::new(String::from("ok"));
     let mut rc_bytes = Vec::new();
     serialize_to_buffer(&rc, &mut rc_bytes).expect("serialize rc string");
     assert_eq!(rc_bytes, boxed_bytes);
     assert_eq!(rc.encoded_len_hint(), Some(rc_bytes.len()));
     assert_eq!(rc.encoded_len_exact(), Some(rc_bytes.len()));
-
     let arc = Arc::new(String::from("ok"));
     let mut arc_bytes = Vec::new();
     serialize_to_buffer(&arc, &mut arc_bytes).expect("serialize arc string");
     assert_eq!(arc_bytes, boxed_bytes);
     assert_eq!(arc.encoded_len_hint(), Some(arc_bytes.len()));
     assert_eq!(arc.encoded_len_exact(), Some(arc_bytes.len()));
-
     let some = Some(String::from("ok"));
     let mut some_bytes = Vec::new();
     serialize_to_buffer(&some, &mut some_bytes).expect("serialize option some");
     assert_eq!(some_bytes, [1, 3, 2, b'o', b'k']);
     assert_eq!(some.encoded_len_hint(), Some(some_bytes.len()));
     assert_eq!(some.encoded_len_exact(), Some(some_bytes.len()));
-
     let none: Option<String> = None;
     let mut none_bytes = Vec::new();
     serialize_to_buffer(&none, &mut none_bytes).expect("serialize option none");
     assert_eq!(none_bytes, [0]);
     assert_eq!(none.encoded_len_hint(), Some(none_bytes.len()));
     assert_eq!(none.encoded_len_exact(), Some(none_bytes.len()));
-
     let ok: Result<String, String> = Ok(value);
     let mut ok_bytes = Vec::new();
     serialize_to_buffer(&ok, &mut ok_bytes).expect("serialize result ok");
     assert_eq!(ok_bytes, [0, 3, 2, b'o', b'k']);
     assert_eq!(ok.encoded_len_hint(), Some(ok_bytes.len()));
     assert_eq!(ok.encoded_len_exact(), Some(ok_bytes.len()));
-
     let err: Result<String, String> = Err(String::from("no"));
     let mut err_bytes = Vec::new();
     serialize_to_buffer(&err, &mut err_bytes).expect("serialize result err");
     assert_eq!(err_bytes, [1, 3, 2, b'n', b'o']);
     assert_eq!(err.encoded_len_hint(), Some(err_bytes.len()));
     assert_eq!(err.encoded_len_exact(), Some(err_bytes.len()));
-
     reset_decode_state();
 }
-
 #[test]
 fn float_roundtrip() {
     let f32_val: f32 = 3.5;
     let bytes = to_bytes(&f32_val).unwrap();
     let decoded: f32 = decode_from_bytes(&bytes).unwrap();
     assert_eq!(f32_val, decoded);
-
     let f64_val: f64 = -2.25;
     let bytes = to_bytes(&f64_val).unwrap();
     let decoded: f64 = decode_from_bytes(&bytes).unwrap();
     assert_eq!(f64_val, decoded);
 }
-
 #[test]
 fn string_roundtrip() {
     let value = String::from("norito");
@@ -2184,7 +1905,6 @@ fn string_roundtrip() {
     let decoded: String = decode_from_bytes(&bytes).unwrap();
     assert_eq!(value, decoded);
 }
-
 #[test]
 fn box_roundtrip() {
     let value: Box<u32> = Box::new(41);
@@ -2192,14 +1912,12 @@ fn box_roundtrip() {
     let archived = from_bytes::<Box<u32>>(&bytes).unwrap();
     let decoded = <Box<u32> as NoritoDeserialize>::deserialize(archived);
     assert_eq!(value, decoded);
-
     let str_box: Box<String> = Box::new("boxed".into());
     let bytes = to_bytes(&str_box).unwrap();
     let archived = from_bytes::<Box<String>>(&bytes).unwrap();
     let decoded = <Box<String> as NoritoDeserialize>::deserialize(archived);
     assert_eq!(str_box, decoded);
 }
-
 #[test]
 fn rc_roundtrip() {
     let value: Rc<u32> = Rc::new(7);
@@ -2207,14 +1925,12 @@ fn rc_roundtrip() {
     let archived = from_bytes::<Rc<u32>>(&bytes).unwrap();
     let decoded = <Rc<u32> as NoritoDeserialize>::deserialize(archived);
     assert_eq!(value, decoded);
-
     let str_rc: Rc<String> = Rc::new(String::from("shared"));
     let bytes = to_bytes(&str_rc).unwrap();
     let archived = from_bytes::<Rc<String>>(&bytes).unwrap();
     let decoded = <Rc<String> as NoritoDeserialize>::deserialize(archived);
     assert_eq!(str_rc, decoded);
 }
-
 #[test]
 fn arc_roundtrip() {
     let value: Arc<u32> = Arc::new(99);
@@ -2222,37 +1938,31 @@ fn arc_roundtrip() {
     let archived = from_bytes::<Arc<u32>>(&bytes).unwrap();
     let decoded = <Arc<u32> as NoritoDeserialize>::deserialize(archived);
     assert_eq!(value, decoded);
-
     let str_arc: Arc<String> = Arc::new(String::from("threads"));
     let bytes = to_bytes(&str_arc).unwrap();
     let archived = from_bytes::<Arc<String>>(&bytes).unwrap();
     let decoded = <Arc<String> as NoritoDeserialize>::deserialize(archived);
     assert_eq!(str_arc, decoded);
 }
-
 #[test]
 fn option_roundtrip() {
     let value = Some(5u32);
     let bytes = to_bytes(&value).unwrap();
     let decoded: Option<u32> = decode_from_bytes(&bytes).unwrap();
     assert_eq!(value, decoded);
-
     let none: Option<u32> = None;
     let bytes = to_bytes(&none).unwrap();
     let decoded: Option<u32> = decode_from_bytes(&bytes).unwrap();
     assert_eq!(none, decoded);
-
     let str_some: Option<String> = Some("abc".into());
     let bytes = to_bytes(&str_some).unwrap();
     let decoded: Option<String> = decode_from_bytes(&bytes).unwrap();
     assert_eq!(str_some, decoded);
-
     let str_none: Option<String> = None;
     let bytes = to_bytes(&str_none).unwrap();
     let decoded: Option<String> = decode_from_bytes(&bytes).unwrap();
     assert_eq!(str_none, decoded);
 }
-
 #[test]
 fn vec_roundtrip() {
     let value = vec![1u32, 2, 3];
@@ -2260,7 +1970,6 @@ fn vec_roundtrip() {
     let decoded: Vec<u32> = decode_from_bytes(&bytes).unwrap();
     assert_eq!(value, decoded);
 }
-
 #[test]
 fn decode_from_slice_vec_u32_packed_offsets() {
     let elems = [1u32, 2, 3];
@@ -2280,7 +1989,6 @@ fn decode_from_slice_vec_u32_packed_offsets() {
     assert_eq!(decoded, elems);
     assert_eq!(used, buf.len());
 }
-
 #[test]
 fn decode_from_slice_vec_u32() {
     // Build payload for packed-seq Vec<T>: [len:u64][(len+1) offsets][data]
@@ -2310,7 +2018,6 @@ fn decode_from_slice_vec_u32() {
     assert_eq!(out, elems);
     assert_eq!(used, buf.len());
 }
-
 #[test]
 fn vec_header_is_u64() {
     use crate::core::header_flags;
@@ -2330,7 +2037,6 @@ fn vec_header_is_u64() {
     let reported = u64::from_le_bytes(hdr);
     assert_eq!(reported as usize, value.len());
 }
-
 #[test]
 fn decode_from_slice_option_and_result() {
     // Use compact-len for these slice-based decodes since we encode lengths via `write_len`.
@@ -2347,7 +2053,6 @@ fn decode_from_slice_option_and_result() {
     let (oval, used) = <Option<String> as DecodeFromSlice>::decode_from_slice(&obuf).unwrap();
     assert_eq!(oval, Some(s));
     assert_eq!(used, obuf.len());
-
     // Result::Err(String)
     let e = String::from("err");
     let mut ebuf = Vec::new();
@@ -2362,7 +2067,6 @@ fn decode_from_slice_option_and_result() {
     assert_eq!(used, rbuf.len());
     reset_decode_state();
 }
-
 #[test]
 fn decode_from_slice_borrowed_bytes() {
     set_decode_flags(header_flags::COMPACT_LEN);
@@ -2375,7 +2079,6 @@ fn decode_from_slice_borrowed_bytes() {
     assert_eq!(used, buf.len());
     reset_decode_state();
 }
-
 #[test]
 fn vec_string_roundtrip() {
     let value = vec![String::from("foo"), String::from("bar")];
@@ -2383,12 +2086,10 @@ fn vec_string_roundtrip() {
     let decoded: Vec<String> = decode_from_bytes(&bytes).unwrap();
     assert_eq!(value, decoded);
 }
-
 #[test]
 fn archived_cast_roundtrip() {
     #[repr(transparent)]
     struct Wrapper(Vec<u32>);
-
     let value = vec![1u32, 2, 3];
     let bytes = to_bytes(&value).unwrap();
     let archived_vec = from_bytes::<Vec<u32>>(&bytes).unwrap();
@@ -2397,20 +2098,17 @@ fn archived_cast_roundtrip() {
     let decoded = <Vec<u32> as NoritoDeserialize>::deserialize(archived_vec_again);
     assert_eq!(value, decoded);
 }
-
 #[test]
 fn result_string_roundtrip() {
     let ok: Result<String, String> = Ok("ok".into());
     let bytes = to_bytes(&ok).unwrap();
     let decoded: Result<String, String> = decode_from_bytes(&bytes).unwrap();
     assert_eq!(ok, decoded);
-
     let err: Result<String, String> = Err("err".into());
     let bytes = to_bytes(&err).unwrap();
     let decoded: Result<String, String> = decode_from_bytes(&bytes).unwrap();
     assert_eq!(err, decoded);
 }
-
 #[test]
 fn view_decode_string_and_vec() {
     let s = String::from("hello");
@@ -2418,14 +2116,12 @@ fn view_decode_string_and_vec() {
     let view = from_bytes_view(&bytes).unwrap();
     let decoded: String = view.decode().unwrap();
     assert_eq!(decoded, s);
-
     let v = vec![1u32, 2, 3, 4];
     let bytes = to_bytes(&v).unwrap();
     let view = from_bytes_view(&bytes).unwrap();
     let decoded: Vec<u32> = view.decode().unwrap();
     assert_eq!(decoded, v);
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PayloadContextFingerprint {
     base: usize,
@@ -2436,7 +2132,6 @@ struct PayloadContextFingerprint {
     flags_hint: u8,
     flags_active: bool,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct DecodeStateFingerprint {
     flags: u8,
@@ -2444,7 +2139,6 @@ struct DecodeStateFingerprint {
     flags_active: bool,
     payload: Option<PayloadContextFingerprint>,
 }
-
 fn decode_state_fingerprint() -> DecodeStateFingerprint {
     DecodeStateFingerprint {
         flags: get_decode_flags(),
@@ -2461,7 +2155,6 @@ fn decode_state_fingerprint() -> DecodeStateFingerprint {
         }),
     }
 }
-
 #[test]
 fn archive_view_is_pure_and_scopes_custom_decode_state() {
     reset_decode_state();
@@ -2480,13 +2173,11 @@ fn archive_view_is_pure_and_scopes_custom_decode_state() {
         ambient_flags,
     );
     let ambient_state = decode_state_fingerprint();
-
     let outer = from_bytes_view(&outer_frame)
         .expect("view construction must ignore mismatched ambient layout state");
     assert_eq!(decode_state_fingerprint(), ambient_state);
     let inner = from_bytes_view(&inner_frame).expect("construct nested view");
     assert_eq!(decode_state_fingerprint(), ambient_state);
-
     let decoded = outer
         .decode_exact_with::<u8, _>(|payload| {
             let state = payload_ctx_state().expect("view decode payload context");
@@ -2498,19 +2189,16 @@ fn archive_view_is_pure_and_scopes_custom_decode_state() {
         .expect("decode outer view");
     assert_eq!(decoded, 0x31);
     assert_eq!(decode_state_fingerprint(), ambient_state);
-
     let error = outer
         .decode_exact_with::<u8, _>(|_| Err(Error::Message("expected failure".to_owned())))
         .expect_err("custom decoder error must propagate");
     assert!(matches!(error, Error::Message(_)));
     assert_eq!(decode_state_fingerprint(), ambient_state);
-
     let panic = std::panic::catch_unwind(|| {
         let _ = outer.decode_exact_with::<u8, _>(|_| panic!("expected decoder panic"));
     });
     assert!(panic.is_err());
     assert_eq!(decode_state_fingerprint(), ambient_state);
-
     let nested = outer
         .decode_exact_with::<u8, _>(|outer_payload| {
             let outer_state = decode_state_fingerprint();
@@ -2526,7 +2214,6 @@ fn archive_view_is_pure_and_scopes_custom_decode_state() {
         .expect("decode nested views");
     assert_eq!(nested, 0x31 ^ 0x42);
     assert_eq!(decode_state_fingerprint(), ambient_state);
-
     let mut corrupted = outer_frame.clone();
     *corrupted.last_mut().expect("payload byte") ^= 0xFF;
     assert!(matches!(
@@ -2534,11 +2221,9 @@ fn archive_view_is_pure_and_scopes_custom_decode_state() {
         Err(Error::ChecksumMismatch)
     ));
     assert_eq!(decode_state_fingerprint(), ambient_state);
-
     drop(ambient_guard);
     reset_decode_state();
 }
-
 #[test]
 fn archive_view_construction_does_not_influence_encoding() {
     reset_decode_state();
@@ -2549,7 +2234,6 @@ fn archive_view_construction_does_not_influence_encoding() {
         to_bytes(&value).expect("encode alternate layout")
     };
     assert_ne!(canonical, alternate, "fixture must distinguish layouts");
-
     let frame =
         frame_bare_with_header_flags::<u8>(&[7], 0).expect("frame non-default-layout scalar");
     let _view = from_bytes_view(&frame).expect("construct pure archive view");
@@ -2560,22 +2244,18 @@ fn archive_view_construction_does_not_influence_encoding() {
         canonical
     );
 }
-
 #[derive(Debug)]
 struct DecodeBudgetProbe;
-
 impl<'a> DecodeFromSlice<'a> for DecodeBudgetProbe {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         enforce_decode_sequence_length(u64::MAX)?;
         Ok((Self, bytes.len()))
     }
 }
-
 #[test]
 fn archive_view_decode_installs_payload_derived_resource_limits() {
     let bytes = to_bytes(&0_u8).expect("encode a minimal archive");
     let view = from_bytes_view(&bytes).expect("validate archive framing");
-
     assert!(matches!(
         view.decode_unchecked::<DecodeBudgetProbe>(),
         Err(Error::SequenceLengthExceeded {
@@ -2584,7 +2264,6 @@ fn archive_view_decode_installs_payload_derived_resource_limits() {
         })
     ));
 }
-
 #[test]
 fn view_decode_exact_rejects_a_zero_filled_logical_tail() {
     let value = 7_u8;
@@ -2592,7 +2271,6 @@ fn view_decode_exact_rejects_a_zero_filled_logical_tail() {
     let frame = frame_bare_with_header_flags::<u8>(&payload, V1_LAYOUT_FLAGS)
         .expect("frame scalar payload with a zero tail");
     let view = from_bytes_view(&frame).expect("validate tailed frame");
-
     assert_eq!(
         view.decode::<u8>()
             .expect("compatibility decode accepts a zero tail"),
@@ -2603,14 +2281,12 @@ fn view_decode_exact_rejects_a_zero_filled_logical_tail() {
         Err(Error::LengthMismatch)
     ));
 }
-
 #[test]
 fn header_driven_compact_len_string_decode() {
     #[cfg(not(feature = "compact-len"))]
     {
         // Compact-len feature disabled; no additional coverage required.
     }
-
     #[cfg(feature = "compact-len")]
     {
         // Build a varint-length encoded string payload: len=3, data="abc"
@@ -2620,7 +2296,6 @@ fn header_driven_compact_len_string_decode() {
             write_len_to_vec(&mut payload, 3);
         }
         payload.extend_from_slice(b"abc");
-
         // Compose header with COMPACT_LEN flag set
         let mut bytes = Vec::new();
         let mut header = Header::new(
@@ -2631,12 +2306,10 @@ fn header_driven_compact_len_string_decode() {
         header.flags |= header_flags::COMPACT_LEN;
         header.write(&mut bytes).unwrap();
         bytes.extend_from_slice(&payload);
-
         let decoded: String = decode_from_bytes(&bytes).unwrap();
         assert_eq!(decoded, "abc");
     }
 }
-
 #[cfg(feature = "compact-len")]
 #[test]
 fn write_len_marks_compact_len_usage() {
@@ -2655,7 +2328,6 @@ fn write_len_marks_compact_len_usage() {
     drop(encode_guard);
     reset_decode_state();
 }
-
 #[test]
 fn length_prefix_requires_compact_len_flag() {
     reset_decode_state();
@@ -2671,14 +2343,12 @@ fn length_prefix_requires_compact_len_flag() {
     }
     reset_decode_state();
 }
-
 #[test]
 fn header_driven_fixed_len_string_decode() {
     // Build a fixed-u64 length encoded string payload with len=3
     let mut payload = Vec::new();
     payload.extend_from_slice(&(3u64.to_le_bytes()));
     payload.extend_from_slice(b"abc");
-
     // Compose header without COMPACT_LEN flag
     let mut bytes = Vec::new();
     let header = Header::new(
@@ -2688,11 +2358,9 @@ fn header_driven_fixed_len_string_decode() {
     );
     header.write(&mut bytes).unwrap();
     bytes.extend_from_slice(&payload);
-
     let decoded: String = decode_from_bytes(&bytes).unwrap();
     assert_eq!(decoded, "abc");
 }
-
 #[test]
 fn seq_len_respects_explicit_flags() {
     reset_decode_state();
@@ -2712,17 +2380,14 @@ fn strict_safe_read_len_and_decode_from_slice() {
     let mut buf = Vec::new();
     crate::core::write_len(&mut buf, s.len() as u64).unwrap();
     buf.extend_from_slice(s.as_bytes());
-
     let (out_s, used) = String::decode_from_slice(&buf).unwrap();
     assert_eq!(out_s, s);
     assert_eq!(used, buf.len());
-
     let (out_str, used2) = <&str as DecodeFromSlice>::decode_from_slice(&buf).unwrap();
     assert_eq!(out_str, s);
     assert_eq!(used2, buf.len());
     reset_decode_state();
 }
-
 #[test]
 fn fixed_u64_length_respects_usize_limits() {
     reset_decode_state();
@@ -2730,7 +2395,6 @@ fn fixed_u64_length_respects_usize_limits() {
     let overflow = (usize::MAX as u128)
         .checked_add(1)
         .and_then(|value| u64::try_from(value).ok());
-
     if let Some(len) = overflow {
         let buf = len.to_le_bytes();
         assert!(matches!(
@@ -2751,7 +2415,6 @@ fn fixed_u64_length_respects_usize_limits() {
         assert_eq!(used, 8);
     }
 }
-
 #[test]
 fn owned_payload_len_respects_usize_limits() {
     reset_decode_state();
@@ -2759,7 +2422,6 @@ fn owned_payload_len_respects_usize_limits() {
     let overflow = (usize::MAX as u128)
         .checked_add(1)
         .and_then(|value| u64::try_from(value).ok());
-
     if let Some(len) = overflow {
         let mut buf = Vec::new();
         buf.extend_from_slice(&len.to_le_bytes());
@@ -2777,7 +2439,6 @@ fn owned_payload_len_respects_usize_limits() {
     drop(guard);
     reset_decode_state();
 }
-
 #[test]
 fn decode_slice_usize_isize_respects_width() {
     let value = 17u64;
@@ -2785,13 +2446,11 @@ fn decode_slice_usize_isize_respects_width() {
     let (out, used) = <usize as DecodeFromSlice>::decode_from_slice(&buf).expect("usize");
     assert_eq!(out, 17usize);
     assert_eq!(used, 8);
-
     let value = -9i64;
     let buf = value.to_le_bytes();
     let (out, used) = <isize as DecodeFromSlice>::decode_from_slice(&buf).expect("isize");
     assert_eq!(out, -9isize);
     assert_eq!(used, 8);
-
     let overflow = (usize::MAX as u128)
         .checked_add(1)
         .and_then(|value| u64::try_from(value).ok());
@@ -2799,14 +2458,12 @@ fn decode_slice_usize_isize_respects_width() {
         let buf = value.to_le_bytes();
         let result = <usize as DecodeFromSlice>::decode_from_slice(&buf);
         assert!(matches!(result, Err(Error::LengthMismatch)));
-
         let value = i64::try_from(value).expect("overflow fits i64");
         let buf = value.to_le_bytes();
         let result = <isize as DecodeFromSlice>::decode_from_slice(&buf);
         assert!(matches!(result, Err(Error::LengthMismatch)));
     }
 }
-
 #[test]
 fn vec_decode_rejects_impossible_header_sizes() {
     reset_decode_state();
@@ -2815,11 +2472,9 @@ fn vec_decode_rejects_impossible_header_sizes() {
     let len_u64 = u64::try_from(len).expect("len fits u64");
     let mut buf = Vec::new();
     buf.extend_from_slice(&len_u64.to_le_bytes());
-
     let result = <Vec<u8> as DecodeFromSlice>::decode_from_slice(&buf);
     assert!(matches!(result, Err(Error::LengthMismatch)));
 }
-
 #[test]
 fn vec_u8_encodes_as_len_plus_raw_bytes() {
     reset_decode_state();
@@ -2833,7 +2488,6 @@ fn vec_u8_encodes_as_len_plus_raw_bytes() {
     assert_eq!(&payload[8..], value.as_slice());
     reset_decode_state();
 }
-
 #[test]
 fn vec_u8_decode_rejects_len_prefixed_elements() {
     reset_decode_state();
@@ -2845,13 +2499,11 @@ fn vec_u8_decode_rejects_len_prefixed_elements() {
         payload.extend_from_slice(&1u64.to_le_bytes());
         payload.push(*byte);
     }
-
     let result = <Vec<u8> as DecodeFromSlice>::decode_from_slice(&payload);
     assert!(matches!(result, Err(Error::LengthMismatch)));
     drop(guard);
     reset_decode_state();
 }
-
 #[test]
 fn vec_u8_raw_decode_works_even_with_packed_seq_flag() {
     reset_decode_state();
@@ -2859,7 +2511,6 @@ fn vec_u8_raw_decode_works_even_with_packed_seq_flag() {
     let mut raw = Vec::new();
     raw.extend_from_slice(&(value.len() as u64).to_le_bytes());
     raw.extend_from_slice(&value);
-
     let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
     let (decoded, used) =
         <Vec<u8> as DecodeFromSlice>::decode_from_slice(&raw).expect("decode raw vec");
@@ -2867,6 +2518,5 @@ fn vec_u8_raw_decode_works_even_with_packed_seq_flag() {
     assert_eq!(decoded, value);
     reset_decode_state();
 }
-
 // Preserve pointer and length boundary coverage under `core::tests`.
 include!("../core_payload_boundary_tests.rs");

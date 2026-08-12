@@ -15,10 +15,8 @@ build = "build.rs"
 unexpected_cfgs = { level = "warn", check-cfg = [
     'cfg(feature, values("compact-len"))',
     'cfg(feature, values("iroha_telemetry"))',
-    'cfg(feature, values("ivm_halo2_real"))',
     'cfg(feature, values("packed-struct"))',
     'cfg(feature, values("schema-structural"))',
-    'cfg(feature, values("zk-halo2-ipa-poseidon"))',
 ] }
 
 [dependencies]
@@ -194,16 +192,6 @@ harness = false
 [[bench]]
 name = "bench_zk"
 path = "benches/bench_zk.rs"
-harness = false
-
-[[bench]]
-name = "bench_dex"
-path = "benches/bench_dex.rs"
-harness = false
-
-[[bench]]
-name = "bench_voting"
-path = "benches/bench_voting.rs"
 harness = false
 
 [[bench]]

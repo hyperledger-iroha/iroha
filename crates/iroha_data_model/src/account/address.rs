@@ -482,6 +482,7 @@ fn map_account_address_json_error(error: AccountAddressError) -> json::Error {
 }
 
 #[cfg(feature = "json")]
+#[allow(unsafe_code)]
 fn decode_account_address_hex_for_json(encoded: &str) -> Result<Vec<u8>, json::Error> {
     if encoded.len() % 2 != 0 {
         return Err(json::Error::Message("invalid account address".to_owned()));
@@ -490,8 +491,8 @@ fn decode_account_address_hex_for_json(encoded: &str) -> Result<Vec<u8>, json::E
     if bytes == 0 {
         return Ok(Vec::new());
     }
-    let layout = std::alloc::Layout::array::<u8>(bytes)
-        .map_err(|_| json::Error::DecodeResourceLimit)?;
+    let layout =
+        std::alloc::Layout::array::<u8>(bytes).map_err(|_| json::Error::DecodeResourceLimit)?;
     // The source-derived account-literal precharge covers this exact decoded
     // destination before entry. Null is rejected before ownership.
     let allocation = unsafe { std::alloc::alloc(layout) };
@@ -503,9 +504,10 @@ fn decode_account_address_hex_for_json(encoded: &str) -> Result<Vec<u8>, json::E
         _ => None,
     };
     for (index, pair) in encoded.as_bytes().chunks_exact(2).enumerate() {
-        let Some(byte) = nibble(pair[0]).zip(nibble(pair[1])).map(|(high, low)| {
-            (high << 4) | low
-        }) else {
+        let Some(byte) = nibble(pair[0])
+            .zip(nibble(pair[1]))
+            .map(|(high, low)| (high << 4) | low)
+        else {
             // SAFETY: `allocation` still owns the exact `layout` above.
             unsafe { std::alloc::dealloc(allocation.as_ptr(), layout) };
             return Err(json::Error::Message("invalid account address".to_owned()));
@@ -887,6 +889,7 @@ fn decode_public_key(
     })
 }
 
+#[allow(unsafe_code)]
 fn allocate_multisig_members(
     member_count: usize,
 ) -> Result<Vec<MultisigMemberPayload>, AccountAddressError> {

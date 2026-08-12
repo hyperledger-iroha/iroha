@@ -288,7 +288,7 @@ where
             return hold_query_fanout_memory_in_response_body(response, reservation);
         }
     };
-    let empty_body = Vec::new();
+    let empty_body: Vec<u8> = Vec::new();
     let request_bytes = match torii_routed_read_request_bytes(
         &path_args,
         path_args.capacity(),

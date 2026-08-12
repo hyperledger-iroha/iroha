@@ -467,11 +467,9 @@ fn filesystem_publisher_rejects_legacy_separate_car_queue_authority() {
     let publisher =
         FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
     let (settlement, encoded) = sample_settlement();
-    fs::write(
-        temp.path().join(GOVERNANCE_CAR_QUEUE_FILE),
-        br#"{"schema":"wrong","segments":[]}"#,
-    )
-    .expect("write malformed queue");
+    let legacy_queue = temp.path().join(GOVERNANCE_CAR_QUEUE_FILE);
+    let legacy_body: &[u8] = br#"{"schema":"wrong","segments":[]}"#;
+    fs::write(&legacy_queue, legacy_body).expect("write malformed queue");
 
     let err = publisher
         .publish_deal_settlement(&settlement, &encoded)
@@ -480,6 +478,22 @@ fn filesystem_publisher_rejects_legacy_separate_car_queue_authority() {
         err.to_string()
             .contains("legacy governance publication authority"),
         "unexpected error: {err}"
+    );
+    assert_eq!(
+        fs::read(&legacy_queue).expect("read retained legacy CAR authority"),
+        legacy_body,
+        "online rejection must not alter the legacy authority"
+    );
+    assert!(
+        !temp
+            .path()
+            .join(GOVERNANCE_PUBLICATION_SOURCES_DIR)
+            .exists(),
+        "legacy authority rejection must precede immutable source writes"
+    );
+    assert!(
+        !temp.path().join(GOVERNANCE_CAR_SEGMENTS_DIR).exists(),
+        "legacy authority rejection must precede immutable CAR writes"
     );
 }
 
@@ -1662,7 +1676,11 @@ fn filesystem_publisher_rejects_missing_authority_without_deleting_history() {
     let error = FilesystemGovernancePublisher::try_new(temp.path().to_path_buf())
         .expect_err("missing initialized authority must fail closed");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    assert!(error.to_string().contains("authority is missing"));
+    assert!(
+        error
+            .to_string()
+            .contains("publication state is missing from an initialized root")
+    );
     for path in [encoded_path, json_path].into_iter().chain(car_paths) {
         assert!(
             path.is_file(),
@@ -1818,7 +1836,9 @@ fn write_atomic_rejects_symlink_output() {
     let message = err.to_string();
 
     assert!(
-        message.contains("regular file") || message.contains("reparse"),
+        message.contains("regular file")
+            || message.contains("reparse")
+            || message.contains("symbolic link"),
         "unexpected error: {message}"
     );
     assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");

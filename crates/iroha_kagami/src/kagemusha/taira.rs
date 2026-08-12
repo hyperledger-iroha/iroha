@@ -16,7 +16,7 @@ use iroha_core::zk::confidential_v2::{
 };
 use iroha_crypto::{HashOf, PublicKey};
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     account::{Account, AccountId, ParsedAccountId, address::ChainDiscriminantGuard},
     asset::{AssetDefinitionAlias, AssetDefinitionId, AssetId},
     block::consensus_v2::{ConsensusMode, ValidatorPower},
@@ -871,7 +871,7 @@ pub(super) fn prepare_testnet_base_genesis_v4<T: std::io::Write>(
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
-    use iroha_data_model::offline::offline_escrow_account_id;
+    use iroha_data_model::{ChainId, offline::offline_escrow_account_id};
 
     fn test_network_id(seed: impl AsRef<[u8]>) -> NetworkId {
         NetworkId::from_genesis_hash(

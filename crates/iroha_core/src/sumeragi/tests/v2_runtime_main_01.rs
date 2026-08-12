@@ -201,10 +201,18 @@ fn active_view_producer_cannot_fence_absolute_timeout() {
             .expect("armed reservation is eligible")
     );
 
-    let ownership = runtime
+    let proposal_ownership = runtime
         .mint_local_proposal_effect_ownership(initial, &proposal.manifest)
         .expect("local Store aliases the active producer");
-    assert_eq!(ownership.owner(), reserved.owner());
+    let store_effect = AdapterEffect::StoreBody {
+        tag: initial,
+        round: proposal.manifest.round,
+        subject: proposal.manifest.subject,
+    };
+    let store_ownership = proposal_ownership
+        .exact_store_task_ownership(&store_effect, &proposal.manifest)
+        .expect("project the exact local Store task owner");
+    assert_eq!(store_ownership.owner(), reserved.owner());
     assert!(runtime.active_view_producer.is_some());
 
     let deadline = start + Duration::from_secs(10);
@@ -219,7 +227,7 @@ fn active_view_producer_cannot_fence_absolute_timeout() {
     );
 
     runtime
-        .complete_active_view_producer_after_proposal_fanout(proposal.round, &ownership)
+        .complete_active_view_producer_after_proposal_fanout(proposal.round, &store_ownership)
         .expect("guarded fanout retires the inherited producer");
     assert!(runtime.active_view_producer.is_none());
     assert!(

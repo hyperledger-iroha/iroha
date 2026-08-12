@@ -1,0 +1,17 @@
+
+            fn via_if(bool flag) -> int {
+                if flag { 7 } else { return 9; }
+            }
+            fn via_if_let(Option<int> value) -> int {
+                if let Option::some(item) = value { item } else { return 0; }
+            }
+            fn via_match(Option<int> value) -> int {
+                match value {
+                    Option::some(item) => item,
+                    Option::none => { return 0; },
+                }
+            }
+            fn wholly_divergent(bool flag) -> int {
+                if flag { return 1; } else { return 2; }
+            }
+        

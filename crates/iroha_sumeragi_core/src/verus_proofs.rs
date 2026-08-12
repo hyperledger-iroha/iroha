@@ -37,7 +37,6 @@ use crate::refinement::{
     WAL_RECORD_OBSERVE_PREPARE, WAL_RECORD_PREPARE_INTENT, WAL_RECORD_PROPOSAL_INTENT,
     WAL_RECORD_TIMEOUT_INTENT,
 };
-
 // These expressions are instantiated both as specifications and as executable Verus functions.
 // The PrepareIntent and TimeoutIntent WAL guards below are derived directly from primitive vote
 // and frozen-context fields. The remaining projected WAL certificate/proposal predicates are
@@ -59,7 +58,6 @@ macro_rules! same_certificate_body {
                     && $left.subject == $right.subject))
     }};
 }
-
 #[allow(unused_macros)]
 macro_rules! same_certificate_evidence_body {
     ($left:expr, $right:expr) => {{
@@ -67,7 +65,6 @@ macro_rules! same_certificate_evidence_body {
             && (!$left.present || $left.evidence == $right.evidence)
     }};
 }
-
 // Compose the source-linked EnterView gate and the exact effect-count checks
 // once for both the closed specification and its branch-factored executable
 // Verus instances.
@@ -79,19 +76,15 @@ macro_rules! production_enter_view_exact_body {
             && $projection.enter_view.fetch_count == effect_count_body!($projection.effects, 2u8)
     }};
 }
-
 verus! {
-
 /// Largest value representable by every production height/view/generation/WAL
 /// counter (`u64`).
 pub open spec fn machine_u64_max() -> int {
     18_446_744_073_709_551_615
 }
-
 // ---------------------------------------------------------------------------
 // Production persisted-continuation ordering / abstract causal FIFO seam
 // ---------------------------------------------------------------------------
-
 /// Mathematical result of the production `rev()` plus `push_front` loop.
 ///
 /// `continuation.reverse()` is the order visited by the iterator and the
@@ -104,7 +97,6 @@ pub open spec fn production_reverse_push_front(
 ) -> Seq<int> {
     continuation.reverse().reverse().add(old_tail)
 }
-
 /// The production synchronous expansion is exactly continuation-before-tail
 /// FIFO order. In particular, replacing the production reverse iterator with
 /// forward iteration would leave only the first reverse and violate this
@@ -119,7 +111,6 @@ pub proof fn production_reverse_push_front_refines_fifo(
 {
     assert(continuation.reverse().reverse() =~= continuation);
 }
-
 /// Stable first-owner filter used at the production/TLA+ projection boundary.
 ///
 /// Integers stand for exact projected causal-candidate identities. The
@@ -149,7 +140,6 @@ pub open spec fn production_fresh_causal_successors(
         }
     }
 }
-
 /// Standard subsequence relation used to state that first-owner filtering
 /// preserves the source order. Combined with the exact filter body and output
 /// uniqueness, this excludes either reversing or prepending recursive output.
@@ -169,7 +159,6 @@ pub open spec fn production_stable_subsequence(
         production_stable_subsequence(subsequence, source.drop_first())
     }
 }
-
 /// Every retained successor is absent from the complete prior-owner set.
 pub proof fn production_fresh_causal_successors_excludes_prior_owners(
     owned: Set<int>,
@@ -185,7 +174,6 @@ pub proof fn production_fresh_causal_successors_excludes_prior_owners(
 {
     broadcast use vstd::seq_lib::group_seq_properties;
     broadcast use vstd::set::group_set_axioms;
-
     if successors.len() != 0 {
         let candidate = successors.first();
         let remaining = successors.drop_first();
@@ -216,7 +204,6 @@ pub proof fn production_fresh_causal_successors_excludes_prior_owners(
         }
     }
 }
-
 /// Every emitted identity that was not already owned is retained. Together
 /// with prior-owner exclusion, uniqueness, and stable-subsequence order, this
 /// prevents an implementation that silently drops all fresh successors.
@@ -233,7 +220,6 @@ pub proof fn production_fresh_causal_successors_keeps_every_fresh_value(
 {
     broadcast use vstd::seq_lib::group_seq_properties;
     broadcast use vstd::set::group_set_axioms;
-
     if successors.len() != 0 {
         let candidate = successors.first();
         let remaining = successors.drop_first();
@@ -268,7 +254,6 @@ pub proof fn production_fresh_causal_successors_keeps_every_fresh_value(
         }
     }
 }
-
 /// Stable first ownership emits each projected identity at most once.
 pub proof fn production_fresh_causal_successors_has_unique_values(
     owned: Set<int>,
@@ -280,7 +265,6 @@ pub proof fn production_fresh_causal_successors_has_unique_values(
 {
     broadcast use vstd::seq_lib::group_seq_properties;
     broadcast use vstd::set::group_set_axioms;
-
     if successors.len() != 0 {
         let candidate = successors.first();
         let remaining = successors.drop_first();
@@ -304,7 +288,6 @@ pub proof fn production_fresh_causal_successors_has_unique_values(
         }
     }
 }
-
 /// The exact first-owner output is a stable subsequence of emitted identities.
 pub proof fn production_fresh_causal_successors_preserves_first_owner_order(
     owned: Set<int>,
@@ -319,7 +302,6 @@ pub proof fn production_fresh_causal_successors_preserves_first_owner_order(
 {
     broadcast use vstd::seq_lib::group_seq_properties;
     broadcast use vstd::set::group_set_axioms;
-
     if successors.len() != 0 {
         let candidate = successors.first();
         let remaining = successors.drop_first();
@@ -342,7 +324,6 @@ pub proof fn production_fresh_causal_successors_preserves_first_owner_order(
         }
     }
 }
-
 /// Abstract causal FIFO after one completely expanded production effect batch.
 ///
 /// The production adapter drains its private expansion queue synchronously.
@@ -356,7 +337,6 @@ pub open spec fn production_async_causal_fifo_after_batch(
 ) -> Seq<int> {
     old_queue.add(production_fresh_causal_successors(owned, emitted))
 }
-
 /// With the checked effect-to-candidate projection, a batch preserves the old
 /// causal prefix and appends a disjoint, unique, stable first-owner suffix.
 /// The concrete `Effect` mapping is discharged by
@@ -383,7 +363,6 @@ pub proof fn production_async_causal_fifo_after_batch_preserves_fresh_tail(
 {
     broadcast use vstd::seq_lib::group_seq_properties;
     broadcast use vstd::set::group_set_axioms;
-
     let fresh = production_fresh_causal_successors(owned, emitted);
     production_fresh_causal_successors_excludes_prior_owners(owned, emitted);
     production_fresh_causal_successors_has_unique_values(owned, emitted);
@@ -407,7 +386,6 @@ pub proof fn production_async_causal_fifo_after_batch_preserves_fresh_tail(
             == fresh
     );
 }
-
 /// Product rank for Completion capacity after exact first-owner coalescing.
 ///
 /// The successor residual is bounded by three, so radix four makes one strict
@@ -418,7 +396,6 @@ pub open spec fn production_completion_capacity_product_rank(
 ) -> nat {
     root_remaining * 4 + successor_remaining
 }
-
 /// Completion-capacity service strictly descends either by consuming one
 /// successor under the same root, or by consuming a root while permitting the
 /// bounded successor component to reset. Equal-owner retries are absent from
@@ -447,7 +424,6 @@ pub proof fn production_completion_capacity_product_rank_descends(
             by(nonlinear_arith);
     }
 }
-
 /// Deliberately inverted owner predicate used only by the concrete mutation
 /// witness below.
 pub open spec fn production_inverted_owner_filter_mutant(
@@ -471,7 +447,6 @@ pub open spec fn production_inverted_owner_filter_mutant(
         }
     }
 }
-
 /// The inverted predicate retains the prior owner and drops the fresh value.
 pub proof fn production_inverted_owner_filter_mutant_is_rejected()
     ensures
@@ -489,7 +464,6 @@ pub proof fn production_inverted_owner_filter_mutant_is_rejected()
     reveal_with_fuel(production_inverted_owner_filter_mutant, 3);
     reveal_with_fuel(production_fresh_causal_successors, 3);
 }
-
 /// Deliberately appends each first owner after its recursive suffix, reversing
 /// every all-fresh batch.
 pub open spec fn production_reversed_fresh_order_mutant(
@@ -513,7 +487,6 @@ pub open spec fn production_reversed_fresh_order_mutant(
         }
     }
 }
-
 /// Recursive append reverses the reviewed three-element stable batch.
 pub proof fn production_reversed_fresh_order_mutant_is_rejected()
     ensures
@@ -531,11 +504,9 @@ pub proof fn production_reversed_fresh_order_mutant_is_rejected()
     reveal_with_fuel(production_reversed_fresh_order_mutant, 4);
     reveal_with_fuel(production_fresh_causal_successors, 4);
 }
-
 // ---------------------------------------------------------------------------
 // Production timer/FIFO scheduling kernel
 // ---------------------------------------------------------------------------
-
 /// Fixed-width projection of one production scheduling decision.
 pub struct ScheduleDecisionProjection {
     /// `1 = Timeout`, `2 = PeriodicTimer`, `3 = Fifo`, `4 = Idle`.
@@ -543,7 +514,6 @@ pub struct ScheduleDecisionProjection {
     /// Whether an admitted FIFO command is owed the next non-timeout slot.
     pub fifo_owed: bool,
 }
-
 /// Exact branch relation instantiated by `ScheduleState::select` in
 /// production. The macro body is owned by the source-linked scheduler module,
 /// so the executable runtime and this proof cannot drift independently.
@@ -564,7 +534,6 @@ pub open spec fn schedule_decision(
         ScheduleDecisionProjection { work: 4, fifo_owed: false },
     )
 }
-
 /// Executable Verus instance of the exact production arbitration branches.
 pub fn verified_schedule_decision(
     fifo_owed: bool,
@@ -595,7 +564,6 @@ pub fn verified_schedule_decision(
     }
     decision
 }
-
 /// The absolute timeout always preempts periodic work and FIFO debt.
 pub proof fn schedule_timeout_has_absolute_priority(
     fifo_owed: bool,
@@ -618,7 +586,6 @@ pub proof fn schedule_timeout_has_absolute_priority(
 {
     reveal(schedule_decision);
 }
-
 /// Once periodic service incurs FIFO debt, the next non-timeout slot drains
 /// the FIFO even when the periodic timer remains due.
 pub proof fn schedule_fifo_debt_prevents_periodic_starvation(
@@ -630,7 +597,6 @@ pub proof fn schedule_fifo_debt_prevents_periodic_starvation(
 {
     reveal(schedule_decision);
 }
-
 /// A periodic tick which precedes ready FIFO work records the exact debt used
 /// by the previous theorem, giving an admitted command a two-invocation rank.
 pub proof fn schedule_periodic_delay_is_bounded()
@@ -646,13 +612,9 @@ pub proof fn schedule_periodic_delay_is_bounded()
 {
     reveal(schedule_decision);
 }
-
-
-
 // ---------------------------------------------------------------------------
 // Authenticated vote-statement identity
 // ---------------------------------------------------------------------------
-
 /// Full vote projection at the authenticated reducer-ingress seam.
 pub struct VoteStatementProjection {
     /// Frozen height-context identity.
@@ -672,7 +634,6 @@ pub struct VoteStatementProjection {
     /// Authenticated frozen-roster signer identity.
     pub signer: int,
 }
-
 /// Equality of the exact signable statement, deliberately excluding signer.
 pub open spec fn same_vote_statement(
     left: VoteStatementProjection,
@@ -695,7 +656,6 @@ pub open spec fn same_vote_statement(
         right.subject,
     )
 }
-
 /// Distinct authenticated validators may sign one identical vote statement.
 pub proof fn vote_statement_identity_excludes_only_authenticated_signer(
     left: VoteStatementProjection,
@@ -714,7 +674,6 @@ pub proof fn vote_statement_identity_excludes_only_authenticated_signer(
         same_vote_statement(left, right),
 {
 }
-
 /// Changing any signable field cannot hide behind an alternate signer.
 pub proof fn vote_statement_identity_rejects_altered_semantics(
     left: VoteStatementProjection,
@@ -732,11 +691,9 @@ pub proof fn vote_statement_identity_rejects_altered_semantics(
         !same_vote_statement(left, right),
 {
 }
-
 // ---------------------------------------------------------------------------
 // Common certificate and quorum facts
 // ---------------------------------------------------------------------------
-
 /// Safety projection of a quorum certificate.
 pub struct CertificateProjection {
     /// Whether a certificate is present.
@@ -764,7 +721,6 @@ pub struct CertificateProjection {
     /// reference.
     pub evidence: int,
 }
-
 /// The absent certificate value.  Its remaining fields are canonicalized.
 pub open spec fn absent_certificate() -> CertificateProjection {
     CertificateProjection {
@@ -781,7 +737,6 @@ pub open spec fn absent_certificate() -> CertificateProjection {
         evidence: 0,
     }
 }
-
 /// Exact equality of the safety-relevant certificate reference.
 pub open spec fn same_certificate(
     left: CertificateProjection,
@@ -789,7 +744,6 @@ pub open spec fn same_certificate(
 ) -> bool {
     same_certificate_body!(left, right)
 }
-
 /// Stable certificate body identity after independent phase validation.
 pub open spec fn same_certificate_height_subject(
     left: CertificateProjection,
@@ -804,7 +758,6 @@ pub open spec fn same_certificate_height_subject(
         right.subject,
     )
 }
-
 /// Stable Commit decision identity across unchanged reproposal.
 ///
 /// Both the certificate/finality round and proposal-origin round are excluded.
@@ -821,7 +774,6 @@ pub open spec fn same_commit_decision(
         && !right.prepare
         && same_certificate_height_subject(left, right)
 }
-
 /// Same-body Commit identity accepts independently valid same-round QCs from
 /// different reproposal rounds.
 pub proof fn same_commit_decision_ignores_only_witness_rounds(
@@ -837,7 +789,6 @@ pub proof fn same_commit_decision_ignores_only_witness_rounds(
         same_commit_decision(left, right),
 {
 }
-
 /// A foreign subject cannot become equivalent by changing QC rounds.
 pub proof fn same_commit_decision_rejects_altered_subject(
     left: CertificateProjection,
@@ -851,7 +802,6 @@ pub proof fn same_commit_decision_rejects_altered_subject(
         !same_commit_decision(left, right),
 {
 }
-
 /// Equality of the complete carried certificate, including its signer and
 /// signature evidence identity.  Production timeout intents compare the full
 /// `QuorumCertificate`, not only its stable semantic reference.
@@ -861,13 +811,11 @@ pub open spec fn same_certificate_evidence(
 ) -> bool {
     same_certificate_evidence_body!(left, right)
 }
-
 /// Canonical fixed-width identity stored for one timeout intent's optional
 /// full high QC.  Absence has no hidden evidence bytes.
 pub open spec fn certificate_evidence_identity(certificate: CertificateProjection) -> int {
     if certificate.present { certificate.evidence } else { 0 }
 }
-
 /// A well-formed projected PrepareQC.
 pub open spec fn valid_prepare(certificate: CertificateProjection) -> bool {
     certificate.present
@@ -877,7 +825,6 @@ pub open spec fn valid_prepare(certificate: CertificateProjection) -> bool {
         && certificate.proposal_height == certificate.height
         && certificate.proposal_view == certificate.view
 }
-
 /// A well-formed projected CommitQC.
 pub open spec fn valid_commit(certificate: CertificateProjection) -> bool {
     certificate.present
@@ -887,7 +834,6 @@ pub open spec fn valid_commit(certificate: CertificateProjection) -> bool {
         && certificate.proposal_height == certificate.height
         && certificate.proposal_view == certificate.view
 }
-
 /// Equal-view certificates do not conflict and a higher one may replace one.
 pub open spec fn compatible_highest_update(
     current: CertificateProjection,
@@ -898,7 +844,6 @@ pub open spec fn compatible_highest_update(
             || incoming.view != current.view
             || incoming.subject == current.subject)
 }
-
 /// Production `update_highest`: install only a strictly higher PrepareQC.
 pub open spec fn highest_after_update(
     current: CertificateProjection,
@@ -910,7 +855,6 @@ pub open spec fn highest_after_update(
         current
     }
 }
-
 /// Production TC installation: never lower a lock and change its subject only
 /// at a strictly greater view.
 pub open spec fn lock_after_timeout(
@@ -923,7 +867,6 @@ pub open spec fn lock_after_timeout(
         current
     }
 }
-
 /// Production Decision replay keeps the first full certificate evidence for
 /// a semantic decision and accepts later certificates only as equivalent
 /// witnesses for the same reference.
@@ -933,7 +876,6 @@ pub open spec fn decision_after_update(
 ) -> CertificateProjection {
     if current.present { current } else { incoming }
 }
-
 /// A later state extends, rather than regresses, an earlier lock.
 pub open spec fn lock_extends(
     before: CertificateProjection,
@@ -944,7 +886,6 @@ pub open spec fn lock_extends(
             && (after.view > before.view
                 || (after.view == before.view && after.subject == before.subject)))
 }
-
 /// Arithmetic core of strict voting-power quorum intersection.
 pub proof fn strict_power_quorums_cannot_be_disjoint(
     total_power: int,
@@ -963,7 +904,6 @@ pub proof fn strict_power_quorums_cannot_be_disjoint(
     assert((left_power + right_power) * 3 > total_power * 4);
     assert(total_power * 4 >= total_power * 3);
 }
-
 /// Arithmetic core of the floor(2n/3)+1 count quorum rule.
 pub proof fn strict_count_quorums_cannot_be_disjoint(
     validator_count: int,
@@ -982,11 +922,9 @@ pub proof fn strict_count_quorums_cannot_be_disjoint(
     assert((left_count + right_count) * 3 > validator_count * 4);
     assert(validator_count * 4 >= validator_count * 3);
 }
-
 // ---------------------------------------------------------------------------
 // Exact physical WAL lifecycle projection
 // ---------------------------------------------------------------------------
-
 /// Fixed-width projection of the canonical WAL file header.
 pub struct WalHeaderProjection {
     /// Whether all canonical header bytes are present.
@@ -1004,7 +942,6 @@ pub struct WalHeaderProjection {
     /// Recomputed checksum equals the stored checksum.
     pub checksum_matches: bool,
 }
-
 /// Header identity expected by the running validator.
 pub struct WalExpectedIdentityProjection {
     /// Configured consensus protocol version.
@@ -1014,7 +951,6 @@ pub struct WalExpectedIdentityProjection {
     /// Configured local consensus-key hash.
     pub consensus_key: int,
 }
-
 /// The executable parser accepts a header only after every structural,
 /// identity, and checksum comparison succeeds.
 pub open spec fn wal_header_accepted(
@@ -1034,7 +970,6 @@ pub open spec fn wal_header_accepted(
         header.checksum_matches,
     )
 }
-
 /// Accepted header bytes are bound to the exact protocol, chain, and local
 /// consensus key; a mismatch cannot be interpreted as an empty WAL.
 pub proof fn accepted_wal_header_has_exact_identity(
@@ -1053,7 +988,6 @@ pub proof fn accepted_wal_header_has_exact_identity(
         header.checksum_matches,
 {
 }
-
 /// A malformed header or any protocol/chain/key/checksum mismatch cannot be
 /// accepted as an empty log.
 pub proof fn invalid_or_foreign_wal_header_is_rejected(
@@ -1072,7 +1006,6 @@ pub proof fn invalid_or_foreign_wal_header_is_rejected(
         !wal_header_accepted(header, expected),
 {
 }
-
 /// Verified complete-prefix state used by physical WAL recovery.
 pub struct PhysicalWalStateProjection {
     /// Required physical sequence of the next complete frame.
@@ -1084,7 +1017,6 @@ pub struct PhysicalWalStateProjection {
     /// Whether recovery has failed closed.
     pub failed_closed: bool,
 }
-
 /// One observed frame boundary in canonical file order.
 pub struct PhysicalWalFrameProjection {
     /// Whether the complete header, payload, and checksum are present.
@@ -1104,12 +1036,10 @@ pub struct PhysicalWalFrameProjection {
     /// Whether the append call returned a durability acknowledgement.
     pub acknowledged: bool,
 }
-
 /// Fixed proof value of the production 16 MiB frame-payload limit.
 pub open spec fn wal_max_record_bytes() -> int {
     16_777_216
 }
-
 /// A complete frame extends the verified prefix exactly when every production
 /// sequence, length, hash-chain, and checksum check succeeds.
 pub open spec fn complete_physical_frame_valid(
@@ -1132,7 +1062,6 @@ pub open spec fn complete_physical_frame_valid(
             frame.calculated_hash,
         )
 }
-
 /// Physical recovery has exactly three outcomes at one observed boundary.
 pub enum PhysicalWalRecoveryPath {
     /// One complete valid frame extends the recovered prefix.
@@ -1142,7 +1071,6 @@ pub enum PhysicalWalRecoveryPath {
     /// Complete corruption, or a non-final incomplete frame, fails closed.
     Reject,
 }
-
 /// One executable physical-recovery step.
 pub open spec fn physical_wal_recovery_step(
     before: PhysicalWalStateProjection,
@@ -1182,7 +1110,6 @@ pub open spec fn physical_wal_recovery_step(
         }
     }
 }
-
 /// A complete accepted frame advances one sequence and one hash-chain link.
 pub proof fn complete_physical_frame_extends_verified_prefix(
     before: PhysicalWalStateProjection,
@@ -1203,7 +1130,6 @@ pub proof fn complete_physical_frame_extends_verified_prefix(
         !after.failed_closed,
 {
 }
-
 /// A complete frame may have reached disk before `sync_data` returned. Replay
 /// accepts it only through the same full checksum/hash-chain corridor and
 /// installs it atomically, which is conservative for safety.
@@ -1228,7 +1154,6 @@ pub proof fn complete_unacknowledged_frame_replays_atomically(
         !after.failed_closed,
 {
 }
-
 /// An incomplete final frame is never acknowledged or exposed to decoded
 /// replay and leaves the complete-prefix sequence/hash unchanged.
 pub proof fn incomplete_final_frame_is_unacknowledged_stutter(
@@ -1253,7 +1178,6 @@ pub proof fn incomplete_final_frame_is_unacknowledged_stutter(
         !after.failed_closed,
 {
 }
-
 /// A complete sequence, length, previous-hash, or checksum failure cannot be
 /// truncated as an unacknowledged tail; it preserves the prefix and closes.
 pub proof fn corrupt_complete_frame_fails_closed(
@@ -1277,7 +1201,6 @@ pub proof fn corrupt_complete_frame_fails_closed(
         after.failed_closed,
 {
 }
-
 /// Ordered adapter completions for one physical append attempt.
 pub struct WalAppendLifecycleProjection {
     /// `write_all` returned success.
@@ -1299,7 +1222,6 @@ pub struct WalAppendLifecycleProjection {
     /// Whether an I/O failure poisoned this append instance.
     pub failed_closed: bool,
 }
-
 /// Exact append lifecycle implemented by `WalAppendState::append`.
 pub open spec fn wal_append_lifecycle_valid(step: WalAppendLifecycleProjection) -> bool {
     (!step.write_complete || 0 < step.write_order)
@@ -1319,7 +1241,6 @@ pub open spec fn wal_append_lifecycle_valid(step: WalAppendLifecycleProjection) 
         && step.failed_closed == (!step.write_complete
             || (step.write_complete && !step.receipt_minted))
 }
-
 /// A returned append receipt implies the complete ordered
 /// write/flush/sync-data corridor and atomic hash-chain-state advance.
 pub proof fn append_receipt_requires_ordered_durability(
@@ -1337,7 +1258,6 @@ pub proof fn append_receipt_requires_ordered_durability(
         !step.failed_closed,
 {
 }
-
 /// Any incomplete append corridor mints no receipt and does not advance the
 /// in-memory sequence/hash state.
 pub proof fn incomplete_append_corridor_has_no_acknowledgement(
@@ -1352,7 +1272,6 @@ pub proof fn incomplete_append_corridor_has_no_acknowledgement(
         step.failed_closed,
 {
 }
-
 /// Fixed-width projection of the typed WAL retirement corridor.
 pub struct WalRetirementProjection {
     /// A `FinalizedHeight` was produced by consuming the reducer.
@@ -1402,12 +1321,10 @@ pub struct WalRetirementProjection {
     /// Trusted Kura certificate subject.
     pub receipt_certificate_subject: int,
 }
-
 /// Fixed proof discriminator for the production Commit phase.
 pub open spec fn wal_commit_phase_code() -> int {
     0
 }
-
 /// Exact production rule for minting WAL retirement authority.
 pub open spec fn wal_retirement_authorized(step: WalRetirementProjection) -> bool {
     wal_retirement_authorized_body!(
@@ -1437,7 +1354,6 @@ pub open spec fn wal_retirement_authorized(step: WalRetirementProjection) -> boo
         step.receipt_certificate_subject,
     )
 }
-
 /// Retirement authority proves both Kura durability facts and exact identity
 /// equality with the reducer's durable CommitQC decision.
 pub proof fn wal_retirement_requires_exact_durable_kura_receipt(
@@ -1464,7 +1380,6 @@ pub proof fn wal_retirement_requires_exact_durable_kura_receipt(
         step.decision_certificate_subject == step.receipt_certificate_subject,
 {
 }
-
 /// Missing block durability, missing certificate durability, or an unclosed
 /// reducer height cannot authorize pruning regardless of matching identities.
 pub proof fn incomplete_kura_durability_cannot_authorize_wal_retirement(
@@ -1476,11 +1391,9 @@ pub proof fn incomplete_kura_durability_cannot_authorize_wal_retirement(
         !wal_retirement_authorized(step),
 {
 }
-
 // ---------------------------------------------------------------------------
 // Exact WAL safety projection
 // ---------------------------------------------------------------------------
-
 /// Primitive projection used by the shared exact local-proposal timeout
 /// justification kernel.
 pub struct LocalProposalTimeoutJustificationProjection {
@@ -1525,7 +1438,6 @@ pub struct LocalProposalTimeoutJustificationProjection {
     /// Full durable timeout-certificate evidence identity.
     pub durable_timeout_evidence_identity: int,
 }
-
 /// Every production `WalRecord` variant, projected onto checked predicates.
 pub enum WalRecordProjection {
     /// `WalRecord::ProposalIntent`.
@@ -1623,7 +1535,6 @@ pub enum WalRecordProjection {
         certificate_valid: bool,
     },
 }
-
 /// One complete projected WAL frame.
 pub struct WalFrameProjection {
     /// Monotonic frame number.
@@ -1633,7 +1544,6 @@ pub struct WalFrameProjection {
     /// Projected record.
     pub record: WalRecordProjection,
 }
-
 /// Safety-relevant durable fields plus frozen inputs supplied to WAL replay.
 pub struct WalStateProjection {
     /// Frozen context identity.
@@ -1669,7 +1579,6 @@ pub struct WalStateProjection {
     /// Durable CommitQC decision.
     pub decision: CertificateProjection,
 }
-
 /// Structural equality of the complete durable safety projection.
 pub open spec fn wal_states_equivalent(
     left: WalStateProjection,
@@ -1692,7 +1601,6 @@ pub open spec fn wal_states_equivalent(
         && left.last_timeout_group_count == right.last_timeout_group_count
         && same_certificate_evidence(left.decision, right.decision)
 }
-
 /// The invariant reconstructed from every accepted complete WAL prefix.
 pub open spec fn wal_invariant(state: WalStateProjection) -> bool {
     0 <= state.height <= machine_u64_max()
@@ -1720,7 +1628,6 @@ pub open spec fn wal_invariant(state: WalStateProjection) -> bool {
                     || state.highest_prepare.subject == state.locked.subject)))
         && (!state.decision.present || valid_commit(state.decision))
 }
-
 /// A map insertion is permitted only when it does not change an existing
 /// local intent for the same view.
 pub open spec fn unique_insert_allowed(
@@ -1730,7 +1637,6 @@ pub open spec fn unique_insert_allowed(
 ) -> bool {
     !intents.dom().contains(view) || intents[view] == subject
 }
-
 /// Exact production round admissibility for a new `LockAndCommit` record.
 ///
 /// The vote round, proposal-origin round, and durable current round must all
@@ -1746,7 +1652,6 @@ pub open spec fn lock_and_commit_round_is_admissible(
         && vote_proposal_view == vote_view
         && !before.timeout_intents.dom().contains(vote_view)
 }
-
 /// A second TC for the immediately preceding round may install only a
 /// strictly higher selected Prepare origin while retaining the current view.
 pub struct StrictSameRoundTimeoutUpgradeProjection {
@@ -1769,7 +1674,6 @@ pub struct StrictSameRoundTimeoutUpgradeProjection {
     /// Origin view of the durable lock.
     pub locked_prepare_view: int,
 }
-
 /// Verus instantiation of the source-shared fixed-width production predicate.
 pub open spec fn strict_same_round_timeout_upgrade(
     before: WalStateProjection,
@@ -1794,7 +1698,6 @@ pub open spec fn strict_same_round_timeout_upgrade(
         one
     )
 }
-
 /// Verus instantiation of the exact production kernel binding a non-zero-view
 /// local proposal to the latest timeout certificate reconstructed from WAL.
 pub open spec fn local_proposal_timeout_justification_is_exact(
@@ -1810,7 +1713,6 @@ pub open spec fn local_proposal_timeout_justification_is_exact(
         absent_evidence
     )
 }
-
 /// Proof-mode Verus instance of the source-shared local-proposal timeout
 /// identity relation. Production executes the same macro over fixed-width
 /// values; the mathematical projection remains ghost-only here.
@@ -1832,7 +1734,6 @@ pub proof fn verified_local_proposal_timeout_justification_is_exact(
     reveal(local_proposal_timeout_justification_is_exact);
     accepted
 }
-
 /// Acceptance exposes the exact predecessor, frozen context/height, selected
 /// high-QC projection, group cardinality, and full durable evidence identity.
 pub proof fn exact_local_proposal_timeout_justification_binds_latest_durable_tc(
@@ -1859,7 +1760,6 @@ pub proof fn exact_local_proposal_timeout_justification_binds_latest_durable_tc(
 {
     reveal(local_proposal_timeout_justification_is_exact);
 }
-
 /// Altering the full certificate evidence class cannot be hidden by retaining
 /// an equal round, group count, or selected high-QC reference.
 pub proof fn foreign_local_proposal_timeout_evidence_is_rejected(
@@ -1874,7 +1774,6 @@ pub proof fn foreign_local_proposal_timeout_evidence_is_rejected(
 {
     reveal(local_proposal_timeout_justification_is_exact);
 }
-
 /// A projected frame passes every production pre-state check, but has not yet
 /// changed the state.  This is the guard half of `DurableState::apply`.
 pub open spec fn wal_frame_admissible(
@@ -2046,7 +1945,6 @@ pub open spec fn wal_frame_admissible(
             }
         }
 }
-
 /// Fields unaffected by a WAL record remain identical.
 pub open spec fn same_wal_identity_and_intents(
     before: WalStateProjection,
@@ -2057,7 +1955,6 @@ pub open spec fn same_wal_identity_and_intents(
         && after.validator_count == before.validator_count
         && after.local_validator == before.local_validator
 }
-
 /// Exact latest-timeout identity retained by every non-install WAL branch.
 pub open spec fn same_latest_timeout(
     before: WalStateProjection,
@@ -2067,7 +1964,6 @@ pub open spec fn same_latest_timeout(
         && after.last_timeout_evidence == before.last_timeout_evidence
         && after.last_timeout_group_count == before.last_timeout_group_count
 }
-
 /// Exact transition relation for the safety projection of
 /// `DurableState::apply_in_place`.
 pub open spec fn wal_apply(
@@ -2217,7 +2113,6 @@ pub open spec fn wal_apply(
             }
         }
 }
-
 /// Transactional success/failure split of public `DurableState::apply`.
 pub enum WalApplyPathProjection {
     /// The frame passed every guard and was committed to the clone.
@@ -2225,7 +2120,6 @@ pub enum WalApplyPathProjection {
     /// The frame failed and the original state was retained exactly.
     Rejected,
 }
-
 /// Public `DurableState::apply` either applies one admissible frame or leaves
 /// every projected field unchanged on error.
 pub open spec fn durable_apply_refines(
@@ -2242,7 +2136,6 @@ pub open spec fn durable_apply_refines(
         }
     }
 }
-
 /// A rejected frame cannot partially change a vote, lock, view, or decision.
 pub proof fn rejected_wal_frame_is_transactional(
     before: WalStateProjection,
@@ -2259,7 +2152,6 @@ pub proof fn rejected_wal_frame_is_transactional(
         same_certificate(before.decision, after.decision),
 {
 }
-
 /// Every accepted WAL transition preserves the durable invariant.
 pub proof fn wal_apply_preserves_invariant(
     before: WalStateProjection,
@@ -2282,7 +2174,6 @@ pub proof fn wal_apply_preserves_invariant(
         WalRecordProjection::Decision { .. } => {},
     }
 }
-
 /// Existing local proposal, Prepare, Commit, and timeout intents never change.
 pub proof fn wal_apply_preserves_all_existing_intents(
     before: WalStateProjection,
@@ -2383,7 +2274,6 @@ pub proof fn wal_apply_preserves_all_existing_intents(
         | WalRecordProjection::Decision { .. } => {},
     }
 }
-
 /// WAL application never lowers a lock or changes its subject at equal view.
 pub proof fn wal_apply_preserves_lock_monotonicity(
     before: WalStateProjection,
@@ -2405,7 +2295,6 @@ pub proof fn wal_apply_preserves_lock_monotonicity(
         WalRecordProjection::Decision { .. } => {},
     }
 }
-
 /// Installed TCs are the only WAL action that advances view, and never regress it.
 pub proof fn wal_apply_preserves_view_monotonicity(
     before: WalStateProjection,
@@ -2427,7 +2316,6 @@ pub proof fn wal_apply_preserves_view_monotonicity(
         | WalRecordProjection::Decision { .. } => {},
     }
 }
-
 /// A durable decision is immutable across all later complete frames.
 pub proof fn wal_apply_preserves_decision_uniqueness(
     before: WalStateProjection,
@@ -2450,7 +2338,6 @@ pub proof fn wal_apply_preserves_decision_uniqueness(
         | WalRecordProjection::InstallTimeout { .. } => {},
     }
 }
-
 /// ProposalIntent installs exactly one proposal subject at its projected view.
 pub proof fn proposal_intent_branch_postcondition(
     before: WalStateProjection,
@@ -2474,7 +2361,6 @@ pub proof fn proposal_intent_branch_postcondition(
         _ => {},
     }
 }
-
 /// A non-zero-view ProposalIntent is admissible only when its explicit
 /// timeout projection names the exact latest durable certificate evidence.
 pub proof fn proposal_intent_guard_binds_exact_latest_timeout(
@@ -2515,7 +2401,6 @@ pub proof fn proposal_intent_guard_binds_exact_latest_timeout(
         _ => {},
     }
 }
-
 /// PrepareIntent admissibility is computed from vote primitives and frozen
 /// replay inputs; no caller-supplied validity bit can authorize the record.
 pub proof fn prepare_intent_guard_is_derived_from_vote_and_frozen_context(
@@ -2548,7 +2433,6 @@ pub proof fn prepare_intent_guard_is_derived_from_vote_and_frozen_context(
         _ => {},
     }
 }
-
 /// PrepareIntent installs exactly one Prepare subject while its view is open.
 pub proof fn prepare_intent_branch_postcondition(
     before: WalStateProjection,
@@ -2572,7 +2456,6 @@ pub proof fn prepare_intent_branch_postcondition(
         _ => {},
     }
 }
-
 /// ObservePrepare changes only the highest-PrepareQC projection and cannot
 /// select a lower certificate.
 pub proof fn observe_prepare_branch_postcondition(
@@ -2600,7 +2483,6 @@ pub proof fn observe_prepare_branch_postcondition(
         _ => {},
     }
 }
-
 /// LockAndCommit atomically installs the exact lock and matching unique Commit
 /// intent in the same acknowledged frame. Its proposal-origin round is the
 /// current vote round, which remains behind that round's timeout fence.
@@ -2643,7 +2525,6 @@ pub proof fn lock_and_commit_branch_is_atomic(
         _ => {},
     }
 }
-
 /// TimeoutIntent admissibility is derived from timeout-vote primitives and the
 /// frozen replay context; no caller-supplied validity or high-QC-match bit can
 /// authorize the record.
@@ -2678,7 +2559,6 @@ pub proof fn timeout_intent_guard_is_derived_from_vote_and_frozen_context(
         _ => {},
     }
 }
-
 /// TimeoutIntent durably closes exactly the current view with the expected
 /// full high PrepareQC evidence identity.
 pub proof fn timeout_intent_branch_postcondition(
@@ -2713,7 +2593,6 @@ pub proof fn timeout_intent_branch_postcondition(
         _ => {},
     }
 }
-
 /// InstallTimeout is the only durable branch that can advance view; a strict
 /// same-round high-QC upgrade retains the view and every branch preserves the
 /// lock rank.
@@ -2755,7 +2634,6 @@ pub proof fn install_timeout_branch_postcondition(
         _ => {},
     }
 }
-
 /// Decision installs the first exact CommitQC witness and accepts a later
 /// same-body, independently same-round QC as the same semantic decision.
 /// Application remains a later reducer effect.
@@ -2782,11 +2660,9 @@ pub proof fn decision_branch_postcondition(
         _ => {},
     }
 }
-
 // ---------------------------------------------------------------------------
 // Branch-complete reducer safety refinement
 // ---------------------------------------------------------------------------
-
 /// The four production `SignableMessage` classes.
 pub enum SignKindProjection {
     /// Leader proposal signature.
@@ -2798,7 +2674,6 @@ pub enum SignKindProjection {
     /// Timeout vote signature.
     Timeout,
 }
-
 /// Every production `Event` variant with safety-relevant payload projected.
 pub enum EventProjection {
     /// `Event::LocalProposalReady`.
@@ -2834,7 +2709,6 @@ pub enum EventProjection {
     /// `Event::ApplicationCompleted`.
     ApplicationCompleted { subject: int },
 }
-
 /// Production event envelope.  Every asynchronous completion and authenticated
 /// ingress carries the active height, persisted view, and local generation.
 pub struct ReducerInputProjection {
@@ -2847,7 +2721,6 @@ pub struct ReducerInputProjection {
     /// Projected event payload.
     pub event: EventProjection,
 }
-
 /// Safety-relevant continuation attached to one pending WAL frame.
 pub enum ContinuationProjection {
     /// No direct signing/view/decision continuation.
@@ -2865,7 +2738,6 @@ pub enum ContinuationProjection {
     /// Handle a CommitQC only after Decision acknowledgement.
     Decide { view: int, subject: int },
 }
-
 /// One signing request emitted by the reducer.
 pub struct SignEffectProjection {
     /// Whether signing was requested.
@@ -2877,7 +2749,6 @@ pub struct SignEffectProjection {
     /// Signed subject; ignored for timeout.
     pub subject: int,
 }
-
 /// Safety-relevant subset of the reducer's effect list.
 pub struct EffectProjection {
     /// A complete WAL frame append was requested.
@@ -2891,7 +2762,6 @@ pub struct EffectProjection {
     /// A persisted TC caused an EnterView notification.
     pub enter_view: bool,
 }
-
 /// Safety projection of the executable reducer plus adapter-held historical
 /// body-store tokens.  The two sets are monotone for the active height even
 /// when production `body_work` is cleared on a view change.
@@ -2921,7 +2791,6 @@ pub struct ReducerProjection {
     /// Whether the sole recovery-resumption transition was consumed.
     pub replay_resumed: bool,
 }
-
 /// Reducer source branches at the safety projection boundary.
 pub enum ReducerPathProjection {
     /// Ignored, rejected transactionally, or volatile-only processing.
@@ -2942,7 +2811,6 @@ pub enum ReducerPathProjection {
     /// `on_resume_after_replay` consumed the recovery-pending transition.
     ResumeAfterReplay,
 }
-
 /// Durable-state equality used by all non-acknowledgement reducer branches.
 pub open spec fn same_wal_state(
     left: WalStateProjection,
@@ -2950,7 +2818,6 @@ pub open spec fn same_wal_state(
 ) -> bool {
     wal_states_equivalent(left, right)
 }
-
 /// Continuation kind must correspond exactly to its production WAL record.
 pub open spec fn continuation_matches(
     record: WalRecordProjection,
@@ -2989,7 +2856,6 @@ pub open spec fn continuation_matches(
         _ => false,
     }
 }
-
 /// Events permitted to reach each `start_persistence` call site in
 /// `Reducer::step` and the synchronous handlers it invokes.
 pub open spec fn event_may_start_record(
@@ -3065,7 +2931,6 @@ pub open spec fn event_may_start_record(
         _ => false,
     }
 }
-
 /// Historical body facts supplied by accepted body-adapter completions.
 pub open spec fn body_history_transition(
     before: ReducerProjection,
@@ -3103,7 +2968,6 @@ pub open spec fn body_history_transition(
         _ => false,
     }
 }
-
 /// Accepted body progress never creates a validation token before its durable
 /// exact-body token.
 pub proof fn body_history_preserves_storage_before_validation(
@@ -3128,7 +2992,6 @@ pub proof fn body_history_preserves_storage_before_validation(
         _ => {},
     }
 }
-
 /// A signing effect is authorized by a complete durable intent and, where
 /// required, by the retained exact-body history.
 pub open spec fn signing_effect_is_safe(
@@ -3158,7 +3021,6 @@ pub open spec fn signing_effect_is_safe(
             }
         }
 }
-
 /// Apply is authorized only by a durable CommitQC for a validated durable body.
 pub open spec fn apply_effect_is_safe(
     state: ReducerProjection,
@@ -3171,7 +3033,6 @@ pub open spec fn apply_effect_is_safe(
             && state.validated_bodies.contains(effects.apply_subject)
             && state.application_ready.contains(effects.apply_subject))
 }
-
 /// Reducer invariant spanning WAL state and the body adapter's monotone tokens.
 pub open spec fn reducer_invariant(state: ReducerProjection) -> bool {
     wal_invariant(state.durable)
@@ -3189,7 +3050,6 @@ pub open spec fn reducer_invariant(state: ReducerProjection) -> bool {
                 && state.applied_subject == state.durable.decision.subject
                 && state.validated_bodies.contains(state.applied_subject)))
 }
-
 /// Effects that do not append a WAL frame still obey signing/application fences.
 pub open spec fn non_persist_effects_safe(
     state: ReducerProjection,
@@ -3199,7 +3059,6 @@ pub open spec fn non_persist_effects_safe(
         && signing_effect_is_safe(state, effects.sign)
         && apply_effect_is_safe(state, effects)
 }
-
 /// Exact `reject_tag` predicate for the safety projection.
 pub open spec fn input_tag_matches(
     state: ReducerProjection,
@@ -3209,12 +3068,10 @@ pub open spec fn input_tag_matches(
         && input.tag_view == state.durable.view
         && input.tag_generation == state.generation
 }
-
 /// No persistence, signing, application, or view effect was emitted.
 pub open spec fn no_safety_effect(effects: EffectProjection) -> bool {
     !effects.persist && !effects.sign.present && !effects.apply && !effects.enter_view
 }
-
 /// The two events allowed through the pending-persistence busy fence.
 pub open spec fn is_persistence_completion(event: EventProjection) -> bool {
     match event {
@@ -3222,7 +3079,6 @@ pub open spec fn is_persistence_completion(event: EventProjection) -> bool {
         _ => false,
     }
 }
-
 /// The `NoDurableChange` branch enforces the recovery and pending-write fences,
 /// may retransmit Apply only on the timer path, and may request the next
 /// already-authorized signature only after Signed. This safety projection
@@ -3253,7 +3109,6 @@ pub open spec fn no_change_effects_match_input(
             })
     }
 }
-
 /// Safety-state equality for ignored, rejected, and volatile-only branches.
 pub open spec fn same_reducer_projection(
     before: ReducerProjection,
@@ -3274,7 +3129,6 @@ pub open spec fn same_reducer_projection(
         && (!before.applied || before.applied_subject == after.applied_subject)
         && before.replay_resumed == after.replay_resumed
 }
-
 /// Exact safety projection of the one replay-resumption event.  The complete
 /// production effect vector is checked separately by the executable gate;
 /// this projection retains the persistence/sign/application fences.
@@ -3301,7 +3155,6 @@ pub open spec fn replay_resume_transition(
         && !effects.apply
         && !effects.enter_view
 }
-
 /// Exact safety-effect behavior after acknowledgement of each continuation.
 /// A queued replay signature may be selected ahead of the just-acknowledged
 /// continuation, but any such selection must satisfy the durable sign fence.
@@ -3342,7 +3195,6 @@ pub open spec fn acknowledgement_effects_match(
             }
         }
 }
-
 /// The single branch-complete safety refinement relation for `Reducer::step`.
 pub open spec fn reducer_step_refines(
     before: ReducerProjection,
@@ -3467,7 +3319,6 @@ pub open spec fn reducer_step_refines(
         }
     }
 }
-
 /// Every reducer branch preserves the combined WAL/body/application invariant.
 pub proof fn reducer_step_preserves_invariant(
     before: ReducerProjection,
@@ -3515,7 +3366,6 @@ pub proof fn reducer_step_preserves_invariant(
         ReducerPathProjection::ResumeAfterReplay => {},
     }
 }
-
 /// Every emitted signing, persistence, view, and application effect is on the
 /// far side of its corresponding durable fence.
 pub proof fn reducer_step_preserves_effect_ordering(
@@ -3550,7 +3400,6 @@ pub proof fn reducer_step_preserves_effect_ordering(
         | ReducerPathProjection::ResumeAfterReplay => {},
     }
 }
-
 /// Reducer steps inherit durable vote uniqueness from the sole WAL-ack branch.
 pub proof fn reducer_step_preserves_vote_uniqueness(
     before: ReducerProjection,
@@ -3590,7 +3439,6 @@ pub proof fn reducer_step_preserves_vote_uniqueness(
         | ReducerPathProjection::ResumeAfterReplay => {},
     }
 }
-
 /// Reducer steps inherit lock and decision monotonicity from the sole WAL-ack
 /// branch; every other event leaves durable state unchanged.
 pub proof fn reducer_step_preserves_lock_and_decision(
@@ -3629,7 +3477,6 @@ pub proof fn reducer_step_preserves_lock_and_decision(
         | ReducerPathProjection::ResumeAfterReplay => {},
     }
 }
-
 /// Crash recovery projects to replaying a complete WAL prefix.  Volatile
 /// pending work and body reconstruction may be lost, while durable intents,
 /// lock, view, and decision remain identical.
@@ -3646,7 +3493,6 @@ pub open spec fn crash_recovery(
         && !after.applied
         && !after.replay_resumed
 }
-
 /// Replay preserves all safety invariants; application acknowledgement is
 /// deliberately volatile and must be reacquired from Kura after restart.
 pub proof fn crash_recovery_preserves_safety(
@@ -3665,11 +3511,9 @@ pub proof fn crash_recovery_preserves_safety(
         !after.replay_resumed,
 {
 }
-
 // ---------------------------------------------------------------------------
 // Exact executable production commit gate
 // ---------------------------------------------------------------------------
-
 /// Verus-side primitive durable-intent ownership trace.
 #[derive(Copy, Clone)]
 pub struct ProductionDurableIntentTraceProjection {
@@ -3686,7 +3530,6 @@ pub struct ProductionDurableIntentTraceProjection {
     pub durable_sequence_before: u64,
     pub durable_sequence_after: u64,
 }
-
 /// Verus-side primitive ownership facts for one validated durable lock.
 #[derive(Copy, Clone)]
 pub struct LockedCommitProgressWitnessProjection {
@@ -3723,7 +3566,6 @@ pub struct LockedCommitProgressWitnessProjection {
     pub installed_timeout_height: u64,
     pub installed_timeout_view: u64,
 }
-
 /// Verus-side complete semantic Decision identity.
 #[derive(Copy, Clone)]
 pub struct ProductionDecisionIdentityProjection {
@@ -3739,7 +3581,6 @@ pub struct ProductionDecisionIdentityProjection {
     pub execution_commitment: CanonicalIdentityProjection,
     pub executed_block_wire_hash: CanonicalIdentityProjection,
 }
-
 /// Verus-side complete quorum-certificate identity.
 #[derive(Copy, Clone)]
 pub struct ProductionQuorumCertificateIdentityProjection {
@@ -3748,7 +3589,6 @@ pub struct ProductionQuorumCertificateIdentityProjection {
     pub signer_count: u64,
     pub aggregate_signature_len: u64,
 }
-
 /// Verus-side exact durable-body identity.
 #[derive(Copy, Clone)]
 pub struct ProductionDurableBodyIdentityProjection {
@@ -3761,7 +3601,6 @@ pub struct ProductionDurableBodyIdentityProjection {
     pub manifest: CanonicalIdentityProjection,
     pub frame: CanonicalIdentityProjection,
 }
-
 /// Verus-side primitive pending-Decision recovery trace.
 #[derive(Copy, Clone)]
 pub struct ProductionDecisionRecoveryTraceProjection {
@@ -3783,7 +3622,6 @@ pub struct ProductionDecisionRecoveryTraceProjection {
     pub validated_execution_commitment: CanonicalIdentityProjection,
     pub stage: u8,
 }
-
 /// Verus-side primitive scheduler ownership trace.
 #[derive(Copy, Clone)]
 pub struct ProductionSchedulerTraceProjection {
@@ -3794,7 +3632,6 @@ pub struct ProductionSchedulerTraceProjection {
     pub selected: u8,
     pub fifo_owed_after: bool,
 }
-
 /// Verus-side primitive ingress identity, ordinal, and service-class trace.
 #[derive(Copy, Clone)]
 pub struct ProductionIngressIdentityAndClassTraceProjection {
@@ -3818,7 +3655,6 @@ pub struct ProductionIngressIdentityAndClassTraceProjection {
     pub dormant_owner_ordinal: u128,
     pub ordinal_minted: bool,
 }
-
 /// Verus-side lossless observation of one concrete adapter effect and the
 /// exact causal-candidate owner retained for it by production.
 #[derive(Copy, Clone)]
@@ -3853,7 +3689,6 @@ pub struct ProductionEffectToCandidateTraceProjection {
     pub candidate_owner_admitted: bool,
     pub producer_episode_retained: bool,
 }
-
 /// Verus-side exact replacement of one unpublished reservation by its
 /// reducer-visible command.
 #[derive(Copy, Clone)]
@@ -3879,7 +3714,6 @@ pub struct ProductionIngressReservationMaterializationTraceProjection {
     pub dormant_reservations_after: u64,
     pub dormant_owner_ordinal: u128,
 }
-
 /// Verus-side total durable leader-wire admission transition.
 #[derive(Copy, Clone)]
 pub struct ProductionLeaderWireAdmissionTraceProjection {
@@ -3912,7 +3746,6 @@ pub struct ProductionLeaderWireAdmissionTraceProjection {
     pub terminal_evidence_before: bool,
     pub terminal_evidence_after: bool,
 }
-
 /// Verus-side primitive two-stage daemon retry trace.
 #[derive(Copy, Clone)]
 pub struct ProductionTwoStageRelayRetryTraceProjection {
@@ -3935,7 +3768,6 @@ pub struct ProductionTwoStageRelayRetryTraceProjection {
     pub source_capacity: u64,
     pub total_capacity: u64,
 }
-
 /// Verus-side primitive writer-flush ownership trace.
 ///
 /// `stream_epoch` retains the non-zero durable request-stream incarnation,
@@ -3986,7 +3818,6 @@ pub struct ProductionReliableFlushTraceProjection {
     pub admitted_after: u64,
     pub capacity: u64,
 }
-
 /// Verus-side exact lane application of one actor-confirmed writer flush.
 ///
 /// `service_generation`, `stream_epoch`, and `semantic_sequence` are captured
@@ -4088,7 +3919,6 @@ pub struct ProductionReliableFlushApplicationProjection {
     pub sibling_state_before: CanonicalIdentityProjection,
     pub sibling_state_after: CanonicalIdentityProjection,
 }
-
 /// Verus-side primitive durable application-completion trace.
 #[derive(Copy, Clone)]
 pub struct ProductionApplicationTraceProjection {
@@ -4116,7 +3946,6 @@ pub struct ProductionApplicationTraceProjection {
     pub task_work_id: u64,
     pub completion_work_id: u64,
 }
-
 /// Verus-side exact application boundary before successor construction.
 #[derive(Copy, Clone)]
 pub struct ProductionTerminalApplicationWithoutSuccessorActivationProjection {
@@ -4133,7 +3962,6 @@ pub struct ProductionTerminalApplicationWithoutSuccessorActivationProjection {
     pub predecessor: ProductionDurablePredecessorIdentityProjection,
     pub pending_successor_activation_present: bool,
 }
-
 /// Verus-side primitive durable owner of one exact lane queue reservation.
 #[derive(Copy, Clone)]
 pub struct ProductionInFlightReservationOwnerProjection {
@@ -4141,7 +3969,6 @@ pub struct ProductionInFlightReservationOwnerProjection {
     pub reservation_identity: CanonicalIdentityProjection,
     pub release_identity: CanonicalIdentityProjection,
 }
-
 /// Verus-side mirror of one primitive reservation-journal owner transition.
 #[derive(Copy, Clone)]
 pub struct ProductionInFlightReservationTransitionProjection {
@@ -4151,7 +3978,6 @@ pub struct ProductionInFlightReservationTransitionProjection {
     pub before: ProductionInFlightReservationOwnerProjection,
     pub after: ProductionInFlightReservationOwnerProjection,
 }
-
 /// Verus-side QueuePlan V4 and reservation journal V5 state.
 #[derive(Copy, Clone)]
 pub struct ProductionInFlightFirstReleaseQueueProjection {
@@ -4159,7 +3985,6 @@ pub struct ProductionInFlightFirstReleaseQueueProjection {
     pub selected_count: u64,
     pub reservation_state: u8,
 }
-
 /// Verus-side durable Kura/input/READY-QC state.
 #[derive(Copy, Clone)]
 pub struct ProductionInFlightFirstReleaseCarrierProjection {
@@ -4167,7 +3992,6 @@ pub struct ProductionInFlightFirstReleaseCarrierProjection {
     pub execution_input_durable: u128,
     pub ready_qc_durable: bool,
 }
-
 /// Verus-side volatile body and READY authorization custody.
 #[derive(Copy, Clone)]
 pub struct ProductionInFlightFirstReleaseSessionProjection {
@@ -4176,7 +4000,6 @@ pub struct ProductionInFlightFirstReleaseSessionProjection {
     pub crashed: u128,
     pub producer_alive: bool,
 }
-
 /// Verus-side monotonic durable history.
 #[derive(Copy, Clone)]
 pub struct ProductionInFlightFirstReleaseHistoryProjection {
@@ -4192,7 +4015,6 @@ pub struct ProductionInFlightFirstReleaseHistoryProjection {
     pub pending_high_water: u64,
     pub released_high_water: u64,
 }
-
 /// Verus-side lane decision, canonical WSV, and release owner.
 #[derive(Copy, Clone)]
 pub struct ProductionInFlightFirstReleaseDecisionProjection {
@@ -4204,7 +4026,6 @@ pub struct ProductionInFlightFirstReleaseDecisionProjection {
     pub application_count: u8,
     pub applied_by: u128,
 }
-
 /// Verus-side four-stage release progress.
 #[derive(Copy, Clone)]
 pub struct ProductionInFlightFirstReleaseReleaseProjection {
@@ -4213,7 +4034,6 @@ pub struct ProductionInFlightFirstReleaseReleaseProjection {
     pub released_prefix: u64,
     pub fifo_restored: bool,
 }
-
 /// Verus-side total fixed-width first-release carrier state for canonical
 /// committees of 1 through 128 validators.
 ///
@@ -4234,7 +4054,6 @@ pub struct ProductionInFlightFirstReleaseStateProjection {
     pub decision: ProductionInFlightFirstReleaseDecisionProjection,
     pub release: ProductionInFlightFirstReleaseReleaseProjection,
 }
-
 /// Verus-side named action over the total first-release carrier state.
 #[derive(Copy, Clone)]
 pub struct ProductionInFlightFirstReleaseTransitionProjection {
@@ -4244,7 +4063,6 @@ pub struct ProductionInFlightFirstReleaseTransitionProjection {
     pub before: ProductionInFlightFirstReleaseStateProjection,
     pub after: ProductionInFlightFirstReleaseStateProjection,
 }
-
 /// Verus-side reverse classification of one terminal economic owner.
 #[derive(Copy, Clone)]
 pub struct ProductionInFlightFirstReleaseTerminalOwnerProjection {
@@ -4253,7 +4071,6 @@ pub struct ProductionInFlightFirstReleaseTerminalOwnerProjection {
     pub commit_terminal: bool,
     pub release_terminal: bool,
 }
-
 /// Verus-side complete immutable identity of one durable predecessor.
 #[derive(Copy, Clone)]
 pub struct ProductionDurablePredecessorIdentityProjection {
@@ -4261,7 +4078,6 @@ pub struct ProductionDurablePredecessorIdentityProjection {
     pub block_hash: CanonicalIdentityProjection,
     pub artifact_hash: CanonicalIdentityProjection,
 }
-
 /// Verus-side exact predecessor binding returned by successor construction.
 #[derive(Copy, Clone)]
 pub struct ProductionSuccessorPredecessorBindingProjection {
@@ -4269,7 +4085,6 @@ pub struct ProductionSuccessorPredecessorBindingProjection {
     pub authority_predecessor: ProductionDurablePredecessorIdentityProjection,
     pub successor_context_id: CanonicalIdentityProjection,
 }
-
 /// Verus-side prepared successor status and exact activation marker.
 #[derive(Copy, Clone)]
 pub struct ProductionSuccessorSnapshotProjection {
@@ -4286,7 +4101,6 @@ pub struct ProductionSuccessorSnapshotProjection {
     pub marker_kind: u8,
     pub marker_age_ms: u64,
 }
-
 /// Verus-side applied-predecessor activation trace.
 #[derive(Copy, Clone)]
 pub struct ProductionAppliedSuccessorTraceProjection {
@@ -4297,7 +4111,6 @@ pub struct ProductionAppliedSuccessorTraceProjection {
     pub predecessor_stage_after: u8,
     pub successor: ProductionSuccessorSnapshotProjection,
 }
-
 /// Verus-side complete-tip or snapshot recovery activation trace.
 #[derive(Copy, Clone)]
 pub struct ProductionRecoveredSuccessorTraceProjection {
@@ -4310,7 +4123,6 @@ pub struct ProductionRecoveredSuccessorTraceProjection {
     pub published_status_height_before: u64,
     pub successor: ProductionSuccessorSnapshotProjection,
 }
-
 /// Verus-side successor startup lifecycle transition.
 #[derive(Copy, Clone)]
 pub struct ProductionSuccessorStartupLifecycleProjection {
@@ -4324,7 +4136,6 @@ pub struct ProductionSuccessorStartupLifecycleProjection {
     pub restart_required_before: bool,
     pub restart_required_after: bool,
 }
-
 /// Verus-side authenticated historical CommitQC reducer handoff.
 #[derive(Copy, Clone)]
 pub struct ProductionHistoricalCertificateTraceProjection {
@@ -4341,7 +4152,6 @@ pub struct ProductionHistoricalCertificateTraceProjection {
     pub request_present_before: bool,
     pub request_present_after: bool,
 }
-
 /// Verus-side authenticated certified-body handoff into the ordinary pipeline.
 #[derive(Copy, Clone)]
 pub struct ProductionHistoricalBodyPipelineTraceProjection {
@@ -4372,7 +4182,6 @@ pub struct ProductionHistoricalBodyPipelineTraceProjection {
     pub pending_fetch_present_after: bool,
     pub request_present_after: bool,
 }
-
 /// Total applied-successor gate mirrored by the production consumer.
 pub closed spec fn check_production_applied_successor_transition(
     projection: ProductionAppliedSuccessorTraceProjection,
@@ -4383,7 +4192,6 @@ pub closed spec fn check_production_applied_successor_transition(
         None
     }
 }
-
 /// Total recovered-successor gate mirrored by the production consumer.
 pub closed spec fn check_production_recovered_successor_transition(
     projection: ProductionRecoveredSuccessorTraceProjection,
@@ -4394,7 +4202,6 @@ pub closed spec fn check_production_recovered_successor_transition(
         None
     }
 }
-
 /// Total successor-startup lifecycle gate mirrored by production.
 pub closed spec fn check_production_successor_startup_lifecycle_transition(
     projection: ProductionSuccessorStartupLifecycleProjection,
@@ -4405,7 +4212,6 @@ pub closed spec fn check_production_successor_startup_lifecycle_transition(
         None
     }
 }
-
 /// Total historical-certificate gate mirrored by production.
 pub closed spec fn check_production_historical_certificate_transition(
     projection: ProductionHistoricalCertificateTraceProjection,
@@ -4416,7 +4222,6 @@ pub closed spec fn check_production_historical_certificate_transition(
         None
     }
 }
-
 /// Total historical-body pipeline gate mirrored by production.
 pub closed spec fn check_production_historical_body_pipeline_transition(
     projection: ProductionHistoricalBodyPipelineTraceProjection,
@@ -4427,7 +4232,6 @@ pub closed spec fn check_production_historical_body_pipeline_transition(
         None
     }
 }
-
 /// Total reducer durable-intent gate mirrored by production.
 pub closed spec fn check_production_durable_intent_transition(
     projection: ProductionDurableIntentTraceProjection,
@@ -4438,14 +4242,12 @@ pub closed spec fn check_production_durable_intent_transition(
         None
     }
 }
-
 /// Exact typed locked-Commit progress projection consumed by the cross-tool theorem.
 pub closed spec fn locked_commit_progress_witness_projection(
     projection: LockedCommitProgressWitnessProjection,
 ) -> LockedCommitProgressWitnessProjection {
     projection
 }
-
 /// Total pending-Decision recovery gate mirrored by production.
 pub closed spec fn check_production_decision_recovery_transition(
     projection: ProductionDecisionRecoveryTraceProjection,
@@ -4456,7 +4258,6 @@ pub closed spec fn check_production_decision_recovery_transition(
         None
     }
 }
-
 /// Total protected scheduler gate mirrored by production.
 pub closed spec fn check_production_scheduler_transition(
     projection: ProductionSchedulerTraceProjection,
@@ -4467,7 +4268,6 @@ pub closed spec fn check_production_scheduler_transition(
         None
     }
 }
-
 /// Total bounded-ingress gate mirrored by production.
 pub closed spec fn check_production_ingress_transition(
     projection: ProductionIngressIdentityAndClassTraceProjection,
@@ -4478,7 +4278,6 @@ pub closed spec fn check_production_ingress_transition(
         None
     }
 }
-
 /// Total effect-to-candidate ownership gate mirrored by production before it
 /// retains an adapter-effect batch or publishes an asynchronous owner.
 pub closed spec fn check_production_effect_to_candidate_transition(
@@ -4490,7 +4289,6 @@ pub closed spec fn check_production_effect_to_candidate_transition(
         None
     }
 }
-
 /// Total exact reservation-materialization gate mirrored by production.
 pub closed spec fn check_production_ingress_reservation_materialization_transition(
     projection: ProductionIngressReservationMaterializationTraceProjection,
@@ -4503,7 +4301,6 @@ pub closed spec fn check_production_ingress_reservation_materialization_transiti
         None
     }
 }
-
 /// Total durable leader-wire admission gate mirrored by production.
 pub closed spec fn check_production_leader_wire_admission_transition(
     projection: ProductionLeaderWireAdmissionTraceProjection,
@@ -4514,7 +4311,6 @@ pub closed spec fn check_production_leader_wire_admission_transition(
         None
     }
 }
-
 /// Total two-stage retry gate mirrored by production.
 pub closed spec fn check_production_two_stage_relay_retry_transition(
     projection: ProductionTwoStageRelayRetryTraceProjection,
@@ -4525,7 +4321,6 @@ pub closed spec fn check_production_two_stage_relay_retry_transition(
         None
     }
 }
-
 /// Total worker-side reliable-flush gate mirrored by production.
 pub closed spec fn check_production_reliable_flush_worker_transition(
     projection: ProductionReliableFlushTraceProjection,
@@ -4536,7 +4331,6 @@ pub closed spec fn check_production_reliable_flush_worker_transition(
         None
     }
 }
-
 /// Total lane-application reliable-flush gate mirrored by production.
 pub closed spec fn check_production_reliable_flush_application_transition(
     projection: ProductionReliableFlushApplicationProjection,
@@ -4547,7 +4341,6 @@ pub closed spec fn check_production_reliable_flush_application_transition(
         None
     }
 }
-
 /// Total two-phase reliable-flush link gate mirrored by production.
 pub closed spec fn check_production_reliable_flush_link_transition(
     worker: ProductionReliableFlushTraceProjection,
@@ -4559,7 +4352,6 @@ pub closed spec fn check_production_reliable_flush_link_transition(
         None
     }
 }
-
 /// Total durable-application gate mirrored by production.
 pub closed spec fn check_production_application_transition(
     projection: ProductionApplicationTraceProjection,
@@ -4570,7 +4362,6 @@ pub closed spec fn check_production_application_transition(
         None
     }
 }
-
 /// Total terminal-application boundary gate mirrored by production.
 pub closed spec fn check_production_terminal_application_transition(
     projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,
@@ -4581,7 +4372,6 @@ pub closed spec fn check_production_terminal_application_transition(
         None
     }
 }
-
 /// Total gate over the primitive reservation-owner projection mirrored by production.
 ///
 /// This is intentionally not a total refinement checker for the surrounding
@@ -4595,7 +4385,6 @@ pub closed spec fn check_production_in_flight_reservation_transition(
         None
     }
 }
-
 /// Total gate over one complete bounded first-release carrier transition.
 pub closed spec fn check_production_in_flight_first_release_transition(
     projection: ProductionInFlightFirstReleaseTransitionProjection,
@@ -4606,7 +4395,6 @@ pub closed spec fn check_production_in_flight_first_release_transition(
         None
     }
 }
-
 /// Reverse terminal-owner extractor mirrored from the production kernel.
 pub closed spec fn production_in_flight_first_release_terminal_owner(
     projection: ProductionInFlightFirstReleaseStateProjection,
@@ -4639,133 +4427,114 @@ pub closed spec fn production_in_flight_first_release_terminal_owner(
         None
     }
 }
-
 /// Exact Verus mirror of the durable predecessor production gate.
 pub closed spec fn production_durable_predecessor_identity_kernel(
     projection: ProductionDurablePredecessorIdentityProjection,
 ) -> bool {
     durable_predecessor_is_canonical_body!(projection)
 }
-
 /// Exact Verus mirror of the successor-construction ownership gate.
 pub closed spec fn production_successor_predecessor_binding_kernel(
     projection: ProductionSuccessorPredecessorBindingProjection,
 ) -> bool {
     production_successor_predecessor_binding_body!(projection)
 }
-
 /// Exact Verus mirror of the applied-successor publication gate.
 pub closed spec fn production_applied_successor_trace_refines_indexed_activation_kernel(
     projection: ProductionAppliedSuccessorTraceProjection,
 ) -> bool {
     production_applied_successor_trace_body!(projection)
 }
-
 /// Exact Verus mirror of the recovered-successor publication gate.
 pub closed spec fn production_recovered_successor_trace_refines_indexed_activation_kernel(
     projection: ProductionRecoveredSuccessorTraceProjection,
 ) -> bool {
     production_recovered_successor_trace_body!(projection)
 }
-
 /// Exact Verus mirror of the successor startup failure/restart gate.
 pub closed spec fn production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
     projection: ProductionSuccessorStartupLifecycleProjection,
 ) -> bool {
     production_startup_failure_and_restart_trace_body!(projection)
 }
-
 /// Exact Verus mirror of the historical CommitQC reducer-admission gate.
 pub closed spec fn production_historical_certificate_trace_refines_indexed_async_kernel(
     projection: ProductionHistoricalCertificateTraceProjection,
 ) -> bool {
     production_historical_certificate_trace_body!(projection)
 }
-
 /// Exact Verus mirror of the historical certified-body pipeline-admission gate.
 pub closed spec fn production_historical_body_pipeline_trace_refines_indexed_async_kernel(
     projection: ProductionHistoricalBodyPipelineTraceProjection,
 ) -> bool {
     production_historical_body_pipeline_trace_body!(projection)
 }
-
 /// Exact Verus mirror of the reducer durable-intent production kernel.
 pub closed spec fn production_durable_intent_trace_refines_progress_witness_kernel(
     projection: ProductionDurableIntentTraceProjection,
 ) -> bool {
     production_durable_intent_trace_body!(projection)
 }
-
 /// Exact Verus mirror of the validated-lock progress-witness production kernel.
 pub closed spec fn locked_commit_progress_witness_is_valid_kernel(
     projection: LockedCommitProgressWitnessProjection,
 ) -> bool {
     locked_commit_progress_witness_body!(projection)
 }
-
 /// Exact Verus mirror of the pending-Decision recovery production kernel.
 pub closed spec fn production_decision_trace_refines_recovery_witness_kernel(
     projection: ProductionDecisionRecoveryTraceProjection,
 ) -> bool {
     production_decision_recovery_trace_body!(projection)
 }
-
 /// Exact Verus mirror of the scheduler ownership production kernel.
 pub closed spec fn production_scheduler_trace_refines_protected_ownership_kernel(
     projection: ProductionSchedulerTraceProjection,
 ) -> bool {
     production_scheduler_trace_body!(projection)
 }
-
 /// Exact Verus mirror of the ingress identity/class production kernel.
 pub closed spec fn production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
     projection: ProductionIngressIdentityAndClassTraceProjection,
 ) -> bool {
     production_ingress_identity_and_class_trace_body!(projection)
 }
-
 /// Exact Verus mirror of the concrete effect-to-candidate ownership kernel.
 pub closed spec fn production_effect_to_candidate_refines_async_ownership_kernel(
     projection: ProductionEffectToCandidateTraceProjection,
 ) -> bool {
     production_effect_to_candidate_trace_body!(projection)
 }
-
 /// Exact Verus mirror of the reservation-materialization ownership kernel.
 pub closed spec fn production_ingress_reservation_materialization_refines_protected_ownership_kernel(
     projection: ProductionIngressReservationMaterializationTraceProjection,
 ) -> bool {
     production_ingress_reservation_materialization_trace_body!(projection)
 }
-
 /// Exact Verus mirror of the durable leader-wire admission kernel.
 pub closed spec fn production_leader_wire_admission_refines_lifecycle_ownership_kernel(
     projection: ProductionLeaderWireAdmissionTraceProjection,
 ) -> bool {
     production_leader_wire_admission_trace_body!(projection)
 }
-
 /// Exact Verus mirror of the two-stage relay retry fairness kernel.
 pub closed spec fn production_two_stage_relay_retry_trace_refines_source_fairness_kernel(
     projection: ProductionTwoStageRelayRetryTraceProjection,
 ) -> bool {
     production_two_stage_relay_retry_trace_body!(projection)
 }
-
 /// Exact Verus mirror of the writer-flush ownership production kernel.
 pub closed spec fn production_reliable_flush_trace_refines_outbound_ownership_kernel(
     projection: ProductionReliableFlushTraceProjection,
 ) -> bool {
     production_reliable_flush_trace_body!(projection)
 }
-
 /// Exact Verus mirror of the lane-side writer-flush application kernel.
 pub closed spec fn production_reliable_flush_application_refines_source_lane_kernel(
     projection: ProductionReliableFlushApplicationProjection,
 ) -> bool {
     production_reliable_flush_application_body!(projection)
 }
-
 /// Exact Verus mirror of the worker-to-lane occurrence linkage kernel.
 pub closed spec fn production_reliable_flush_two_phase_link_kernel(
     worker: ProductionReliableFlushTraceProjection,
@@ -4773,42 +4542,36 @@ pub closed spec fn production_reliable_flush_two_phase_link_kernel(
 ) -> bool {
     production_reliable_flush_two_phase_link_body!(worker, application)
 }
-
 /// Exact Verus mirror of the durable application production kernel.
 pub closed spec fn production_application_trace_refines_decision_completion_kernel(
     projection: ProductionApplicationTraceProjection,
 ) -> bool {
     production_application_trace_body!(projection)
 }
-
 /// Exact Verus mirror of the application/successor boundary separation gate.
 pub closed spec fn production_terminal_application_without_successor_activation_kernel(
     projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,
 ) -> bool {
     production_terminal_application_without_successor_activation_body!(projection)
 }
-
 /// Exact Verus mirror of the primitive reservation-owner production kernel.
 pub closed spec fn production_in_flight_reservation_transition_kernel(
     projection: ProductionInFlightReservationTransitionProjection,
 ) -> bool {
     production_in_flight_reservation_transition_body!(projection)
 }
-
 /// Exact Verus mirror of the complete bounded first-release state invariant.
 pub closed spec fn production_in_flight_first_release_state_kernel(
     projection: ProductionInFlightFirstReleaseStateProjection,
 ) -> bool {
     production_in_flight_first_release_state_body!(projection)
 }
-
 /// Exact Verus mirror of the complete bounded first-release action relation.
 pub closed spec fn production_in_flight_first_release_transition_kernel(
     projection: ProductionInFlightFirstReleaseTransitionProjection,
 ) -> bool {
     production_in_flight_first_release_transition_body!(projection)
 }
-
 /// Exact applied predecessor ownership and the prepared successor marker admit
 /// only the next indexed context and consume Running into Complete.
 pub proof fn production_applied_successor_trace_refines_indexed_activation(
@@ -4829,7 +4592,6 @@ pub proof fn production_applied_successor_trace_refines_indexed_activation(
     reveal(check_production_applied_successor_transition);
     reveal(production_applied_successor_trace_refines_indexed_activation_kernel);
 }
-
 /// A foreign same-height block or artifact identity cannot satisfy the exact
 /// construction-ownership gate.
 pub proof fn production_foreign_same_height_predecessor_is_rejected(
@@ -4856,7 +4618,6 @@ pub proof fn production_foreign_same_height_predecessor_is_rejected(
 {
     reveal(production_successor_predecessor_binding_kernel);
 }
-
 /// Complete-tip recovery and audited snapshot bootstrap both publish the
 /// exact next context, but their authorities remain structurally disjoint.
 pub proof fn production_recovered_successor_trace_refines_indexed_activation(
@@ -4880,7 +4641,6 @@ pub proof fn production_recovered_successor_trace_refines_indexed_activation(
     reveal(check_production_recovered_successor_transition);
     reveal(production_recovered_successor_trace_refines_indexed_activation_kernel);
 }
-
 /// Startup failure preserves the Running owner, while a fresh retry can use
 /// only its explicitly distinguished complete-tip or snapshot authority.
 pub proof fn production_startup_failure_and_restart_refines_indexed_lifecycle(
@@ -4908,7 +4668,6 @@ pub proof fn production_startup_failure_and_restart_refines_indexed_lifecycle(
     reveal(check_production_successor_startup_lifecycle_transition);
     reveal(production_startup_failure_and_restart_refines_indexed_lifecycle_kernel);
 }
-
 /// An authenticated historical CommitQC can retire discovery ownership only
 /// after its exact certificate envelope entered reducer ingress.
 pub proof fn production_historical_certificate_trace_refines_indexed_async(
@@ -4930,7 +4689,6 @@ pub proof fn production_historical_certificate_trace_refines_indexed_async(
     reveal(check_production_historical_certificate_transition);
     reveal(production_historical_certificate_trace_refines_indexed_async_kernel);
 }
-
 /// An authenticated historical body can retire its signed request only after
 /// the exact canonical bytes entered the original reducer-owned body pipeline.
 pub proof fn production_historical_body_pipeline_trace_refines_indexed_async(
@@ -4950,7 +4708,6 @@ pub proof fn production_historical_body_pipeline_trace_refines_indexed_async(
     reveal(check_production_historical_body_pipeline_transition);
     reveal(production_historical_body_pipeline_trace_refines_indexed_async_kernel);
 }
-
 /// A reducer step which satisfies the primitive WAL lifecycle owns either its
 /// unchanged pending intent or the exact next durable sequence position.
 pub proof fn production_durable_intent_trace_refines_progress_witness(
@@ -5003,7 +4760,6 @@ pub proof fn production_durable_intent_trace_refines_progress_witness(
     reveal(check_production_durable_intent_transition);
     reveal(production_durable_intent_trace_refines_progress_witness_kernel);
 }
-
 /// An exact active Commit, pending LockAndCommit, durable current-view timeout,
 /// or installed previous-view timeout retains a commit or reproposal path for
 /// the immutable locked subject.
@@ -5023,7 +4779,6 @@ pub proof fn locked_commit_progress_witness_is_valid(
         locked_commit_progress_witness_projection(projection),
     ));
 }
-
 /// A startup pending-tip classification reconstructs the exact durable
 /// Decision height and its pending Kura application owner.
 pub proof fn production_decision_trace_refines_recovery_witness(
@@ -5047,7 +4802,6 @@ pub proof fn production_decision_trace_refines_recovery_witness(
     reveal(check_production_decision_recovery_transition);
     reveal(production_decision_trace_refines_recovery_witness_kernel);
 }
-
 /// One scheduler selection preserves the exact protected FIFO/timer owner.
 pub proof fn production_scheduler_trace_refines_protected_ownership(
     projection: ProductionSchedulerTraceProjection,
@@ -5068,7 +4822,6 @@ pub proof fn production_scheduler_trace_refines_protected_ownership(
     reveal(check_production_scheduler_transition);
     reveal(production_scheduler_trace_refines_protected_ownership_kernel);
 }
-
 /// One bounded ingress admission preserves its complete tag, service class,
 /// immutable lifecycle owner, and atomic ordinal/dormant-slot transition.
 pub proof fn production_ingress_identity_and_class_trace_refines_protected_ownership(
@@ -5114,7 +4867,6 @@ pub proof fn production_ingress_identity_and_class_trace_refines_protected_owner
     reveal(check_production_ingress_transition);
     reveal(production_ingress_identity_and_class_trace_refines_protected_ownership_kernel);
 }
-
 /// One checked concrete adapter effect preserves exact identity and causal
 /// origin, maps to its closed candidate kind, and either installs the unique
 /// owner or retains a finite coalesced producer episode.
@@ -5157,7 +4909,6 @@ pub proof fn production_effect_to_candidate_trace_refines_async_ownership(
     reveal(check_production_effect_to_candidate_transition);
     reveal(production_effect_to_candidate_refines_async_ownership_kernel);
 }
-
 /// One exact reservation materialization preserves source and effective
 /// occupancy while replacing the token (and optional dormant backing) with
 /// one reducer-visible command.
@@ -5200,7 +4951,6 @@ pub proof fn production_ingress_reservation_materialization_refines_protected_ow
     reveal(check_production_ingress_reservation_materialization_transition);
     reveal(production_ingress_reservation_materialization_refines_protected_ownership_kernel);
 }
-
 /// One durable leader-wire admission preserves immutable identity and ordinal
 /// ownership, consumes restart-dormant potential atomically, or coalesces
 /// without mutation.
@@ -5257,7 +5007,6 @@ pub proof fn production_leader_wire_admission_trace_refines_lifecycle_ownership(
     reveal(check_production_leader_wire_admission_transition);
     reveal(production_leader_wire_admission_refines_lifecycle_ownership_kernel);
 }
-
 /// One exact retry preserves its authenticated source owner and rotates both
 /// the outer source and inner-source FIFO item to finite fair ranks.
 pub proof fn production_two_stage_relay_retry_trace_refines_source_fairness(
@@ -5277,7 +5026,6 @@ pub proof fn production_two_stage_relay_retry_trace_refines_source_fairness(
     reveal(check_production_two_stage_relay_retry_transition);
     reveal(production_two_stage_relay_retry_trace_refines_source_fairness_kernel);
 }
-
 /// Writer completion and lane application are one linked occurrence: the
 /// exact marker and cursors advance once, sibling state is unchanged, and the
 /// target is either retained at its fair rank or removed completely.
@@ -5350,7 +5098,6 @@ pub proof fn production_reliable_flush_trace_refines_outbound_ownership(
     reveal(production_reliable_flush_application_refines_source_lane_kernel);
     reveal(production_reliable_flush_two_phase_link_kernel);
 }
-
 /// A durable writer occurrence without a stream incarnation cannot satisfy
 /// the worker-side ownership kernel.
 pub proof fn production_reliable_flush_trace_rejects_zero_stream_epoch(
@@ -5363,7 +5110,6 @@ pub proof fn production_reliable_flush_trace_rejects_zero_stream_epoch(
 {
     reveal(production_reliable_flush_trace_refines_outbound_ownership_kernel);
 }
-
 /// A writer occurrence without a responder service lifetime cannot satisfy the
 /// worker-side ownership kernel.
 pub proof fn production_reliable_flush_trace_rejects_zero_service_generation(
@@ -5376,7 +5122,6 @@ pub proof fn production_reliable_flush_trace_rejects_zero_service_generation(
 {
     reveal(production_reliable_flush_trace_refines_outbound_ownership_kernel);
 }
-
 /// A writer occurrence without a semantic sequence cannot satisfy the
 /// worker-side ownership kernel.
 pub proof fn production_reliable_flush_trace_rejects_zero_semantic_sequence(
@@ -5389,7 +5134,6 @@ pub proof fn production_reliable_flush_trace_rejects_zero_semantic_sequence(
 {
     reveal(production_reliable_flush_trace_refines_outbound_ownership_kernel);
 }
-
 /// Lane application rejects either an absent stream incarnation or a marker
 /// retained from a different incarnation.
 pub proof fn production_reliable_flush_application_rejects_disconnected_stream_epoch(
@@ -5404,7 +5148,6 @@ pub proof fn production_reliable_flush_application_rejects_disconnected_stream_e
 {
     reveal(production_reliable_flush_application_refines_source_lane_kernel);
 }
-
 /// Lane application rejects an erased responder service lifetime or a gate
 /// marker retained from a different service lifetime.
 pub proof fn production_reliable_flush_application_rejects_disconnected_service_generation(
@@ -5419,7 +5162,6 @@ pub proof fn production_reliable_flush_application_rejects_disconnected_service_
 {
     reveal(production_reliable_flush_application_refines_source_lane_kernel);
 }
-
 /// Lane application rejects an erased semantic occurrence or a gate marker
 /// retained from a different request sequence.
 pub proof fn production_reliable_flush_application_rejects_disconnected_semantic_sequence(
@@ -5434,7 +5176,6 @@ pub proof fn production_reliable_flush_application_rejects_disconnected_semantic
 {
     reveal(production_reliable_flush_application_refines_source_lane_kernel);
 }
-
 /// Worker confirmation and lane application cannot be linked across distinct
 /// durable stream incarnations.
 pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_stream_epoch(
@@ -5452,7 +5193,6 @@ pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_strea
 {
     reveal(production_reliable_flush_two_phase_link_kernel);
 }
-
 /// Worker confirmation and lane application cannot be linked across distinct
 /// responder service lifetimes.
 pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_service_generation(
@@ -5470,7 +5210,6 @@ pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_servi
 {
     reveal(production_reliable_flush_two_phase_link_kernel);
 }
-
 /// Worker confirmation and lane application cannot be linked across distinct
 /// semantic request occurrences.
 pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_semantic_sequence(
@@ -5488,7 +5227,6 @@ pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_seman
 {
     reveal(production_reliable_flush_two_phase_link_kernel);
 }
-
 /// Worker confirmation and lane application cannot be linked across distinct
 /// adaptive writer-timeout generations.
 pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_timeout_attempt(
@@ -5502,7 +5240,6 @@ pub proof fn production_reliable_flush_two_phase_link_rejects_disconnected_timeo
 {
     reveal(production_reliable_flush_two_phase_link_kernel);
 }
-
 /// A returned application completion binds the task to the exact durable
 /// receipt, finality artifact, and committed State height.
 pub proof fn production_application_trace_refines_decision_completion(
@@ -5528,7 +5265,6 @@ pub proof fn production_application_trace_refines_decision_completion(
     reveal(check_production_application_transition);
     reveal(production_application_trace_refines_decision_completion_kernel);
 }
-
 /// Exact application finalization has no pending successor activation; the
 /// runner constructs that independently only after this authenticated seam.
 pub proof fn production_terminal_application_without_successor_activation_refines_indexed_terminal(
@@ -5555,8 +5291,6 @@ pub proof fn production_terminal_application_without_successor_activation_refine
     reveal(check_production_terminal_application_transition);
     reveal(production_terminal_application_without_successor_activation_kernel);
 }
-
-
 /// Verus-side shape of one fixed-width effect capability key.
 #[derive(Copy, Clone)]
 pub struct ProductionTagProjection {
@@ -5564,8 +5298,6 @@ pub struct ProductionTagProjection {
     pub view: u64,
     pub generation: u64,
 }
-
-
 /// Verus-side complete safety identity of one optional quorum certificate.
 ///
 /// The roster-indexed signer bitmap and quorum totals preserve the complete
@@ -5581,7 +5313,6 @@ pub struct CanonicalIdentityProjection {
     pub word2: u64,
     pub word3: u64,
 }
-
 #[derive(Copy, Clone)]
 pub struct CertificateIdentityProjection {
     pub present: bool,
@@ -5596,7 +5327,6 @@ pub struct CertificateIdentityProjection {
     pub voting_power: u64,
     pub evidence_class: u8,
 }
-
 /// Verus-side identity of one optional timeout certificate and its selected
 /// highest `PrepareQC`.
 #[derive(Copy, Clone)]
@@ -5607,7 +5337,6 @@ pub struct TimeoutIdentityProjection {
     pub view: u64,
     pub highest_prepare: CertificateIdentityProjection,
 }
-
 /// Exact persisted-TC `EnterView` macro-step projected by the production
 /// reducer.
 ///
@@ -5640,7 +5369,6 @@ pub struct EnterViewProjection {
     pub enter_index: u8,
     pub following_fetch_index: u8,
 }
-
 /// Verus-side shape of a concrete requested/granted effect capability.
 #[derive(Copy, Clone)]
 pub struct ProductionEffectCapabilityKeyProjection {
@@ -5669,14 +5397,12 @@ pub struct ProductionEffectCapabilityKeyProjection {
     pub manifest_len: u64,
     pub manifest_count: u64,
 }
-
 /// Verus-side shape of one exact durable replay-plan item.
 #[derive(Copy, Clone)]
 pub struct ProductionReplayPlanSlotProjection {
     pub kind: u8,
     pub capability: ProductionEffectCapabilityKeyProjection,
 }
-
 /// Verus-side fixed projection of the complete three-item recovery FIFO.
 #[derive(Copy, Clone)]
 pub struct ProductionReplayPlanProjection {
@@ -5685,7 +5411,6 @@ pub struct ProductionReplayPlanProjection {
     pub slot1: ProductionReplayPlanSlotProjection,
     pub slot2: ProductionReplayPlanSlotProjection,
 }
-
 /// Verus-side shape of one effect vector slot.
 #[derive(Copy, Clone)]
 pub struct ProductionEffectSlotProjection {
@@ -5693,7 +5418,6 @@ pub struct ProductionEffectSlotProjection {
     pub requested: ProductionEffectCapabilityKeyProjection,
     pub granted: ProductionEffectCapabilityKeyProjection,
 }
-
 /// Verus-side shape of the fixed production effect trace.  This mirrors the
 /// private `refinement::EffectTrace`; the decision expression below is shared
 /// textually with production through `production_transition_gate_body!`.
@@ -5709,7 +5433,6 @@ pub struct ProductionEffectTraceProjection {
     pub slot6: ProductionEffectSlotProjection,
     pub slot7: ProductionEffectSlotProjection,
 }
-
 /// Verus-side shape of `refinement::VolatileSummary`.
 #[derive(Copy, Clone)]
 pub struct ProductionVolatileSummaryProjection {
@@ -5729,21 +5452,18 @@ pub struct ProductionVolatileSummaryProjection {
     pub durable_signable_limit: u64,
     pub replay_resumed: bool,
 }
-
 /// Verus-side optional validator identity.
 #[derive(Copy, Clone)]
 pub struct ProductionValidatorProjection {
     pub present: bool,
     pub id: int,
 }
-
 /// Verus-side optional subject identity.
 #[derive(Copy, Clone)]
 pub struct ProductionSubjectProjection {
     pub present: bool,
     pub subject: int,
 }
-
 /// Verus-side concrete invariant violation counters.
 #[derive(Copy, Clone)]
 pub struct ProductionSafetyProjection {
@@ -5757,7 +5477,6 @@ pub struct ProductionSafetyProjection {
     pub unauthorized_signables: u64,
     pub invalid_application: u64,
 }
-
 /// Verus-side safety identity of one pending WAL append.
 #[derive(Copy, Clone)]
 pub struct ProductionPendingProjection {
@@ -5772,7 +5491,6 @@ pub struct ProductionPendingProjection {
     pub proposal_view: u64,
     pub subject: CanonicalIdentityProjection,
 }
-
 /// Verus-side durable-boundary capability key.
 #[derive(Copy, Clone)]
 pub struct ProductionBoundaryCapabilityKeyProjection {
@@ -5799,7 +5517,6 @@ pub struct ProductionBoundaryCapabilityKeyProjection {
     pub auxiliary_subject: int,
     pub replay_plan: ProductionReplayPlanProjection,
 }
-
 /// Verus-side primitive projection supplied to the exact production kernel.
 ///
 /// Whole reducer and durable-state identities are mathematical values here;
@@ -5846,7 +5563,6 @@ pub struct ProductionTransitionProjection {
     pub enter_view: EnterViewProjection,
     pub effects: ProductionEffectTraceProjection,
 }
-
 /// Verus-side shape of the facts extracted by the production reducer before
 /// committing a candidate transition.  These booleans are internal derived
 /// values; production callers cannot provide them to the kernel.
@@ -5883,7 +5599,6 @@ pub struct ProductionTransitionFactsProjection {
     pub enter_view_exact: bool,
     pub effects: ProductionEffectTraceProjection,
 }
-
 /// Verus-side classification slice of the production fact constructor.
 #[derive(Copy, Clone)]
 pub struct ProductionTransitionClassificationFactsProjection {
@@ -5900,7 +5615,6 @@ pub struct ProductionTransitionClassificationFactsProjection {
     pub replay_effect_kind: u8,
     pub validator_count: u64,
 }
-
 /// Verus-side durable/effect slice of the production fact constructor.
 #[derive(Copy, Clone)]
 pub struct ProductionTransitionDeltaFactsProjection {
@@ -5923,7 +5637,6 @@ pub struct ProductionTransitionDeltaFactsProjection {
     pub replay_boundary_exact: bool,
     pub effects: ProductionEffectTraceProjection,
 }
-
 /// Lock selected by the persisted-TC view transition: the incoming highest
 /// `PrepareQC` replaces the local lock only when it has a strictly higher view.
 pub open spec fn production_enter_view_selected_lock(
@@ -5939,7 +5652,6 @@ pub open spec fn production_enter_view_selected_lock(
         incoming
     }
 }
-
 /// Whether the effect immediately following `EnterView` is the one exact
 /// durable-lock recovery fetch.
 pub open spec fn production_enter_view_has_exact_following_fetch(
@@ -5953,7 +5665,6 @@ pub open spec fn production_enter_view_has_exact_following_fetch(
         && projection.enter_index < 254
         && projection.following_fetch_index == projection.enter_index + 1
 }
-
 /// Exact source-linked reducer relation for the persisted-TC `EnterView`
 /// macro-step.
 pub open spec fn production_enter_view_projection_relation(
@@ -5961,21 +5672,18 @@ pub open spec fn production_enter_view_projection_relation(
 ) -> bool {
     enter_view_projection_gate_body!(projection)
 }
-
 /// Full locked-PrepareQC identity preserved across every persisted-TC seam.
 pub open spec fn production_enter_view_preserves_locked_prepare_qc_identity(
     projection: EnterViewProjection,
 ) -> bool {
     enter_view_locked_prepare_qc_identity_body!(projection)
 }
-
 /// Exact durable-high PrepareQC remains the one retained retransmission owner.
 pub open spec fn production_enter_view_retains_high_prepare_qc_identity(
     projection: EnterViewProjection,
 ) -> bool {
     enter_view_high_prepare_qc_control_identity_body!(projection)
 }
-
 /// Exact durable/effect derivation shared with the executable production kernel.
 pub closed spec fn production_delta_facts_from_projection(
     projection: ProductionTransitionProjection,
@@ -5985,7 +5693,6 @@ pub closed spec fn production_delta_facts_from_projection(
         ProductionTransitionDeltaFactsProjection
     )
 }
-
 /// Exact classification derivation shared with the executable production kernel.
 pub closed spec fn production_classification_facts_from_projection(
     projection: ProductionTransitionProjection,
@@ -5997,7 +5704,6 @@ pub closed spec fn production_classification_facts_from_projection(
         ProductionTransitionClassificationFactsProjection
     )
 }
-
 /// The EnterView component of the source-linked fact constructor, isolated so
 /// its certificate-identity cases can be discharged independently of the
 /// remaining transition fields.
@@ -6007,7 +5713,6 @@ pub closed spec fn production_enter_view_effect_counts_exact(
     projection.enter_view.enter_count == production_effect_count(projection.effects, 8u8)
         && projection.enter_view.fetch_count == production_effect_count(projection.effects, 2u8)
 }
-
 /// The complete EnterView fact composes the certificate relation with the two
 /// exact effect counts, keeping each proof query below the pinned solver limit.
 pub closed spec fn production_enter_view_exact_fact(
@@ -6016,7 +5721,6 @@ pub closed spec fn production_enter_view_exact_fact(
     production_enter_view_projection_relation(projection.enter_view)
         && production_enter_view_effect_counts_exact(projection)
 }
-
 /// Exact fact composition shared with the executable production kernel.
 pub closed spec fn production_facts_from_projection(
     projection: ProductionTransitionProjection,
@@ -6030,7 +5734,6 @@ pub closed spec fn production_facts_from_projection(
         ProductionTransitionFactsProjection
     )
 }
-
 /// The full source-linked constructor projects the isolated exact EnterView
 /// fact. Case splitting keeps this definitional bridge within the normal root
 /// verifier budget without weakening either side of the equality.
@@ -6043,7 +5746,6 @@ pub proof fn production_enter_view_fact_projection_is_exact(
 {
     reveal(production_facts_from_projection);
 }
-
 /// Equality of invariant, fence, and action-classification facts.
 pub open spec fn production_classification_facts_equal(
     left: ProductionTransitionFactsProjection,
@@ -6062,7 +5764,6 @@ pub open spec fn production_classification_facts_equal(
         && left.replay_effect_kind == right.replay_effect_kind
         && left.validator_count == right.validator_count
 }
-
 /// Equality of volatile, durable-delta, capability, and effect facts.
 pub open spec fn production_delta_facts_equal(
     left: ProductionTransitionFactsProjection,
@@ -6087,7 +5788,6 @@ pub open spec fn production_delta_facts_equal(
         && left.timeout_control_after_absent == right.timeout_control_after_absent
         && left.effects == right.effects
 }
-
 /// Field equality for every production transition fact except the separately
 /// factored EnterView certificate relation.
 pub open spec fn production_non_enter_view_facts_equal(
@@ -6097,7 +5797,6 @@ pub open spec fn production_non_enter_view_facts_equal(
     production_classification_facts_equal(left, right)
         && production_delta_facts_equal(left, right)
 }
-
 /// Equality of the factored EnterView field plus all remaining fields is
 /// extensional equality of the complete production fact projection.
 pub proof fn production_transition_fact_extensionality(
@@ -6114,7 +5813,6 @@ pub proof fn production_transition_fact_extensionality(
     reveal(production_classification_facts_equal);
     reveal(production_delta_facts_equal);
 }
-
 /// Executable projection of invariant, fence, and classification facts from
 /// the exact shared constructor.
 #[verifier::spinoff_prover]
@@ -6135,7 +5833,6 @@ pub fn verified_classification_facts_from_projection(
     }
     facts
 }
-
 /// Executable projection of volatile, durable-delta, capability, and effect
 /// facts from the exact shared constructor.
 #[verifier::spinoff_prover]
@@ -6154,7 +5851,6 @@ pub fn verified_delta_facts_from_projection(
     }
     facts
 }
-
 /// Executable equality of the exact EnterView and follow-up-fetch effect
 /// counts, proved separately from certificate selection.
 #[verifier::spinoff_prover]
@@ -6173,7 +5869,6 @@ pub fn verified_enter_view_effect_counts_fact(
     }
     accepted
 }
-
 /// Exact EnterView fact when the transition is inactive.
 #[verifier::spinoff_prover]
 pub fn verified_inactive_enter_view_fact(
@@ -6194,7 +5889,6 @@ pub fn verified_inactive_enter_view_fact(
     }
     enter_view_exact
 }
-
 /// Exact active EnterView fact when neither a local nor incoming lock exists.
 #[verifier::spinoff_prover]
 pub fn verified_empty_enter_view_lock_fact(
@@ -6215,7 +5909,6 @@ pub fn verified_empty_enter_view_lock_fact(
     }
     enter_view_exact
 }
-
 /// Exact active EnterView fact when only the incoming highest `PrepareQC`
 /// exists.
 #[verifier::spinoff_prover]
@@ -6237,7 +5930,6 @@ pub fn verified_incoming_only_enter_view_lock_fact(
     }
     enter_view_exact
 }
-
 /// Isolate the incoming-only certificate relation from the complete
 /// transition effect-count projection.
 #[verifier::spinoff_prover]
@@ -6259,7 +5951,6 @@ pub fn verified_incoming_only_enter_view_projection_relation(
     }
     accepted
 }
-
 /// Exact active EnterView fact when only the pre-transition local lock exists.
 #[verifier::spinoff_prover]
 pub fn verified_local_only_enter_view_lock_fact(
@@ -6280,7 +5971,6 @@ pub fn verified_local_only_enter_view_lock_fact(
     }
     enter_view_exact
 }
-
 /// Exact active EnterView fact when the local lock is at least as high as the
 /// incoming highest `PrepareQC`.
 #[verifier::spinoff_prover]
@@ -6304,7 +5994,6 @@ pub fn verified_local_max_enter_view_projection_relation(
     }
     accepted
 }
-
 /// Compose the isolated local-lock-maximal relation with the exact effect
 /// counts from the complete production transition projection.
 #[verifier::spinoff_prover]
@@ -6331,7 +6020,6 @@ pub fn verified_local_max_enter_view_lock_fact(
     }
     enter_view_exact
 }
-
 /// Exact active EnterView fact when the incoming highest `PrepareQC` is
 /// strictly higher than the local lock.
 #[verifier::spinoff_prover]
@@ -6355,7 +6043,6 @@ pub fn verified_incoming_max_enter_view_projection_relation(
     }
     accepted
 }
-
 /// Compose the isolated higher-incoming-lock relation with the exact effect
 /// counts from the complete production transition projection.
 #[verifier::spinoff_prover]
@@ -6381,7 +6068,6 @@ pub fn verified_incoming_max_enter_view_lock_fact(
     }
     enter_view_exact
 }
-
 /// Executable projection of only the exact EnterView fact from the same shared
 /// constructor. The selected-certificate cases are discharged separately from
 /// the remaining transition structure.
@@ -6410,7 +6096,6 @@ pub fn verified_enter_view_fact_from_projection(
         verified_incoming_max_enter_view_lock_fact(projection)
     }
 }
-
 /// Executable fact derivation used to prove that action and authorization
 /// booleans cannot be supplied independently of their primitive witnesses.
 pub fn verified_facts_from_projection(
@@ -6434,7 +6119,6 @@ pub fn verified_facts_from_projection(
     }
     facts
 }
-
 /// Names of the TLA+ `SumeragiV2Core` actions represented at the reducer's
 /// safety projection.  `SpecStutter` is the stuttering step admitted by
 /// `[Next]_vars`; `NoAction` is an empty slot in a production macro-step.
@@ -6478,7 +6162,6 @@ pub enum TlaActionNameProjection {
     ResumeTimeout,
     ApplyDecision,
 }
-
 /// At most three TLA+ names represented by one serialized production step:
 /// authenticated/completion ingress, an optional non-timeout certificate
 /// formation, and the reducer's durable boundary. Timeout receipt and local
@@ -6488,7 +6171,6 @@ pub struct TlaMacroStepProjection {
     pub formation: TlaActionNameProjection,
     pub boundary: TlaActionNameProjection,
 }
-
 /// TLA+ source/completion action named by the exact production event class.
 pub open spec fn production_source_tla_action(
     facts: ProductionTransitionFactsProjection,
@@ -6518,7 +6200,6 @@ pub open spec fn production_source_tla_action(
         _ => TlaActionNameProjection::NoAction,
     }
 }
-
 /// Optional TLA+ certificate-formation action coalesced into an ingress/sign
 /// macro-step by the executable reducer.
 pub open spec fn production_formation_tla_action(
@@ -6534,7 +6215,6 @@ pub open spec fn production_formation_tla_action(
         }
     }
 }
-
 /// TLA+ action corresponding to the durable/body/application boundary of the
 /// classified production transition.
 pub open spec fn production_boundary_tla_action(
@@ -6574,7 +6254,6 @@ pub open spec fn production_boundary_tla_action(
         _ => TlaActionNameProjection::NoAction,
     }
 }
-
 /// Canonical named TLA+ macro-step for one production transition.
 pub open spec fn production_tla_macro_step(
     facts: ProductionTransitionFactsProjection,
@@ -6585,7 +6264,6 @@ pub open spec fn production_tla_macro_step(
         boundary: production_boundary_tla_action(facts),
     }
 }
-
 /// State-delta compatibility at the shared safety projection.  This names the
 /// exact pending-WAL/durable/view/application boundary represented by each TLA+
 /// action family; transport queues and certificate payloads remain outside
@@ -6667,7 +6345,6 @@ pub open spec fn production_tla_boundary_delta(
         | TlaActionNameProjection::ResumeTimeout => true,
     }
 }
-
 /// The action relation enforced at the caller-visible production commit
 /// boundary.  Effect kinds are the exhaustive production discriminants:
 /// Persist=1, Fetch=2, Store=3, Validate=4, Sign=5, Broadcast=6, Apply=7,
@@ -6677,7 +6354,6 @@ pub open spec fn production_effect_slots_authorized(
 ) -> bool {
     effect_slots_authorized_body!(trace)
 }
-
 /// One active slot is authorized only by equality of its complete requested
 /// and independently granted capability keys.
 pub open spec fn production_effect_slot_authorized(
@@ -6685,7 +6361,6 @@ pub open spec fn production_effect_slot_authorized(
 ) -> bool {
     active_effect_slot_body!(slot)
 }
-
 /// Exact boundedness relation enforced for each concrete volatile summary.
 pub open spec fn production_volatile_summary_well_formed(
     summary: ProductionVolatileSummaryProjection,
@@ -6693,7 +6368,6 @@ pub open spec fn production_volatile_summary_well_formed(
 ) -> bool {
     volatile_summary_well_formed_body!(summary, validator_count)
 }
-
 /// Exact equality relation used for stale, busy, and rejected stutters.
 pub open spec fn production_volatile_summaries_equal(
     before: ProductionVolatileSummaryProjection,
@@ -6701,70 +6375,60 @@ pub open spec fn production_volatile_summaries_equal(
 ) -> bool {
     volatile_summaries_equal_body!(before, after)
 }
-
 /// Signed-completion discriminator relation enforced by production.
 pub closed spec fn production_signed_message_class_relation(
     facts: ProductionTransitionFactsProjection,
 ) -> bool {
     signed_message_class_body!(facts)
 }
-
 /// Exact stutter-action relation enforced by production.
 pub closed spec fn production_stutter_action_relation(
     facts: ProductionTransitionFactsProjection,
 ) -> bool {
     stutter_action_body!(facts)
 }
-
 /// Exact begin-WAL action relation enforced by production.
 pub closed spec fn production_begin_wal_action_relation(
     facts: ProductionTransitionFactsProjection,
 ) -> bool {
     begin_wal_action_body!(facts)
 }
-
 /// Exact acknowledge-WAL action relation enforced by production.
 pub closed spec fn production_acknowledge_wal_action_relation(
     facts: ProductionTransitionFactsProjection,
 ) -> bool {
     acknowledge_wal_action_body!(facts)
 }
-
 /// Exact successful-validation effect relation enforced by production.
 pub closed spec fn production_validation_completed_action_relation(
     facts: ProductionTransitionFactsProjection,
 ) -> bool {
     validation_completed_action_body!(facts, production_effect_count)
 }
-
 /// Exact body-pipeline action relation enforced by production.
 pub closed spec fn production_body_progress_action_relation(
     facts: ProductionTransitionFactsProjection,
 ) -> bool {
     body_progress_action_body!(facts, production_validation_completed_action_relation)
 }
-
 /// Exact volatile-protocol action relation enforced by production.
 pub closed spec fn production_volatile_protocol_action_relation(
     facts: ProductionTransitionFactsProjection,
 ) -> bool {
     volatile_protocol_action_body!(facts)
 }
-
 /// Exact application-completion action relation enforced by production.
 pub closed spec fn production_complete_application_action_relation(
     facts: ProductionTransitionFactsProjection,
 ) -> bool {
     complete_application_action_body!(facts)
 }
-
 /// Exact replay-resumption action relation enforced by production.
 pub closed spec fn production_resume_after_replay_action_relation(
     facts: ProductionTransitionFactsProjection,
 ) -> bool {
     resume_after_replay_action_body!(facts, production_effect_count)
 }
-
 /// Exact action-discriminant relation enforced by production.
 pub closed spec fn production_action_kind_relation(
     facts: ProductionTransitionFactsProjection,
@@ -6780,7 +6444,6 @@ pub closed spec fn production_action_kind_relation(
         production_resume_after_replay_action_relation,
     )
 }
-
 /// Named atomic action/WAL-class relation enforced by the production gate.
 pub closed spec fn production_named_action_relation(
     facts: ProductionTransitionFactsProjection,
@@ -6791,7 +6454,6 @@ pub closed spec fn production_named_action_relation(
         production_action_kind_relation,
     )
 }
-
 /// Exact order and mutual-exclusion rules for safety-bearing effects.
 pub open spec fn production_effect_count(
     trace: ProductionEffectTraceProjection,
@@ -6799,7 +6461,6 @@ pub open spec fn production_effect_count(
 ) -> u64 {
     effect_count_body!(trace, kind)
 }
-
 /// Order rules once exact discriminant counts have been computed.
 pub open spec fn production_effect_order_constraints(
     trace: ProductionEffectTraceProjection,
@@ -6824,7 +6485,6 @@ pub open spec fn production_effect_order_constraints(
         enter_count,
     )
 }
-
 /// Exact order and mutual-exclusion rules for safety-bearing effects.
 pub open spec fn production_effect_order_relation(
     trace: ProductionEffectTraceProjection,
@@ -6842,14 +6502,10 @@ pub open spec fn production_effect_order_relation(
         production_effect_count(trace, 8),
     )
 }
-
 /// Complete fixed-vector effect relation.
 } // verus!
-
 include!("verus_proofs/production_transition_contracts.rs");
-
 // The in-flight reservation/first-release proofs remain in this lexical module.
 include!("verus_proofs/in_flight_first_release_proofs.rs");
-
 // The production-kernel proof tail remains in this lexical module.
 include!("verus_proofs/production_kernel_tail.rs");

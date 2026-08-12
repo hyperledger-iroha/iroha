@@ -165,6 +165,37 @@ impl MaskedRelaxedDimensionsV1 {
     }
 }
 
+/// Immutable protocol inputs shared by one streamed masked-relaxed precomputation.
+pub(super) struct MaskedRelaxedStreamConfigV1<'a> {
+    domain: &'static [u8],
+    context_frame: &'a [u8],
+    commitment_key_label: &'a [u8],
+    shape: Arc<Shape>,
+    strict_public_inputs: &'a [Vec<Scalar>],
+    worker_count: usize,
+}
+
+impl<'a> MaskedRelaxedStreamConfigV1<'a> {
+    /// Bind transcript, commitment, shape, input, and worker parameters for one stream.
+    pub(super) fn new(
+        domain: &'static [u8],
+        context_frame: &'a [u8],
+        commitment_key_label: &'a [u8],
+        shape: Arc<Shape>,
+        strict_public_inputs: &'a [Vec<Scalar>],
+        worker_count: usize,
+    ) -> Self {
+        Self {
+            domain,
+            context_frame,
+            commitment_key_label,
+            shape,
+            strict_public_inputs,
+            worker_count,
+        }
+    }
+}
+
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -344,17 +375,19 @@ pub(super) fn precompute_masked_relaxed_v1<R: MaskedRelaxedRandomSourceV1>(
         .map(|assignment| assignment.public_inputs.clone())
         .collect::<Vec<_>>();
     precompute_masked_relaxed_stream_v1(
-        domain,
-        context_frame,
-        commitment_key_label,
-        shape,
-        &public_inputs,
+        MaskedRelaxedStreamConfigV1::new(
+            domain,
+            context_frame,
+            commitment_key_label,
+            shape,
+            &public_inputs,
+            worker_count,
+        ),
         |_| {
             assignments
                 .take_next()
                 .ok_or(MaskedRelaxedErrorV1::InvalidProfile)
         },
-        worker_count,
         random,
     )
 }
@@ -371,15 +404,18 @@ pub(super) fn precompute_masked_relaxed_stream_v1<
     R: MaskedRelaxedRandomSourceV1,
     F: FnMut(usize) -> Result<CircuitAssignment, MaskedRelaxedErrorV1>,
 >(
-    domain: &'static [u8],
-    context_frame: &[u8],
-    commitment_key_label: &[u8],
-    shape: Arc<Shape>,
-    strict_public_inputs: &[Vec<Scalar>],
+    config: MaskedRelaxedStreamConfigV1<'_>,
     mut assignment_at: F,
-    worker_count: usize,
     random: &mut R,
 ) -> Result<MaskedRelaxedPrecomputationV1, MaskedRelaxedErrorV1> {
+    let MaskedRelaxedStreamConfigV1 {
+        domain,
+        context_frame,
+        commitment_key_label,
+        shape,
+        strict_public_inputs,
+        worker_count,
+    } = config;
     validate_count(strict_public_inputs.len())?;
     validate_worker_count(worker_count)?;
     if domain.is_empty() || context_frame.is_empty() || commitment_key_label.is_empty() {
@@ -502,6 +538,7 @@ pub(super) fn prove_masked_relaxed_precomputation_v1(
 /// That hard boundary prevents a malicious PBS from replacing the encrypted
 /// fold history with an independently satisfiable relaxed assignment.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub(super) fn prove_precomputed_masked_relaxed_v1(
     domain: &'static [u8],
     context_frame: &[u8],
@@ -938,34 +975,6 @@ fn sample_relaxed_mask<R: MaskedRelaxedRandomSourceV1>(
             error_blindings: core::mem::take(&mut *error_blindings),
         },
     ))
-}
-
-/// Construct the sole masked-Nova composition transcript used by plaintext,
-/// encrypted, prover, and verifier paths.
-pub(super) fn masked_relaxed_composition_transcript_v1(
-    domain: &'static [u8],
-    context_frame: &[u8],
-    shape: &Shape,
-    strict_public_inputs: &[Vec<Scalar>],
-) -> Result<VegaTranscriptV1, MaskedRelaxedErrorV1> {
-    validate_count(strict_public_inputs.len())?;
-    if domain.is_empty() || context_frame.is_empty() {
-        return Err(MaskedRelaxedErrorV1::InvalidProfile);
-    }
-    let dimensions = MaskedRelaxedDimensionsV1::from_shape(shape)?;
-    if strict_public_inputs
-        .iter()
-        .any(|inputs| inputs.len() != dimensions.public_input_count)
-    {
-        return Err(MaskedRelaxedErrorV1::InvalidProfile);
-    }
-    composition_transcript(
-        domain,
-        context_frame,
-        shape,
-        strict_public_inputs,
-        dimensions,
-    )
 }
 
 fn composition_transcript(
@@ -1671,11 +1680,14 @@ mod tests {
         let strict_public_inputs = vec![vec![s(3)], vec![s(5)]];
         let values = [3_u64, 5];
         let precomputation = precompute_masked_relaxed_stream_v1(
-            TEST_DOMAIN,
-            TEST_CONTEXT,
-            TEST_KEY_LABEL,
-            Arc::clone(&shape),
-            &strict_public_inputs,
+            MaskedRelaxedStreamConfigV1::new(
+                TEST_DOMAIN,
+                TEST_CONTEXT,
+                TEST_KEY_LABEL,
+                Arc::clone(&shape),
+                &strict_public_inputs,
+                1,
+            ),
             |index| {
                 let mut witness = vec![Scalar::zero(); assignment_shape.variable_count()];
                 witness[0] = s(values[index]);
@@ -1685,7 +1697,6 @@ mod tests {
                     public_inputs: strict_public_inputs[index].clone(),
                 })
             },
-            1,
             &mut CounterRandom(0x243f_6a88_85a3_08d3),
         )
         .expect("two strict assignments stream in canonical order");

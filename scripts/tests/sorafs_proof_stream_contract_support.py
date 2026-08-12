@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -70,32 +71,17 @@ def assert_pdp_and_potr_proof_streams_use_exact_finalized_chain_projections(
         in potr_dispatch
     )
 
-    pdp_schema_start = openapi.index('"SorafsProofStreamPdpRequestV1".to_owned()')
-    pdp_schema_end = openapi.index(
-        '"SorafsProofStreamPotrRequestV1".to_owned()',
-        pdp_schema_start,
-    )
-    pdp_schema = openapi[pdp_schema_start:pdp_schema_end]
-    pdp_required_start = pdp_schema.index('"required": [')
-    pdp_required_end = pdp_schema.index("],", pdp_required_start)
-    pdp_required = pdp_schema[pdp_required_start:pdp_required_end]
-    assert '"challenge_id_hex"' in pdp_required
-    assert '"additionalProperties": false' in pdp_schema
+    schemas = json.loads(openapi)["components"]["schemas"]
+    pdp_schema = schemas["SorafsProofStreamPdpRequestV1"]
+    assert "challenge_id_hex" in pdp_schema["required"]
+    assert pdp_schema["additionalProperties"] is False
 
-    potr_schema_start = pdp_schema_end
-    potr_schema_end = openapi.index(
-        '"SorafsProofStreamHttpRequestV1".to_owned()',
-        potr_schema_start,
-    )
-    potr_schema = openapi[potr_schema_start:potr_schema_end]
-    potr_required_start = potr_schema.index('"required": [')
-    potr_required_end = potr_schema.index("],", potr_required_start)
-    potr_required = potr_schema[potr_required_start:potr_required_end]
-    assert '"orchestrator_job_id_hex"' in potr_required
-    assert '"additionalProperties": false' in potr_schema
+    potr_schema = schemas["SorafsProofStreamPotrRequestV1"]
+    assert "orchestrator_job_id_hex" in potr_schema["required"]
+    assert potr_schema["additionalProperties"] is False
     assert (
         "chain-authoritative request-scope identity with the manifest and provider"
-        in potr_schema
+        in json.dumps(potr_schema, sort_keys=True)
     )
 
     assert "`proof_kind=pdp` is reserved for future SF-13 work" not in openapi

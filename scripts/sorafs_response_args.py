@@ -124,10 +124,14 @@ def non_negative_int_arg(value: str) -> int:
 
 
 def _response_argfile_open_flags() -> int:
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    if not nonblock:
+        raise RuntimeError(ARGFILE_INSPECTION_DIAGNOSTIC)
     return (
         os.O_RDONLY
         | getattr(os, "O_BINARY", 0)
         | getattr(os, "O_CLOEXEC", 0)
+        | nonblock
         | getattr(os, "O_NOFOLLOW", 0)
     )
 
@@ -279,7 +283,7 @@ def _read_response_argfile_bytes(path: Path) -> bytes:
             "st_mtime_ns",
             "st_ctime_ns",
         )
-        if any(
+        if after.st_nlink != 1 or any(
             getattr(before, field) != getattr(after, field)
             for field in stable_fields
         ):

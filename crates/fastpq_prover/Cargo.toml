@@ -1,6 +1,7 @@
 [package]
 name = "fastpq_prover"
 autobins = false
+autotests = false
 version.workspace = true
 edition = "2024"
 publish = false
@@ -64,6 +65,10 @@ required-features = ["dev-tools"]
 [[test]]
 name = "transcript_replay"
 required-features = ["fastpq-gpu"]
+
+[[test]]
+name = "fastpq_integration"
+path = "tests/fastpq_integration.rs"
 
 [build-dependencies]
 cc = "1.2.45"

@@ -1,0 +1,19 @@
+
+seiyaku Counter {
+    const int initial = 1;
+    const int step = 2;
+
+    state int value;
+
+    hajimari() {
+        value = initial;
+    }
+
+    kotoage fn increment() authorize("CanIncrement") {
+        value = value + step;
+    }
+
+    view fn current() -> int {
+        return value;
+    }
+}

@@ -1055,28 +1055,110 @@ BY FS_CardinalityType, Isa
    DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
        AsyncOrdinaryIngressCarrierOwnershipInvariant
 
-THEOREM AsyncProducerTypedItemIsInNetworkCarrier ==
-  \A item:
-    AsyncItemTyped(item) => item \in AsyncNetworkItems
-BY ZenonT(120)
-   DEF AsyncItemTyped, AsyncNetworkItems, AsyncNetworkItem,
-       AsyncCertifiedRequestItems, AsyncCommitCertificateRequestItems,
-       AsyncBodyEnvelopeTyped,
-       AsyncCommitCertificateRequestEnvelopeTyped,
-       AsyncReplyRequestItemTyped,
-       AsyncCertifiedResponseEnvelopeTyped,
-       AsyncCommitCertificateResponseEnvelopeTyped,
-       AsyncCertifiedResponseEnvelope,
-       AsyncCommitCertificateResponseEnvelope,
-       AsyncTcEnvelopeTyped, AsyncTcRecordTyped,
-       AsyncBodyEnvelopeSet, AsyncCommitCertificateRequestEnvelopeSet,
-       TcEnvelopeSet, TcRecordSet
+THEOREM AsyncProducerPacketRouteProjectsToIngressCarrier ==
+  \A packet:
+    AsyncPacketTyped(packet)
+      => AsyncProducerIngressRequest(packet.item)
+           \in AsyncProducerIngressRequests
+PROOF
+  <1>1. ASSUME NEW packet, AsyncPacketTyped(packet)
+         PROVE AsyncProducerIngressRequest(packet.item)
+                 \in AsyncProducerIngressRequests
+    <2>1. PICK carrier \in AsyncNetworkItems:
+             packet.transportIdentity =
+               AsyncTransportRouteIdentity(carrier)
+      BY <1>1, Isa
+         DEF AsyncPacketTyped, AsyncTransportRouteIdentitySet
+    <2>2. AsyncTransportRouteIdentity(packet.item) =
+             AsyncTransportRouteIdentity(carrier)
+      BY <1>1, <2>1 DEF AsyncPacketTyped
+    <2>3. packet.item.kind = "CertifiedResponse"
+             => carrier.kind = "CertifiedResponse"
+      <3>1. SUFFICES ASSUME
+               packet.item.kind = "CertifiedResponse",
+               carrier.kind # "CertifiedResponse"
+             PROVE FALSE
+        BY Zenon
+      <3>2. DOMAIN AsyncTransportRouteIdentity(packet.item) =
+               {"kind", "envelope"}
+        BY <3>1, Isa
+           DEF AsyncTransportRouteIdentity,
+               AsyncLeaderWireServiceIdentity
+      <3>3. DOMAIN AsyncTransportRouteIdentity(carrier) =
+               {"kind", "source", "envelope"}
+        BY <3>1, Isa
+           DEF AsyncTransportRouteIdentity,
+               AsyncLeaderWireServiceIdentity
+      <3> QED BY <2>2, <3>2, <3>3, Isa
+    <2>4. carrier.kind = "CertifiedResponse"
+             => packet.item.kind = "CertifiedResponse"
+      <3>1. SUFFICES ASSUME
+               carrier.kind = "CertifiedResponse",
+               packet.item.kind # "CertifiedResponse"
+             PROVE FALSE
+        BY Zenon
+      <3>2. DOMAIN AsyncTransportRouteIdentity(carrier) =
+               {"kind", "envelope"}
+        BY <3>1, Isa
+           DEF AsyncTransportRouteIdentity,
+               AsyncLeaderWireServiceIdentity
+      <3>3. DOMAIN AsyncTransportRouteIdentity(packet.item) =
+               {"kind", "source", "envelope"}
+        BY <3>1, Isa
+           DEF AsyncTransportRouteIdentity,
+               AsyncLeaderWireServiceIdentity
+      <3> QED BY <2>2, <3>2, <3>3, Isa
+    <2>5. packet.item.kind = "CertifiedResponse"
+             <=> carrier.kind = "CertifiedResponse"
+      BY <2>3, <2>4, Zenon
+    <2>6. CASE packet.item.kind = "CertifiedResponse"
+      <3>1. carrier.kind = "CertifiedResponse"
+        BY <2>5, <2>6, Zenon
+      <3>2. packet.item.envelope = carrier.envelope
+        BY <2>2, <2>6, <3>1, Isa
+           DEF AsyncTransportRouteIdentity,
+               AsyncLeaderWireServiceIdentity
+      <3>3. AsyncProducerIngressRequest(packet.item) =
+               AsyncProducerIngressRequest(carrier)
+        BY <2>6, <3>1, <3>2, Isa
+           DEF AsyncProducerIngressRequest, AsyncReplyRequestKinds,
+               AsyncCertifiedResponseCanonicalWireIdentity
+      <3> QED BY <2>1, <3>3, Isa
+           DEF AsyncProducerIngressRequests
+    <2>7. CASE packet.item.kind # "CertifiedResponse"
+      <3>1. carrier.kind # "CertifiedResponse"
+        BY <2>5, <2>7, Zenon
+      <3>2. /\ packet.item.kind = carrier.kind
+             /\ packet.item.source = carrier.source
+             /\ packet.item.envelope = carrier.envelope
+        BY <2>2, <2>7, <3>1, Isa
+           DEF AsyncTransportRouteIdentity,
+               AsyncLeaderWireServiceIdentity
+      <3>3. CASE packet.item.kind \in AsyncReplyRequestKinds
+        <4>1. AsyncProducerIngressRequest(packet.item) =
+                 AsyncProducerIngressRequest(carrier)
+          BY <3>2, <3>3, Isa
+             DEF AsyncProducerIngressRequest,
+                 AsyncServeLogicalRequestIdentity,
+                 AsyncReplySemanticIdentity
+        <4> QED BY <2>1, <4>1, Isa
+             DEF AsyncProducerIngressRequests
+      <3>4. CASE packet.item.kind \notin AsyncReplyRequestKinds
+        <4>1. AsyncProducerIngressRequest(packet.item) =
+                 AsyncProducerIngressRequest(carrier)
+          BY <2>7, <3>1, <3>2, <3>4, Isa
+             DEF AsyncProducerIngressRequest, AsyncNetworkItem
+        <4> QED BY <2>1, <4>1, Isa
+             DEF AsyncProducerIngressRequests
+      <3> QED BY <3>3, <3>4
+    <2> QED BY <2>6, <2>7
+  <1> QED BY <1>1
 
 THEOREM AdmitIngressPacketHasDueSourcePacket ==
   \A recipient, source:
     AdmitIngressPacket(recipient, source)
       => DueSourcePackets(recipient, source) # {}
-BY Zenon
+BY Isa
    DEF AdmitIngressPacket, AdmitHiddenPacket, CoalesceHiddenPacket,
        DropPolicyRejectedHiddenPacket,
        DropExactActiveLeaderWireRetry
@@ -1097,7 +1179,7 @@ PROOF
              AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
              TypeInvariant
     <2>2. IsFiniteSet(ValidatorIds)
-      BY <2>1, FS_Subset, Zenon DEF AsyncIngressSources
+      BY <1>1, RuntimeValidatorIdsAreFinite DEF AsyncTypeInvariant
     <2>3. IsFiniteSet(AsyncProducerAdmittedIngressCoordinates)
       BY <2>1, <2>2, FS_Product, FS_Subset, Zenon
          DEF AsyncProducerAdmittedIngressCoordinates
@@ -1135,70 +1217,215 @@ PROOF
              AsyncTransportTypeInvariant,
              AsyncTransportContentTypeInvariant
     <2>2. \A coordinate \in AsyncProducerAdmittedIngressCoordinates:
-             LET packet ==
-                   OldestDueSourcePacket(coordinate[1], coordinate[2])
-             IN /\ AsyncPacketTyped(packet)
-                /\ packet.item \in AsyncNetworkItems
-      BY <2>1, AdmitIngressPacketHasDueSourcePacket,
-         OldestDueSourcePacketFacts,
-         AsyncProducerTypedItemIsInNetworkCarrier, Zenon
+             /\ coordinate[1] \in ValidatorIds
+             /\ coordinate[2] \in AsyncIngressSources
+             /\ DueSourcePackets(coordinate[1], coordinate[2]) # {}
+      BY AdmitIngressPacketHasDueSourcePacket, Isa
          DEF AsyncProducerAdmittedIngressCoordinates
-    <2>3. AsyncProducerAdmittedIngressEpisodes
+    <2>3. \A coordinate \in AsyncProducerAdmittedIngressCoordinates:
+             AsyncPacketTyped(
+               OldestDueSourcePacket(coordinate[1], coordinate[2]))
+      BY <2>1, <2>2, OldestDueSourcePacketFacts, Isa
+    <2>4. \A coordinate \in AsyncProducerAdmittedIngressCoordinates:
+             AsyncProducerIngressRequest(
+               OldestDueSourcePacket(coordinate[1], coordinate[2]).item)
+               \in AsyncProducerIngressRequests
+      BY <2>3, AsyncProducerPacketRouteProjectsToIngressCarrier, Zenon
+    <2>5. AsyncProducerAdmittedIngressEpisodes
              \subseteq AsyncProducerIngressEpisodeSet
-      BY <2>2, Zenon
-         DEF AsyncProducerAdmittedIngressEpisodes,
-             AsyncProducerIngressEpisodeSet,
-             AsyncProducerIngressEpisode, AsyncProducerEpisode,
-             AsyncProducerIngressRequests
-    <2>4. AsyncProducerAdmittedIngressObligations
+      <3>1. SUFFICES ASSUME
+               NEW episode \in AsyncProducerAdmittedIngressEpisodes
+             PROVE episode \in AsyncProducerIngressEpisodeSet
+        BY Zenon
+      <3>2. PICK coordinate
+                    \in AsyncProducerAdmittedIngressCoordinates:
+               episode =
+                 AsyncProducerIngressEpisode(
+                   OldestDueSourcePacket(
+                     coordinate[1], coordinate[2]).item,
+                   OldestDueSourcePacket(
+                     coordinate[1], coordinate[2]).authenticatedSource)
+        BY <3>1, Zenon
+           DEF AsyncProducerAdmittedIngressEpisodes
+      <3> DEFINE Packet ==
+             OldestDueSourcePacket(coordinate[1], coordinate[2])
+      <3>3. AsyncPacketTyped(Packet)
+        BY <2>3, <3>2
+      <3>4. AsyncProducerIngressRequest(Packet.item)
+               \in AsyncProducerIngressRequests
+        BY <2>4, <3>2
+      <3>5. Packet.authenticatedSource \in AsyncIngressSources
+        BY <3>3, Isa DEF AsyncPacketTyped
+      <3> QED BY <3>2, <3>4, <3>5, Isa
+           DEF Packet, AsyncProducerIngressEpisodeSet,
+               AsyncProducerIngressEpisode, AsyncProducerEpisode
+    <2>6. AsyncProducerAdmittedIngressObligations
              \subseteq AsyncProducerObligationSet
-      BY <2>3, Zenon
-         DEF AsyncProducerAdmittedIngressObligations,
-             AsyncProducerEpisodeObligation,
-             AsyncProducerObligationSet,
-             AsyncProducerIngressEpisodeSet,
-             AsyncProducerEpisode, AsyncProducerObligation
-    <2>5. AsyncProducerAdmittedIngressOrigins
+      <3>1. SUFFICES ASSUME
+               NEW obligation \in AsyncProducerAdmittedIngressObligations
+             PROVE obligation \in AsyncProducerObligationSet
+        BY Zenon
+      <3>2. PICK episode \in AsyncProducerAdmittedIngressEpisodes:
+               obligation = AsyncProducerEpisodeObligation(episode)
+        BY <3>1, Zenon
+           DEF AsyncProducerAdmittedIngressObligations
+      <3>3. episode \in AsyncProducerIngressEpisodeSet
+        BY <2>5, <3>2
+      <3>4. /\ episode.request \in AsyncProducerIngressRequests
+             /\ episode.authenticatedSource \in AsyncIngressSources
+        BY <3>3, Isa
+           DEF AsyncProducerIngressEpisodeSet
+      <3> QED BY <3>2, <3>4, Isa
+           DEF AsyncProducerEpisodeObligation,
+               AsyncProducerObligation, AsyncProducerObligationSet
+    <2>7. AsyncProducerAdmittedIngressOrigins
              \subseteq AsyncProducerIngressOriginSet
-      BY <2>3, Zenon
-         DEF AsyncProducerAdmittedIngressOrigins,
-             AsyncProducerCanonicalOrigin,
-             AsyncProducerIngressOriginSet,
-             AsyncProducerIngressOwnerSet,
-             AsyncProducerIngressEpisodeSet,
-             AsyncProducerOrigin
-    <2> QED BY <2>3, <2>4, <2>5
+      <3>1. SUFFICES ASSUME
+               NEW origin \in AsyncProducerAdmittedIngressOrigins
+             PROVE origin \in AsyncProducerIngressOriginSet
+        BY Zenon
+      <3>2. PICK episode \in AsyncProducerAdmittedIngressEpisodes:
+               origin = AsyncProducerCanonicalOrigin(episode)
+        BY <3>1, Zenon
+           DEF AsyncProducerAdmittedIngressOrigins
+      <3>3. episode \in AsyncProducerIngressEpisodeSet
+        BY <2>5, <3>2
+      <3>4. episode.request \in AsyncProducerIngressRequests
+        BY <3>3, Isa
+           DEF AsyncProducerIngressEpisodeSet
+      <3>5. [kind |-> "Ingress", request |-> episode.request]
+                 \in AsyncProducerIngressOwnerSet
+        BY <3>4, Isa
+           DEF AsyncProducerIngressOwnerSet
+      <3> QED BY <3>2, <3>3, <3>5, Isa
+           DEF AsyncProducerCanonicalOrigin, AsyncProducerOrigin,
+               AsyncProducerIngressOriginSet
+    <2> QED BY <2>5, <2>6, <2>7
   <1> QED BY <1>1
 
 THEOREM AsyncProducerProjectionPreservesTypeInvariant ==
   /\ AsyncTypeInvariant
   /\ AsyncProducerProjectionStep
   => AsyncProducerTypeInvariant'
-BY AsyncProducerAdmittedIngressProjectionIsFinite,
-   AsyncProducerAdmittedIngressProjectionIsTyped,
-   FS_Union, ZenonT(120)
-   DEF AsyncTypeInvariant, AsyncProducerTypeInvariant,
-       AsyncProducerProjectionStep, AsyncProducerJournalClosed,
-       AsyncProducerAdmittedIngressObligations,
-       AsyncProducerAdmittedIngressOrigins,
-       AsyncProducerEpisodeObligation,
-       AsyncProducerCanonicalOrigin, AsyncProducerOrigin
+PROOF
+  <1>1. ASSUME /\ AsyncTypeInvariant
+                /\ AsyncProducerProjectionStep
+         PROVE AsyncProducerTypeInvariantAt(
+                 asyncProducerKnownObligations',
+                 asyncProducerConsumedEpisodes',
+                 asyncProducerOriginHistory')
+    <2>1. /\ AsyncProducerTypeInvariantAt(
+                 asyncProducerKnownObligations,
+                 asyncProducerConsumedEpisodes,
+                 asyncProducerOriginHistory)
+           /\ AsyncProducerProjectionStep
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncProducerTypeInvariant
+    <2>2. /\ AsyncProducerJournalClosedAt(
+                  asyncProducerKnownObligations,
+                  asyncProducerConsumedEpisodes,
+                  asyncProducerOriginHistory)
+           /\ \A origin \in asyncProducerOriginHistory:
+                /\ origin.producerEpisode
+                     \in asyncProducerConsumedEpisodes
+                /\ origin.owner.request = origin.producerEpisode.request
+      BY <2>1 DEF AsyncProducerTypeInvariantAt
+    <2>3. /\ IsFiniteSet(AsyncProducerAdmittedIngressEpisodes)
+           /\ IsFiniteSet(AsyncProducerAdmittedIngressObligations)
+           /\ IsFiniteSet(AsyncProducerAdmittedIngressOrigins)
+      BY <1>1, AsyncProducerAdmittedIngressProjectionIsFinite
+    <2>4. /\ AsyncProducerAdmittedIngressEpisodes
+                  \subseteq AsyncProducerIngressEpisodeSet
+           /\ AsyncProducerAdmittedIngressObligations
+                  \subseteq AsyncProducerObligationSet
+           /\ AsyncProducerAdmittedIngressOrigins
+                  \subseteq AsyncProducerIngressOriginSet
+      BY <1>1, AsyncProducerAdmittedIngressProjectionIsTyped
+    <2>5. /\ IsFiniteSet(asyncProducerKnownObligations')
+           /\ IsFiniteSet(asyncProducerConsumedEpisodes')
+           /\ IsFiniteSet(asyncProducerOriginHistory')
+      BY <2>1, <2>3, FS_Union, Zenon
+         DEF AsyncProducerTypeInvariantAt, AsyncProducerProjectionStep
+    <2>6. /\ asyncProducerKnownObligations'
+                  \subseteq AsyncProducerObligationSet
+           /\ asyncProducerConsumedEpisodes'
+                  \subseteq AsyncProducerIngressEpisodeSet
+           /\ asyncProducerOriginHistory'
+                  \subseteq AsyncProducerIngressOriginSet
+      BY <2>1, <2>4, Isa
+         DEF AsyncProducerTypeInvariantAt, AsyncProducerProjectionStep
+    <2>7. \A episode \in AsyncProducerAdmittedIngressEpisodes:
+             /\ AsyncProducerEpisodeObligation(episode)
+                  \in AsyncProducerAdmittedIngressObligations
+             /\ AsyncProducerCanonicalOrigin(episode)
+                  \in AsyncProducerAdmittedIngressOrigins
+      BY Isa
+         DEF AsyncProducerAdmittedIngressObligations,
+             AsyncProducerAdmittedIngressOrigins
+    <2>8. AsyncProducerJournalClosedAt(
+             asyncProducerKnownObligations',
+             asyncProducerConsumedEpisodes',
+             asyncProducerOriginHistory')
+      <3>1. asyncProducerConsumedEpisodes'
+                 \subseteq AsyncProducerIngressEpisodeSet
+        BY <2>6
+      <3>2. \A episode \in asyncProducerConsumedEpisodes':
+               /\ AsyncProducerEpisodeObligation(episode)
+                    \in asyncProducerKnownObligations'
+               /\ AsyncProducerCanonicalOrigin(episode)
+                    \in asyncProducerOriginHistory'
+        <4>1. ASSUME NEW episode
+                           \in asyncProducerConsumedEpisodes'
+               PROVE /\ AsyncProducerEpisodeObligation(episode)
+                            \in asyncProducerKnownObligations'
+                     /\ AsyncProducerCanonicalOrigin(episode)
+                            \in asyncProducerOriginHistory'
+          <5>1. episode \in asyncProducerConsumedEpisodes
+                   \/ episode \in AsyncProducerAdmittedIngressEpisodes
+            BY <2>1, <4>1, Isa DEF AsyncProducerProjectionStep
+          <5>2. CASE episode \in asyncProducerConsumedEpisodes
+            <6> QED BY <2>1, <2>2, <5>2, Isa
+                 DEF AsyncProducerProjectionStep,
+                     AsyncProducerJournalClosedAt
+          <5>3. CASE episode \in AsyncProducerAdmittedIngressEpisodes
+            <6> QED BY <2>1, <2>7, <5>3, Isa
+                 DEF AsyncProducerProjectionStep
+          <5> QED BY <5>1, <5>2, <5>3
+        <4> QED BY <4>1
+      <3> QED BY <3>1, <3>2, Zenon
+           DEF AsyncProducerJournalClosedAt
+    <2>9. \A origin \in AsyncProducerAdmittedIngressOrigins:
+             /\ origin.producerEpisode
+                  \in AsyncProducerAdmittedIngressEpisodes
+             /\ origin.owner.request = origin.producerEpisode.request
+      <3>1. ASSUME NEW origin \in AsyncProducerAdmittedIngressOrigins
+             PROVE /\ origin.producerEpisode
+                          \in AsyncProducerAdmittedIngressEpisodes
+                   /\ origin.owner.request = origin.producerEpisode.request
+        <4>1. PICK episode \in AsyncProducerAdmittedIngressEpisodes:
+                 origin = AsyncProducerCanonicalOrigin(episode)
+          BY <3>1, Zenon DEF AsyncProducerAdmittedIngressOrigins
+        <4> QED BY <4>1, Isa
+             DEF AsyncProducerCanonicalOrigin, AsyncProducerOrigin
+      <3> QED BY <3>1
+    <2>10. \A origin \in asyncProducerOriginHistory':
+              /\ origin.producerEpisode
+                   \in asyncProducerConsumedEpisodes'
+              /\ origin.owner.request = origin.producerEpisode.request
+      BY <2>1, <2>2, <2>9, Isa DEF AsyncProducerProjectionStep
+    <2> QED BY <2>5, <2>6, <2>8, <2>10, Zenon
+         DEF AsyncProducerTypeInvariantAt,
+             AsyncProducerJournalClosedAt
+  <1> QED BY <1>1 DEF AsyncProducerTypeInvariant
 
 THEOREM AsyncProducerVarsFramePreservesTypeInvariant ==
   /\ AsyncProducerTypeInvariant
   /\ UNCHANGED AsyncProducerVars
   => AsyncProducerTypeInvariant'
 BY Zenon
-   DEF AsyncProducerTypeInvariant, AsyncProducerJournalClosed,
+   DEF AsyncProducerTypeInvariant, AsyncProducerTypeInvariantAt,
+       AsyncProducerJournalClosed, AsyncProducerJournalClosedAt,
        AsyncProducerVars
-
-THEOREM AsyncServeProducerEpisodeTransitionPreservesTypeInvariant ==
-  /\ AsyncServeProducerEpisodeTypeInvariant
-  /\ AsyncServeProducerEpisodeTransition
-  => AsyncServeProducerEpisodeTypeInvariant'
-BY Zenon
-   DEF AsyncServeProducerEpisodeTypeInvariant,
-       AsyncServeProducerEpisodeTransition
 
 THEOREM AsyncServeProducerEpisodeFramePreservesTypeInvariant ==
   /\ AsyncServeProducerEpisodeTypeInvariant
@@ -1211,10 +1438,6 @@ THEOREM AsyncStrongTypeProjectsAsyncType ==
   AsyncStrongTypeInvariant => AsyncTypeInvariant
 BY DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
        StrongInductiveInvariant, Safety
-
-THEOREM AsyncStrongTypeProjectsControlServiceStateType ==
-  AsyncStrongTypeInvariant => AsyncControlServiceStateTypeInvariant
-BY DEF AsyncStrongTypeInvariant
 
 AsyncTimeoutRecoveryEpisodeBoundaryIn(
     episode, currentContext, currentNodeView,
@@ -1312,6 +1535,8 @@ PROOF
     <2>3e. AsyncOrdinaryIngressCarrierOwnershipInvariant
       BY <1>1,
          AsyncInitEstablishesOrdinaryIngressCarrierOwnership
+    <2>3f. AsyncProducerTypeInvariant
+      BY <1>1, AsyncInitEstablishesProducerTypeInvariant
     <2>3p. /\ AsyncServeProducerEpisodeTypeInvariant
              /\ AsyncServeProducerEpisodeOwnershipInvariant
       BY <1>1, AsyncInitEstablishesServeProducerEpisodeInvariants
@@ -1338,8 +1563,8 @@ PROOF
              AsyncGstRecoveryPhaseInvariant
     <2>7. AsyncSerializedBusyKernelInvariant
       BY <1>1, AsyncInitEstablishesSerializedBusyKernelInvariant
-    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3bb, <2>3c, <2>3d, <2>3e, <2>3p, <2>3t, <2>4,
-                <2>5, <2>6, <2>7
+    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3bb, <2>3c, <2>3d, <2>3e,
+                <2>3f, <2>3p, <2>3t, <2>4, <2>5, <2>6, <2>7
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
@@ -1376,8 +1601,12 @@ PROOF
          PROVE AsyncStrongTypeInvariant'
     <2>1. /\ StrongInductiveInvariant
            /\ AsyncSchedulerTypeInvariant
+           /\ AsyncProducerTypeInvariant
+           /\ AsyncServeProducerEpisodeTypeInvariant
+           /\ AsyncServeProducerEpisodeOwnershipInvariant
            /\ AsyncServiceActivationPairInvariant
            /\ AsyncControlServiceStateTypeInvariant
+           /\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant
            /\ AsyncCandidateLifecycleSchedulerCoverageInvariant
            /\ AsyncCertifiedResponseClaimIngressOwnershipInvariant
            /\ AsyncLeaderWireIngressCarrierOwnershipInvariant
@@ -1453,6 +1682,26 @@ PROOF
              AsyncOrdinaryIngressCarrierOwnershipInvariant,
              AsyncOrdinaryIngressCarrierCoordinates,
              IngressLane
+    <2>4e. AsyncProducerTypeInvariant'
+      BY <1>1, <2>1, AsyncProducerVarsFramePreservesTypeInvariant
+         DEF AsyncAllVars
+    <2>4f. AsyncServeProducerEpisodeTypeInvariant'
+      BY <1>1, <2>1,
+         AsyncServeProducerEpisodeFramePreservesTypeInvariant
+         DEF AsyncAllVars
+    <2>4g. AsyncServeProducerEpisodeOwnershipInvariant'
+      BY <1>1, <2>1, Isa
+         DEF AsyncAllVars, AsyncSchedulerVars,
+             AsyncServeProducerEpisodeOwnershipInvariant,
+             AsyncServeIngressLifecycleOwnerIdentities,
+             AsyncServeIngressAdmissionIdentities,
+             AsyncServeOffQueueReservations
+    <2>4h. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
+      BY <1>1, <2>1, Isa
+         DEF AsyncAllVars, AsyncSchedulerVars, vars,
+             AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant,
+             AsyncTimeoutRecoveryEpisodes,
+             AsyncTimeoutRecoveryEpisodesIn, NodeHasDecision
     <2>5. ReceivedTimeoutVotePoolInvariant'
       BY <1>1, <2>1,
          AsyncAllVarsStutterPreservesTimeoutPoolInvariant
@@ -1494,7 +1743,7 @@ PROOF
              AsyncTimeoutRecoveryEpisodesIn,
              NodeHasDecision, AsyncNodeHasDecisionIn
     <2> QED BY <2>3, <2>4, <2>4aa, <2>4a, <2>4b, <2>4bb, <2>4c, <2>4d,
-                <2>5, <2>6, <2>7, <2>8, <2>8p, <2>8t
+                <2>4e, <2>5, <2>6, <2>7, <2>8, <2>8p, <2>8t
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 
@@ -1790,14 +2039,6 @@ PROOF
       <3> QED BY <3>1, <3>2
     <2> QED BY <2>1, <2>2
   <1> QED BY <1>1
-
-THEOREM FreshReplayCandidateIsDisjointFromScheduled ==
-  \A candidate:
-    SequenceSet(FreshCandidateSequence(candidate)) \cap
-      (QueuedCandidates \cup DeferredCandidates \cup CausalCandidates
-        \cup TrackedWorkCandidates) = {}
-BY Isa
-   DEF FreshCandidateSequence, CandidateScheduled, SequenceSet
 
 THEOREM DriveResponsiveReplayHeadPreservesSchedulerType ==
   /\ StrongInductiveInvariant
@@ -2116,93 +2357,6 @@ PROOF
       BY <2>4, Isa DEF AsyncRestartAuthorityInvariant
     <2> QED BY <2>8, <2>9
   <1> QED BY <1>1
-
-THEOREM ReplayingOrdinaryStepPreservesRecoveryCorridor ==
-  /\ StrongInductiveInvariant
-  /\ AsyncTypeInvariant
-  /\ AsyncRecoveryTypeInvariant
-  /\ AsyncRecoveryExecutionInvariant
-  /\ asyncRecoveryPhase = "Replaying"
-  /\ (AsyncRunnerStep \/ AsyncNonRunnerStep)
-  /\ UNCHANGED <<up, AsyncRecoveryVars>>
-  => /\ (~NodeHasApplication(asyncRecoveryNode))'
-     /\ (RestartDecisions(asyncRecoveryNode) = {})'
-     /\ \A request \in asyncActiveRequests':
-          \/ request.source # asyncRecoveryNode'
-          \/ (RestartLockedCertifiedRequest(
-                asyncRecoveryNode, request))'
-     /\ \A candidate \in
-          ResponsiveReplayScheduledCandidates(asyncRecoveryNode)':
-          /\ (CandidateConsumerCurrent(candidate))'
-          /\ \/ candidate \in
-                   (SequenceSet(
-                      RestartSignatureReplay(asyncRecoveryNode)))'
-             \/ (RestartLockedBodyPipelineCandidate(
-                   asyncRecoveryNode, candidate))'
-BY RestartSignatureReplayCommandsAreSignatures,
-   RestartLockedBodyReplayCandidateShape,
-   RestartReplayReplayingCandidateShape,
-   SMTT(180), Isa
-   DEF AsyncRunnerStep, RunNode, RunHistoricalRecoveryNode,
-       RunNodeWork,
-       ResolveRunNodeCandidateProducerContinuation,
-       ReplayRunNodeCandidateProducerContinuation,
-       AsyncCandidateProducerContinuationExactLocalReplayStep,
-       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
-       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
-       AsyncCandidateProducerContinuationExactReplayIdentity,
-       AsyncCandidateProducerContinuationSelectedLocalCandidate,
-       AsyncCandidateProducerContinuationSelectedReplayRecord,
-       AsyncCandidateProducerContinuationSelectedResolutionRecord,
-       AsyncCandidateProducerContinuationResolutionRequired,
-       AsyncCandidateProducerContinuationResolutionRecordsForNode,
-       ResponsiveReplayQuarantined,
-       AsyncSchedulerExceptCausalControlAndNodeService,
-       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
-       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
-       LocalAdmissionStep, AdmitProducerCompletion,
-       AdmitCausalHead, IngressDrainStep, DrainFairIngressSelected,
-       SerializedRuntimeStep,
-       SerializedRuntimePrecedesServeIngressStep,
-       SerializedLocalPrecedesServeIngressStep,
-       SelectedLocalAdmissionAdvance,
-       AsyncServeIngressTargetOnlyTurn,
-       RuntimeStep, DeferredDrainStep,
-       FifoRuntimeStep, DeferredTagStep, DeferredTimeoutStep,
-       DeferredRetransmitStep, DirectTimeoutStep,
-       DirectRetransmitStep, IdleRuntimeStep,
-       RemoveNextDeferredCommand, RemoveNextNodeCommand,
-       DeferCommand, DiscardCommand, AdvanceNextDeferredClass,
-       ExecuteCommand, ExecuteRegularCommand, ExecuteDecisionFetch,
-       ExecuteSignProposal, ExecuteSignVote, ExecuteFormPrepareQC,
-       ExecuteSignTimeout, ExecutePersistInstall,
-       ExecutePersistDecision, ExecuteRequestCertifiedBody,
-       ExecuteApply, ExecuteCoreDelivery, ExecuteChunkDelivery,
-       ExecuteRejectAuthenticatedJunk,
-       PublishCertifiedRequests, CertifiedRequestOutbox,
-       CertifiedRecoveryFetchFrontier, LockedPrepareFetchFrontier,
-       AppendCausalSuccessors, FreshCommandSuccessors,
-       CommandSuccessors, FreshCandidateSequence,
-       CausalCandidate, AsyncCandidateFrom,
-       AsyncNonRunnerStep, AsyncNetworkStep, AdmitIngressPacket,
-       AdmitHiddenPacket, CoalesceHiddenPacket,
-       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
-       EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
-       OpenHistoricalRecovery,
-       DirectCommitCertificateDiscoveryStep,
-       DirectHistoricalCommitCertificateDiscoveryStep,
-       CommitCertificateDiscoveryStepWork,
-       ResponsiveReplayQuarantined, ResponsiveReplayDraining,
-       RestartLockedCertifiedRequest,
-       RestartLockedBodyPipelineCandidate,
-       RestartLockedPrepareQCs, LockedPrepareRecoverySource,
-       ResponsiveReplayScheduledCandidates,
-       QueuedCandidates, DeferredCandidates, CausalCandidates,
-       TrackedWorkCandidates, CandidateScheduled,
-       CandidateConsumerCurrent, NodeHasApplication, RestartDecisions,
-       AsyncRecoveryTypeInvariant,
-       AsyncRecoveryExecutionInvariant, AsyncRecoveryVars,
-       SequenceSet, vars
 
 (***************************************************************************
 Replay entry removes every active exact-Serve ingress selector owner for the

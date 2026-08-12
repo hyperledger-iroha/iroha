@@ -1,4 +1,4 @@
-//! Regressions for the bounded local SoraFS gateway response path.
+// Regressions for the bounded local SoraFS gateway response path.
 
 use super::*;
 

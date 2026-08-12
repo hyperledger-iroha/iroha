@@ -806,6 +806,9 @@ fn map_spool_v1(_: iroha_confidential_spool::ConfidentialSpoolErrorV1) -> Extern
     ExternalStorageErrorV1::Spool
 }
 
+#[path = "external_sumcheck_storage_v1/m_table_oracle_v1.rs"]
+mod m_table_oracle_v1;
+
 #[cfg(test)]
 #[path = "external_sumcheck_storage_v1_tests.rs"]
 mod tests;

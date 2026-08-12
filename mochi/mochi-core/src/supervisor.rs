@@ -32,7 +32,7 @@ use iroha_data_model::{
 };
 use iroha_genesis::{GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_version::build_line::BuildLine;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "test"))]
 use izanami::genesis_support::sign_prepared_genesis_from_config;
 use izanami::genesis_support::{
     ManagedNodeConfig, UNRESOLVED_GENESIS_EXPECTED_HASH, validate_prepared_genesis_for_startup,
@@ -81,7 +81,7 @@ const GENESIS_SIGNED_FILE_NAME: &str = "genesis.signed.nrt";
 const GENESIS_EXPECTED_HASH_FILE_NAME: &str = "genesis.expected_hash";
 const GENESIS_PUBLIC_KEY_FILE_NAME: &str = "genesis.public_key";
 const GENESIS_EXPECTED_HASH_PLACEHOLDER: &str = UNRESOLVED_GENESIS_EXPECTED_HASH;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "test"))]
 const TEST_FINALIZE_KAGAMI_STUB_SIGNATURE: &str = "MOCHI_TEST_FINALIZE_KAGAMI_STUB_SIGNATURE";
 const SNAPSHOT_GENERATIONS_DIR_NAME: &str = "generations";
 const SNAPSHOT_METADATA_MAX_BYTES_V1: usize = 64 * 1024;
@@ -113,14 +113,12 @@ const MANAGED_RANS_SEED0_TABLE: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../codec/rans/tables/rans_seed0.toml"
 ));
-
 fn timestamp_ms() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
         .as_millis()
 }
-
 fn encode_hex(bytes: &[u8]) -> String {
     const TABLE: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -130,10 +128,8 @@ fn encode_hex(bytes: &[u8]) -> String {
     }
     out
 }
-
 /// Result alias for supervisor operations.
 pub type Result<T> = std::result::Result<T, SupervisorError>;
-
 /// Errors emitted while preparing or managing the supervisor.
 #[derive(Debug, thiserror::Error)]
 pub enum SupervisorError {
@@ -263,7 +259,6 @@ pub enum SupervisorError {
     #[error("failed to start requested peer set: {details}")]
     PeerSetStart { details: String },
 }
-
 fn combine_post_commit_failures(
     reconciliation: Option<SupervisorError>,
     uncertainty: Option<SupervisorError>,
@@ -280,7 +275,6 @@ fn combine_post_commit_failures(
         (None, None) => None,
     }
 }
-
 impl From<SignerVaultError> for SupervisorError {
     fn from(err: SignerVaultError) -> Self {
         match err {
@@ -290,7 +284,6 @@ impl From<SignerVaultError> for SupervisorError {
         }
     }
 }
-
 #[derive(Clone)]
 struct OnboardingRuntimeBundle {
     authority: AccountId,
@@ -298,7 +291,6 @@ struct OnboardingRuntimeBundle {
     token_file: PathBuf,
     token_hash: [u8; 32],
 }
-
 impl std::fmt::Debug for OnboardingRuntimeBundle {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -310,13 +302,11 @@ impl std::fmt::Debug for OnboardingRuntimeBundle {
             .finish()
     }
 }
-
 impl OnboardingRuntimeBundle {
     fn create(paths: &NetworkPaths, authority: &SigningAuthority) -> Result<Self> {
         let root = fs::canonicalize(paths.root())?;
         let runtime_dir = root.join(LOCAL_ONBOARDING_RUNTIME_DIRECTORY);
         prepare_owner_only_runtime_directory(&runtime_dir, &root)?;
-
         let private_key_file = runtime_dir.join(LOCAL_ONBOARDING_SIGNER_KEY_FILE);
         let token_file = runtime_dir.join(LOCAL_ONBOARDING_TOKEN_FILE);
         let private_key = ExposedPrivateKey(authority.key_pair().private_key().clone());
@@ -337,7 +327,6 @@ impl OnboardingRuntimeBundle {
             LOCAL_ONBOARDING_TOKEN_FILE_MAX_BYTES,
             "local onboarding token",
         )?;
-
         let token = match (existing_signer, existing_token) {
             (Some(existing_signer), Some(existing_token)) => {
                 if !secret_bytes_equal(&existing_signer, signer_payload.as_bytes()) {
@@ -359,7 +348,6 @@ impl OnboardingRuntimeBundle {
                     format!("iroha-localnet-{}", encode_hex(token_entropy.as_slice())).into_bytes(),
                 );
                 token_entropy.zeroize();
-
                 write_new_owner_only_runtime_file(&private_key_file, signer_payload.as_bytes())?;
                 if let Err(error) = write_new_owner_only_runtime_file(&token_file, &token) {
                     let _ = fs::remove_file(&private_key_file);
@@ -375,7 +363,6 @@ impl OnboardingRuntimeBundle {
             }
         };
         let token_hash = *blake3::hash(&token).as_bytes();
-
         Ok(Self {
             authority: authority.account_id().clone(),
             private_key_file,
@@ -383,7 +370,6 @@ impl OnboardingRuntimeBundle {
             token_hash,
         })
     }
-
     fn config_table(&self) -> toml::Table {
         let mut scope = toml::Table::new();
         scope.insert(
@@ -400,7 +386,6 @@ impl OnboardingRuntimeBundle {
             "token_hash".to_owned(),
             toml::Value::String(format!("blake3:{}", encode_hex(&self.token_hash))),
         );
-
         let mut table = toml::Table::new();
         table.insert(
             "authority".to_owned(),
@@ -422,7 +407,6 @@ impl OnboardingRuntimeBundle {
         table
     }
 }
-
 fn localnet_admin_signer() -> Result<&'static SigningAuthority> {
     development_signing_authorities().first().ok_or_else(|| {
         SupervisorError::Config(
@@ -430,7 +414,6 @@ fn localnet_admin_signer() -> Result<&'static SigningAuthority> {
         )
     })
 }
-
 #[cfg(unix)]
 fn prepare_owner_only_runtime_directory(path: &Path, trusted_root: &Path) -> Result<()> {
     let trusted_root_metadata = fs::metadata(trusted_root)?;
@@ -464,14 +447,12 @@ fn prepare_owner_only_runtime_directory(path: &Path, trusted_root: &Path) -> Res
     }
     Ok(())
 }
-
 #[cfg(not(unix))]
 fn prepare_owner_only_runtime_directory(_path: &Path, _trusted_root: &Path) -> Result<()> {
     Err(SupervisorError::Config(
         "local onboarding requires owner-only runtime directory support".to_owned(),
     ))
 }
-
 #[cfg(unix)]
 fn read_owner_only_runtime_file(
     path: &Path,
@@ -485,7 +466,6 @@ fn read_owner_only_runtime_file(
         Err(error) => return Err(error.into()),
     };
     validate_owner_only_runtime_file_metadata(&initial, owner_uid, max_bytes, label)?;
-
     let mut file = OpenOptions::new().read(true).open(path)?;
     let opened = file.metadata()?;
     validate_owner_only_runtime_file_metadata(&opened, owner_uid, max_bytes, label)?;
@@ -494,7 +474,6 @@ fn read_owner_only_runtime_file(
             "{label} changed while it was opened"
         )));
     }
-
     let mut payload = Zeroizing::new(Vec::with_capacity(opened.len() as usize));
     Read::by_ref(&mut file)
         .take((max_bytes + 1) as u64)
@@ -504,7 +483,6 @@ fn read_owner_only_runtime_file(
             "{label} exceeds the reviewed size limit"
         )));
     }
-
     let after = file.metadata()?;
     let current = fs::symlink_metadata(path)?;
     validate_owner_only_runtime_file_metadata(&after, owner_uid, max_bytes, label)?;
@@ -517,7 +495,6 @@ fn read_owner_only_runtime_file(
     }
     Ok(Some(payload))
 }
-
 #[cfg(unix)]
 fn validate_owner_only_runtime_file_metadata(
     metadata: &fs::Metadata,
@@ -538,7 +515,6 @@ fn validate_owner_only_runtime_file_metadata(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn same_runtime_file_revision(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev()
@@ -549,7 +525,6 @@ fn same_runtime_file_revision(left: &fs::Metadata, right: &fs::Metadata) -> bool
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 fn secret_bytes_equal(left: &[u8], right: &[u8]) -> bool {
     if left.len() != right.len() {
         return false;
@@ -561,7 +536,6 @@ fn secret_bytes_equal(left: &[u8], right: &[u8]) -> bool {
         })
         == 0
 }
-
 fn validated_local_onboarding_token(mut payload: Zeroizing<Vec<u8>>) -> Result<Zeroizing<Vec<u8>>> {
     let token_len = if payload.ends_with(b"\r\n") {
         payload.len().saturating_sub(2)
@@ -582,7 +556,6 @@ fn validated_local_onboarding_token(mut payload: Zeroizing<Vec<u8>>) -> Result<Z
     }
     Ok(payload)
 }
-
 #[cfg(unix)]
 fn write_new_owner_only_runtime_file(path: &Path, payload: &[u8]) -> Result<()> {
     let parent = path.parent().ok_or_else(|| {
@@ -609,7 +582,6 @@ fn write_new_owner_only_runtime_file(path: &Path, payload: &[u8]) -> Result<()> 
     }
     result
 }
-
 #[cfg(not(unix))]
 fn read_owner_only_runtime_file(
     _path: &Path,
@@ -621,14 +593,12 @@ fn read_owner_only_runtime_file(
         "local onboarding requires owner-only runtime file support".to_owned(),
     ))
 }
-
 #[cfg(not(unix))]
 fn write_new_owner_only_runtime_file(_path: &Path, _payload: &[u8]) -> Result<()> {
     Err(SupervisorError::Config(
         "local onboarding requires owner-only runtime file support".to_owned(),
     ))
 }
-
 /// Policy governing automatic restarts for managed peers.
 #[derive(Debug, Clone, Copy)]
 pub enum RestartPolicy {
@@ -642,7 +612,6 @@ pub enum RestartPolicy {
         backoff: Duration,
     },
 }
-
 impl RestartPolicy {
     /// Determine whether another restart attempt is permitted.
     fn should_retry(self, attempt: usize) -> bool {
@@ -654,7 +623,6 @@ impl RestartPolicy {
             RestartPolicy::OnFailure { max_restarts, .. } => attempt <= max_restarts,
         }
     }
-
     /// Compute the backoff for the provided attempt (1-based).
     fn backoff_for(self, attempt: usize) -> Duration {
         if attempt == 0 {
@@ -673,7 +641,6 @@ impl RestartPolicy {
         }
     }
 }
-
 impl Default for RestartPolicy {
     fn default() -> Self {
         RestartPolicy::OnFailure {
@@ -682,7 +649,6 @@ impl Default for RestartPolicy {
         }
     }
 }
-
 /// Describes where a binary path originated so UI layers can surface actionable hints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum BinarySource {
@@ -703,7 +669,6 @@ enum BinarySource {
     /// Produced by an on-demand cargo build.
     Built,
 }
-
 impl BinarySource {
     fn label(&self) -> String {
         match self {
@@ -718,7 +683,6 @@ impl BinarySource {
         }
     }
 }
-
 /// Version and build metadata discovered for a binary.
 #[derive(Debug, Clone)]
 pub struct BinaryVersionInfo {
@@ -737,14 +701,12 @@ pub struct BinaryVersionInfo {
     /// Where the executable was discovered.
     source: BinarySource,
 }
-
 impl BinaryVersionInfo {
     /// Human-readable source label for display.
     pub fn source_label(&self) -> String {
         self.source.label()
     }
 }
-
 /// Structured summary emitted by `kagami verify`.
 #[derive(Debug, Clone)]
 pub struct KagamiVerifyReport {
@@ -761,7 +723,6 @@ pub struct KagamiVerifyReport {
     /// Full stdout/stderr output from the verification command.
     pub raw_output: String,
 }
-
 impl KagamiVerifyReport {
     fn summary_fragment(&self) -> String {
         let mut parts = Vec::new();
@@ -774,7 +735,6 @@ impl KagamiVerifyReport {
         parts.join(" • ")
     }
 }
-
 /// Compatibility and version summary for a prepared supervisor.
 #[derive(Debug, Clone)]
 pub struct CompatibilityReport {
@@ -787,7 +747,6 @@ pub struct CompatibilityReport {
     /// Genesis profile used to construct the network, if any.
     pub profile: Option<GenesisProfile>,
 }
-
 impl CompatibilityReport {
     /// One-line human readable summary suitable for the UI header.
     pub fn summary_line(&self) -> String {
@@ -808,7 +767,6 @@ impl CompatibilityReport {
         }
     }
 }
-
 /// Connection details for the active Mochi sandbox.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SupervisorSessionInfo {
@@ -841,7 +799,6 @@ pub struct SupervisorSessionInfo {
     /// Owner-only file containing the dedicated local account-onboarding token.
     pub onboarding_token_file: PathBuf,
 }
-
 /// Paths to external binaries used by the supervisor.
 #[derive(Debug, Clone)]
 pub struct BinaryPaths {
@@ -862,27 +819,23 @@ pub struct BinaryPaths {
     iroha_cli_source: BinarySource,
     allow_builds: bool,
 }
-
 fn default_binary_entry(
     env_override: &'static str,
     cargo_env: &'static str,
     binary: &str,
 ) -> (PathBuf, bool, BinarySource) {
     let exe_name = format!("{binary}{}", env::consts::EXE_SUFFIX);
-
     let env_path = |key: &str| {
         env::var_os(key)
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     };
-
     if let Some(path) = env_path(env_override) {
         return (path, false, BinarySource::Env(env_override));
     }
     if let Some(path) = env_path(cargo_env) {
         return (path, false, BinarySource::CargoEnv(cargo_env));
     }
-
     if let Ok(current) = env::current_exe()
         && let Some(dir) = current.parent()
     {
@@ -891,7 +844,6 @@ fn default_binary_entry(
             return (candidate, true, BinarySource::CurrentExeNeighbor);
         }
     }
-
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     if let Some(workspace) = manifest_dir.parent().and_then(|dir| dir.parent()) {
         for profile in ["debug", "release"] {
@@ -905,32 +857,26 @@ fn default_binary_entry(
             }
         }
     }
-
     (PathBuf::from(binary), true, BinarySource::AutoDefault)
 }
-
 fn default_irohad_entry() -> (PathBuf, bool, BinarySource) {
     const ENV_OVERRIDE: &str = "MOCHI_IROHAD";
     const CARGO_ENV: &str = "CARGO_BIN_EXE_iroha3d";
     default_binary_entry(ENV_OVERRIDE, CARGO_ENV, "iroha3d")
 }
-
 fn default_kagami_entry() -> (PathBuf, bool, BinarySource) {
     const ENV_OVERRIDE: &str = "MOCHI_KAGAMI";
     const CARGO_ENV: &str = "CARGO_BIN_EXE_kagami";
     default_binary_entry(ENV_OVERRIDE, CARGO_ENV, "kagami")
 }
-
 fn default_iroha_cli_entry() -> (PathBuf, bool, BinarySource) {
     const ENV_OVERRIDE: &str = "MOCHI_IROHA_CLI";
     const CARGO_ENV: &str = "CARGO_BIN_EXE_iroha_cli";
     default_binary_entry(ENV_OVERRIDE, CARGO_ENV, "iroha_cli")
 }
-
 fn resolve_iroha_cli_alias() -> Option<(PathBuf, BinarySource)> {
     for bin in ["iroha3", "iroha", "iroha2"] {
         let exe_name = format!("{bin}{}", env::consts::EXE_SUFFIX);
-
         if let Ok(current) = env::current_exe()
             && let Some(dir) = current.parent()
         {
@@ -939,12 +885,10 @@ fn resolve_iroha_cli_alias() -> Option<(PathBuf, BinarySource)> {
                 return Some((candidate, BinarySource::CurrentExeNeighbor));
             }
         }
-
         let target_root = env::var_os("CARGO_TARGET_DIR")
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
             .or_else(|| workspace_root().map(|workspace| workspace.join("target")));
-
         if let Some(target_root) = target_root {
             for profile in ["debug", "release"] {
                 let candidate = target_root.join(profile).join(&exe_name);
@@ -953,15 +897,12 @@ fn resolve_iroha_cli_alias() -> Option<(PathBuf, BinarySource)> {
                 }
             }
         }
-
         if let Some(resolved) = resolve_name_on_path(OsStr::new(bin)) {
             return Some((resolved, BinarySource::PathSearch));
         }
     }
-
     None
 }
-
 impl BinaryPaths {
     /// Override the path to the `iroha3d` executable.
     pub fn irohad(mut self, path: impl Into<PathBuf>) -> Self {
@@ -972,7 +913,6 @@ impl BinaryPaths {
         self.irohad_source = BinarySource::Explicit;
         self
     }
-
     /// Override the path to the `kagami` executable.
     pub fn kagami(mut self, path: impl Into<PathBuf>) -> Self {
         self.kagami = path.into();
@@ -982,7 +922,6 @@ impl BinaryPaths {
         self.kagami_source = BinarySource::Explicit;
         self
     }
-
     /// Override the path to the `iroha_cli` executable.
     pub fn iroha_cli(mut self, path: impl Into<PathBuf>) -> Self {
         self.iroha_cli = path.into();
@@ -992,13 +931,11 @@ impl BinaryPaths {
         self.iroha_cli_source = BinarySource::Explicit;
         self
     }
-
     /// Enable or disable automatic cargo builds when binaries are missing.
     pub fn allow_auto_builds(mut self, allow: bool) -> Self {
         self.allow_builds = allow;
         self
     }
-
     fn verify_build_line(&mut self, expected: BuildLine) -> Result<()> {
         let versions = self.probe_versions()?;
         for info in &versions {
@@ -1012,7 +949,6 @@ impl BinaryPaths {
         }
         Ok(())
     }
-
     fn probe_versions(&mut self) -> Result<Vec<BinaryVersionInfo>> {
         let irohad = self.ensure_irohad_ready()?.to_path_buf();
         let irohad_source = self.irohad_source.clone();
@@ -1020,20 +956,17 @@ impl BinaryPaths {
         let kagami_source = self.kagami_source.clone();
         let iroha_cli = self.ensure_iroha_cli_ready()?.to_path_buf();
         let iroha_cli_source = self.iroha_cli_source.clone();
-
         let entries = [
             ("iroha3d", irohad, irohad_source),
             ("kagami", kagami, kagami_source),
             ("iroha_cli", iroha_cli, iroha_cli_source),
         ];
-
         let mut versions = Vec::with_capacity(entries.len());
         for (name, path, source) in entries {
             versions.push(Self::probe_single_version(name, &path, source)?);
         }
         Ok(versions)
     }
-
     fn probe_single_version(
         name: &'static str,
         path: &Path,
@@ -1041,7 +974,6 @@ impl BinaryPaths {
     ) -> Result<BinaryVersionInfo> {
         let (raw_output, version) = probe_version_output(path, name)?;
         let build_line = infer_build_line(name, path, raw_output.as_deref());
-
         Ok(BinaryVersionInfo {
             name,
             path: path.to_path_buf(),
@@ -1052,22 +984,18 @@ impl BinaryPaths {
             source,
         })
     }
-
     fn irohad_executable(&self) -> &Path {
         &self.irohad
     }
-
     fn ensure_irohad_ready(&mut self) -> Result<&Path> {
         if self.irohad_verified && is_executable_file(&self.irohad) {
             return Ok(&self.irohad);
         }
-
         if is_explicit_path(&self.irohad) && is_executable_file(&self.irohad) {
             self.irohad_verified = true;
             self.irohad_source = BinarySource::Explicit;
             return Ok(&self.irohad);
         }
-
         if !is_explicit_path(&self.irohad) {
             if let Some(resolved) = resolve_name_on_path(self.irohad.as_os_str()) {
                 self.irohad = resolved;
@@ -1083,7 +1011,6 @@ impl BinaryPaths {
             self.irohad_source = BinarySource::PathSearch;
             return Ok(&self.irohad);
         }
-
         if self.allow_builds && self.irohad_auto && !self.irohad_build_attempted {
             self.irohad_build_attempted = true;
             if let Some(workspace) = workspace_root() {
@@ -1098,12 +1025,10 @@ impl BinaryPaths {
                 }
             }
         }
-
         if is_executable_file(&self.irohad) {
             self.irohad_verified = true;
             return Ok(&self.irohad);
         }
-
         let message = if self.irohad_auto {
             format!(
                 "looked for `{}` and searched on PATH; run `cargo build -p irohad --bin iroha3d` \
@@ -1117,24 +1042,20 @@ impl BinaryPaths {
                 self.irohad.display()
             )
         };
-
         Err(SupervisorError::BinaryUnavailable {
             binary: "iroha3d",
             message,
         })
     }
-
     fn ensure_kagami_ready(&mut self) -> Result<&Path> {
         if self.kagami_verified && is_executable_file(&self.kagami) {
             return Ok(&self.kagami);
         }
-
         if is_explicit_path(&self.kagami) && is_executable_file(&self.kagami) {
             self.kagami_verified = true;
             self.kagami_source = BinarySource::Explicit;
             return Ok(&self.kagami);
         }
-
         if !is_explicit_path(&self.kagami) {
             if let Some(resolved) = resolve_name_on_path(self.kagami.as_os_str()) {
                 self.kagami = resolved;
@@ -1150,7 +1071,6 @@ impl BinaryPaths {
             self.kagami_source = BinarySource::PathSearch;
             return Ok(&self.kagami);
         }
-
         if self.allow_builds && self.kagami_auto && !self.kagami_build_attempted {
             self.kagami_build_attempted = true;
             if let Some(workspace) = workspace_root() {
@@ -1165,12 +1085,10 @@ impl BinaryPaths {
                 }
             }
         }
-
         if is_executable_file(&self.kagami) {
             self.kagami_verified = true;
             return Ok(&self.kagami);
         }
-
         let message = if self.kagami_auto {
             format!(
                 "looked for `{}` and searched on PATH; run `cargo build -p iroha_kagami` \
@@ -1184,28 +1102,23 @@ impl BinaryPaths {
                 self.kagami.display()
             )
         };
-
         Err(SupervisorError::BinaryUnavailable {
             binary: "kagami",
             message,
         })
     }
-
     fn iroha_cli_executable(&self) -> &Path {
         &self.iroha_cli
     }
-
     fn ensure_iroha_cli_ready(&mut self) -> Result<&Path> {
         if self.iroha_cli_verified && is_executable_file(&self.iroha_cli) {
             return Ok(&self.iroha_cli);
         }
-
         if is_explicit_path(&self.iroha_cli) && is_executable_file(&self.iroha_cli) {
             self.iroha_cli_verified = true;
             self.iroha_cli_source = BinarySource::Explicit;
             return Ok(&self.iroha_cli);
         }
-
         if !is_explicit_path(&self.iroha_cli) {
             if let Some(resolved) = resolve_name_on_path(self.iroha_cli.as_os_str()) {
                 self.iroha_cli = resolved;
@@ -1221,14 +1134,12 @@ impl BinaryPaths {
             self.iroha_cli_source = BinarySource::PathSearch;
             return Ok(&self.iroha_cli);
         }
-
         if let Some((resolved, source)) = resolve_iroha_cli_alias() {
             self.iroha_cli = resolved;
             self.iroha_cli_verified = true;
             self.iroha_cli_source = source;
             return Ok(&self.iroha_cli);
         }
-
         if self.allow_builds && self.iroha_cli_auto && !self.iroha_cli_build_attempted {
             self.iroha_cli_build_attempted = true;
             if let Some(workspace) = workspace_root() {
@@ -1243,12 +1154,10 @@ impl BinaryPaths {
                 }
             }
         }
-
         if is_executable_file(&self.iroha_cli) {
             self.iroha_cli_verified = true;
             return Ok(&self.iroha_cli);
         }
-
         let message = if self.iroha_cli_auto {
             format!(
                 "looked for `{}` and searched on PATH; run `cargo build -p iroha_cli` \
@@ -1262,14 +1171,12 @@ impl BinaryPaths {
                 self.iroha_cli.display()
             )
         };
-
         Err(SupervisorError::BinaryUnavailable {
             binary: "iroha_cli",
             message,
         })
     }
 }
-
 impl Default for BinaryPaths {
     fn default() -> Self {
         let (irohad, irohad_auto, irohad_source) = default_irohad_entry();
@@ -1295,7 +1202,6 @@ impl Default for BinaryPaths {
         }
     }
 }
-
 fn probe_version_output(path: &Path, binary: &str) -> Result<(Option<String>, Option<String>)> {
     let output = Command::new(path)
         .arg("--version")
@@ -1307,7 +1213,6 @@ fn probe_version_output(path: &Path, binary: &str) -> Result<(Option<String>, Op
             binary: binary.to_owned(),
             message: err.to_string(),
         })?;
-
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let mut raw_output = None;
@@ -1322,7 +1227,6 @@ fn probe_version_output(path: &Path, binary: &str) -> Result<(Option<String>, Op
         }
         raw_output = Some(combined);
     }
-
     if !output.status.success() {
         let message = if let Some(raw) = &raw_output {
             format!("`{binary} --version` exited with {}: {raw}", output.status)
@@ -1334,15 +1238,12 @@ fn probe_version_output(path: &Path, binary: &str) -> Result<(Option<String>, Op
             message,
         });
     }
-
     let version = raw_output
         .as_deref()
         .and_then(|text| text.lines().find(|line| !line.trim().is_empty()))
         .map(|line| line.trim().to_owned());
-
     Ok((raw_output, version))
 }
-
 fn infer_build_line(name: &str, path: &Path, output: Option<&str>) -> BuildLine {
     if let Some(raw) = output {
         let lower = raw.to_ascii_lowercase();
@@ -1353,28 +1254,23 @@ fn infer_build_line(name: &str, path: &Path, output: Option<&str>) -> BuildLine 
             return BuildLine::Iroha3;
         }
     }
-
     if let Some(stem) = path.file_stem().and_then(|value| value.to_str()) {
         let inferred = BuildLine::from_bin_name(stem);
         if inferred.is_iroha2() || inferred.is_iroha3() {
             return inferred;
         }
     }
-
     BuildLine::from_bin_name(name)
 }
-
 fn is_explicit_path(path: &Path) -> bool {
     path.has_root() || path.components().count() > 1
 }
-
 fn is_executable_file(path: &Path) -> bool {
     match fs::metadata(path) {
         Ok(meta) => meta.is_file(),
         Err(_) => false,
     }
 }
-
 fn socket_addr_literal(value: &str, parameter: &str) -> Result<String> {
     value
         .parse::<iroha_primitives::addr::SocketAddr>()
@@ -1385,12 +1281,10 @@ fn socket_addr_literal(value: &str, parameter: &str) -> Result<String> {
             ))
         })
 }
-
 fn resolve_name_on_path(name: &OsStr) -> Option<PathBuf> {
     let path_var = env::var_os("PATH")?;
     let mut candidates = Vec::with_capacity(2);
     candidates.push(OsString::from(name));
-
     let suffix = env::consts::EXE_SUFFIX;
     if !suffix.is_empty() {
         let has_suffix = name.to_string_lossy().ends_with(suffix);
@@ -1400,7 +1294,6 @@ fn resolve_name_on_path(name: &OsStr) -> Option<PathBuf> {
             candidates.push(with_suffix);
         }
     }
-
     for dir in env::split_paths(&path_var) {
         for candidate in &candidates {
             let full = dir.join(candidate);
@@ -1409,10 +1302,8 @@ fn resolve_name_on_path(name: &OsStr) -> Option<PathBuf> {
             }
         }
     }
-
     None
 }
-
 fn workspace_root() -> Option<PathBuf> {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     manifest_dir
@@ -1421,13 +1312,11 @@ fn workspace_root() -> Option<PathBuf> {
         .filter(|root| root.exists())
         .map(PathBuf::from)
 }
-
 fn try_build_irohad(workspace: &Path) -> Result<PathBuf> {
     let cargo = env::var_os("CARGO")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("cargo"));
-
     let mut command = Command::new(&cargo);
     command
         .current_dir(workspace)
@@ -1437,7 +1326,6 @@ fn try_build_irohad(workspace: &Path) -> Result<PathBuf> {
         .arg("--bin")
         .arg("iroha3d")
         .stdout(Stdio::null());
-
     // Preserve stderr so build failures surface in the parent console.
     let status = command
         .status()
@@ -1445,31 +1333,26 @@ fn try_build_irohad(workspace: &Path) -> Result<PathBuf> {
             binary: "iroha3d",
             message: format!("failed to invoke `{}`: {err}", cargo.display()),
         })?;
-
     if !status.success() {
         return Err(SupervisorError::BinaryUnavailable {
             binary: "iroha3d",
             message: format!("`cargo build -p irohad --bin iroha3d` exited with status {status}"),
         });
     }
-
     let target_root = env::var_os("CARGO_TARGET_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.join("target"));
-
     let exe_name = format!("iroha3d{}", env::consts::EXE_SUFFIX);
     let candidates = [
         target_root.join("debug").join(&exe_name),
         target_root.join("release").join(&exe_name),
     ];
-
     for candidate in candidates {
         if is_executable_file(&candidate) {
             return Ok(candidate);
         }
     }
-
     Err(SupervisorError::BinaryUnavailable {
         binary: "iroha3d",
         message: format!(
@@ -1478,13 +1361,11 @@ fn try_build_irohad(workspace: &Path) -> Result<PathBuf> {
         ),
     })
 }
-
 fn try_build_kagami(workspace: &Path) -> Result<PathBuf> {
     let cargo = env::var_os("CARGO")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("cargo"));
-
     let mut command = Command::new(&cargo);
     command
         .current_dir(workspace)
@@ -1492,38 +1373,32 @@ fn try_build_kagami(workspace: &Path) -> Result<PathBuf> {
         .arg("-p")
         .arg("iroha_kagami")
         .stdout(Stdio::null());
-
     let status = command
         .status()
         .map_err(|err| SupervisorError::BinaryUnavailable {
             binary: "kagami",
             message: format!("failed to invoke `{}`: {err}", cargo.display()),
         })?;
-
     if !status.success() {
         return Err(SupervisorError::BinaryUnavailable {
             binary: "kagami",
             message: format!("`cargo build -p iroha_kagami` exited with status {status}"),
         });
     }
-
     let target_root = env::var_os("CARGO_TARGET_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.join("target"));
-
     let exe_name = format!("kagami{}", env::consts::EXE_SUFFIX);
     let candidates = [
         target_root.join("debug").join(&exe_name),
         target_root.join("release").join(&exe_name),
     ];
-
     for candidate in candidates {
         if is_executable_file(&candidate) {
             return Ok(candidate);
         }
     }
-
     Err(SupervisorError::BinaryUnavailable {
         binary: "kagami",
         message: format!(
@@ -1532,13 +1407,11 @@ fn try_build_kagami(workspace: &Path) -> Result<PathBuf> {
         ),
     })
 }
-
 fn try_build_iroha_cli(workspace: &Path) -> Result<PathBuf> {
     let cargo = env::var_os("CARGO")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("cargo"));
-
     let mut command = Command::new(&cargo);
     command
         .current_dir(workspace)
@@ -1546,26 +1419,22 @@ fn try_build_iroha_cli(workspace: &Path) -> Result<PathBuf> {
         .arg("-p")
         .arg("iroha_cli")
         .stdout(Stdio::null());
-
     let status = command
         .status()
         .map_err(|err| SupervisorError::BinaryUnavailable {
             binary: "iroha_cli",
             message: format!("failed to invoke `{}`: {err}", cargo.display()),
         })?;
-
     if !status.success() {
         return Err(SupervisorError::BinaryUnavailable {
             binary: "iroha_cli",
             message: format!("`cargo build -p iroha_cli` exited with status {status}"),
         });
     }
-
     let target_root = env::var_os("CARGO_TARGET_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| workspace.join("target"));
-
     for bin in ["iroha3", "iroha", "iroha2"] {
         let exe_name = format!("{bin}{}", env::consts::EXE_SUFFIX);
         for candidate in [
@@ -1577,7 +1446,6 @@ fn try_build_iroha_cli(workspace: &Path) -> Result<PathBuf> {
             }
         }
     }
-
     Err(SupervisorError::BinaryUnavailable {
         binary: "iroha_cli",
         message: format!(
@@ -1586,7 +1454,6 @@ fn try_build_iroha_cli(workspace: &Path) -> Result<PathBuf> {
         ),
     })
 }
-
 /// Builds a [`Supervisor`] with user-selected presets.
 #[derive(Debug)]
 pub struct SupervisorBuilder {
@@ -1608,7 +1475,6 @@ pub struct SupervisorBuilder {
     #[cfg(test)]
     fail_early_post_commit_reconciliation: bool,
 }
-
 /// Failure produced by an ownership-preserving supervisor replacement.
 ///
 /// A pre-commit failure returns the stopped previous supervisor only after
@@ -1619,14 +1485,12 @@ pub struct SupervisorReplacementFailure {
     error: SupervisorError,
     previous: Option<Supervisor>,
 }
-
 impl SupervisorReplacementFailure {
     /// Split the build error from an optional still-current previous handle.
     pub fn into_parts(self) -> (SupervisorError, Option<Supervisor>) {
         (self.error, self.previous)
     }
 }
-
 impl SupervisorBuilder {
     /// Create a builder using one of the predefined presets.
     pub fn new(preset: ProfilePreset) -> Self {
@@ -1652,7 +1516,6 @@ impl SupervisorBuilder {
             fail_early_post_commit_reconciliation: false,
         }
     }
-
     /// Override the default profile with a custom topology.
     pub fn with_profile(profile: NetworkProfile) -> Self {
         let data_root = default_data_root();
@@ -1676,13 +1539,11 @@ impl SupervisorBuilder {
             fail_early_post_commit_reconciliation: false,
         }
     }
-
     /// Override the network profile while preserving existing builder settings.
     pub fn set_profile(mut self, profile: NetworkProfile) -> Self {
         self.profile = profile;
         self
     }
-
     /// Override the profile using a preset value.
     pub fn profile_preset(self, preset: ProfilePreset) -> Self {
         let consensus_mode = self.profile.consensus_mode;
@@ -1690,19 +1551,16 @@ impl SupervisorBuilder {
         profile.consensus_mode = consensus_mode;
         self.set_profile(profile)
     }
-
     /// Provide a custom data root directory that contains configs, logs, and snapshots.
     pub fn data_root(mut self, root: impl Into<PathBuf>) -> Self {
         self.data_root = root.into();
         self
     }
-
     /// Set a custom chain identifier for the generated configurations.
     pub fn chain_id(mut self, chain_id: impl Into<String>) -> Self {
         self.chain_id = chain_id.into();
         self
     }
-
     /// Select a Kagami genesis profile; also aligns the chain id and consensus mode for NPoS.
     pub fn genesis_profile(mut self, profile: GenesisProfile) -> Self {
         self.genesis_profile = Some(profile);
@@ -1711,96 +1569,80 @@ impl SupervisorBuilder {
         self.chain_id = defaults.chain_id.to_owned();
         self
     }
-
     /// Provide an explicit VRF seed for Kagami genesis (hex, 32 bytes).
     pub fn vrf_seed_hex(mut self, seed: impl Into<String>) -> Self {
         self.vrf_seed_hex = Some(seed.into());
         self
     }
-
     /// Adjust the starting port for Torii bindings.
     pub fn torii_base_port(mut self, port: u16) -> Self {
         self.torii_base_port = port;
         self
     }
-
     /// Adjust the starting port for the P2P listener.
     pub fn p2p_base_port(mut self, port: u16) -> Self {
         self.p2p_base_port = port;
         self
     }
-
     /// Override the paths to external binaries.
     pub fn binaries(mut self, binaries: BinaryPaths) -> Self {
         self.binaries = binaries;
         self
     }
-
     /// Allow the supervisor to build missing binaries automatically.
     pub fn auto_build_binaries(mut self, allow: bool) -> Self {
         self.auto_build_binaries = allow;
         self
     }
-
     /// Override just the `iroha3d` binary path.
     pub fn irohad_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.binaries = self.binaries.clone().irohad(path);
         self
     }
-
     /// Override just the `kagami` binary path.
     pub fn kagami_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.binaries = self.binaries.clone().kagami(path);
         self
     }
-
     /// Override just the `iroha_cli` binary path.
     pub fn iroha_cli_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.binaries = self.binaries.clone().iroha_cli(path);
         self
     }
-
     /// Configure the restart policy for managed peers.
     pub fn restart_policy(mut self, policy: RestartPolicy) -> Self {
         self.restart_policy = policy;
         self
     }
-
     /// Override the generated Nexus configuration table.
     pub fn nexus_config(mut self, config: toml::Table) -> Self {
         self.nexus_config = Some(config);
         self
     }
-
     /// Enable or disable Nexus features in the rendered peer configs.
     pub fn nexus_enabled(mut self, enabled: bool) -> Self {
         set_table_bool(&mut self.nexus_config, "enabled", enabled);
         self
     }
-
     /// Override the configured Nexus lane count.
     pub fn nexus_lane_count(mut self, lane_count: u32) -> Self {
         set_table_u32(&mut self.nexus_config, "lane_count", lane_count);
         self
     }
-
     /// Override the generated Sumeragi configuration table.
     pub fn sumeragi_config(mut self, config: toml::Table) -> Self {
         self.sumeragi_config = Some(config);
         self
     }
-
     /// Override the generated Torii configuration table.
     pub fn torii_config(mut self, config: toml::Table) -> Self {
         self.torii_config = Some(config);
         self
     }
-
     /// Retrieve the profile that will be used when building the supervisor.
     pub fn profile(&self) -> &NetworkProfile {
         &self.profile
     }
-
     #[cfg(test)]
     fn with_post_commit_faults_for_test(
         mut self,
@@ -1810,7 +1652,6 @@ impl SupervisorBuilder {
         self.fail_early_post_commit_reconciliation = true;
         self
     }
-
     fn reserve_unique_port(
         allocator: &mut PortAllocator,
         reserved: &mut HashSet<u16>,
@@ -1825,12 +1666,10 @@ impl SupervisorBuilder {
             }
         }
     }
-
     /// Finalize the builder and construct a newly owned supervisor instance.
     pub fn build(self) -> Result<Supervisor> {
         self.build_inner(None)
     }
-
     /// Consume a stopped supervisor and atomically build its replacement.
     ///
     /// Consuming the prior handle prevents callers from using two active
@@ -1849,7 +1688,6 @@ impl SupervisorBuilder {
                 previous: Some(previous),
             });
         }
-
         let previous_generation = previous.generation_id().to_owned();
         let previous_root = previous.paths().root().to_path_buf();
         let ownership_lock = Arc::clone(&previous._ownership_lock);
@@ -1899,7 +1737,6 @@ impl SupervisorBuilder {
             }
         }
     }
-
     fn build_inner(
         self,
         transferred_ownership: Option<Arc<SupervisorOwnershipLock>>,
@@ -1956,7 +1793,6 @@ impl SupervisorBuilder {
             sumeragi: sumeragi_config,
             torii: torii_config,
         };
-
         let nexus_enabled = peer_config_overrides
             .nexus
             .as_ref()
@@ -1968,14 +1804,12 @@ impl SupervisorBuilder {
                 "nexus.enabled = true requires an NPoS signed-genesis consensus mode".to_owned(),
             ));
         }
-
         if self.genesis_profile.is_some() {
             binaries.ensure_irohad_ready()?;
             binaries.ensure_kagami_ready()?;
             binaries.ensure_iroha_cli_ready()?;
             binaries.verify_build_line(BuildLine::Iroha3)?;
         }
-
         let mut torii_ports = PortAllocator::new(self.torii_base_port);
         let mut p2p_ports = PortAllocator::new(self.p2p_base_port);
         let mut reserved_ports = HashSet::new();
@@ -1984,7 +1818,6 @@ impl SupervisorBuilder {
             GenerationTransaction::begin_replacing(paths.root(), expected_base_generation)?;
         let generation_id = generation_transaction.id().to_owned();
         let generation_root = generation_transaction.root().to_path_buf();
-
         let mut specs = Vec::with_capacity(self.profile.topology.peer_count);
         for index in 0..self.profile.topology.peer_count {
             let alias = format!("peer{index}");
@@ -2000,7 +1833,6 @@ impl SupervisorBuilder {
                 p2p_port,
             )?);
         }
-
         let genesis = GenesisMaterial::create(
             &mut binaries,
             GenesisCreateContext {
@@ -2016,7 +1848,6 @@ impl SupervisorBuilder {
                 onboarding_authority: &onboarding.authority,
             },
         )?;
-
         for spec in &specs {
             spec.write_config(&chain_id, &genesis, &specs, &peer_config_overrides, &[])?;
         }
@@ -2039,7 +1870,6 @@ impl SupervisorBuilder {
         }?;
         #[cfg(not(test))]
         let mut publication = generation_transaction.publish(inventory)?;
-
         let reconciliation = (|| -> Result<Supervisor> {
             #[cfg(test)]
             if self.fail_early_post_commit_reconciliation {
@@ -2075,10 +1905,8 @@ impl SupervisorBuilder {
                 .into_iter()
                 .map(|spec| PeerHandle::prepared(spec, paths.logs_dir(), self.restart_policy))
                 .collect::<Vec<_>>();
-
             let vault = SignerVault::new(&paths);
             let signers = vault.load_with_fallback();
-
             let mut supervisor = Supervisor {
                 profile: self.profile,
                 paths,
@@ -2112,23 +1940,19 @@ impl SupervisorBuilder {
         }
     }
 }
-
 fn set_table_bool(target: &mut Option<toml::Table>, key: &str, value: bool) {
     let table = target.get_or_insert_with(toml::Table::new);
     table.insert(key.to_owned(), toml::Value::Boolean(value));
 }
-
 fn set_table_u32(target: &mut Option<toml::Table>, key: &str, value: u32) {
     let table = target.get_or_insert_with(toml::Table::new);
     table.insert(key.to_owned(), toml::Value::Integer(i64::from(value)));
 }
-
 fn merge_table(target: &mut toml::Table, overlay: &toml::Table) {
     for (key, value) in overlay {
         target.insert(key.clone(), value.clone());
     }
 }
-
 fn restore_streaming_soranet_defaults(table: &mut toml::Table) {
     // `StreamingSoranet` is read as one nested value. Once Mochi emits that
     // table to manage its spool, it must remain structurally complete instead
@@ -2158,13 +1982,11 @@ fn restore_streaming_soranet_defaults(table: &mut toml::Table) {
         .entry("provision_queue_capacity")
         .or_insert(toml::Value::Integer(256));
 }
-
 fn restore_streaming_soravpn_defaults(table: &mut toml::Table) {
     table
         .entry("provision_spool_max_bytes")
         .or_insert(toml::Value::Integer(0));
 }
-
 fn lane_aliases(nexus: Option<&toml::Table>) -> BTreeMap<u32, String> {
     let Some(nexus) = nexus else {
         return BTreeMap::new();
@@ -2175,7 +1997,6 @@ fn lane_aliases(nexus: Option<&toml::Table>) -> BTreeMap<u32, String> {
         .and_then(toml::Value::as_integer)
         .and_then(|value| u32::try_from(value).ok())
         .unwrap_or(1);
-
     if let Some(values) = nexus.get("lane_catalog").and_then(toml::Value::as_array) {
         for (idx, value) in values.iter().enumerate() {
             let Some(table) = value.as_table() else {
@@ -2194,22 +2015,18 @@ fn lane_aliases(nexus: Option<&toml::Table>) -> BTreeMap<u32, String> {
             entries.insert(index, alias);
         }
     }
-
     if entries.is_empty() && lane_count > 1 {
         for index in 0..lane_count {
             entries.insert(index, default_lane_alias(index));
         }
     }
-
     entries
 }
-
 fn lane_path_comments(storage_root: &Path, nexus: Option<&toml::Table>) -> Vec<String> {
     let entries = lane_aliases(nexus);
     if entries.is_empty() {
         return Vec::new();
     }
-
     let mut comments = Vec::with_capacity(entries.len() * 3);
     for (lane_id, alias) in entries {
         let slug = lane_slug(&alias, lane_id);
@@ -2231,7 +2048,6 @@ fn lane_path_comments(storage_root: &Path, nexus: Option<&toml::Table>) -> Vec<S
     }
     comments
 }
-
 fn default_lane_alias(index: u32) -> String {
     if index == 0 {
         "default".to_owned()
@@ -2239,11 +2055,9 @@ fn default_lane_alias(index: u32) -> String {
         format!("lane{index}")
     }
 }
-
 fn lane_slug(alias: &str, lane_id: u32) -> String {
     let mut slug = String::with_capacity(alias.len());
     let mut underscore_written = false;
-
     for ch in alias.chars() {
         if ch.is_ascii_alphanumeric() {
             slug.push(ch.to_ascii_lowercase());
@@ -2258,7 +2072,6 @@ fn lane_slug(alias: &str, lane_id: u32) -> String {
             underscore_written = true;
         }
     }
-
     let slug = slug.trim_matches('_').to_string();
     if slug.is_empty() {
         format!("lane{lane_id}")
@@ -2266,7 +2079,6 @@ fn lane_slug(alias: &str, lane_id: u32) -> String {
         slug
     }
 }
-
 fn normalize_peer_config_overrides(
     nexus: &mut Option<toml::Table>,
     _sumeragi: &mut Option<toml::Table>,
@@ -2279,7 +2091,6 @@ fn normalize_peer_config_overrides(
         let lane_catalog = parse_table_array(table, "lane_catalog", "nexus.lane_catalog")?;
         let dataspace_catalog =
             parse_table_array(table, "dataspace_catalog", "nexus.dataspace_catalog")?;
-
         let lane_summary = lane_catalog
             .map(|values| LaneCatalogSummary::from_values(values))
             .transpose()?
@@ -2288,7 +2099,6 @@ fn normalize_peer_config_overrides(
             ensure_table_entries(catalog, "nexus.dataspace_catalog")?;
         }
         let dataspace_len = dataspace_catalog.map_or(0, |values| values.len());
-
         let lane_count = if lane_count.is_some() {
             lane_count
         } else if lane_summary.len > 0 {
@@ -2303,7 +2113,6 @@ fn normalize_peer_config_overrides(
         } else {
             lane_count
         };
-
         if !enabled_effective
             && (lane_count.unwrap_or(1) > 1 || lane_summary.len > 0 || dataspace_len > 0)
         {
@@ -2312,7 +2121,6 @@ fn normalize_peer_config_overrides(
                     .to_owned(),
             ));
         }
-
         if let Some(count) = lane_count {
             if count == 0 {
                 return Err(SupervisorError::Config(
@@ -2334,7 +2142,6 @@ fn normalize_peer_config_overrides(
             }
         }
     }
-
     if let Some(table) = torii.as_ref()
         && let Some(da_ingest) = table.get("da_ingest")
         && !matches!(da_ingest, toml::Value::Table(_))
@@ -2343,13 +2150,10 @@ fn normalize_peer_config_overrides(
             "torii.da_ingest must be a table".to_owned(),
         ));
     }
-
     ensure_local_mcp_config(torii)?;
     ensure_local_norito_rpc_config(torii)?;
-
     Ok(())
 }
-
 fn install_managed_account_onboarding_config(
     torii: &mut Option<toml::Table>,
     onboarding: &OnboardingRuntimeBundle,
@@ -2367,7 +2171,6 @@ fn install_managed_account_onboarding_config(
     );
     Ok(())
 }
-
 fn ensure_local_mcp_config(torii: &mut Option<toml::Table>) -> Result<()> {
     let table = torii.get_or_insert_with(toml::Table::new);
     let entry = table
@@ -2378,7 +2181,6 @@ fn ensure_local_mcp_config(torii: &mut Option<toml::Table>) -> Result<()> {
             "torii.mcp must be a table".to_owned(),
         ));
     };
-
     mcp.entry("enabled".to_owned())
         .or_insert(toml::Value::Boolean(true));
     mcp.entry("profile".to_owned())
@@ -2389,16 +2191,13 @@ fn ensure_local_mcp_config(torii: &mut Option<toml::Table>) -> Result<()> {
         .or_insert_with(|| {
             toml::Value::Array(vec![toml::Value::String(LOCAL_MCP_TOOL_PREFIX.to_owned())])
         });
-
     if !matches!(mcp.get("allow_tool_prefixes"), Some(toml::Value::Array(_))) {
         return Err(SupervisorError::Config(
             "torii.mcp.allow_tool_prefixes must be an array".to_owned(),
         ));
     }
-
     Ok(())
 }
-
 fn ensure_local_norito_rpc_config(torii: &mut Option<toml::Table>) -> Result<()> {
     let table = torii.get_or_insert_with(toml::Table::new);
     let transport_entry = table
@@ -2417,7 +2216,6 @@ fn ensure_local_norito_rpc_config(torii: &mut Option<toml::Table>) -> Result<()>
             "torii.transport.norito_rpc must be a table".to_owned(),
         ));
     };
-
     norito_rpc
         .entry("enabled".to_owned())
         .or_insert(toml::Value::Boolean(true));
@@ -2427,10 +2225,8 @@ fn ensure_local_norito_rpc_config(torii: &mut Option<toml::Table>) -> Result<()>
     norito_rpc
         .entry("stage".to_owned())
         .or_insert(toml::Value::String(LOCAL_NORITO_RPC_STAGE.to_owned()));
-
     Ok(())
 }
-
 fn parse_table_bool(table: &toml::Table, key: &str, label: &str) -> Result<Option<bool>> {
     match table.get(key) {
         None => Ok(None),
@@ -2440,7 +2236,6 @@ fn parse_table_bool(table: &toml::Table, key: &str, label: &str) -> Result<Optio
         ))),
     }
 }
-
 fn parse_table_u32(table: &toml::Table, key: &str, label: &str) -> Result<Option<u32>> {
     match table.get(key) {
         None => Ok(None),
@@ -2461,7 +2256,6 @@ fn parse_table_u32(table: &toml::Table, key: &str, label: &str) -> Result<Option
         ))),
     }
 }
-
 fn parse_table_array<'a>(
     table: &'a toml::Table,
     key: &str,
@@ -2475,7 +2269,6 @@ fn parse_table_array<'a>(
         ))),
     }
 }
-
 fn ensure_table_entries(values: &[toml::Value], label: &str) -> Result<()> {
     for (idx, value) in values.iter().enumerate() {
         if !matches!(value, toml::Value::Table(_)) {
@@ -2486,13 +2279,11 @@ fn ensure_table_entries(values: &[toml::Value], label: &str) -> Result<()> {
     }
     Ok(())
 }
-
 #[derive(Debug, Default)]
 struct LaneCatalogSummary {
     len: usize,
     max_index: Option<u32>,
 }
-
 impl LaneCatalogSummary {
     fn from_values(values: &[toml::Value]) -> Result<Self> {
         let mut summary = LaneCatalogSummary {
@@ -2543,14 +2334,12 @@ impl LaneCatalogSummary {
         Ok(summary)
     }
 }
-
 #[derive(Clone, Default)]
 struct PeerConfigOverrides {
     nexus: Option<toml::Table>,
     sumeragi: Option<toml::Table>,
     torii: Option<toml::Table>,
 }
-
 impl std::fmt::Debug for PeerConfigOverrides {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut torii = self.torii.clone();
@@ -2570,7 +2359,6 @@ impl std::fmt::Debug for PeerConfigOverrides {
             .finish()
     }
 }
-
 /// Supervises a prepared set of peers for a local network.
 #[derive(Debug)]
 pub struct Supervisor {
@@ -2588,23 +2376,19 @@ pub struct Supervisor {
     iroha_cli_ready: bool,
     _ownership_lock: Arc<SupervisorOwnershipLock>,
 }
-
 impl Supervisor {
     /// Access the Nexus config overrides applied when rendering peer configs.
     pub fn nexus_config_overrides(&self) -> Option<&toml::Table> {
         self.peer_config_overrides.nexus.as_ref()
     }
-
     /// Access the Sumeragi config overrides applied when rendering peer configs.
     pub fn sumeragi_config_overrides(&self) -> Option<&toml::Table> {
         self.peer_config_overrides.sumeragi.as_ref()
     }
-
     /// Access the Torii config overrides applied when rendering peer configs.
     pub fn torii_config_overrides(&self) -> Option<&toml::Table> {
         self.peer_config_overrides.torii.as_ref()
     }
-
     fn ensure_irohad(&mut self) -> Result<&Path> {
         if !self.irohad_ready {
             let path = self.binaries.ensure_irohad_ready()?;
@@ -2614,11 +2398,9 @@ impl Supervisor {
         }
         Ok(self.binaries.irohad_executable())
     }
-
     fn irohad_path(&mut self) -> Result<PathBuf> {
         self.ensure_irohad().map(|path| path.to_path_buf())
     }
-
     fn ensure_iroha_cli(&mut self) -> Result<&Path> {
         if !self.iroha_cli_ready {
             let path = self.binaries.ensure_iroha_cli_ready()?;
@@ -2627,34 +2409,28 @@ impl Supervisor {
         }
         Ok(self.binaries.iroha_cli_executable())
     }
-
     /// Resolve the path to the configured `iroha_cli` binary, verifying it if necessary.
     pub fn iroha_cli_path(&mut self) -> Result<PathBuf> {
         self.ensure_iroha_cli().map(|path| path.to_path_buf())
     }
-
     fn refresh_peer_states_with(&mut self, irohad: &Path) {
         let ownership_lock = Arc::clone(&self._ownership_lock);
         for peer in &mut self.peers {
             peer.refresh_state(irohad, &ownership_lock);
         }
     }
-
     /// Access metadata describing the topology and consensus profile the supervisor holds.
     pub fn profile(&self) -> &NetworkProfile {
         &self.profile
     }
-
     /// Returns the filesystem paths used by the supervisor.
     pub fn paths(&self) -> &NetworkPaths {
         &self.paths
     }
-
     /// Returns the configured chain identifier.
     pub fn chain_id(&self) -> &str {
         &self.chain_id
     }
-
     /// Return the exact transaction replay-protection domain derived from the
     /// validated genesis block hash.
     ///
@@ -2672,12 +2448,10 @@ impl Supervisor {
                 )
             })
     }
-
     /// Return the immutable configuration/genesis generation identifier.
     pub fn generation_id(&self) -> &str {
         &self.genesis.generation_id
     }
-
     fn ensure_selected_generation_metadata(&self, selected: &VerifiedGeneration) -> Result<()> {
         if selected.generation_id != self.genesis.generation_id
             || selected.chain_id != self.chain_id
@@ -2700,7 +2474,6 @@ impl Supervisor {
         }
         Ok(())
     }
-
     fn ensure_selected_peer_storage_paths_under_lock(
         &self,
         selected: &VerifiedGeneration,
@@ -2738,7 +2511,6 @@ impl Supervisor {
         }
         Ok(())
     }
-
     fn selected_generation_with_lease(&self) -> Result<(VerifiedGeneration, Arc<fs::File>)> {
         let observed = current_generation_id(self.paths.root())?.ok_or_else(|| {
             SupervisorError::GenerationValidation(
@@ -2758,61 +2530,50 @@ impl Supervisor {
         self.ensure_selected_peer_storage_paths_under_lock(&selected)?;
         Ok((selected, selection_lease))
     }
-
     fn retain_ownership_lock_indefinitely(&self) {
         // A failed stop can leave an unmanaged child alive. Keep the advisory
         // ownership lock held until this process exits so no replacement can
         // start against that possibly-live runtime.
         std::mem::forget(Arc::clone(&self._ownership_lock));
     }
-
     /// Path to the generated genesis manifest.
     pub fn genesis_manifest(&self) -> &Path {
         &self.genesis.manifest_path
     }
-
     /// Path to the generated signed genesis wire file consumed by `iroha3d`.
     pub fn genesis_block_file(&self) -> &Path {
         &self.genesis.block_path
     }
-
     /// Optional verification report emitted by `kagami verify` when a profile is selected.
     pub fn genesis_verify_report(&self) -> Option<&KagamiVerifyReport> {
         self.genesis.verify_report.as_ref()
     }
-
     /// Cached compatibility summary for the configured binaries and genesis.
     pub fn compatibility(&self) -> Option<&CompatibilityReport> {
         self.compatibility.as_ref()
     }
-
     /// Returns the prepared peers in their current states.
     pub fn peers(&self) -> &[PeerHandle] {
         &self.peers
     }
-
     /// Mutable access to the managed peers (primarily for UI refresh logic).
     pub fn peers_mut(&mut self) -> &mut [PeerHandle] {
         &mut self.peers
     }
-
     /// Available signing authorities for local transactions.
     pub fn signers(&self) -> &[SigningAuthority] {
         &self.signers
     }
-
     /// Access the signer vault handle for the current supervisor.
     #[must_use]
     pub fn signer_vault(&self) -> SignerVault {
         SignerVault::new(&self.paths)
     }
-
     /// Reload signing authorities from disk, applying fallback keys when necessary.
     pub fn reload_signers(&mut self) {
         let vault = SignerVault::new(&self.paths);
         self.signers = vault.load_with_fallback();
     }
-
     /// Persist new signing authorities and refresh the in-memory cache.
     pub fn save_signers(&mut self, signers: &[SigningAuthority]) -> Result<()> {
         let vault = SignerVault::new(&self.paths);
@@ -2820,12 +2581,10 @@ impl Supervisor {
         self.signers = vault.load_with_fallback();
         Ok(())
     }
-
     /// Build a readiness smoke plan using the genesis signing authority.
     pub fn readiness_smoke_plan(&self, attempts: usize) -> Result<ReadinessSmokePlan> {
         self.readiness_smoke_plan_with_offset(attempts, 0)
     }
-
     /// Build a readiness smoke plan using the genesis signing authority and nonce offset.
     pub fn readiness_smoke_plan_with_offset(
         &self,
@@ -2842,18 +2601,15 @@ impl Supervisor {
         )
         .map_err(|err| SupervisorError::Config(err.to_string()))
     }
-
     /// Build a readiness smoke plan with the default retry budget.
     pub fn default_readiness_smoke_plan(&self) -> Result<ReadinessSmokePlan> {
         self.readiness_smoke_plan(SMOKE_MAX_ATTEMPTS)
     }
-
     /// Construct a Torii client for the specified peer alias.
     pub fn torii_client(&self, alias: &str) -> Option<ToriiClient> {
         let peer = self.peers.iter().find(|peer| peer.alias() == alias)?;
         peer.torii_client().ok()
     }
-
     /// Produce an instantaneous, generation-validated snapshot of local
     /// sandbox connection details for bootstrap files and automation.
     pub fn session_info(&self) -> Result<SupervisorSessionInfo> {
@@ -2888,7 +2644,6 @@ impl Supervisor {
             .trim_end_matches('/')
             .to_owned();
         let signer = self.signers.first();
-
         Ok(SupervisorSessionInfo {
             profile_slug: self.profile.slug(),
             chain_id: self.chain_id.clone(),
@@ -2912,7 +2667,6 @@ impl Supervisor {
             onboarding_token_file: self.onboarding.token_file.clone(),
         })
     }
-
     /// Access the structured log stream for the given peer alias.
     pub fn log_stream(&self, alias: &str) -> Option<PeerLogStream> {
         self.peers
@@ -2920,7 +2674,6 @@ impl Supervisor {
             .find(|peer| peer.alias() == alias)
             .map(|peer| peer.log_stream())
     }
-
     /// Create a managed block stream handle for the specified peer using the provided runtime.
     pub fn managed_block_stream(&self, alias: &str, handle: &Handle) -> Result<ManagedBlockStream> {
         let client = self
@@ -2930,7 +2683,6 @@ impl Supervisor {
             })?;
         Ok(ManagedBlockStream::spawn(handle, alias.to_owned(), client))
     }
-
     /// Create a managed event stream handle for the specified peer using the provided runtime.
     pub fn managed_event_stream(&self, alias: &str, handle: &Handle) -> Result<ManagedEventStream> {
         let client = self
@@ -2940,7 +2692,6 @@ impl Supervisor {
             })?;
         Ok(ManagedEventStream::spawn(handle, alias.to_owned(), client))
     }
-
     /// Refresh peer process state by polling for exited children.
     pub fn refresh_peer_states(&mut self) {
         let Ok((_selected, _selection_lease)) = self.selected_generation_with_lease() else {
@@ -2950,7 +2701,6 @@ impl Supervisor {
             self.refresh_peer_states_with(&path);
         }
     }
-
     fn readiness_smoke_signer(&self) -> Result<SigningAuthority> {
         development_signing_authorities()
             .first()
@@ -2962,12 +2712,10 @@ impl Supervisor {
                 )
             })
     }
-
     /// Paths to the binaries used by the supervisor.
     pub fn binaries(&self) -> &BinaryPaths {
         &self.binaries
     }
-
     fn run_compatibility_checks(&mut self) -> Result<()> {
         let versions = self.binaries.probe_versions()?;
         if self.genesis.profile.is_some() {
@@ -3000,7 +2748,6 @@ impl Supervisor {
                 }
             }
         }
-
         self.compatibility = Some(CompatibilityReport {
             versions,
             verify: self.genesis.verify_report.clone(),
@@ -3009,14 +2756,12 @@ impl Supervisor {
         });
         Ok(())
     }
-
     /// Start all peers managed by the supervisor.
     pub fn start_all(&mut self) -> Result<()> {
         let (_selected, _selection_lease) = self.selected_generation_with_lease()?;
         self.run_compatibility_checks()?;
         let irohad_path = self.irohad_path()?;
         self.refresh_peer_states_with(&irohad_path);
-
         let mut started = Vec::new();
         let ownership_lock = Arc::clone(&self._ownership_lock);
         for (idx, peer) in self.peers.iter_mut().enumerate() {
@@ -3033,7 +2778,6 @@ impl Supervisor {
         }
         Ok(())
     }
-
     /// Stop all peers managed by the supervisor.
     pub fn stop_all(&mut self) -> Result<()> {
         let mut last_err = None;
@@ -3050,12 +2794,10 @@ impl Supervisor {
             Ok(())
         }
     }
-
     /// Check whether any peer process is currently running.
     pub fn is_any_running(&self) -> bool {
         self.peers.iter().any(PeerHandle::is_running)
     }
-
     /// Start a single peer by alias.
     pub fn start_peer(&mut self, alias: &str) -> Result<()> {
         let (_selected, _selection_lease) = self.selected_generation_with_lease()?;
@@ -3076,7 +2818,6 @@ impl Supervisor {
             .expect("peer index should remain valid");
         peer.start(&irohad_path, StartReason::Manual, &ownership_lock)
     }
-
     /// Stop a single peer by alias.
     pub fn stop_peer(&mut self, alias: &str) -> Result<()> {
         let index = self
@@ -3092,7 +2833,6 @@ impl Supervisor {
             .expect("peer index should remain valid");
         peer.stop()
     }
-
     /// Export the current network state into a timestamped snapshot directory.
     ///
     /// The snapshot contains peer storage directories, rendered configs, and
@@ -3101,7 +2841,6 @@ impl Supervisor {
     pub fn export_snapshot(&mut self, label: Option<&str>) -> Result<PathBuf> {
         self.export_snapshot_inner(label, || {})
     }
-
     #[cfg(test)]
     pub(super) fn export_snapshot_with_selection_hook<F>(
         &mut self,
@@ -3113,7 +2852,6 @@ impl Supervisor {
     {
         self.export_snapshot_inner(label, selection_hook)
     }
-
     fn export_snapshot_inner<F>(
         &mut self,
         label: Option<&str>,
@@ -3131,11 +2869,9 @@ impl Supervisor {
         if let Err(primary) = self.stop_captured_running_peers(&previously_running) {
             return Err(self.restore_running_set_after_error(&previously_running, primary));
         }
-
         let export = (|| -> Result<PathBuf> {
             let root = self.paths.snapshots_dir();
             fs::create_dir_all(&root)?;
-
             let snapshot_name = label
                 .and_then(sanitize_snapshot_label)
                 .unwrap_or_else(default_snapshot_slug);
@@ -3146,19 +2882,15 @@ impl Supervisor {
                     root,
                 });
             }
-
             fs::create_dir_all(&destination)?;
             let peers_root = destination.join("peers");
             fs::create_dir_all(&peers_root)?;
-
             for peer in &self.peers {
                 let alias = peer.alias();
                 let alias_dir = peers_root.join(alias);
                 fs::create_dir_all(&alias_dir)?;
-
                 let storage_dst = alias_dir.join("storage");
                 copy_dir_recursive(peer.storage_dir(), &storage_dst)?;
-
                 let config_dst = alias_dir.join("config.toml");
                 if let Some(parent) = config_dst.parent() {
                     fs::create_dir_all(parent)?;
@@ -3166,13 +2898,11 @@ impl Supervisor {
                 if peer.config_path().exists() {
                     fs::copy(peer.config_path(), &config_dst)?;
                 }
-
                 let log_dst = alias_dir.join("latest.log");
                 if peer.log_path().exists() {
                     fs::copy(peer.log_path(), &log_dst)?;
                 }
             }
-
             let genesis_dir = destination.join("genesis");
             fs::create_dir_all(&genesis_dir)?;
             if !self.genesis_manifest().exists() {
@@ -3192,19 +2922,16 @@ impl Supervisor {
                 self.genesis_block_file(),
                 genesis_dir.join(GENESIS_SIGNED_FILE_NAME),
             )?;
-
             let (genesis_hash, _) = hash_snapshot_file_bounded(
                 self.genesis_manifest(),
                 u64::try_from(iroha_genesis::GENESIS_MANIFEST_JSON_MAX_BYTES_V1)
                     .expect("genesis manifest byte bound fits u64"),
             )?;
-
             let mut kura_hashes = Map::new();
             for peer in &self.peers {
                 let hash = hash_directory(peer.storage_dir())?;
                 kura_hashes.insert(peer.alias().to_owned(), Value::String(hash.to_string()));
             }
-
             let mut metadata = Map::new();
             metadata.insert("chain_id".to_owned(), Value::String(self.chain_id.clone()));
             metadata.insert(
@@ -3229,7 +2956,6 @@ impl Supervisor {
                 Value::String(genesis_hash.to_string()),
             );
             metadata.insert("kura_hashes".to_owned(), Value::Object(kura_hashes));
-
             let metadata =
                 json::to_json_bounded(&Value::Object(metadata), SNAPSHOT_METADATA_MAX_BYTES_V1)
                     .map_err(|error| {
@@ -3238,7 +2964,6 @@ impl Supervisor {
                         ))
                     })?;
             fs::write(destination.join("metadata.json"), metadata.as_bytes())?;
-
             Ok(destination)
         })();
         match export {
@@ -3249,7 +2974,6 @@ impl Supervisor {
             Err(primary) => Err(self.restore_running_set_after_error(&previously_running, primary)),
         }
     }
-
     /// Restore a previously exported snapshot's mutable peer storage and logs.
     ///
     /// Snapshots are bound to one immutable generation. Configuration and
@@ -3257,7 +2981,6 @@ impl Supervisor {
     pub fn restore_snapshot<P: AsRef<Path>>(&mut self, snapshot: P) -> Result<PathBuf> {
         self.restore_snapshot_inner(snapshot, || {})
     }
-
     #[cfg(test)]
     pub(super) fn restore_snapshot_with_selection_hook<P, F>(
         &mut self,
@@ -3270,7 +2993,6 @@ impl Supervisor {
     {
         self.restore_snapshot_inner(snapshot, selection_hook)
     }
-
     fn restore_snapshot_inner<P, F>(&mut self, snapshot: P, selection_hook: F) -> Result<PathBuf>
     where
         P: AsRef<Path>,
@@ -3299,10 +3021,8 @@ impl Supervisor {
                 snapshot_root.display()
             )));
         }
-
         let (verified_generation, _selection_lease) = self.selected_generation_with_lease()?;
         selection_hook();
-
         let metadata = load_snapshot_metadata(&snapshot_root)?;
         if metadata.chain_id != self.chain_id {
             return Err(SupervisorError::Config(format!(
@@ -3330,7 +3050,6 @@ impl Supervisor {
                 recorded = metadata.peer_count
             )));
         }
-
         let peers_root = snapshot_root.join("peers");
         if !peers_root.is_dir() {
             return Err(SupervisorError::Config(format!(
@@ -3338,7 +3057,6 @@ impl Supervisor {
                 snapshot_root.display()
             )));
         }
-
         let genesis_src = snapshot_root.join("genesis").join(GENESIS_FILE_NAME);
         let genesis_block_src = snapshot_root.join("genesis").join(GENESIS_SIGNED_FILE_NAME);
         if !genesis_src.exists() {
@@ -3396,7 +3114,6 @@ impl Supervisor {
                 current_genesis_hash
             )));
         }
-
         for peer in &self.peers {
             let alias_dir = peers_root.join(peer.alias());
             if !alias_dir.is_dir() {
@@ -3435,7 +3152,6 @@ impl Supervisor {
                 )));
             }
         }
-
         if let Ok(path) = self.irohad_path() {
             self.refresh_peer_states_with(&path);
         }
@@ -3443,12 +3159,10 @@ impl Supervisor {
         if let Err(primary) = self.stop_captured_running_peers(&previously_running) {
             return Err(self.restore_running_set_after_error(&previously_running, primary));
         }
-
         let restore = (|| -> Result<()> {
             for peer in &mut self.peers {
                 let alias_dir = peers_root.join(peer.alias());
                 peer.wipe_storage()?;
-
                 copy_dir_recursive(&alias_dir.join("storage"), peer.storage_dir())?;
                 copy_file_if_exists(&alias_dir.join("latest.log"), peer.log_path())?;
             }
@@ -3463,7 +3177,6 @@ impl Supervisor {
         }
     }
 }
-
 impl Drop for Supervisor {
     fn drop(&mut self) {
         if self.stop_all().is_err() {
@@ -3471,7 +3184,6 @@ impl Drop for Supervisor {
         }
     }
 }
-
 /// Lightweight metadata and state for a child `iroha3d` process.
 pub struct PeerHandle {
     spec: PeerSpec,
@@ -3487,13 +3199,11 @@ pub struct PeerHandle {
     next_restart_at: Option<Instant>,
     manual_stop: bool,
 }
-
 #[derive(Debug, Clone, Copy)]
 enum StartReason {
     Manual,
     Restart { attempt: usize },
 }
-
 impl StartReason {
     fn attempt(self) -> usize {
         match self {
@@ -3502,7 +3212,6 @@ impl StartReason {
         }
     }
 }
-
 impl std::fmt::Debug for PeerHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PeerHandle")
@@ -3513,7 +3222,6 @@ impl std::fmt::Debug for PeerHandle {
             .finish()
     }
 }
-
 impl PeerHandle {
     fn prepared(spec: PeerSpec, logs_dir: PathBuf, restart_policy: RestartPolicy) -> Self {
         let alias = spec.alias.clone();
@@ -3533,25 +3241,20 @@ impl PeerHandle {
             manual_stop: false,
         }
     }
-
     fn is_running(&self) -> bool {
         matches!(self.state, PeerState::Running | PeerState::Restarting)
     }
-
     /// Mutable storage root selected for this peer's current generation.
     pub fn storage_dir(&self) -> &Path {
         &self.spec.storage_dir
     }
-
     /// Snapshot root nested under the peer's selected mutable storage.
     pub fn snapshot_dir(&self) -> &Path {
         &self.spec.snapshot_dir
     }
-
     pub(crate) fn kura_store_dir(&self) -> &Path {
         &self.spec.kura_dir
     }
-
     fn wipe_storage(&self) -> Result<()> {
         if self.is_running() {
             return Err(SupervisorError::PeerStillRunning {
@@ -3565,51 +3268,41 @@ impl PeerHandle {
         fs::create_dir_all(self.snapshot_dir().join(SNAPSHOT_GENERATIONS_DIR_NAME))?;
         Ok(())
     }
-
     fn replace_spec(&mut self, spec: PeerSpec) {
         self.spec = spec;
     }
-
     /// Stable identifier for the peer (e.g. `peer0`).
     pub fn alias(&self) -> &str {
         &self.spec.alias
     }
-
     /// Peer identifier derived from the generated key pair.
     pub fn peer_id(&self) -> PeerId {
         self.spec.peer_id()
     }
-
     /// Public Torii address advertised to clients.
     pub fn torii_address(&self) -> &str {
         &self.spec.torii_public
     }
-
     /// Public P2P address advertised to peers.
     pub fn p2p_address(&self) -> &str {
         &self.spec.p2p_public
     }
-
     /// Location of the rendered configuration file.
     pub fn config_path(&self) -> &Path {
         &self.spec.config_path
     }
-
     /// Path to the log file capturing stdout/stderr.
     pub fn log_path(&self) -> &Path {
         &self.log_path
     }
-
     /// Structured log stream associated with the peer.
     pub fn log_stream(&self) -> PeerLogStream {
         self.log_stream.clone()
     }
-
     /// Current lifecycle state for the peer.
     pub fn state(&self) -> PeerState {
         self.state
     }
-
     /// Generate a Torii client targeting this peer.
     pub fn torii_client(&self) -> ToriiResult<ToriiClient> {
         if let Some(client) = self.torii_client.get() {
@@ -3634,7 +3327,6 @@ impl PeerHandle {
             Ok(self.torii_client.get().cloned().unwrap_or(client))
         }
     }
-
     fn start(
         &mut self,
         irohad: &Path,
@@ -3649,15 +3341,12 @@ impl PeerHandle {
             }
             PeerState::Prepared | PeerState::Stopped => {}
         }
-
         self.manual_stop = false;
         if matches!(reason, StartReason::Manual) {
             self.restart_attempts = 0;
             self.next_restart_at = None;
         }
-
         self.teardown_log_threads();
-
         fs::create_dir_all(self.log_path.parent().unwrap_or_else(|| Path::new(".")))?;
         let file = OpenOptions::new()
             .create(true)
@@ -3665,7 +3354,6 @@ impl PeerHandle {
             .open(&self.log_path)?;
         let log_file = Arc::new(Mutex::new(file));
         self.log_file = Some(log_file.clone());
-
         let mut command = Command::new(irohad);
         let config_path = self.spec.config_path.canonicalize()?;
         let peer_dir = config_path.parent().ok_or_else(|| {
@@ -3688,7 +3376,6 @@ impl PeerHandle {
             .stdin(ownership_lock.child_stdin()?)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-
         let mut child = command.spawn().map_err(|err| {
             let source = match err.kind() {
                 io::ErrorKind::NotFound => {
@@ -3708,7 +3395,6 @@ impl PeerHandle {
                 source,
             }
         })?;
-
         let stdout = child.stdout.take().ok_or_else(|| SupervisorError::Spawn {
             alias: self.spec.alias.clone(),
             source: io::Error::other("failed to capture stdout"),
@@ -3717,7 +3403,6 @@ impl PeerHandle {
             alias: self.spec.alias.clone(),
             source: io::Error::other("failed to capture stderr"),
         })?;
-
         let stdout_stream = self.log_stream.clone();
         let stderr_stream = self.log_stream.clone();
         let stdout_handle = spawn_log_forwarder(
@@ -3733,15 +3418,12 @@ impl PeerHandle {
             stderr_stream,
         );
         self.log_threads = vec![stdout_handle, stderr_handle];
-
         self.process = Some(child);
         self.state = PeerState::Running;
         let attempt = reason.attempt();
         self.emit_lifecycle_event(LifecycleEvent::Started { attempt });
-
         Ok(())
     }
-
     fn stop(&mut self) -> Result<()> {
         match (&mut self.process, self.state) {
             (Some(child), PeerState::Running) => {
@@ -3794,7 +3476,6 @@ impl PeerHandle {
             }
         }
     }
-
     fn refresh_state(&mut self, irohad: &Path, ownership_lock: &SupervisorOwnershipLock) {
         if let (PeerState::Running, Some(child)) = (self.state, self.process.as_mut())
             && let Ok(Some(status)) = child.try_wait()
@@ -3805,14 +3486,12 @@ impl PeerHandle {
             let success = status.success();
             self.emit_lifecycle_event(LifecycleEvent::Exited { code, success });
             self.state = PeerState::Stopped;
-
             if self.manual_stop {
                 self.manual_stop = false;
                 self.restart_attempts = 0;
                 self.next_restart_at = None;
                 return;
             }
-
             if success {
                 self.restart_attempts = 0;
                 self.next_restart_at = None;
@@ -3820,7 +3499,6 @@ impl PeerHandle {
                 self.schedule_restart(irohad, ownership_lock);
             }
         }
-
         if matches!(self.state, PeerState::Restarting | PeerState::Stopped)
             && let Some(instant) = self.next_restart_at
             && Instant::now() >= instant
@@ -3842,7 +3520,6 @@ impl PeerHandle {
             }
         }
     }
-
     fn schedule_restart(&mut self, irohad: &Path, ownership_lock: &SupervisorOwnershipLock) {
         let next_attempt = self.restart_attempts + 1;
         if !self.restart_policy.should_retry(next_attempt) {
@@ -3854,10 +3531,8 @@ impl PeerHandle {
             self.state = PeerState::Stopped;
             return;
         }
-
         let delay = self.restart_policy.backoff_for(next_attempt);
         self.set_restart_timer(next_attempt, delay);
-
         if delay.is_zero() {
             let attempt = self.restart_attempts;
             match self.start(irohad, StartReason::Restart { attempt }, ownership_lock) {
@@ -3871,7 +3546,6 @@ impl PeerHandle {
                         attempt,
                         error: err.to_string(),
                     });
-
                     let upcoming_attempt = attempt + 1;
                     if self.restart_policy.should_retry(upcoming_attempt) {
                         let next_delay = self.restart_policy.backoff_for(upcoming_attempt);
@@ -3888,14 +3562,12 @@ impl PeerHandle {
             }
         }
     }
-
     fn teardown_log_threads(&mut self) {
         for handle in self.log_threads.drain(..) {
             let _ = handle.join();
         }
         self.log_file = None;
     }
-
     fn set_restart_timer(&mut self, attempt: usize, delay: Duration) {
         self.restart_attempts = attempt;
         self.state = PeerState::Restarting;
@@ -3905,7 +3577,6 @@ impl PeerHandle {
             delay_ms: delay.as_millis().min(u128::from(u64::MAX)) as u64,
         });
     }
-
     fn emit_lifecycle_event(&self, event: LifecycleEvent) {
         if let Some(file) = &self.log_file {
             let message = format_lifecycle(&event);
@@ -3914,7 +3585,6 @@ impl PeerHandle {
         self.log_stream.emit_lifecycle(event);
     }
 }
-
 /// Lifecycle state for a peer managed by the supervisor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerState {
@@ -3927,7 +3597,6 @@ pub enum PeerState {
     /// Process was stopped or exited.
     Stopped,
 }
-
 impl PeerState {
     /// Human-readable label for UI presentation.
     pub fn label(self) -> &'static str {
@@ -3939,18 +3608,15 @@ impl PeerState {
         }
     }
 }
-
 fn write_log_record(file: &Arc<Mutex<fs::File>>, kind: LogStreamKind, message: &str) {
     if let Ok(mut guard) = file.lock() {
         let sanitized = sanitize_message(message);
         let _ = writeln!(guard, "{}|{}|{}", timestamp_ms(), kind, sanitized);
     }
 }
-
 fn sanitize_message(message: &str) -> String {
     message.replace(['\n', '\r'], " ")
 }
-
 fn format_lifecycle(event: &LifecycleEvent) -> String {
     match event {
         LifecycleEvent::Started { attempt } if *attempt == 0 => "started".to_owned(),
@@ -3974,7 +3640,6 @@ fn format_lifecycle(event: &LifecycleEvent) -> String {
         LifecycleEvent::StoppedByUser => "stopped by user".to_owned(),
     }
 }
-
 fn spawn_log_forwarder<R>(
     kind: LogStreamKind,
     reader: R,
@@ -4006,7 +3671,6 @@ where
         }
     })
 }
-
 fn stage_managed_rans_tables(peer_dir: &Path) -> Result<PathBuf> {
     let peer_dir = peer_dir.canonicalize()?;
     let destination = peer_dir.join(MANAGED_RANS_TABLE_RELATIVE_PATH);
@@ -4024,7 +3688,6 @@ fn stage_managed_rans_tables(peer_dir: &Path) -> Result<PathBuf> {
     }
     Ok(destination)
 }
-
 #[derive(Debug, Clone)]
 struct PeerSpec {
     alias: String,
@@ -4039,7 +3702,6 @@ struct PeerSpec {
     rans_tables_path: PathBuf,
     keys: PeerKeys,
 }
-
 impl PeerSpec {
     fn new_in_generation(
         generation_root: &Path,
@@ -4050,18 +3712,14 @@ impl PeerSpec {
     ) -> Result<Self> {
         let generation_peer_dir = generation_root.join("peers").join(&alias);
         fs::create_dir_all(&generation_peer_dir)?;
-
         Self::initialize_storage(&storage_dir)?;
-
         // Kura authenticates a pristine store root before establishing its
         // configured-catalog baseline. Keep its root separate from the other
         // per-peer runtime directories and let Kura create it on first start.
         let kura_dir = storage_dir.join("kura");
-
         let snapshot_dir = storage_dir.join("snapshot");
         let config_path = generation_peer_dir.join("config.toml");
         let rans_tables_path = stage_managed_rans_tables(&generation_peer_dir)?;
-
         let key_pair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let (public_key, private_key) = key_pair.into_parts();
         let pop = bls_normal_pop_prove(&private_key)
@@ -4071,7 +3729,6 @@ impl PeerSpec {
         let soranet_transport_key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let (soranet_transport_public_key, soranet_transport_private_key) =
             soranet_transport_key_pair.into_parts();
-
         Ok(Self {
             alias,
             torii_bind: format!("0.0.0.0:{torii_port}"),
@@ -4094,7 +3751,6 @@ impl PeerSpec {
             },
         })
     }
-
     fn in_generation(&self, generation_root: &Path) -> Result<Self> {
         let mut relocated = self.clone();
         let peer_dir = generation_root.join("peers").join(&self.alias);
@@ -4103,7 +3759,6 @@ impl PeerSpec {
         relocated.rans_tables_path = stage_managed_rans_tables(&peer_dir)?;
         Ok(relocated)
     }
-
     fn in_fresh_generation(&self, generation_root: &Path, storage_dir: PathBuf) -> Result<Self> {
         let mut relocated = self.in_generation(generation_root)?;
         Self::initialize_storage(&storage_dir)?;
@@ -4112,7 +3767,6 @@ impl PeerSpec {
         relocated.storage_dir = storage_dir;
         Ok(relocated)
     }
-
     fn initialize_storage(storage_dir: &Path) -> Result<()> {
         fs::create_dir_all(storage_dir)?;
         fs::create_dir_all(
@@ -4122,7 +3776,6 @@ impl PeerSpec {
         )?;
         Ok(())
     }
-
     fn write_config(
         &self,
         chain_id: &str,
@@ -4164,7 +3817,6 @@ impl PeerSpec {
             "soranet_transport_private_key".into(),
             toml::Value::String(self.keys.soranet_transport_private_key.to_string()),
         );
-
         let trusted = all_peers
             .iter()
             .map(|peer| toml::Value::String(peer.trusted_peer_entry()))
@@ -4186,7 +3838,6 @@ impl PeerSpec {
             })
             .collect();
         root.insert("trusted_peers_pop".into(), toml::Value::Array(trusted_pops));
-
         let network_bind = socket_addr_literal(&self.p2p_bind, "network.address")?;
         let network_public = socket_addr_literal(&self.p2p_public, "network.public_address")?;
         let mut network = toml::Table::new();
@@ -4236,7 +3887,6 @@ impl PeerSpec {
             );
         }
         root.insert("network".into(), toml::Value::Table(network));
-
         let torii_bind = socket_addr_literal(&self.torii_bind, "torii.address")?;
         let mut torii = toml::Table::new();
         if let Some(overrides) = config_overrides.torii.as_ref() {
@@ -4289,7 +3939,6 @@ impl PeerSpec {
             }
         }
         root.insert("torii".into(), toml::Value::Table(torii));
-
         // Streaming components persist sessions and provisioned routes even
         // when a developer does not exercise streaming. Give every peer its
         // own absolute state tree instead of inheriting process-wide relative
@@ -4334,7 +3983,6 @@ impl PeerSpec {
         );
         streaming.insert("soravpn".into(), toml::Value::Table(soravpn));
         root.insert("streaming".into(), toml::Value::Table(streaming));
-
         let mut genesis_table = toml::Table::new();
         genesis_table.insert(
             "public_key".into(),
@@ -4362,25 +4010,21 @@ impl PeerSpec {
             ),
         );
         root.insert("genesis".into(), toml::Value::Table(genesis_table));
-
         let mut kura = toml::Table::new();
         kura.insert(
             "store_dir".into(),
             toml::Value::String(self.kura_dir.display().to_string()),
         );
         root.insert("kura".into(), toml::Value::Table(kura));
-
         let mut snapshot = toml::Table::new();
         snapshot.insert(
             "store_dir".into(),
             toml::Value::String(self.snapshot_dir.display().to_string()),
         );
         root.insert("snapshot".into(), toml::Value::Table(snapshot));
-
         let mut confidential = toml::Table::new();
         confidential.insert("enabled".into(), toml::Value::Boolean(true));
         root.insert("confidential".into(), toml::Value::Table(confidential));
-
         // The embedded SoraFS runtime persists transaction-forwarder
         // checkpoints even when provider storage and its worker loops are
         // disabled. Do not let multiple managed peers inherit the process-wide
@@ -4394,23 +4038,19 @@ impl PeerSpec {
         let mut sorafs = toml::Table::new();
         sorafs.insert("storage".into(), toml::Value::Table(sorafs_storage));
         root.insert("sorafs".into(), toml::Value::Table(sorafs));
-
         if let Some(table) = config_overrides.sumeragi.as_ref()
             && !table.is_empty()
         {
             root.insert("sumeragi".into(), toml::Value::Table(table.clone()));
         }
-
         if let Some(table) = config_overrides.nexus.as_ref()
             && !table.is_empty()
         {
             root.insert("nexus".into(), toml::Value::Table(table.clone()));
         }
-
         for overlay in extra_layers {
             merge_table(&mut root, overlay);
         }
-
         if let Some(expected) = managed_account_onboarding.as_ref() {
             let configured = root
                 .get("torii")
@@ -4423,7 +4063,6 @@ impl PeerSpec {
                 ));
             }
         }
-
         let expected_kura_dir = self.kura_dir.display().to_string();
         let configured_kura_dir = root
             .get("kura")
@@ -4435,7 +4074,6 @@ impl PeerSpec {
                 "temporary config overlays must preserve Mochi's managed Kura root `{expected_kura_dir}`"
             )));
         }
-
         let expected_sorafs_dir = sorafs_dir.display().to_string();
         let sorafs = root
             .entry("sorafs")
@@ -4458,7 +4096,6 @@ impl PeerSpec {
         // replaces the generated table. Restore the launcher-owned path after
         // validating that the overlay did not try to redirect it.
         sorafs_storage.insert("data_dir".into(), toml::Value::String(expected_sorafs_dir));
-
         let expected_streaming_dir = streaming_dir.display().to_string();
         let expected_soranet_spool_dir = soranet_spool_dir.display().to_string();
         let expected_soravpn_spool_dir = soravpn_spool_dir.display().to_string();
@@ -4487,7 +4124,6 @@ impl PeerSpec {
         streaming
             .entry("identity_private_key")
             .or_insert_with(|| toml::Value::String(self.keys.identity_private_key.to_string()));
-
         let expected_rans_tables_path = self.rans_tables_path.display().to_string();
         let codec = streaming
             .entry("codec")
@@ -4523,7 +4159,6 @@ impl PeerSpec {
             "rans_tables_path".into(),
             toml::Value::String(expected_rans_tables_path),
         );
-
         let soranet = streaming
             .entry("soranet")
             .or_insert_with(|| toml::Value::Table(toml::Table::new()))
@@ -4546,7 +4181,6 @@ impl PeerSpec {
             .entry("enabled")
             .or_insert(toml::Value::Boolean(false));
         restore_streaming_soranet_defaults(soranet);
-
         let soravpn = streaming
             .entry("soravpn")
             .or_insert_with(|| toml::Value::Table(toml::Table::new()))
@@ -4566,7 +4200,6 @@ impl PeerSpec {
             toml::Value::String(expected_soravpn_spool_dir),
         );
         restore_streaming_soravpn_defaults(soravpn);
-
         let header = Self::config_header(
             chain_id,
             genesis,
@@ -4578,14 +4211,12 @@ impl PeerSpec {
         self.write_owner_only_config(rendered.as_bytes())?;
         Ok(())
     }
-
     #[cfg(unix)]
     fn write_owner_only_config(&self, payload: &[u8]) -> Result<()> {
         let parent = self.config_path.parent().ok_or_else(|| {
             SupervisorError::Config("managed peer config has no parent directory".to_owned())
         })?;
         let owner_uid = fs::metadata(parent)?.uid();
-
         if let Ok(existing) = fs::symlink_metadata(&self.config_path) {
             if !existing.file_type().is_file()
                 || existing.file_type().is_symlink()
@@ -4598,14 +4229,12 @@ impl PeerSpec {
                 )));
             }
         }
-
         let mut options = OpenOptions::new();
         options.write(true).create(true).mode(0o600);
         let mut file = options.open(&self.config_path)?;
         let mut permissions = file.metadata()?.permissions();
         permissions.set_mode(0o600);
         file.set_permissions(permissions)?;
-
         let metadata = file.metadata()?;
         if !metadata.is_file()
             || metadata.uid() != owner_uid
@@ -4617,20 +4246,17 @@ impl PeerSpec {
                 self.config_path.display()
             )));
         }
-
         file.set_len(0)?;
         file.write_all(payload)?;
         file.sync_all()?;
         Ok(())
     }
-
     #[cfg(not(unix))]
     fn write_owner_only_config(&self, _payload: &[u8]) -> Result<()> {
         Err(SupervisorError::Config(
             "managed peer configs require owner-only file support".to_owned(),
         ))
     }
-
     fn config_header(
         chain_id: &str,
         genesis: &GenesisMaterial,
@@ -4645,23 +4271,18 @@ impl PeerSpec {
         lines.extend(lane_path_comments(storage_root, nexus));
         lines.join("\n")
     }
-
     fn trusted_peer_entry(&self) -> String {
         format!("{}@{}", self.keys.public_key, self.p2p_public)
     }
-
     fn peer_id(&self) -> PeerId {
         self.keys.public_key.clone().into()
     }
-
     fn pop_bytes(&self) -> &[u8] {
         &self.keys.pop
     }
-
     fn torii_base_http(&self) -> String {
         format!("http://{}", self.torii_public)
     }
-
     fn operator_signing_context(
         &self,
         network_id: NetworkId,
@@ -4679,7 +4300,6 @@ impl PeerSpec {
         Ok(OperatorSigningContext::new(network_id, key_pair))
     }
 }
-
 #[derive(Debug, Clone)]
 struct PeerKeys {
     public_key: PublicKey,
@@ -4690,7 +4310,6 @@ struct PeerKeys {
     identity_private_key: ExposedPrivateKey,
     pop: Vec<u8>,
 }
-
 #[derive(Debug)]
 struct GenesisMaterial {
     generation_id: String,
@@ -4706,7 +4325,6 @@ struct GenesisMaterial {
     verify_report: Option<KagamiVerifyReport>,
     consensus_fingerprint: Option<String>,
 }
-
 #[derive(Clone, Copy)]
 struct GenesisCreateContext<'a> {
     generation_id: &'a str,
@@ -4720,12 +4338,10 @@ struct GenesisCreateContext<'a> {
     vrf_seed_hex: Option<&'a str>,
     onboarding_authority: &'a AccountId,
 }
-
 #[derive(Debug)]
 struct TemporaryGenesisKeyFile {
     path: PathBuf,
 }
-
 impl TemporaryGenesisKeyFile {
     #[cfg(unix)]
     fn create(genesis_dir: &Path, key_pair: &KeyPair) -> Result<Self> {
@@ -4734,7 +4350,6 @@ impl TemporaryGenesisKeyFile {
         // component. macOS commonly exposes its temporary directory through
         // `/var`, so resolve the managed directory before deriving the file.
         let genesis_dir = fs::canonicalize(genesis_dir)?;
-
         for attempt in 0..MAX_CREATE_ATTEMPTS {
             let path = genesis_dir.join(format!(
                 ".mochi-genesis-signing-key-{}-{}-{attempt}",
@@ -4755,25 +4370,21 @@ impl TemporaryGenesisKeyFile {
             file.sync_all()?;
             return Ok(guard);
         }
-
         Err(SupervisorError::Config(format!(
             "failed to allocate an owner-only genesis signing key beneath `{}`",
             genesis_dir.display()
         )))
     }
-
     #[cfg(not(unix))]
     fn create(_genesis_dir: &Path, _key_pair: &KeyPair) -> Result<Self> {
         Err(SupervisorError::Config(
             "config-bound genesis signing requires owner-only private-key file support".to_owned(),
         ))
     }
-
     fn path(&self) -> &Path {
         &self.path
     }
 }
-
 impl Drop for TemporaryGenesisKeyFile {
     fn drop(&mut self) {
         if let Err(error) = fs::remove_file(&self.path)
@@ -4786,17 +4397,16 @@ impl Drop for TemporaryGenesisKeyFile {
         }
     }
 }
-
 /// Build the canonical signed genesis body used by Mochi's Kagami test stub.
 ///
 /// This helper is intentionally available only to tests and consumers which
-/// opt into `test-support`; production supervision always invokes Kagami.
+/// opt into `test`; production supervision always invokes Kagami.
 ///
 /// # Errors
 ///
 /// Returns an error when the prepared manifest or node configuration cannot
 /// be parsed, their genesis bindings differ, or canonical signing fails.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "test"))]
 pub fn sign_kagami_stub_genesis_from_config(
     manifest_path: &Path,
     config_path: &Path,
@@ -4815,10 +4425,9 @@ pub fn sign_kagami_stub_genesis_from_config(
         ))
     })
 }
-
 /// Derive the exact genesis policies selected by a finalized node config.
 ///
-/// This test-support companion keeps config parsing behind Mochi's existing
+/// This test-only companion keeps config parsing behind Mochi's existing
 /// orchestration dependency while allowing the Kagami mock to verify the
 /// canonical block it emitted.
 ///
@@ -4826,7 +4435,7 @@ pub fn sign_kagami_stub_genesis_from_config(
 ///
 /// Returns an error when the node configuration cannot be parsed or omits a
 /// required genesis binding.
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "test"))]
 pub fn kagami_stub_genesis_policies_from_config(
     config_path: &Path,
 ) -> Result<(
@@ -4844,7 +4453,6 @@ pub fn kagami_stub_genesis_policies_from_config(
         config.genesis_confidential_policy_hash,
     ))
 }
-
 impl GenesisMaterial {
     fn create(binaries: &mut BinaryPaths, context: GenesisCreateContext<'_>) -> Result<Self> {
         let GenesisCreateContext {
@@ -4865,7 +4473,6 @@ impl GenesisMaterial {
         let block_path = genesis_dir.join(GENESIS_SIGNED_FILE_NAME);
         let expected_hash_path = genesis_dir.join(GENESIS_EXPECTED_HASH_FILE_NAME);
         let public_key_path = genesis_dir.join(GENESIS_PUBLIC_KEY_FILE_NAME);
-
         let key_pair = KeyPair::random();
         let manifest = Self::generate_manifest(
             binaries,
@@ -4898,7 +4505,6 @@ impl GenesisMaterial {
         let json = norito::json::to_vec_pretty(&manifest)?;
         fs::write(&manifest_path, json)?;
         fs::write(&public_key_path, format!("{}\n", key_pair.public_key()))?;
-
         let mut material = Self {
             generation_id: generation_id.to_owned(),
             key_pair,
@@ -4929,7 +4535,6 @@ impl GenesisMaterial {
             consensus_mode,
         )?;
         material.expected_hash = Some(expected_hash);
-
         let verify_report = if let Some(profile) = genesis_profile {
             Some(Self::verify_manifest_with_kagami(
                 binaries,
@@ -4958,7 +4563,6 @@ impl GenesisMaterial {
         material.consensus_fingerprint = consensus_fingerprint;
         Ok(material)
     }
-
     fn copy_into_generation(&self, generation_id: &str, generation_root: &Path) -> Result<Self> {
         let genesis_dir = generation_root.join("genesis");
         fs::create_dir_all(&genesis_dir)?;
@@ -4985,7 +4589,6 @@ impl GenesisMaterial {
             consensus_fingerprint: self.consensus_fingerprint.clone(),
         })
     }
-
     fn sign_manifest_with_kagami(
         &self,
         binaries: &mut BinaryPaths,
@@ -5024,7 +4627,6 @@ impl GenesisMaterial {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-
         let output = command.output().map_err(|error| {
             SupervisorError::KagamiInvocation(format!(
                 "failed to invoke `kagami genesis sign`: {error}"
@@ -5038,7 +4640,7 @@ impl GenesisMaterial {
                 output.status
             )));
         }
-        #[cfg(any(test, feature = "test-support"))]
+        #[cfg(any(test, feature = "test"))]
         if std::env::var_os(TEST_FINALIZE_KAGAMI_STUB_SIGNATURE).is_some() {
             self.finalize_kagami_stub_signature(config_path, consensus_mode)?;
         }
@@ -5054,7 +4656,6 @@ impl GenesisMaterial {
                 self.block_path.display()
             )));
         }
-
         let expected_hash_record =
             fs::read_to_string(&self.expected_hash_path).map_err(|error| {
                 SupervisorError::KagamiInvocation(format!(
@@ -5090,12 +4691,10 @@ impl GenesisMaterial {
                 self.expected_hash_path.display()
             )));
         }
-
         let manifest = RawGenesisTransaction::from_path(&self.manifest_path)?;
         Ok((manifest, expected_hash))
     }
-
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test"))]
     fn finalize_kagami_stub_signature(
         &self,
         config_path: &Path,
@@ -5116,7 +4715,6 @@ impl GenesisMaterial {
         fs::write(&self.expected_hash_path, format!("{}\n", block.hash()))?;
         Ok(())
     }
-
     fn validate_generation(&self, chain_id: &str, peers: &[PeerSpec]) -> Result<()> {
         let signed = iroha_genesis::read_signed_genesis_bytes(&self.block_path).map_err(|error| {
             SupervisorError::GenerationValidation(format!(
@@ -5162,7 +4760,6 @@ impl GenesisMaterial {
             ))
         })?;
         drop(signed);
-
         let expected_roster = peers
             .iter()
             .map(|peer| (peer.keys.public_key.clone(), peer.keys.pop.clone()))
@@ -5172,7 +4769,6 @@ impl GenesisMaterial {
                 "signed genesis validator roster differs from the candidate peers".to_owned(),
             ));
         }
-
         let canonical_block = fs::canonicalize(&self.block_path)?;
         let canonical_manifest = fs::canonicalize(&self.manifest_path)?;
         for peer in peers {
@@ -5235,7 +4831,6 @@ impl GenesisMaterial {
         }
         Ok(())
     }
-
     fn generate_manifest(
         binaries: &mut BinaryPaths,
         genesis_dir: &Path,
@@ -5271,7 +4866,6 @@ impl GenesisMaterial {
                 ))
             });
         }
-
         if let Some(profile) = genesis_profile
             && profile.requires_seed()
             && vrf_seed_hex.is_none()
@@ -5285,7 +4879,6 @@ impl GenesisMaterial {
                 "`--vrf-seed-hex` requires a genesis profile (NPoS mode)".into(),
             ));
         }
-
         let kagami = binaries.ensure_kagami_ready()?;
         let mut command = Command::new(kagami);
         command
@@ -5298,7 +4891,6 @@ impl GenesisMaterial {
             .arg(genesis_public_key.to_string())
             .arg("--chain-id")
             .arg(chain_id);
-
         if let Some(profile) = genesis_profile {
             command.arg("--profile").arg(profile.as_kagami_arg());
         }
@@ -5313,11 +4905,9 @@ impl GenesisMaterial {
             .arg("default")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-
         let output = command.output().map_err(|err| {
             SupervisorError::KagamiInvocation(format!("failed to invoke `kagami`: {err}"))
         })?;
-
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(SupervisorError::KagamiInvocation(format!(
@@ -5325,17 +4915,14 @@ impl GenesisMaterial {
                 output.status
             )));
         }
-
         if genesis_profile.is_some() && !output.stderr.is_empty() {
             eprintln!("{}", String::from_utf8_lossy(&output.stderr));
         }
-
         if output.stdout.is_empty() {
             return Err(SupervisorError::KagamiInvocation(
                 "`kagami` did not emit genesis JSON".into(),
             ));
         }
-
         let mut value: Value = norito::json::from_slice(&output.stdout).map_err(|err| {
             SupervisorError::KagamiInvocation(format!(
                 "failed to parse `kagami` JSON output: {err}"
@@ -5345,7 +4932,6 @@ impl GenesisMaterial {
             SupervisorError::KagamiInvocation("`kagami` JSON payload must be an object".into())
         })?;
         object.insert("chain".into(), Value::String(chain_id.to_owned()));
-
         let manifest: RawGenesisTransaction = norito::json::from_value(value).map_err(|err| {
             SupervisorError::KagamiInvocation(format!(
                 "failed to decode genesis manifest from `kagami` output: {err}"
@@ -5353,7 +4939,6 @@ impl GenesisMaterial {
         })?;
         Ok(manifest)
     }
-
     fn verify_manifest_with_kagami(
         binaries: &mut BinaryPaths,
         manifest_path: &Path,
@@ -5368,20 +4953,16 @@ impl GenesisMaterial {
             .arg(profile.as_kagami_arg())
             .arg("--genesis")
             .arg(manifest_path);
-
         if let Some(seed) = vrf_seed_hex {
             command.arg("--vrf-seed-hex").arg(seed);
         }
-
         command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-
         let output = command.output().map_err(|err| {
             SupervisorError::KagamiInvocation(format!("failed to invoke `kagami verify`: {err}"))
         })?;
-
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         if !output.status.success() {
@@ -5390,7 +4971,6 @@ impl GenesisMaterial {
                 output.status
             )));
         }
-
         let mut combined = stdout.trim_end().to_owned();
         let stderr_trimmed = stderr.trim_end();
         if !stderr_trimmed.is_empty() {
@@ -5399,15 +4979,12 @@ impl GenesisMaterial {
             }
             combined.push_str(stderr_trimmed);
         }
-
         Ok(parse_kagami_verify_output(profile, vrf_seed_hex, &combined))
     }
-
     fn public_key(&self) -> &PublicKey {
         self.key_pair.public_key()
     }
 }
-
 fn validate_managed_peer_paths(
     config: &ManagedNodeConfig,
     peer: &PeerSpec,
@@ -5421,7 +4998,6 @@ fn validate_managed_peer_paths(
         peer_count,
     )
 }
-
 fn validate_managed_peer_paths_against(
     config: &ManagedNodeConfig,
     config_path: &Path,
@@ -5499,7 +5075,6 @@ fn validate_managed_peer_paths_against(
             )));
         }
     }
-
     if peer_count > 1 {
         let configured = &config.managed_paths.soranet_pow_revocation_store_path;
         let expected = storage_dir.join("soranet/ticket_revocations.norito");
@@ -5514,7 +5089,6 @@ fn validate_managed_peer_paths_against(
     }
     Ok(())
 }
-
 fn parse_keyed_value(line: &str, keys: &[&str]) -> Option<String> {
     let lower = line.to_ascii_lowercase();
     for key in keys {
@@ -5531,7 +5105,6 @@ fn parse_keyed_value(line: &str, keys: &[&str]) -> Option<String> {
             }
         }
     }
-
     for token in line.split(|c: char| c.is_whitespace() || c == ',' || c == ';') {
         if let Some((key, value)) = token.split_once(['=', ':'])
             && keys
@@ -5546,7 +5119,6 @@ fn parse_keyed_value(line: &str, keys: &[&str]) -> Option<String> {
     }
     None
 }
-
 fn parse_kagami_verify_output(
     profile: GenesisProfile,
     vrf_seed_hex: Option<&str>,
@@ -5556,7 +5128,6 @@ fn parse_kagami_verify_output(
     let mut peers_with_pop = None;
     let mut fingerprint = None;
     let mut vrf_seed = vrf_seed_hex.map(|value| value.to_owned());
-
     for line in output.lines() {
         if chain_id.is_none() {
             chain_id = parse_keyed_value(line, &["chain_id", "chain id", "chain"]);
@@ -5575,7 +5146,6 @@ fn parse_kagami_verify_output(
             vrf_seed = parse_keyed_value(line, &["vrf_seed_hex", "vrf-seed", "vrf_seed"]);
         }
     }
-
     KagamiVerifyReport {
         profile,
         chain_id,
@@ -5585,14 +5155,12 @@ fn parse_kagami_verify_output(
         raw_output: output.to_owned(),
     }
 }
-
 fn default_data_root() -> PathBuf {
     std::env::var_os("MOCHI_DATA_ROOT")
         .map(PathBuf::from)
         .filter(|path| !path.as_os_str().is_empty())
         .unwrap_or_else(|| std::env::temp_dir().join("mochi"))
 }
-
 fn resolve_data_root(data_root: &Path) -> io::Result<PathBuf> {
     if data_root.is_absolute() {
         Ok(data_root.to_path_buf())
@@ -5600,21 +5168,17 @@ fn resolve_data_root(data_root: &Path) -> io::Result<PathBuf> {
         Ok(env::current_dir()?.join(data_root))
     }
 }
-
 fn default_snapshot_slug() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO);
     format!("snapshot-{}-{:03}", now.as_secs(), now.subsec_millis())
 }
-
 const SNAPSHOT_LABEL_MAX_LEN: usize = 64;
 const SNAPSHOT_STORAGE_LAYOUT: &str = "kura-subdirectory-v1";
-
 fn sanitize_snapshot_label(label: &str) -> Option<String> {
     let mut sanitized = String::with_capacity(label.len().min(SNAPSHOT_LABEL_MAX_LEN));
     let mut previous_was_sep = true;
-
     for ch in label.chars() {
         match ch {
             'a'..='z' | '0'..='9' => {
@@ -5643,7 +5207,6 @@ fn sanitize_snapshot_label(label: &str) -> Option<String> {
             }
         }
     }
-
     let trimmed = sanitized.trim_matches('-');
     if trimmed.is_empty() {
         None
@@ -5651,7 +5214,6 @@ fn sanitize_snapshot_label(label: &str) -> Option<String> {
         Some(trimmed.to_owned())
     }
 }
-
 struct SnapshotMetadata {
     chain_id: String,
     generation_id: String,
@@ -5659,7 +5221,6 @@ struct SnapshotMetadata {
     genesis_hash: Hash,
     kura_hashes: HashMap<String, Hash>,
 }
-
 fn verify_snapshot_artifact_matches_selected(
     snapshot_root: &Path,
     snapshot_path: &Path,
@@ -5697,7 +5258,6 @@ fn verify_snapshot_artifact_matches_selected(
     }
     Ok(())
 }
-
 fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
     let metadata_path = root.join("metadata.json");
     let bytes = read_snapshot_file_bounded(&metadata_path, SNAPSHOT_METADATA_MAX_BYTES_V1)
@@ -5778,7 +5338,6 @@ fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
                 ))
             })
         })?;
-
     let kura_hashes_value = object
         .get("kura_hashes")
         .and_then(Value::as_object)
@@ -5788,7 +5347,6 @@ fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
                 metadata_path.display()
             ))
         })?;
-
     let mut kura_hashes = HashMap::new();
     for (alias, value) in kura_hashes_value {
         let hash_str = value.as_str().ok_or_else(|| {
@@ -5813,9 +5371,7 @@ fn load_snapshot_metadata(root: &Path) -> Result<SnapshotMetadata> {
         kura_hashes,
     })
 }
-
 include!("supervisor/copy_helpers.rs");
-
 include!("supervisor/snapshot_hash_helpers.rs");
 
 #[cfg(test)]

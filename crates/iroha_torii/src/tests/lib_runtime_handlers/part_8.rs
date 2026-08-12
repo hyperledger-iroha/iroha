@@ -847,7 +847,7 @@ async fn local_nexus_read_fanout_completes_without_recursive_self_proxying() {
     .await
     .expect("local fanout must not recurse until timeout")
     .expect("local fanout snapshot");
-    assert_eq!(snapshot.status_code, StatusCode::OK.as_u16());
+    assert_eq!(snapshot.snapshot.status_code, StatusCode::OK.as_u16());
 }
 
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
@@ -1283,7 +1283,7 @@ async fn forward_incoming_torii_proxy_request_returns_route_unavailable_when_hop
         &app,
         &sender_peer_id,
         route,
-        &ToriiProxyRequestV6 {
+        ToriiProxyRequestV6 {
             schema_version: TORII_PROXY_REQUEST_VERSION_V6,
             request_id: Hash::new(b"torii-proxy-hop-exhausted"),
             deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
@@ -1431,7 +1431,7 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
         &app,
         &sender_peer_id,
         route,
-        &ToriiProxyRequestV6 {
+        ToriiProxyRequestV6 {
             schema_version: TORII_PROXY_REQUEST_VERSION_V6,
             request_id,
             deadline_unix_ms: super::torii_proxy_test_deadline_unix_ms(),
@@ -2256,15 +2256,24 @@ async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
         },
     );
 
+    let payload = iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
+        schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
+        request_id,
+        response: expected_response.clone(),
+    }));
+    let payload_bytes = norito::to_bytes(&payload)
+        .expect("encode synthetic Torii proxy response")
+        .len();
+    let (responder_peer, _, payload, _, p2p_memory) =
+        iroha_p2p::peer::message::PeerMessage::new(responder_peer, payload, payload_bytes)
+            .into_parts();
+
     super::handle_torii_proxy_network_message(
         app.clone(),
         iroha_core::IrohaNetwork::closed_for_tests(),
         responder_peer,
-        iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
-            schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
-            request_id,
-            response: expected_response.clone(),
-        })),
+        payload,
+        p2p_memory,
     )
     .await;
 

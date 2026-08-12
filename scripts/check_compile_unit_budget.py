@@ -6,11 +6,26 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
+import re
 import subprocess
 import sys
 from collections import Counter, deque
 from pathlib import Path
 from typing import Any
+
+
+REPORT_SCHEMA_VERSION = 2
+ARTIFACT_IDENTITY = "cargo-package-target-features-profile-v2"
+ArtifactIdentity = tuple[
+    str,
+    str,
+    tuple[str, ...],
+    tuple[str, ...],
+    str,
+    tuple[str, ...],
+    str,
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,8 +93,8 @@ def parse_args() -> argparse.Namespace:
         "--baseline",
         type=Path,
         help=(
-            "Optional JSON baseline. Accepts either a report containing "
-            "`compile_units` or a keyed object selected by --baseline-key."
+            "Optional schema-v2 JSON baseline. Accepts either a complete report "
+            "or a keyed measurement contract selected by --baseline-key."
         ),
     )
     parser.add_argument(
@@ -156,6 +171,58 @@ def compiler_diagnostic_lines(message: dict[str, Any]) -> tuple[str, ...]:
     return tuple(rendered.rstrip().splitlines())
 
 
+def artifact_identity(message: dict[str, Any]) -> ArtifactIdentity | None:
+    """Return the complete stable identity of one Cargo compiler artifact."""
+
+    package_id = message.get("package_id")
+    target = message.get("target")
+    if not isinstance(package_id, str) or not isinstance(target, dict):
+        return None
+    profile = message.get("profile")
+    features = message.get("features")
+    if not isinstance(profile, dict) or not isinstance(features, list):
+        return None
+    if not all(isinstance(feature, str) for feature in features):
+        return None
+
+    def target_strings(field: str) -> tuple[str, ...] | None:
+        values = target.get(field)
+        if not isinstance(values, list) or not all(
+            isinstance(value, str) for value in values
+        ):
+            return None
+        return tuple(sorted(values))
+
+    kinds = target_strings("kind")
+    crate_types = target_strings("crate_types")
+    name = target.get("name")
+    source_path = target.get("src_path")
+    if (
+        kinds is None
+        or crate_types is None
+        or not isinstance(name, str)
+        or not isinstance(source_path, str)
+    ):
+        return None
+    try:
+        profile_identity = json.dumps(
+            profile,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError):
+        return None
+    return (
+        package_id,
+        name,
+        kinds,
+        crate_types,
+        source_path,
+        tuple(sorted(features)),
+        profile_identity,
+    )
+
+
 def cargo_test_command(args: argparse.Namespace) -> list[str]:
     cmd = [
         "cargo",
@@ -195,13 +262,22 @@ def baseline_limit(
     return baseline + max(minimum_growth, percentage_growth)
 
 
-def load_baseline(path: Path, key: str | None) -> int:
-    """Load one compile-unit baseline from a deterministic JSON report."""
-    payload: Any = json.loads(path.read_text(encoding="utf-8"))
+def load_baseline(path: Path, key: str | None) -> dict[str, Any]:
+    """Load one schema-v2 compile-unit measurement contract."""
+
+    document: Any = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError(f"baseline document in {path} must be a JSON object")
+    if document.get("schema_version") != REPORT_SCHEMA_VERSION:
+        raise ValueError(
+            f"baseline document in {path} must use schema_version "
+            f"{REPORT_SCHEMA_VERSION}"
+        )
+    payload: Any = document
     if key is not None:
-        if not isinstance(payload, dict) or key not in payload:
+        if key not in document:
             raise ValueError(f"baseline key `{key}` is missing from {path}")
-        payload = payload[key]
+        payload = document[key]
     if not isinstance(payload, dict):
         raise ValueError(f"baseline payload in {path} must be a JSON object")
     value = payload.get("compile_units")
@@ -209,26 +285,103 @@ def load_baseline(path: Path, key: str | None) -> int:
         raise ValueError(
             f"baseline payload in {path} must contain a non-negative integer compile_units"
         )
-    return value
+    return payload
+
+
+def parse_rustc_release(output: str) -> str:
+    """Extract the exact release string from ``rustc --version --verbose``."""
+
+    for line in output.splitlines():
+        if line.startswith("release: "):
+            release = line.removeprefix("release: ").strip()
+            if re.fullmatch(
+                r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?", release
+            ):
+                return release
+    first_line = output.splitlines()[0] if output.splitlines() else ""
+    match = re.fullmatch(
+        r"rustc ([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?) \(.+\)",
+        first_line,
+    )
+    if match is None:
+        raise ValueError("rustc output does not contain an exact release")
+    return match.group(1)
+
+
+def rustc_release() -> str:
+    """Return the compiler release that Cargo will select in this checkout."""
+
+    compiler = os.environ.get("RUSTC", "rustc")
+    output = subprocess.check_output(
+        [compiler, "--version", "--verbose"],
+        text=True,
+    )
+    return parse_rustc_release(output)
+
+
+def measurement_contract(
+    args: argparse.Namespace,
+    *,
+    toolchain: str,
+) -> dict[str, Any]:
+    """Describe every input that makes a compile-unit baseline comparable."""
+
+    return {
+        "artifact_identity": ARTIFACT_IDENTITY,
+        "artifact_scope": args.artifact_scope,
+        "budget_min_growth": args.budget_min_growth,
+        "budget_percent": (
+            int(args.budget_percent)
+            if args.budget_percent.is_integer()
+            else args.budget_percent
+        ),
+        "cargo_locked": not args.allow_lock_update,
+        "manifest_path": args.manifest_path.as_posix(),
+        "packages": sorted(set(args.package)),
+        "target": "lib" if args.lib else "all",
+        "toolchain": toolchain,
+        "workspace": args.workspace,
+    }
+
+
+def validate_baseline_contract(
+    baseline: dict[str, Any],
+    observed: dict[str, Any],
+) -> None:
+    """Reject a baseline recorded for a different compiler or Cargo scope."""
+
+    errors = []
+    for field, actual in observed.items():
+        if field not in baseline:
+            errors.append(f"missing `{field}`")
+        elif (
+            type(baseline[field]) is not type(actual)
+            or baseline[field] != actual
+        ):
+            errors.append(
+                f"`{field}` is {baseline[field]!r}, expected {actual!r}"
+            )
+    if errors:
+        raise ValueError("baseline measurement contract mismatch: " + "; ".join(errors))
 
 
 def build_report(
     *,
     command: list[str],
-    artifact_scope: str,
-    artifacts: set[tuple[str, str, tuple[str, ...], str]],
+    artifacts: set[ArtifactIdentity],
     artifact_package_ids: set[str],
     source_counts: Counter[str],
     package_artifacts: Counter[str],
     baseline: int | None,
     limit: int | None,
+    contract: dict[str, Any],
 ) -> dict[str, Any]:
     """Build the stable JSON report emitted by the compile-unit guard."""
     compile_units = len(artifacts)
     return {
-        "schema_version": 1,
+        "schema_version": REPORT_SCHEMA_VERSION,
+        **contract,
         "command": command,
-        "artifact_scope": artifact_scope,
         "compile_units": compile_units,
         "artifact_packages": len(artifact_package_ids),
         "package_sources": {
@@ -262,6 +415,8 @@ def write_json_report(report: dict[str, Any], target: Path) -> None:
 def write_human_report(report: dict[str, Any], stream: Any = sys.stdout) -> None:
     """Write the concise report intended for developers and CI logs."""
     print(f"compile_units={report['compile_units']}", file=stream)
+    print(f"artifact_identity={report['artifact_identity']}", file=stream)
+    print(f"toolchain={report['toolchain']}", file=stream)
     print(f"artifact_packages={report['artifact_packages']}", file=stream)
     print(f"registry_packages={report['package_sources']['registry']}", file=stream)
     print(f"path_packages={report['package_sources']['path']}", file=stream)
@@ -288,18 +443,34 @@ def main() -> int:
         return 2
 
     baseline: int | None = None
+    baseline_entry: dict[str, Any] | None = None
     baseline_budget: int | None = None
     if args.baseline is not None:
         try:
-            baseline = load_baseline(args.baseline, args.baseline_key)
-            baseline_budget = baseline_limit(
-                baseline,
-                percent=args.budget_percent,
-                minimum_growth=args.budget_min_growth,
-            )
+            baseline_entry = load_baseline(args.baseline, args.baseline_key)
+            baseline = baseline_entry["compile_units"]
         except (OSError, ValueError, json.JSONDecodeError) as err:
             print(f"ERROR: failed to load compile-unit baseline: {err}", file=sys.stderr)
             return 2
+
+    try:
+        toolchain = rustc_release()
+    except (OSError, ValueError, subprocess.CalledProcessError) as err:
+        print(f"ERROR: failed to identify Rust toolchain: {err}", file=sys.stderr)
+        return 2
+    contract = measurement_contract(args, toolchain=toolchain)
+    if baseline_entry is not None:
+        try:
+            validate_baseline_contract(baseline_entry, contract)
+        except ValueError as err:
+            print(f"ERROR: failed to load compile-unit baseline: {err}", file=sys.stderr)
+            return 2
+        assert baseline is not None
+        baseline_budget = baseline_limit(
+            baseline,
+            percent=args.budget_percent,
+            minimum_growth=args.budget_min_growth,
+        )
 
     limits = [
         limit
@@ -315,8 +486,9 @@ def main() -> int:
 
     packages = {package["id"]: package for package in metadata["packages"]}
     workspace_members = set(metadata["workspace_members"])
-    artifacts: set[tuple[str, str, tuple[str, ...], str]] = set()
+    artifacts: set[ArtifactIdentity] = set()
     package_artifacts: Counter[str] = Counter()
+    malformed_artifacts = 0
 
     cmd = cargo_test_command(args)
     process = subprocess.Popen(
@@ -343,20 +515,15 @@ def main() -> int:
             continue
         if message.get("reason") != "compiler-artifact":
             continue
-        package_id = message.get("package_id")
-        target = message.get("target") or {}
-        if not package_id or not target:
+        key = artifact_identity(message)
+        if key is None:
+            malformed_artifacts += 1
             continue
+        package_id = key[0]
         if not artifact_in_scope(
             package_id, args.artifact_scope, workspace_members
         ):
             continue
-        key = (
-            package_id,
-            target.get("name", ""),
-            tuple(target.get("kind", [])),
-            target.get("src_path", ""),
-        )
         if key in artifacts:
             continue
         artifacts.add(key)
@@ -369,22 +536,30 @@ def main() -> int:
         for line in cargo_output:
             print(line, file=sys.stderr)
         return return_code
+    if malformed_artifacts:
+        print(
+            "ERROR: Cargo emitted "
+            f"{malformed_artifacts} compiler artifact(s) without the complete "
+            "package/target/features/profile identity",
+            file=sys.stderr,
+        )
+        return 2
 
     source_counts: Counter[str] = Counter()
-    artifact_package_ids = {package_id for package_id, _, _, _ in artifacts}
+    artifact_package_ids = {identity[0] for identity in artifacts}
     for package_id in artifact_package_ids:
         package = packages.get(package_id)
         source_counts[package_source(package)] += 1
 
     report = build_report(
         command=cmd,
-        artifact_scope=args.artifact_scope,
         artifacts=artifacts,
         artifact_package_ids=artifact_package_ids,
         source_counts=source_counts,
         package_artifacts=package_artifacts,
         baseline=baseline,
         limit=effective_limit,
+        contract=contract,
     )
 
     human_stream = (

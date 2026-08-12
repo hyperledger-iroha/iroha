@@ -6,8 +6,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-#[cfg(all(feature = "parallel-stage1", feature = "bench-internal"))]
-use norito::json::build_struct_index_parallel_bench;
 use norito::{
     derive::JsonSerialize,
     json as serde_json,
@@ -32,10 +30,6 @@ pub struct Stage1BenchSample {
     pub default_ms_per_iter: f64,
     pub scalar_ms_per_iter: f64,
     pub speedup_vs_scalar: f64,
-    #[cfg(all(feature = "parallel-stage1", feature = "bench-internal"))]
-    pub parallel_ms_per_iter: Option<f64>,
-    #[cfg(all(feature = "parallel-stage1", feature = "bench-internal"))]
-    pub parallel_speedup_vs_scalar: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, JsonSerialize)]
@@ -93,24 +87,8 @@ pub fn run_stage1_bench(options: Stage1BenchOptions) -> Result<Stage1BenchReport
             default_ms_per_iter: default_ms.as_secs_f64() * 1000.0 / (options.iterations as f64),
             scalar_ms_per_iter: scalar_ms.as_secs_f64() * 1000.0 / (options.iterations as f64),
             speedup_vs_scalar: 0.0,
-            #[cfg(all(feature = "parallel-stage1", feature = "bench-internal"))]
-            parallel_ms_per_iter: None,
-            #[cfg(all(feature = "parallel-stage1", feature = "bench-internal"))]
-            parallel_speedup_vs_scalar: None,
         };
         sample.speedup_vs_scalar = sample.scalar_ms_per_iter / sample.default_ms_per_iter;
-        #[cfg(all(feature = "parallel-stage1", feature = "bench-internal"))]
-        {
-            let parallel_ms = time_backend(options.iterations, || {
-                let tape = build_struct_index_parallel_bench(&payload);
-                std::hint::black_box(tape.offsets.len());
-            });
-            let parallel_ms_per_iter =
-                parallel_ms.as_secs_f64() * 1000.0 / (options.iterations as f64);
-            sample.parallel_ms_per_iter = Some(parallel_ms_per_iter);
-            sample.parallel_speedup_vs_scalar =
-                Some(sample.scalar_ms_per_iter / parallel_ms_per_iter);
-        }
         samples.push(sample);
     }
 

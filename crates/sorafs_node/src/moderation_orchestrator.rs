@@ -70,7 +70,6 @@ pub use iroha_data_model::sorafs::moderation_ledger::{
     ModerationFinalizedCaseViewV1, ModerationFinalizedCursorV1, ModerationFinalizedEventCursorV1,
     ModerationFinalizedEventV1, ModerationFinalizedLedgerSnapshotV1,
 };
-
 /// Checkpoint schema version.
 ///
 /// Version nine adds source-bound dead-letter resolution receipts plus bounded
@@ -107,7 +106,6 @@ pub const MODERATION_EXTERNAL_WORK_LEASE_MS_V1: u64 = 30_000;
 pub const MODERATION_PANEL_NOTIFICATION_BACKOFF_BASE_MS_V1: u64 = 1_000;
 /// Maximum retry delay for a panel-notification delivery.
 pub const MODERATION_PANEL_NOTIFICATION_BACKOFF_MAX_MS_V1: u64 = 5 * 60 * 1_000;
-
 const ACTION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.native-action.v1";
 const OPERATION_ID_DOMAIN_V1: &[u8] = b"sorafs.moderation.operation-id.v1";
 const REQUEST_BINDING_DOMAIN_V1: &[u8] = b"sorafs.moderation.http-request-binding.v1";
@@ -186,7 +184,6 @@ const SIGNED_TRANSACTION_LIMITS: DecodeLimits = DecodeLimits::new(
     2 * MODERATION_SIGNED_TRANSACTION_MAX_BYTES_V1,
     128,
 );
-
 /// One exact native moderation mutation.
 #[expect(
     clippy::large_enum_variant,
@@ -217,7 +214,6 @@ pub enum ModerationNativeActionV1 {
     /// Commit the single terminal outcome.
     FinalizeCase(FinalizeSorafsModerationCase),
 }
-
 impl ModerationNativeActionV1 {
     /// Convert this action to the already-defined native instruction.
     #[must_use]
@@ -236,7 +232,6 @@ impl ModerationNativeActionV1 {
             Self::FinalizeCase(value) => value.clone().into(),
         }
     }
-
     /// Stable action label used in payload-free operational records.
     #[must_use]
     pub const fn label(&self) -> &'static str {
@@ -254,7 +249,6 @@ impl ModerationNativeActionV1 {
             Self::FinalizeCase(_) => "finalize_case",
         }
     }
-
     /// Validate the canonical V1 action and its caller authority binding.
     ///
     /// Caller-signed Torii command adapters use this same validator as the
@@ -272,7 +266,6 @@ impl ModerationNativeActionV1 {
         self.canonical_bytes()?;
         Ok(())
     }
-
     fn canonical_bytes(&self) -> Result<Vec<u8>, ModerationOrchestratorError> {
         let bytes = norito::to_bytes(self).map_err(|error| {
             ModerationOrchestratorError::InvalidAction(format!(
@@ -303,7 +296,6 @@ impl ModerationNativeActionV1 {
         }
         Ok(bytes)
     }
-
     fn validate_authority(&self, authority: &AccountId) -> Result<(), ModerationOrchestratorError> {
         match self {
             Self::SetPolicy(value) => value
@@ -419,7 +411,6 @@ impl ModerationNativeActionV1 {
             Self::FinalizeCase(value) => validate_scope(value.case_id(), value.round_id()),
         }
     }
-
     fn semantic_material(
         &self,
         authority: &AccountId,
@@ -472,12 +463,10 @@ impl ModerationNativeActionV1 {
         }
         Ok(material)
     }
-
     fn action_digest(&self) -> Result<[u8; 32], ModerationOrchestratorError> {
         let bytes = self.canonical_bytes()?;
         Ok(domain_hash(ACTION_DIGEST_DOMAIN_V1, &[bytes.as_slice()]))
     }
-
     fn operation_id(
         &self,
         network_id: &iroha_data_model::NetworkId,
@@ -490,7 +479,6 @@ impl ModerationNativeActionV1 {
         ))
     }
 }
-
 /// Public, non-secret qualification for one moderation runtime provider.
 ///
 /// `revision` identifies the deployment-owned adapter and public policy
@@ -502,7 +490,6 @@ pub struct ModerationRuntimeProviderQualificationV1 {
     revision: u64,
     policy_digest: [u8; 32],
 }
-
 impl ModerationRuntimeProviderQualificationV1 {
     /// Construct one provider qualification observation.
     #[must_use]
@@ -512,24 +499,20 @@ impl ModerationRuntimeProviderQualificationV1 {
             policy_digest,
         }
     }
-
     /// Return the non-zero deployment adapter/policy revision.
     #[must_use]
     pub const fn revision(self) -> u64 {
         self.revision
     }
-
     /// Return the non-zero digest of the public provider policy.
     #[must_use]
     pub const fn policy_digest(self) -> [u8; 32] {
         self.policy_digest
     }
-
     fn is_valid(self) -> bool {
         self.revision != 0 && self.policy_digest != [0; 32]
     }
 }
-
 /// Stable, payload-free moderation runtime-provider qualification failures.
 ///
 /// Provider implementations keep credentials, key identifiers, and vendor
@@ -573,7 +556,6 @@ pub enum ModerationRuntimeProviderQualificationErrorV1 {
     #[error("moderation receipt archive public key does not match configuration")]
     ArchivePublicKeyChanged,
 }
-
 /// Fixed readiness failures returned by a moderation runtime provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ModerationRuntimeProviderReadinessErrorV1 {
@@ -584,7 +566,6 @@ pub enum ModerationRuntimeProviderReadinessErrorV1 {
     #[error("moderation runtime provider rejected qualification")]
     Rejected,
 }
-
 /// Stable identity and readiness exposed by an external moderation provider.
 ///
 /// Implementations own credentials, signing keys, authentication material,
@@ -594,13 +575,11 @@ pub enum ModerationRuntimeProviderReadinessErrorV1 {
 pub trait ModerationRuntimeProviderV1: Send + Sync + fmt::Debug {
     /// Return the stable opaque deployment handle for this provider.
     fn handle(&self) -> &str;
-
     /// Qualify the active adapter and its public policy revision.
     fn qualification(
         &self,
     ) -> Result<ModerationRuntimeProviderQualificationV1, ModerationRuntimeProviderReadinessErrorV1>;
 }
-
 /// Qualify one provider against an independently configured exact binding.
 ///
 /// # Errors
@@ -634,7 +613,6 @@ pub fn qualify_moderation_runtime_provider_v1<P: ModerationRuntimeProviderV1 + ?
     }
     Ok(())
 }
-
 /// Revalidate an already pinned provider immediately around external work.
 ///
 /// # Errors
@@ -660,7 +638,6 @@ pub fn revalidate_moderation_runtime_provider_v1<P: ModerationRuntimeProviderV1 
     }
     Ok(())
 }
-
 fn validate_moderation_runtime_provider_handle(
     handle: &str,
     configured: bool,
@@ -680,7 +657,6 @@ fn validate_moderation_runtime_provider_handle(
         }
     })
 }
-
 fn map_runtime_provider_qualification_error(
     _error: ModerationRuntimeProviderQualificationErrorV1,
 ) -> ModerationOrchestratorError {
@@ -688,7 +664,6 @@ fn map_runtime_provider_qualification_error(
         "moderation runtime provider binding is unavailable or invalid".to_owned(),
     )
 }
-
 /// Bounds, provider bindings, and durable path for one moderation orchestrator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationOrchestratorConfigV1 {
@@ -757,7 +732,6 @@ pub struct ModerationOrchestratorConfigV1 {
     /// Configured new-key proof of possession for the same transition.
     pub panel_notification_archive_new_key_possession_signature: Option<[u8; 64]>,
 }
-
 impl ModerationOrchestratorConfigV1 {
     fn validate(&self) -> Result<(), ModerationOrchestratorError> {
         if !self.checkpoint_path.is_absolute() || self.checkpoint_path.file_name().is_none() {
@@ -901,7 +875,6 @@ impl ModerationOrchestratorConfigV1 {
         Ok(())
     }
 }
-
 /// Canonical request forwarded to the runtime-only HSM transaction service.
 #[derive(Debug, Clone)]
 pub struct ModerationTransactionRequestV1 {
@@ -926,7 +899,6 @@ pub struct ModerationTransactionRequestV1 {
     /// Finalized block hash paired with `baseline_finalized_height`.
     pub baseline_finalized_block_hash: [u8; 32],
 }
-
 impl ModerationTransactionRequestV1 {
     /// Construct the canonical submission request for one authenticated action.
     ///
@@ -968,7 +940,6 @@ impl ModerationTransactionRequestV1 {
         request.validate()?;
         Ok(request)
     }
-
     /// Recompute and validate every canonical identity and authority binding.
     ///
     /// This is the sole request validator used at transaction-adapter
@@ -1017,7 +988,6 @@ impl ModerationTransactionRequestV1 {
         Ok(())
     }
 }
-
 /// Exact signed transaction retained before any ingress call.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationSignedTransactionV1 {
@@ -1028,7 +998,6 @@ pub struct ModerationSignedTransactionV1 {
     /// Canonical Norito signed transaction bytes.
     pub canonical_bytes: Vec<u8>,
 }
-
 impl ModerationSignedTransactionV1 {
     /// Validate and retain one exact signed transaction for `request`.
     ///
@@ -1054,7 +1023,6 @@ impl ModerationSignedTransactionV1 {
         signed.decode_for_request(request)?;
         Ok(signed)
     }
-
     /// Decode and revalidate the exact retained transaction.
     ///
     /// # Errors
@@ -1091,7 +1059,6 @@ impl ModerationSignedTransactionV1 {
         Ok(transaction)
     }
 }
-
 /// A transaction identity returned by the injected submitter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModerationTransactionReceiptV1 {
@@ -1100,7 +1067,6 @@ pub struct ModerationTransactionReceiptV1 {
     /// Finalized height observed by the submitter while admitting the request.
     pub observed_finalized_height: u64,
 }
-
 /// Fixed failure classes; arbitrary HSM/provider diagnostics are never persisted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationSubmissionFailureV1 {
@@ -1115,7 +1081,6 @@ pub enum ModerationSubmissionFailureV1 {
     /// Runtime signing or policy is unavailable.
     RuntimeUnavailable,
 }
-
 /// Transaction state resolved by stable operation identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationSubmissionLookupV1 {
@@ -1148,18 +1113,14 @@ pub enum ModerationSubmissionLookupV1 {
     /// Backend state is inconclusive; retrying would be unsafe.
     Unknown,
 }
-
 /// Runtime-only HSM and strict transaction-ingress interface.
 pub trait ModerationTransactionSubmitterV1: Send + Sync {
     /// Return the exact external signer provider qualified by this submitter.
     fn transaction_signer_provider(&self) -> &dyn ModerationRuntimeProviderV1;
-
     /// Return the exact strict-ingress provider qualified by this submitter.
     fn strict_ingress_provider(&self) -> &dyn ModerationRuntimeProviderV1;
-
     /// Exact genesis-derived network identity implemented by this runtime boundary.
     fn network_id(&self) -> iroha_data_model::NetworkId;
-
     /// Sign exactly one native action without exposing it to transaction ingress.
     ///
     /// The orchestrator durably retains the returned canonical bytes and hash
@@ -1168,7 +1129,6 @@ pub trait ModerationTransactionSubmitterV1: Send + Sync {
         &self,
         request: &ModerationTransactionRequestV1,
     ) -> Result<ModerationSignedTransactionV1, ModerationSubmissionFailureV1>;
-
     /// Submit the exact signed envelope already retained by the orchestrator.
     ///
     /// Implementations must never sign or replace a transaction here. They
@@ -1179,7 +1139,6 @@ pub trait ModerationTransactionSubmitterV1: Send + Sync {
         request: &ModerationTransactionRequestV1,
         signed: &ModerationSignedTransactionV1,
     ) -> Result<ModerationTransactionReceiptV1, ModerationSubmissionFailureV1>;
-
     /// Resolve an earlier submission by its stable operation identity.
     fn lookup(
         &self,
@@ -1187,7 +1146,6 @@ pub trait ModerationTransactionSubmitterV1: Send + Sync {
         transaction_id: Option<[u8; 32]>,
     ) -> ModerationSubmissionLookupV1;
 }
-
 /// Reader for one complete, internally consistent finalized moderation view.
 pub trait ModerationFinalizedSnapshotReaderV1: Send + Sync {
     /// Read every retained lifecycle record and a bounded event window from one finalized anchor.
@@ -1197,7 +1155,6 @@ pub trait ModerationFinalizedSnapshotReaderV1: Send + Sync {
         max_events: usize,
     ) -> Result<ModerationFinalizedLedgerSnapshotV1, ModerationSnapshotReadErrorV1>;
 }
-
 /// Fixed snapshot-reader failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationSnapshotReadErrorV1 {
@@ -1208,7 +1165,6 @@ pub enum ModerationSnapshotReadErrorV1 {
     /// The source returned inconsistent or corrupt state.
     InvalidSnapshot,
 }
-
 /// Terminal handoff destination.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -1219,7 +1175,6 @@ pub enum ModerationTerminalHandoffKindV1 {
     /// Downstream governance/transparency publication.
     Publication,
 }
-
 /// Payload-free terminal handoff derived only from finalized ledger state.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationTerminalHandoffV1 {
@@ -1242,7 +1197,6 @@ pub struct ModerationTerminalHandoffV1 {
     /// Sealed minimal committed-event witness retained across bounded event-window eviction.
     pub source_event_witness: ModerationFinalizedEventV1,
 }
-
 impl ModerationTerminalHandoffV1 {
     /// Derive the canonical handoff identity from this record's exact network and scope.
     #[must_use]
@@ -1255,14 +1209,12 @@ impl ModerationTerminalHandoffV1 {
             self.outcome_digest,
         )
     }
-
     /// Return whether the handoff identity is canonical for `network_id`.
     #[must_use]
     pub fn is_bound_to_network(&self, network_id: &iroha_data_model::NetworkId) -> bool {
         self.network_id == *network_id && self.handoff_id == self.canonical_id()
     }
 }
-
 /// Exactly-once terminal settlement/publication adapter.
 pub trait ModerationTerminalHandoffSinkV1: ModerationRuntimeProviderV1 {
     /// Deliver a payload-free finalized handoff, deduplicating `handoff_id`.
@@ -1270,7 +1222,6 @@ pub trait ModerationTerminalHandoffSinkV1: ModerationRuntimeProviderV1 {
         &self,
         handoff: &ModerationTerminalHandoffV1,
     ) -> Result<(), ModerationHandoffFailureV1>;
-
     /// Publish or replay one exact signed notification-archive head.
     ///
     /// Publication implementations must enforce monotonic generation and chain
@@ -1280,7 +1231,6 @@ pub trait ModerationTerminalHandoffSinkV1: ModerationRuntimeProviderV1 {
         &self,
         head: &ModerationPanelNotificationArchiveHeadV1,
     ) -> Result<(), ModerationHandoffFailureV1>;
-
     /// Read the exact publicly visible monotonic archive head.
     ///
     /// The returned value must come from the same authenticated durable store
@@ -1289,7 +1239,6 @@ pub trait ModerationTerminalHandoffSinkV1: ModerationRuntimeProviderV1 {
         &self,
     ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationHandoffFailureV1>;
 }
-
 /// Fixed handoff failures safe for durable recording.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationHandoffFailureV1 {
@@ -1300,7 +1249,6 @@ pub enum ModerationHandoffFailureV1 {
     /// The sink permanently rejected the handoff.
     Permanent,
 }
-
 /// Payload-free panel-notification category derived from finalized ledger state.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -1313,7 +1261,6 @@ pub enum ModerationPanelNotificationKindV1 {
     /// The authoritative commit/reveal ballot is open for this juror.
     BallotActivated,
 }
-
 impl ModerationPanelNotificationKindV1 {
     const fn tag(self) -> u8 {
         match self {
@@ -1323,7 +1270,6 @@ impl ModerationPanelNotificationKindV1 {
         }
     }
 }
-
 /// One payload-free notification derived from an exact finalized operation.
 ///
 /// The record intentionally contains no case identifier, evidence locator,
@@ -1349,7 +1295,6 @@ pub struct ModerationPanelNotificationV1 {
     /// Consensus timestamp of the source event.
     pub source_occurred_at_unix_ms: u64,
 }
-
 impl ModerationPanelNotificationV1 {
     /// Derive the canonical notification identity from this record's exact network and scope.
     #[must_use]
@@ -1364,14 +1309,12 @@ impl ModerationPanelNotificationV1 {
             self.source_occurred_at_unix_ms,
         )
     }
-
     /// Return whether the notification identity is canonical for `network_id`.
     #[must_use]
     pub fn is_bound_to_network(&self, network_id: &iroha_data_model::NetworkId) -> bool {
         self.network_id == *network_id && self.notification_id == self.canonical_id()
     }
 }
-
 /// Lease returned to a notification worker after the claim is durable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationPanelNotificationClaimV1 {
@@ -1388,7 +1331,6 @@ pub struct ModerationPanelNotificationClaimV1 {
     /// Immutable attempt ceiling captured when the finalized event was scanned.
     pub attempt_limit: u32,
 }
-
 /// Stable sink receipt used to finalize a notification delivery.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModerationPanelNotificationDeliveryReceiptV1 {
@@ -1399,7 +1341,6 @@ pub struct ModerationPanelNotificationDeliveryReceiptV1 {
     /// Runtime time at which the sink durably accepted the notification.
     pub delivered_at_unix_ms: u64,
 }
-
 /// Safe, payload-free notification delivery failure class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationPanelNotificationFailureV1 {
@@ -1410,7 +1351,6 @@ pub enum ModerationPanelNotificationFailureV1 {
     /// The sink permanently rejected this notification.
     Permanent,
 }
-
 /// Durable dead-letter class addressed by an externally authorized resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ModerationDeadLetterKindV1 {
@@ -1421,7 +1361,6 @@ pub enum ModerationDeadLetterKindV1 {
     /// A payload-free panel notification.
     PanelNotification,
 }
-
 impl ModerationDeadLetterKindV1 {
     const fn tag(self) -> u8 {
         match self {
@@ -1431,7 +1370,6 @@ impl ModerationDeadLetterKindV1 {
         }
     }
 }
-
 /// Authorized disposition for one exact unresolved dead letter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ModerationDeadLetterResolutionActionV1 {
@@ -1440,7 +1378,6 @@ pub enum ModerationDeadLetterResolutionActionV1 {
     /// Acknowledge the incident without requeueing it.
     Acknowledge,
 }
-
 impl ModerationDeadLetterResolutionActionV1 {
     const fn tag(self) -> u8 {
         match self {
@@ -1449,7 +1386,6 @@ impl ModerationDeadLetterResolutionActionV1 {
         }
     }
 }
-
 /// Externally signed, exact-source authorization resolving one dead letter.
 ///
 /// The statement is bound to the current sealed checkpoint revision and the
@@ -1490,7 +1426,6 @@ pub struct ModerationDeadLetterResolutionV1 {
     /// Archive-lifetime-stable Ed25519 trust anchor.
     pub attestor_public_key: [u8; 32],
 }
-
 impl ModerationDeadLetterResolutionV1 {
     /// Derive the exact Ed25519 authorization message.
     ///
@@ -1502,7 +1437,6 @@ impl ModerationDeadLetterResolutionV1 {
         Ok(dead_letter_resolution_message(self))
     }
 }
-
 /// Exactly-once payload-free panel-notification delivery adapter.
 ///
 /// Implementations must atomically deduplicate
@@ -1521,7 +1455,6 @@ pub trait ModerationPanelNotificationSinkV1: ModerationRuntimeProviderV1 {
         claim: &ModerationPanelNotificationClaimV1,
     ) -> Result<ModerationPanelNotificationDeliveryReceiptV1, ModerationPanelNotificationFailureV1>;
 }
-
 /// Fixed payload-free failures returned by the immutable receipt archive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationPanelNotificationArchiveExternalErrorV1 {
@@ -1532,7 +1465,6 @@ pub enum ModerationPanelNotificationArchiveExternalErrorV1 {
     /// The archive rejected a substitution, stale predecessor, or policy violation.
     Rejected,
 }
-
 /// Canonical terminal-set statement signed by the sealed checkpoint authority.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationPanelNotificationSourceAttestationV1 {
@@ -1569,7 +1501,6 @@ pub struct ModerationPanelNotificationSourceAttestationV1 {
     /// Ed25519 key authenticating the statement.
     pub attestor_public_key: [u8; 32],
 }
-
 impl ModerationPanelNotificationSourceAttestationV1 {
     /// Verify the canonical terminal-set statement and its Ed25519 signature.
     ///
@@ -1591,7 +1522,6 @@ impl ModerationPanelNotificationSourceAttestationV1 {
             .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)
     }
 }
-
 /// Authenticated exact readback from the immutable notification-receipt archive.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ModerationPanelNotificationArchiveReadbackV1 {
@@ -1600,7 +1530,6 @@ pub struct ModerationPanelNotificationArchiveReadbackV1 {
     /// Ed25519 signature emitted only after durable installation.
     pub signature: [u8; 64],
 }
-
 impl fmt::Debug for ModerationPanelNotificationArchiveReadbackV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1611,7 +1540,6 @@ impl fmt::Debug for ModerationPanelNotificationArchiveReadbackV1 {
             .finish()
     }
 }
-
 /// Deployment-owned immutable archive for terminal panel-notification receipts.
 ///
 /// `install` must atomically bind an operation identifier to the exact receipt
@@ -1622,10 +1550,8 @@ impl fmt::Debug for ModerationPanelNotificationArchiveReadbackV1 {
 pub trait ModerationPanelNotificationArchiveV1: ModerationRuntimeProviderV1 {
     /// Return the stable non-secret archive namespace identity.
     fn archive_id(&self) -> [u8; 32];
-
     /// Return the exact Ed25519 key authenticating durable readback.
     fn signing_public_key(&self) -> [u8; 32];
-
     /// Durably install one exact canonical archive artifact.
     fn install(
         &self,
@@ -1633,7 +1559,6 @@ pub trait ModerationPanelNotificationArchiveV1: ModerationRuntimeProviderV1 {
         receipt_message: [u8; 32],
         canonical_artifact: &[u8],
     ) -> Result<[u8; 64], ModerationPanelNotificationArchiveExternalErrorV1>;
-
     /// Read back the exact artifact bound to `operation_id`.
     fn read(
         &self,
@@ -1643,7 +1568,6 @@ pub trait ModerationPanelNotificationArchiveV1: ModerationRuntimeProviderV1 {
         ModerationPanelNotificationArchiveExternalErrorV1,
     >;
 }
-
 /// One sealed archive-signer epoch with dual-control rotation evidence.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationPanelNotificationArchiveSignerEpochV1 {
@@ -1674,7 +1598,6 @@ pub struct ModerationPanelNotificationArchiveSignerEpochV1 {
     /// Digest of every preceding field.
     pub epoch_digest: [u8; 32],
 }
-
 impl ModerationPanelNotificationArchiveSignerEpochV1 {
     /// Derive the exact predecessor-key authorization message for this transition.
     ///
@@ -1718,7 +1641,6 @@ impl ModerationPanelNotificationArchiveSignerEpochV1 {
             network_id, self,
         ))
     }
-
     /// Derive the new-key proof-of-possession message for this transition.
     ///
     /// # Errors
@@ -1733,7 +1655,6 @@ impl ModerationPanelNotificationArchiveSignerEpochV1 {
             .map(panel_notification_archive_signer_pop_message)
     }
 }
-
 /// Signed monotonic head of one immutable notification-receipt archive batch.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationPanelNotificationArchiveHeadV1 {
@@ -1808,7 +1729,6 @@ pub struct ModerationPanelNotificationArchiveHeadV1 {
     /// Archive signature emitted only after durable exact installation.
     pub archive_signature: [u8; 64],
 }
-
 impl ModerationPanelNotificationArchiveHeadV1 {
     /// Verify the deterministic head and provider-issued readback signature.
     ///
@@ -1831,7 +1751,6 @@ impl ModerationPanelNotificationArchiveHeadV1 {
         )
     }
 }
-
 /// Result of one bounded authenticated archive-history audit page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModerationPanelNotificationArchiveAuditProgressV1 {
@@ -1844,7 +1763,6 @@ pub struct ModerationPanelNotificationArchiveAuditProgressV1 {
     /// Whether the current sweep reached the generation-one root.
     pub cycle_complete: bool,
 }
-
 /// Derived coordinates returned after strict slot-55 archive broker validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModerationPanelNotificationArchiveBrokerValidationV1 {
@@ -1866,7 +1784,6 @@ pub struct ModerationPanelNotificationArchiveBrokerValidationV1 {
     /// Checkpoint-authority message already authenticated inside the artifact.
     pub source_attestation_digest: [u8; 32],
 }
-
 /// Stable public expectations used by the slot-55 archive broker validator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationPanelNotificationArchiveBrokerExpectationV1<'a> {
@@ -1895,7 +1812,6 @@ pub struct ModerationPanelNotificationArchiveBrokerExpectationV1<'a> {
     /// Maximum terminal records in one artifact.
     pub max_records: usize,
 }
-
 /// Deterministic non-production fixture for cross-crate broker protocol tests.
 ///
 /// This type is public only so the irohad broker can test the real canonical
@@ -1940,7 +1856,6 @@ pub struct ModerationPanelNotificationArchiveBrokerFixtureV1 {
     /// Archive artifact byte bound.
     pub archive_max_bytes: u64,
 }
-
 impl ModerationPanelNotificationArchiveBrokerFixtureV1 {
     /// Borrow this fixture as strict broker validation expectations.
     #[must_use]
@@ -1961,7 +1876,6 @@ impl ModerationPanelNotificationArchiveBrokerFixtureV1 {
         }
     }
 }
-
 /// Durable terminal reason for a panel notification.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -1972,7 +1886,6 @@ pub enum ModerationPanelNotificationDeadLetterReasonV1 {
     /// Every bounded claim was consumed without a durable receipt.
     RetryExhausted,
 }
-
 /// Public persisted state of a panel notification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationPanelNotificationStatusV1 {
@@ -2019,7 +1932,6 @@ pub enum ModerationPanelNotificationStatusV1 {
         attempt_limit: u32,
     },
 }
-
 /// Outcome of an idempotent receipt finalization.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationPanelNotificationFinalizeOutcomeV1 {
@@ -2028,7 +1940,6 @@ pub enum ModerationPanelNotificationFinalizeOutcomeV1 {
     /// The byte-identical receipt was already durable.
     AlreadyDelivered,
 }
-
 /// Runtime-only dependencies.
 #[derive(Clone)]
 pub struct ModerationOrchestratorDepsV1 {
@@ -2047,7 +1958,6 @@ pub struct ModerationOrchestratorDepsV1 {
     /// Immutable authenticated panel-notification receipt archive.
     pub panel_notification_archive: Arc<dyn ModerationPanelNotificationArchiveV1>,
 }
-
 impl fmt::Debug for ModerationOrchestratorDepsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2062,7 +1972,6 @@ impl fmt::Debug for ModerationOrchestratorDepsV1 {
             .finish()
     }
 }
-
 struct QualifiedModerationTransactionSubmitterV1 {
     transaction_signer_handle: String,
     transaction_signer_qualification: ModerationRuntimeProviderQualificationV1,
@@ -2070,7 +1979,6 @@ struct QualifiedModerationTransactionSubmitterV1 {
     strict_ingress_qualification: ModerationRuntimeProviderQualificationV1,
     submitter: Arc<dyn ModerationTransactionSubmitterV1>,
 }
-
 impl QualifiedModerationTransactionSubmitterV1 {
     fn try_new(
         config: &ModerationOrchestratorConfigV1,
@@ -2094,7 +2002,6 @@ impl QualifiedModerationTransactionSubmitterV1 {
             submitter,
         })
     }
-
     fn revalidate_transaction_signer(
         &self,
     ) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
@@ -2104,7 +2011,6 @@ impl QualifiedModerationTransactionSubmitterV1 {
             self.submitter.transaction_signer_provider(),
         )
     }
-
     fn revalidate_strict_ingress(
         &self,
     ) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
@@ -2114,7 +2020,6 @@ impl QualifiedModerationTransactionSubmitterV1 {
             self.submitter.strict_ingress_provider(),
         )
     }
-
     fn network_id(
         &self,
     ) -> Result<iroha_data_model::NetworkId, ModerationRuntimeProviderQualificationErrorV1> {
@@ -2125,7 +2030,6 @@ impl QualifiedModerationTransactionSubmitterV1 {
         self.revalidate_strict_ingress()?;
         Ok(network_id)
     }
-
     fn sign(
         &self,
         request: &ModerationTransactionRequestV1,
@@ -2137,7 +2041,6 @@ impl QualifiedModerationTransactionSubmitterV1 {
             .map_err(|_| ModerationSubmissionFailureV1::RuntimeUnavailable)?;
         result
     }
-
     fn submit_signed(
         &self,
         request: &ModerationTransactionRequestV1,
@@ -2150,7 +2053,6 @@ impl QualifiedModerationTransactionSubmitterV1 {
             .map_err(|_| ModerationSubmissionFailureV1::Ambiguous)?;
         result
     }
-
     fn lookup(
         &self,
         operation_id: [u8; 32],
@@ -2166,7 +2068,6 @@ impl QualifiedModerationTransactionSubmitterV1 {
         lookup
     }
 }
-
 impl fmt::Debug for QualifiedModerationTransactionSubmitterV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2185,13 +2086,11 @@ impl fmt::Debug for QualifiedModerationTransactionSubmitterV1 {
             .finish()
     }
 }
-
 struct QualifiedModerationTerminalHandoffSinkV1 {
     handle: String,
     qualification: ModerationRuntimeProviderQualificationV1,
     sink: Arc<dyn ModerationTerminalHandoffSinkV1>,
 }
-
 impl QualifiedModerationTerminalHandoffSinkV1 {
     fn try_new(
         expected_handle: &str,
@@ -2209,7 +2108,6 @@ impl QualifiedModerationTerminalHandoffSinkV1 {
             sink,
         })
     }
-
     fn revalidate(&self) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
         revalidate_moderation_runtime_provider_v1(
             &self.handle,
@@ -2217,7 +2115,6 @@ impl QualifiedModerationTerminalHandoffSinkV1 {
             self.sink.as_ref(),
         )
     }
-
     fn deliver(
         &self,
         handoff: &ModerationTerminalHandoffV1,
@@ -2229,7 +2126,6 @@ impl QualifiedModerationTerminalHandoffSinkV1 {
             .map_err(|_| ModerationHandoffFailureV1::Ambiguous)?;
         result
     }
-
     fn publish_panel_notification_archive_head(
         &self,
         head: &ModerationPanelNotificationArchiveHeadV1,
@@ -2241,7 +2137,6 @@ impl QualifiedModerationTerminalHandoffSinkV1 {
             .map_err(|_| ModerationHandoffFailureV1::Ambiguous)?;
         result
     }
-
     fn read_panel_notification_archive_head(
         &self,
     ) -> Result<Option<ModerationPanelNotificationArchiveHeadV1>, ModerationHandoffFailureV1> {
@@ -2253,7 +2148,6 @@ impl QualifiedModerationTerminalHandoffSinkV1 {
         result
     }
 }
-
 impl fmt::Debug for QualifiedModerationTerminalHandoffSinkV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2264,13 +2158,11 @@ impl fmt::Debug for QualifiedModerationTerminalHandoffSinkV1 {
             .finish()
     }
 }
-
 struct QualifiedModerationPanelNotificationSinkV1 {
     handle: String,
     qualification: ModerationRuntimeProviderQualificationV1,
     sink: Arc<dyn ModerationPanelNotificationSinkV1>,
 }
-
 impl QualifiedModerationPanelNotificationSinkV1 {
     fn try_new(
         expected_handle: &str,
@@ -2288,7 +2180,6 @@ impl QualifiedModerationPanelNotificationSinkV1 {
             sink,
         })
     }
-
     fn revalidate(&self) -> Result<(), ModerationRuntimeProviderQualificationErrorV1> {
         revalidate_moderation_runtime_provider_v1(
             &self.handle,
@@ -2296,7 +2187,6 @@ impl QualifiedModerationPanelNotificationSinkV1 {
             self.sink.as_ref(),
         )
     }
-
     fn deliver(
         &self,
         claim: &ModerationPanelNotificationClaimV1,
@@ -2310,7 +2200,6 @@ impl QualifiedModerationPanelNotificationSinkV1 {
         result
     }
 }
-
 impl fmt::Debug for QualifiedModerationPanelNotificationSinkV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2321,7 +2210,6 @@ impl fmt::Debug for QualifiedModerationPanelNotificationSinkV1 {
             .finish()
     }
 }
-
 struct QualifiedModerationPanelNotificationArchiveV1 {
     handle: String,
     qualification: ModerationRuntimeProviderQualificationV1,
@@ -2329,7 +2217,6 @@ struct QualifiedModerationPanelNotificationArchiveV1 {
     public_key: [u8; 32],
     archive: Arc<dyn ModerationPanelNotificationArchiveV1>,
 }
-
 impl QualifiedModerationPanelNotificationArchiveV1 {
     fn try_new(
         expected_handle: &str,
@@ -2362,7 +2249,6 @@ impl QualifiedModerationPanelNotificationArchiveV1 {
             archive,
         })
     }
-
     fn read_qualified_identity(
         handle: &str,
         qualification: ModerationRuntimeProviderQualificationV1,
@@ -2373,7 +2259,6 @@ impl QualifiedModerationPanelNotificationArchiveV1 {
         revalidate_moderation_runtime_provider_v1(handle, qualification, archive)?;
         Ok(identity)
     }
-
     fn revalidate_identity(&self) -> Result<(), ModerationPanelNotificationArchiveExternalErrorV1> {
         let identity =
             Self::read_qualified_identity(&self.handle, self.qualification, self.archive.as_ref())
@@ -2383,7 +2268,6 @@ impl QualifiedModerationPanelNotificationArchiveV1 {
         }
         Ok(())
     }
-
     fn install(
         &self,
         operation_id: [u8; 32],
@@ -2398,7 +2282,6 @@ impl QualifiedModerationPanelNotificationArchiveV1 {
             .map_err(|_| ModerationPanelNotificationArchiveExternalErrorV1::Ambiguous)?;
         result
     }
-
     fn read(
         &self,
         operation_id: [u8; 32],
@@ -2413,7 +2296,6 @@ impl QualifiedModerationPanelNotificationArchiveV1 {
         result
     }
 }
-
 impl fmt::Debug for QualifiedModerationPanelNotificationArchiveV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2426,7 +2308,6 @@ impl fmt::Debug for QualifiedModerationPanelNotificationArchiveV1 {
             .finish()
     }
 }
-
 struct QualifiedModerationOrchestratorDepsV1 {
     checkpoint_store: checkpoint_store::QualifiedModerationCheckpointStoreV1,
     submitter: QualifiedModerationTransactionSubmitterV1,
@@ -2436,7 +2317,6 @@ struct QualifiedModerationOrchestratorDepsV1 {
     panel_notification_sink: QualifiedModerationPanelNotificationSinkV1,
     panel_notification_archive: QualifiedModerationPanelNotificationArchiveV1,
 }
-
 impl QualifiedModerationOrchestratorDepsV1 {
     fn try_new(
         config: &ModerationOrchestratorConfigV1,
@@ -2491,7 +2371,6 @@ impl QualifiedModerationOrchestratorDepsV1 {
         })
     }
 }
-
 impl fmt::Debug for QualifiedModerationOrchestratorDepsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2509,7 +2388,6 @@ impl fmt::Debug for QualifiedModerationOrchestratorDepsV1 {
             .finish()
     }
 }
-
 /// Public state of a native moderation submission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModerationOperationStatusV1 {
@@ -2520,7 +2398,6 @@ pub enum ModerationOperationStatusV1 {
     /// Safe terminal rejection is retained as a tombstone.
     Rejected,
 }
-
 /// Response returned for a submitted or replayed operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationSubmitOutcomeV1 {
@@ -2535,7 +2412,6 @@ pub struct ModerationSubmitOutcomeV1 {
     /// True for an exact replay of a retained identity.
     pub replay: bool,
 }
-
 /// Payload-free durable health observed after one moderation worker pass.
 ///
 /// This report contains only bounded queue counts and the finalized anchor. It
@@ -2565,14 +2441,12 @@ pub struct ModerationOrchestratorDurableHealthV1 {
     /// Latest archive generation covered by an authenticated incremental audit suffix.
     pub panel_notification_archive_audited_generation: u64,
 }
-
 impl ModerationOrchestratorDurableHealthV1 {
     /// Return whether durable work has reached a release-blocking terminal failure.
     #[must_use]
     pub const fn has_dead_letters(self) -> bool {
         self.durable_dead_letters != 0 || self.panel_notification_dead_letters != 0
     }
-
     /// Return whether publication and the incremental authenticated audit cover the current head.
     #[must_use]
     pub const fn archive_is_fresh(self) -> bool {
@@ -2582,14 +2456,12 @@ impl ModerationOrchestratorDurableHealthV1 {
                 == self.panel_notification_archive_audited_generation
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredOperationStatusV1 {
     Pending,
     Finalized,
     Rejected,
 }
-
 impl From<StoredOperationStatusV1> for ModerationOperationStatusV1 {
     fn from(value: StoredOperationStatusV1) -> Self {
         match value {
@@ -2599,7 +2471,6 @@ impl From<StoredOperationStatusV1> for ModerationOperationStatusV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredOperationV1 {
     operation_id: [u8; 32],
@@ -2608,7 +2479,6 @@ struct StoredOperationV1 {
     status: StoredOperationStatusV1,
     transaction_id: Option<[u8; 32]>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredOutboxStateV1 {
     Ready,
@@ -2617,7 +2487,6 @@ enum StoredOutboxStateV1 {
     Ambiguous,
     Submitted,
 }
-
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
 )]
@@ -2627,7 +2496,6 @@ enum StoredExternalWorkKindV1 {
     Lookup,
     Handoff,
 }
-
 impl StoredExternalWorkKindV1 {
     const fn tag(self) -> u8 {
         match self {
@@ -2638,7 +2506,6 @@ impl StoredExternalWorkKindV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredExternalWorkClaimV1 {
     kind: StoredExternalWorkKindV1,
@@ -2650,7 +2517,6 @@ struct StoredExternalWorkClaimV1 {
     work_digest: [u8; 32],
     lease_token: [u8; 32],
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredRetiredEnvelopeDispositionV1 {
     NotFound,
@@ -2658,7 +2524,6 @@ enum StoredRetiredEnvelopeDispositionV1 {
     Applied,
     Rejected,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredRetiredEnvelopeV1 {
     generation: u32,
@@ -2672,7 +2537,6 @@ struct StoredRetiredEnvelopeV1 {
     disposition: StoredRetiredEnvelopeDispositionV1,
     record_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredOutboxEntryV1 {
     operation_id: [u8; 32],
@@ -2694,7 +2558,6 @@ struct StoredOutboxEntryV1 {
     last_lookup_finalized_height: u64,
     last_lookup_finalized_block_hash: [u8; 32],
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredDeadLetterReasonV1 {
     PermanentRejection,
@@ -2703,7 +2566,6 @@ enum StoredDeadLetterReasonV1 {
     HandoffPermanentRejection,
     HandoffRetryExhausted,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredDeadLetterV1 {
     incident_sequence: u64,
@@ -2716,7 +2578,6 @@ struct StoredDeadLetterV1 {
     resolution: Option<ModerationDeadLetterResolutionV1>,
     resolution_signature: Option<[u8; 64]>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredDeadLetterRedriveV1 {
     NativeSubmission {
@@ -2726,7 +2587,6 @@ enum StoredDeadLetterRedriveV1 {
     },
     TerminalHandoff(ModerationTerminalHandoffV1),
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredHandoffV1 {
     handoff: ModerationTerminalHandoffV1,
@@ -2734,14 +2594,12 @@ struct StoredHandoffV1 {
     work_generation: u32,
     work_claim: Option<StoredExternalWorkClaimV1>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredCompletedHandoffV1 {
     handoff: ModerationTerminalHandoffV1,
     completed_at_finalized_cursor: ModerationFinalizedCursorV1,
     record_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredPanelNotificationStateV1 {
     Pending,
@@ -2749,7 +2607,6 @@ enum StoredPanelNotificationStateV1 {
     Delivered,
     DeadLetter,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredPanelNotificationV1 {
     notification: ModerationPanelNotificationV1,
@@ -2768,7 +2625,6 @@ struct StoredPanelNotificationV1 {
     dead_lettered_at_unix_ms: Option<u64>,
     record_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum ModerationPanelNotificationArchiveTerminalStatusV1 {
     Delivered {
@@ -2780,14 +2636,12 @@ enum ModerationPanelNotificationArchiveTerminalStatusV1 {
         dead_lettered_at_unix_ms: u64,
     },
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationPanelNotificationArchiveRecordV1 {
     notification_id: [u8; 32],
     terminal_status: ModerationPanelNotificationArchiveTerminalStatusV1,
     source_record_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredPanelNotificationDeadLetterResolutionV1 {
     terminal_record: ModerationPanelNotificationArchiveRecordV1,
@@ -2795,7 +2649,6 @@ struct StoredPanelNotificationDeadLetterResolutionV1 {
     resolution_signature: [u8; 64],
     record_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum ModerationTerminalArchiveRecordV1 {
     PanelNotification(ModerationPanelNotificationArchiveRecordV1),
@@ -2834,13 +2687,11 @@ enum ModerationTerminalArchiveRecordV1 {
         source_record_digest: [u8; 32],
     },
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationPanelNotificationArchivePayloadV1 {
     version: u16,
     records: Vec<ModerationTerminalArchiveRecordV1>,
 }
-
 /// Payload-minimal witness for archive-signer and predecessor validation.
 ///
 /// The checkpoint authority separately verifies terminal membership before it
@@ -2858,7 +2709,6 @@ struct ModerationPanelNotificationArchiveSourceManifestV1 {
     archive_signer_epochs: Vec<ModerationPanelNotificationArchiveSignerEpochV1>,
     predecessor_archive_head: Option<ModerationPanelNotificationArchiveHeadV1>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationPanelNotificationArchiveArtifactV1 {
     version: u16,
@@ -2866,7 +2716,6 @@ struct ModerationPanelNotificationArchiveArtifactV1 {
     source_manifest: ModerationPanelNotificationArchiveSourceManifestV1,
     payload: ModerationPanelNotificationArchivePayloadV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationPanelNotificationArchiveAuditCursorV1 {
     version: u16,
@@ -2881,7 +2730,6 @@ struct ModerationPanelNotificationArchiveAuditCursorV1 {
     last_completed_generation: u64,
     last_completed_head_digest: Option<[u8; 32]>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationOrchestratorCheckpointV1 {
     version: u16,
@@ -2913,19 +2761,16 @@ struct ModerationOrchestratorCheckpointV1 {
     panel_notifications: Vec<StoredPanelNotificationV1>,
     panel_notification_dead_letter_resolutions: Vec<StoredPanelNotificationDeadLetterResolutionV1>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct ExternalWorkIdentityV1 {
     identity: [u8; 32],
     kind: StoredExternalWorkKindV1,
     work_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ExternalLookupProbeV1 {
     transaction_id: [u8; 32],
 }
-
 #[derive(Debug, Clone)]
 enum PreparedExternalWorkV1 {
     Sign {
@@ -2951,7 +2796,6 @@ enum PreparedExternalWorkV1 {
         handoff: ModerationTerminalHandoffV1,
     },
 }
-
 impl PreparedExternalWorkV1 {
     fn identity(&self) -> ExternalWorkIdentityV1 {
         match self {
@@ -2962,7 +2806,6 @@ impl PreparedExternalWorkV1 {
         }
     }
 }
-
 /// Finalized-chain moderation orchestrator.
 pub struct ModerationOrchestratorV1 {
     config: ModerationOrchestratorConfigV1,
@@ -2972,7 +2815,6 @@ pub struct ModerationOrchestratorV1 {
     checkpoint_record: Mutex<ModerationCheckpointStoreRecordV1>,
     durability_faulted: AtomicBool,
 }
-
 impl fmt::Debug for ModerationOrchestratorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2986,7 +2828,6 @@ impl fmt::Debug for ModerationOrchestratorV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl ModerationOrchestratorV1 {
     /// Open an orchestrator from an authoritative sealed checkpoint and private bounded cache.
     ///
@@ -3044,13 +2885,11 @@ impl ModerationOrchestratorV1 {
             durability_faulted: AtomicBool::new(false),
         })
     }
-
     /// Return the validated non-secret runtime configuration.
     #[must_use]
     pub fn config(&self) -> &ModerationOrchestratorConfigV1 {
         &self.config
     }
-
     /// Reconcile the complete local projection and all durable delivery state.
     ///
     /// # Errors
@@ -3067,7 +2906,6 @@ impl ModerationOrchestratorV1 {
         self.drive_external_work()?;
         Ok(cursor)
     }
-
     /// Submit one authenticated native action after finalized-state reconciliation.
     ///
     /// The `request_binding_digest` must be computed from the exact authenticated
@@ -3095,7 +2933,6 @@ impl ModerationOrchestratorV1 {
         let replay = {
             let mut state = self.lock_state()?;
             self.install_finalized_snapshot_locked(&mut state, snapshot, digest)?;
-
             if let Some(existing) = find_operation(&state, operation_id) {
                 if existing.action_digest != action_digest || existing.authority != authority {
                     return Err(ModerationOrchestratorError::IdempotencyConflict { operation_id });
@@ -3161,7 +2998,6 @@ impl ModerationOrchestratorV1 {
                 }
             }
         };
-
         // All HSM, ingress, lookup, and terminal-sink calls happen after the
         // snapshot/action mutation lock has been released.
         self.drive_external_work()?;
@@ -3179,7 +3015,6 @@ impl ModerationOrchestratorV1 {
             replay,
         })
     }
-
     /// Run deterministic deadline maintenance after a finalized reconciliation.
     ///
     /// Only native sortition, activation/failover, and finalization ISIs are
@@ -3284,7 +3119,6 @@ impl ModerationOrchestratorV1 {
                 | ModerationAppealStatusV1::AwaitingAcceptance => {}
             }
         }
-
         let mut outcomes = Vec::with_capacity(actions.len());
         for action in actions {
             let binding =
@@ -3293,7 +3127,6 @@ impl ModerationOrchestratorV1 {
         }
         Ok(outcomes)
     }
-
     /// Return the complete current finalized projection.
     #[must_use]
     pub fn snapshot(&self) -> Option<ModerationFinalizedLedgerSnapshotV1> {
@@ -3308,21 +3141,18 @@ impl ModerationOrchestratorV1 {
             }
         })
     }
-
     /// Return one committed appeal projection.
     #[must_use]
     pub fn appeal(&self, case_id: &str, round_id: &str) -> Option<ModerationFinalizedAppealViewV1> {
         self.snapshot()
             .and_then(|snapshot| snapshot.appeal(case_id, round_id).cloned())
     }
-
     /// Return one committed case projection.
     #[must_use]
     pub fn case(&self, case_id: &str, round_id: &str) -> Option<ModerationFinalizedCaseViewV1> {
         self.snapshot()
             .and_then(|snapshot| snapshot.case(case_id, round_id).cloned())
     }
-
     /// Return committed events strictly after an exclusive cursor.
     #[must_use]
     pub fn events_after(
@@ -3339,7 +3169,6 @@ impl ModerationOrchestratorV1 {
                 .collect()
         })
     }
-
     /// Return payload-free durable queue health after authenticating the public
     /// archive-head readback.
     ///
@@ -3401,7 +3230,6 @@ impl ModerationOrchestratorV1 {
         )?;
         Ok(health)
     }
-
     /// Durably claim due panel notifications for delivery outside the state lock.
     ///
     /// The returned metadata is deliberately payload-free. Workers must use
@@ -3434,13 +3262,11 @@ impl ModerationOrchestratorV1 {
         let lease_expires_at_unix_ms = now_unix_ms
             .checked_add(MODERATION_PANEL_NOTIFICATION_LEASE_MS_V1)
             .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
-
         let mut state = self.lock_state()?;
         validate_panel_notification_clock(&state, now_unix_ms)?;
         preflight_expired_panel_notification_claims(&state, now_unix_ms)?;
         state.panel_notification_clock_unix_ms = now_unix_ms;
         recover_expired_panel_notification_claims(&mut state, now_unix_ms)?;
-
         let due = state
             .panel_notifications
             .iter()
@@ -3501,7 +3327,6 @@ impl ModerationOrchestratorV1 {
         self.persist_checkpoint_locked(&mut state)?;
         Ok(claims)
     }
-
     /// Atomically record one stable delivery receipt under the exact live claim.
     ///
     /// Calling this again with the same worker, lease token, and receipt returns
@@ -3539,7 +3364,6 @@ impl ModerationOrchestratorV1 {
                 notification_id: receipt.notification_id,
             })?;
         let entry = &state.panel_notifications[position];
-
         if entry.state == StoredPanelNotificationStateV1::Delivered {
             if entry.claimed_by == Some(worker_id)
                 && entry.lease_token == Some(lease_token)
@@ -3556,7 +3380,6 @@ impl ModerationOrchestratorV1 {
                 },
             );
         }
-
         let live_claim = entry.state == StoredPanelNotificationStateV1::Claimed
             && entry.claimed_by == Some(worker_id)
             && entry.lease_token == Some(lease_token)
@@ -3571,7 +3394,6 @@ impl ModerationOrchestratorV1 {
                 },
             );
         }
-
         state.panel_notification_clock_unix_ms = now_unix_ms;
         let entry = &mut state.panel_notifications[position];
         entry.state = StoredPanelNotificationStateV1::Delivered;
@@ -3583,7 +3405,6 @@ impl ModerationOrchestratorV1 {
         self.persist_checkpoint_locked(&mut state)?;
         Ok(ModerationPanelNotificationFinalizeOutcomeV1::Delivered)
     }
-
     /// Release one live claim after a fixed, payload-free delivery result.
     ///
     /// Safe/ambiguous failures use deterministic bounded exponential backoff;
@@ -3650,7 +3471,6 @@ impl ModerationOrchestratorV1 {
             | ModerationPanelNotificationFailureV1::Ambiguous
             | ModerationPanelNotificationFailureV1::Permanent => None,
         };
-
         state.panel_notification_clock_unix_ms = now_unix_ms;
         let entry = &mut state.panel_notifications[position];
         match (failure, retry_available_at_unix_ms) {
@@ -3689,7 +3509,6 @@ impl ModerationOrchestratorV1 {
         }
         self.persist_checkpoint_locked(&mut state)
     }
-
     /// Deliver a bounded batch of due panel notifications through the
     /// independently qualified durable sink.
     ///
@@ -3774,7 +3593,6 @@ impl ModerationOrchestratorV1 {
         }
         Ok(delivered)
     }
-
     /// Return the durable payload-free state for one notification.
     ///
     /// # Errors
@@ -3792,7 +3610,6 @@ impl ModerationOrchestratorV1 {
             .map(panel_notification_status)
             .transpose()
     }
-
     /// Prepare an exact current-checkpoint authorization statement for one
     /// unresolved durable dead letter.
     ///
@@ -3866,7 +3683,6 @@ impl ModerationOrchestratorV1 {
             attestor_public_key: self.config.checkpoint_store_attestation_public_key,
         })
     }
-
     /// Apply one externally signed, source-bound dead-letter resolution.
     ///
     /// Resolution never erases the incident: durable incidents retain the
@@ -3929,7 +3745,6 @@ impl ModerationOrchestratorV1 {
         {
             return Err(ModerationOrchestratorError::PanelNotificationArchiveRejected);
         }
-
         match resolution.kind {
             ModerationDeadLetterKindV1::PanelNotification => {
                 if state
@@ -4086,7 +3901,6 @@ impl ModerationOrchestratorV1 {
         }
         self.persist_checkpoint_locked(&mut state)
     }
-
     /// Archive and prune one bounded canonical batch of terminal moderation records.
     ///
     /// The immutable archive is installed and read back under its exact
@@ -4121,7 +3935,6 @@ impl ModerationOrchestratorV1 {
                 limit: self.config.max_handoffs,
             });
         }
-
         let mut state = self.lock_state()?;
         if state
             .panel_notification_archive_pending_publication
@@ -4254,7 +4067,6 @@ impl ModerationOrchestratorV1 {
         };
         let source_manifest_digest =
             panel_notification_archive_source_manifest_digest(&source_manifest)?;
-
         let (
             generation,
             predecessor_head_digest,
@@ -4274,7 +4086,6 @@ impl ModerationOrchestratorV1 {
         };
         let archive = &self.deps.panel_notification_archive;
         drop(state);
-
         let build_artifact = |selected: &[ModerationTerminalArchiveRecordV1],
                               source_attestation_signature: [u8; 64]|
          -> Result<
@@ -4397,7 +4208,6 @@ impl ModerationOrchestratorV1 {
                 payload,
             })
         };
-
         let candidate = build_artifact(&records, [1; 64])?;
         if norito::to_bytes(&candidate)
             .map_err(|error| {
@@ -4437,7 +4247,6 @@ impl ModerationOrchestratorV1 {
                 "encode panel notification receipt archive: {error}"
             ))
         })?;
-
         // Runtime archive I/O must never execute while the orchestrator state
         // mutex is held. The exact sealed source checkpoint is compared again
         // after authenticated readback and before pruning.
@@ -4455,7 +4264,6 @@ impl ModerationOrchestratorV1 {
         if verified != artifact {
             return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid);
         }
-
         let install_result = archive.install(
             head.operation_id,
             panel_notification_archive_receipt_message(&head),
@@ -4492,7 +4300,6 @@ impl ModerationOrchestratorV1 {
         if let Some(predecessor) = predecessor_head.as_ref() {
             verify_panel_notification_archive_lineage_link(&head, predecessor)?;
         }
-
         let mut state = self.lock_state()?;
         let current_checkpoint_bytes = norito::to_bytes(&*state).map_err(|error| {
             ModerationOrchestratorError::CheckpointCorrupt(format!(
@@ -4510,7 +4317,6 @@ impl ModerationOrchestratorV1 {
         {
             return Err(ModerationOrchestratorError::PanelNotificationArchiveRejected);
         }
-
         let mut candidate_state = state.clone();
         let mut archived_terminal_groups =
             BTreeMap::<[u8; 32], Vec<ModerationFinalizedEventCursorV1>>::new();
@@ -4649,7 +4455,6 @@ impl ModerationOrchestratorV1 {
         *state = candidate_state;
         Ok(Some(head))
     }
-
     /// Publish or replay the one durable archive-head outbox entry.
     ///
     /// The signed head is retained in the sealed checkpoint before this method
@@ -4685,7 +4490,6 @@ impl ModerationOrchestratorV1 {
             &self.deps.publication_sink,
             Some(&head),
         )?;
-
         let mut state = self.lock_state()?;
         if state.panel_notification_archive_head.as_ref() != Some(&head)
             || state
@@ -4700,7 +4504,6 @@ impl ModerationOrchestratorV1 {
         self.persist_checkpoint_locked(&mut state)?;
         Ok(true)
     }
-
     /// Return the exact authenticated current receipt-archive head.
     ///
     /// # Errors
@@ -4725,7 +4528,6 @@ impl ModerationOrchestratorV1 {
         )?;
         Ok(head)
     }
-
     /// Return the complete authenticated archive-signer epoch log.
     ///
     /// The bootstrap key anchors the first epoch. Every successor is checked
@@ -4771,7 +4573,6 @@ impl ModerationOrchestratorV1 {
         }
         Ok(epochs)
     }
-
     /// Start a bounded audit of the complete archive lineage from the current
     /// published head through generation one.
     ///
@@ -4800,7 +4601,6 @@ impl ModerationOrchestratorV1 {
                     .unwrap_or(usize::MAX),
             });
         }
-
         let state = self.lock_state()?;
         let Some(latest_head) = state.panel_notification_archive_head.clone() else {
             drop(state);
@@ -4824,12 +4624,10 @@ impl ModerationOrchestratorV1 {
             .map_err(|_| ModerationOrchestratorError::CheckpointStoreLockPoisoned)?
             .clone();
         drop(state);
-
         verify_published_panel_notification_archive_head_readback(
             &self.deps.publication_sink,
             Some(&latest_head),
         )?;
-
         let mut state = self.lock_state()?;
         let current_checkpoint_bytes = norito::to_bytes(&*state).map_err(|error| {
             ModerationOrchestratorError::CheckpointCorrupt(format!(
@@ -4867,10 +4665,8 @@ impl ModerationOrchestratorV1 {
             });
         self.persist_checkpoint_locked(&mut state)?;
         drop(state);
-
         self.audit_panel_notification_archive(maximum_heads)
     }
-
     /// Authenticate one bounded page of the archive suffix added since the
     /// last completed audit.
     ///
@@ -4901,7 +4697,6 @@ impl ModerationOrchestratorV1 {
                     .unwrap_or(usize::MAX),
             });
         }
-
         let state = self.lock_state()?;
         let Some(latest_head) = state.panel_notification_archive_head.clone() else {
             if state.panel_notification_archive_audit_cursor.is_some() {
@@ -4956,7 +4751,6 @@ impl ModerationOrchestratorV1 {
             &self.deps.publication_sink,
             Some(&latest_head),
         )?;
-
         let audit_floor_generation = cursor.last_completed_generation;
         let audit_floor_head_digest = cursor.last_completed_head_digest;
         if latest_head.generation < audit_floor_generation
@@ -5047,7 +4841,6 @@ impl ModerationOrchestratorV1 {
                 0 => return Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid),
             }
         }
-
         let mut state = self.lock_state()?;
         let current_checkpoint_bytes = norito::to_bytes(&*state).map_err(|error| {
             ModerationOrchestratorError::CheckpointCorrupt(format!(
@@ -5079,7 +4872,6 @@ impl ModerationOrchestratorV1 {
             cycle_complete,
         })
     }
-
     fn lock_state(
         &self,
     ) -> Result<
@@ -5098,7 +4890,6 @@ impl ModerationOrchestratorV1 {
         }
         Ok(state)
     }
-
     fn persist_checkpoint_locked(
         &self,
         state: &mut ModerationOrchestratorCheckpointV1,
@@ -5122,7 +4913,6 @@ impl ModerationOrchestratorV1 {
         }
         Ok(())
     }
-
     fn read_validated_finalized_snapshot(
         &self,
     ) -> Result<(ModerationFinalizedLedgerSnapshotV1, [u8; 32]), ModerationOrchestratorError> {
@@ -5151,7 +4941,6 @@ impl ModerationOrchestratorV1 {
         let digest = finalized_snapshot_digest(&snapshot)?;
         Ok((snapshot, digest))
     }
-
     fn install_finalized_snapshot_locked(
         &self,
         state: &mut ModerationOrchestratorCheckpointV1,
@@ -5194,7 +4983,6 @@ impl ModerationOrchestratorV1 {
         self.queue_terminal_handoffs_locked(state)?;
         self.persist_checkpoint_locked(state)
     }
-
     fn reconcile_outbox_authoritative_locked(
         &self,
         state: &mut ModerationOrchestratorCheckpointV1,
@@ -5274,7 +5062,6 @@ impl ModerationOrchestratorV1 {
         state.dead_letters.extend(dead);
         Ok(())
     }
-
     fn drive_external_work(&self) -> Result<(), ModerationOrchestratorError> {
         let mut attempted = BTreeSet::new();
         let mut deferred_operations = BTreeSet::new();
@@ -5298,7 +5085,6 @@ impl ModerationOrchestratorV1 {
             }
         }
     }
-
     fn prepare_next_external_work_locked(
         &self,
         state: &mut ModerationOrchestratorCheckpointV1,
@@ -5327,7 +5113,6 @@ impl ModerationOrchestratorV1 {
                     "signing outbox entry has no external-work claim".to_owned(),
                 ));
             }
-
             let entry = &state.outbox[position];
             let complete_transaction = entry.transaction_id.is_some()
                 && entry.signed_transaction_digest.is_some()
@@ -5399,7 +5184,6 @@ impl ModerationOrchestratorV1 {
                     }));
                 }
             }
-
             if retired_history_fence_transaction_id(entry).is_some() {
                 position += 1;
                 continue;
@@ -5500,7 +5284,6 @@ impl ModerationOrchestratorV1 {
                 }
             }
         }
-
         for position in 0..state.pending_handoffs.len() {
             let entry = &state.pending_handoffs[position];
             if entry.work_claim.is_some() {
@@ -5547,7 +5330,6 @@ impl ModerationOrchestratorV1 {
         }
         Ok(None)
     }
-
     fn execute_external_work(
         &self,
         prepared: PreparedExternalWorkV1,
@@ -5616,7 +5398,6 @@ impl ModerationOrchestratorV1 {
             }
         }
     }
-
     fn finalize_sign_work(
         &self,
         claim: &StoredExternalWorkClaimV1,
@@ -5667,7 +5448,6 @@ impl ModerationOrchestratorV1 {
         }
         self.persist_checkpoint_locked(&mut state)
     }
-
     fn finalize_invalid_sign_work(
         &self,
         claim: &StoredExternalWorkClaimV1,
@@ -5680,7 +5460,6 @@ impl ModerationOrchestratorV1 {
         }
         Ok(())
     }
-
     fn finalize_sign_failure(
         &self,
         claim: &StoredExternalWorkClaimV1,
@@ -5707,7 +5486,6 @@ impl ModerationOrchestratorV1 {
             }
         }
     }
-
     fn finalize_submit_work(
         &self,
         claim: &StoredExternalWorkClaimV1,
@@ -5753,7 +5531,6 @@ impl ModerationOrchestratorV1 {
         }
         self.persist_checkpoint_locked(&mut state)
     }
-
     fn finalize_lookup_work(
         &self,
         claim: &StoredExternalWorkClaimV1,
@@ -5800,7 +5577,6 @@ impl ModerationOrchestratorV1 {
             state.outbox[position] = candidate;
             return self.persist_checkpoint_locked(&mut state);
         }
-
         let Some(expected_transaction_id) = candidate.transaction_id else {
             return Err(ModerationOrchestratorError::CheckpointCorrupt(
                 "lookup claim lost its active transaction".to_owned(),
@@ -5888,7 +5664,6 @@ impl ModerationOrchestratorV1 {
         }
         self.persist_checkpoint_locked(&mut state)
     }
-
     fn finalize_handoff_work(
         &self,
         claim: &StoredExternalWorkClaimV1,
@@ -5969,7 +5744,6 @@ impl ModerationOrchestratorV1 {
         }
         self.persist_checkpoint_locked(&mut state)
     }
-
     fn retire_expired_envelope(
         &self,
         entry: &mut StoredOutboxEntryV1,
@@ -6002,7 +5776,6 @@ impl ModerationOrchestratorV1 {
             record_digest: [0; 32],
         };
         refresh_retired_envelope_record_digest(entry.operation_id, &mut retired);
-
         entry.retired_envelopes.push(retired);
         entry.envelope_generation = next_generation;
         entry.baseline_finalized_height = 0;
@@ -6016,7 +5789,6 @@ impl ModerationOrchestratorV1 {
         entry.last_lookup_finalized_block_hash = [0; 32];
         Ok(())
     }
-
     fn dead_letter_submission_locked(
         &self,
         state: &mut ModerationOrchestratorCheckpointV1,
@@ -6059,7 +5831,6 @@ impl ModerationOrchestratorV1 {
         });
         self.persist_checkpoint_locked(state)
     }
-
     fn queue_panel_notifications_locked(
         &self,
         state: &mut ModerationOrchestratorCheckpointV1,
@@ -6092,7 +5863,6 @@ impl ModerationOrchestratorV1 {
         let new_scanned_cursor = new_events.last().map(|event| event.cursor());
         let mut additions = Vec::new();
         let mut added = BTreeSet::new();
-
         for event in new_events {
             let (Some(case_id), Some(round_id)) = (
                 event.event.case_id().as_deref(),
@@ -6234,7 +6004,6 @@ impl ModerationOrchestratorV1 {
         }
         Ok(())
     }
-
     fn queue_terminal_handoffs_locked(
         &self,
         state: &mut ModerationOrchestratorCheckpointV1,
@@ -6393,7 +6162,6 @@ impl ModerationOrchestratorV1 {
         Ok(())
     }
 }
-
 /// Compute the digest that binds authenticated HTTP material to one native action.
 ///
 /// `canonical_path_and_query` must be the same normalized path/query string
@@ -6423,7 +6191,6 @@ pub fn moderation_request_binding_digest_v1(
         ],
     ))
 }
-
 fn validate_request_binding_target(
     method: &str,
     canonical_path_and_query: &str,
@@ -6449,7 +6216,6 @@ fn validate_request_binding_target(
                     | b'~'
             )
     }
-
     if method.is_empty() || !method.bytes().all(is_http_token_byte) {
         return Err(ModerationOrchestratorError::InvalidRequestBinding);
     }
@@ -6474,7 +6240,6 @@ fn validate_request_binding_target(
     }
     Ok(())
 }
-
 fn maintenance_request_binding_digest(
     authority: &AccountId,
     action: &ModerationNativeActionV1,
@@ -6496,7 +6261,6 @@ fn maintenance_request_binding_digest(
         action,
     )
 }
-
 fn validate_finalized_snapshot(
     snapshot: &ModerationFinalizedLedgerSnapshotV1,
     config: &ModerationOrchestratorConfigV1,
@@ -6544,7 +6308,6 @@ fn validate_finalized_snapshot(
             ));
         }
     }
-
     let mut prior_appeal = None;
     let mut eligibility_total = 0_u64;
     let mut panel_selection_total = 0_u64;
@@ -6663,7 +6426,6 @@ fn validate_finalized_snapshot(
                 )
             })?;
     }
-
     let mut prior_case = None;
     let mut commit_total = 0_u64;
     let mut reveal_total = 0_u64;
@@ -6745,7 +6507,6 @@ fn validate_finalized_snapshot(
             ));
         }
     }
-
     if let Some(status) = snapshot.status {
         let appeal_count = snapshot.appeals.len() as u64;
         if status.updated_at_unix_ms == 0
@@ -6768,7 +6529,6 @@ fn validate_finalized_snapshot(
             ));
         }
     }
-
     let mut previous_event = None;
     let mut previous_sequence = None;
     let mut previous_event_block: Option<(u64, [u8; 32], u32)> = None;
@@ -6863,7 +6623,6 @@ fn validate_finalized_snapshot(
     }
     Ok(())
 }
-
 fn validate_case_records(
     entry: &ModerationFinalizedCaseViewV1,
     key: &(String, String),
@@ -6998,7 +6757,6 @@ fn validate_case_records(
     }
     Ok(())
 }
-
 fn validate_appeal_lifecycle(
     entry: &ModerationFinalizedAppealViewV1,
 ) -> Result<(), ModerationOrchestratorError> {
@@ -7008,7 +6766,6 @@ fn validate_appeal_lifecycle(
         let canonical = accepted.to_string();
         require_strict_key_order(&mut previous_accepted, &canonical, "assignment acceptances")?;
     }
-
     let Some(selection) = appeal.selection.as_ref() else {
         if !appeal.accepted_jurors.is_empty()
             || !appeal.replacements.is_empty()
@@ -7028,7 +6785,6 @@ fn validate_appeal_lifecycle(
         }
         return Ok(());
     };
-
     if selection.randomness_anchor == [0; 32]
         || selection.seed_digest == [0; 32]
         || selection.sortition_digest == [0; 32]
@@ -7065,7 +6821,6 @@ fn validate_appeal_lifecycle(
             "panel selection, digest, or assignment acceptance is not deterministic".to_owned(),
         ));
     }
-
     let mut waitlist_iter = selection.waitlist.iter();
     let mut expected_replacements = Vec::new();
     let mut failover_exhausted = false;
@@ -7101,7 +6856,6 @@ fn validate_appeal_lifecycle(
             "persisted no-show failover is not deterministic".to_owned(),
         ));
     }
-
     let lifecycle_valid = match appeal.status {
         ModerationAppealStatusV1::AwaitingAcceptance => {
             appeal.replacements.is_empty()
@@ -7133,7 +6887,6 @@ fn validate_appeal_lifecycle(
     }
     Ok(())
 }
-
 fn validate_case_against_appeal(
     case: &ModerationFinalizedCaseViewV1,
     appeal: &ModerationFinalizedAppealViewV1,
@@ -7197,14 +6950,12 @@ fn validate_case_against_appeal(
     }
     Ok(())
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActionEffect {
     Absent,
     Exact,
     Conflict,
 }
-
 fn validate_finalized_action_authority(
     snapshot: &ModerationFinalizedLedgerSnapshotV1,
     authenticated: &AccountId,
@@ -7248,7 +6999,6 @@ fn validate_finalized_action_authority(
     };
     require_exact_authority(authenticated, expected, action.label())
 }
-
 fn finalized_selection_authority<'a>(
     snapshot: &'a ModerationFinalizedLedgerSnapshotV1,
     case_id: &str,
@@ -7265,7 +7015,6 @@ fn finalized_selection_authority<'a>(
             ))
         })
 }
-
 fn action_effect(
     snapshot: &ModerationFinalizedLedgerSnapshotV1,
     authority: &AccountId,
@@ -7459,7 +7208,6 @@ fn action_effect(
             .map_or(ActionEffect::Absent, |_| ActionEffect::Exact)),
     }
 }
-
 fn validate_panel_notification_source_provenance(
     snapshot: &ModerationFinalizedLedgerSnapshotV1,
 ) -> Result<(), ModerationOrchestratorError> {
@@ -7544,7 +7292,6 @@ fn validate_panel_notification_source_provenance(
     }
     Ok(())
 }
-
 fn validate_retained_panel_notification_source(
     notification: &ModerationPanelNotificationV1,
     snapshot: &ModerationFinalizedLedgerSnapshotV1,
@@ -7668,7 +7415,6 @@ fn validate_retained_panel_notification_source(
     }
     Ok(())
 }
-
 fn external_work_cursor_is_valid(
     height: u64,
     block_hash: [u8; 32],
@@ -7682,7 +7428,6 @@ fn external_work_cursor_is_valid(
             && (height != snapshot.finalized_height || block_hash == snapshot.finalized_block_hash)
     })
 }
-
 fn external_work_claim_is_valid(
     identity: [u8; 32],
     claim: &StoredExternalWorkClaimV1,
@@ -7705,7 +7450,6 @@ fn external_work_claim_is_valid(
             == Some(claim.lease_expires_at_unix_ms)
         && external_work_lease_token(identity, claim) == claim.lease_token
 }
-
 #[derive(Clone, Copy)]
 struct RetainedDeadLetterResolutionExpectationV1 {
     signature: [u8; 64],
@@ -7714,7 +7458,6 @@ struct RetainedDeadLetterResolutionExpectationV1 {
     kind: ModerationDeadLetterKindV1,
     incident_time: u64,
 }
-
 fn validate_retained_dead_letter_resolution(
     resolution: &ModerationDeadLetterResolutionV1,
     expected: RetainedDeadLetterResolutionExpectationV1,
@@ -7756,7 +7499,6 @@ fn validate_retained_dead_letter_resolution(
     }
     Ok(())
 }
-
 fn validate_checkpoint(
     state: &ModerationOrchestratorCheckpointV1,
     config: &ModerationOrchestratorConfigV1,
@@ -8331,7 +8073,6 @@ fn validate_checkpoint(
             ));
         }
         previous_incident_sequence = entry.incident_sequence;
-
         let Some(redrive) = entry.redrive.as_ref() else {
             return Err(ModerationOrchestratorError::CheckpointCorrupt(
                 "dead letter has no exact redrive source".to_owned(),
@@ -8383,7 +8124,6 @@ fn validate_checkpoint(
                 }
             }
         }
-
         match (entry.resolution.as_ref(), entry.resolution_signature) {
             (None, None) => {
                 if !unresolved_dead_letters.insert((expected_kind.tag(), entry.identity)) {
@@ -8612,7 +8352,6 @@ fn validate_checkpoint(
             network_id,
         )?;
     }
-
     if let Some(reservation) = state
         .panel_notification_archive_compaction_reservation
         .as_ref()
@@ -8648,7 +8387,6 @@ fn validate_checkpoint(
     }
     Ok(())
 }
-
 fn snapshot_cursor(
     state: &ModerationOrchestratorCheckpointV1,
 ) -> Result<ModerationFinalizedCursorV1, ModerationOrchestratorError> {
@@ -8658,7 +8396,6 @@ fn snapshot_cursor(
         .map(ModerationFinalizedLedgerSnapshotV1::anchor)
         .ok_or(ModerationOrchestratorError::FinalizedReaderUnavailable)
 }
-
 fn find_operation(
     state: &ModerationOrchestratorCheckpointV1,
     operation_id: [u8; 32],
@@ -8668,7 +8405,6 @@ fn find_operation(
         .iter()
         .find(|record| record.operation_id == operation_id)
 }
-
 fn ensure_operation_capacity(
     state: &ModerationOrchestratorCheckpointV1,
     config: &ModerationOrchestratorConfigV1,
@@ -8681,7 +8417,6 @@ fn ensure_operation_capacity(
     }
     Ok(())
 }
-
 fn ensure_outbox_capacity(
     state: &ModerationOrchestratorCheckpointV1,
     config: &ModerationOrchestratorConfigV1,
@@ -8694,7 +8429,6 @@ fn ensure_outbox_capacity(
     }
     Ok(())
 }
-
 fn ensure_dead_letter_capacity(
     state: &ModerationOrchestratorCheckpointV1,
     config: &ModerationOrchestratorConfigV1,
@@ -8708,7 +8442,6 @@ fn ensure_dead_letter_capacity(
     }
     Ok(())
 }
-
 fn next_dead_letter_incident_sequence(
     state: &mut ModerationOrchestratorCheckpointV1,
 ) -> Result<u64, ModerationOrchestratorError> {
@@ -8718,7 +8451,6 @@ fn next_dead_letter_incident_sequence(
         .ok_or(ModerationOrchestratorError::GenerationOverflow)?;
     Ok(state.dead_letter_incident_sequence)
 }
-
 fn make_panel_notification_capacity(
     state: &ModerationOrchestratorCheckpointV1,
     additional: usize,
@@ -8734,7 +8466,6 @@ fn make_panel_notification_capacity(
     }
     Ok(())
 }
-
 fn finalized_snapshot_digest(
     snapshot: &ModerationFinalizedLedgerSnapshotV1,
 ) -> Result<[u8; 32], ModerationOrchestratorError> {
@@ -8743,7 +8474,6 @@ fn finalized_snapshot_digest(
     })?;
     Ok(domain_hash(SNAPSHOT_DIGEST_DOMAIN_V1, &[&bytes]))
 }
-
 fn moderation_transaction_request(
     network_id: &iroha_data_model::NetworkId,
     entry: &StoredOutboxEntryV1,
@@ -8758,7 +8488,6 @@ fn moderation_transaction_request(
         entry.baseline_finalized_block_hash,
     )
 }
-
 fn moderation_signed_transaction(
     entry: &StoredOutboxEntryV1,
 ) -> Result<ModerationSignedTransactionV1, ModerationOrchestratorError> {
@@ -8779,13 +8508,11 @@ fn moderation_signed_transaction(
         )),
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SignedEnvelopeTimingV1 {
     created_at_unix_ms: u64,
     expires_at_unix_ms: u64,
 }
-
 fn signed_envelope_timing(
     transaction: &SignedTransaction,
 ) -> Result<SignedEnvelopeTimingV1, ModerationOrchestratorError> {
@@ -8807,13 +8534,11 @@ fn signed_envelope_timing(
         expires_at_unix_ms,
     })
 }
-
 fn next_envelope_generation(generation: u32) -> Result<u32, ModerationOrchestratorError> {
     generation
         .checked_add(1)
         .ok_or(ModerationOrchestratorError::GenerationOverflow)
 }
-
 fn retired_envelope_disposition_tag(disposition: StoredRetiredEnvelopeDispositionV1) -> [u8; 1] {
     [match disposition {
         StoredRetiredEnvelopeDispositionV1::NotFound => 0,
@@ -8822,7 +8547,6 @@ fn retired_envelope_disposition_tag(disposition: StoredRetiredEnvelopeDispositio
         StoredRetiredEnvelopeDispositionV1::Rejected => 3,
     }]
 }
-
 fn retired_envelope_record_digest(
     operation_id: [u8; 32],
     record: &StoredRetiredEnvelopeV1,
@@ -8849,14 +8573,12 @@ fn retired_envelope_record_digest(
         ],
     )
 }
-
 fn refresh_retired_envelope_record_digest(
     operation_id: [u8; 32],
     record: &mut StoredRetiredEnvelopeV1,
 ) {
     record.record_digest = retired_envelope_record_digest(operation_id, record);
 }
-
 fn retired_history_fence_transaction_id(entry: &StoredOutboxEntryV1) -> Option<[u8; 32]> {
     entry
         .retired_envelopes
@@ -8872,7 +8594,6 @@ fn retired_history_fence_transaction_id(entry: &StoredOutboxEntryV1) -> Option<[
         })
         .map(|record| record.transaction_id)
 }
-
 fn validate_retired_envelope_history(
     entry: &StoredOutboxEntryV1,
     config: &ModerationOrchestratorConfigV1,
@@ -8931,7 +8652,6 @@ fn validate_retired_envelope_history(
     }
     Ok(())
 }
-
 fn validate_signed_transaction_for_request(
     request: &ModerationTransactionRequestV1,
     transaction: &SignedTransaction,
@@ -8970,23 +8690,19 @@ fn validate_signed_transaction_for_request(
         _ => Err(ModerationSubmissionFailureV1::PermanentRejection),
     }
 }
-
 fn signed_transaction_digest(bytes: &[u8]) -> [u8; 32] {
     domain_hash(SIGNED_TRANSACTION_DIGEST_DOMAIN_V1, &[bytes])
 }
-
 fn decode_canonical_commit(
     payload: &[u8],
 ) -> Result<SoraFsModerationBallotCommitV1, ModerationOrchestratorError> {
     decode_canonical_payload(payload, "commit")
 }
-
 fn decode_canonical_reveal(
     payload: &[u8],
 ) -> Result<SoraFsModerationBallotRevealV1, ModerationOrchestratorError> {
     decode_canonical_payload(payload, "reveal")
 }
-
 fn decode_canonical_payload<T>(
     payload: &[u8],
     label: &'static str,
@@ -9013,7 +8729,6 @@ where
     }
     Ok(decoded)
 }
-
 fn canonical_account(
     value: &str,
     field: &'static str,
@@ -9028,7 +8743,6 @@ fn canonical_account(
     }
     Ok(ParsedAccountId::into_account_id(parsed))
 }
-
 fn validate_scope(case_id: &str, round_id: &str) -> Result<(), ModerationOrchestratorError> {
     if !is_canonical_moderation_identifier_v1(case_id)
         || !is_canonical_moderation_identifier_v1(round_id)
@@ -9039,7 +8753,6 @@ fn validate_scope(case_id: &str, round_id: &str) -> Result<(), ModerationOrchest
     }
     Ok(())
 }
-
 fn require_nonzero_digest(
     digest: [u8; 32],
     field: &'static str,
@@ -9051,7 +8764,6 @@ fn require_nonzero_digest(
     }
     Ok(())
 }
-
 fn require_exact_authority(
     authenticated: &AccountId,
     native: &AccountId,
@@ -9066,7 +8778,6 @@ fn require_exact_authority(
     }
     Ok(())
 }
-
 fn push_scope(
     output: &mut Vec<u8>,
     case_id: &str,
@@ -9075,7 +8786,6 @@ fn push_scope(
     push_part(output, case_id.as_bytes())?;
     push_part(output, round_id.as_bytes())
 }
-
 fn push_part(output: &mut Vec<u8>, part: &[u8]) -> Result<(), ModerationOrchestratorError> {
     let len = u64::try_from(part.len()).map_err(|_| {
         ModerationOrchestratorError::InvalidAction(
@@ -9086,7 +8796,6 @@ fn push_part(output: &mut Vec<u8>, part: &[u8]) -> Result<(), ModerationOrchestr
     output.extend_from_slice(part);
     Ok(())
 }
-
 fn domain_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
@@ -9096,13 +8805,11 @@ fn domain_hash(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     }
     *hasher.finalize().as_bytes()
 }
-
 fn next_external_work_generation(generation: u32) -> Result<u32, ModerationOrchestratorError> {
     generation
         .checked_add(1)
         .ok_or(ModerationOrchestratorError::GenerationOverflow)
 }
-
 fn outbox_sign_work_digest(entry: &StoredOutboxEntryV1) -> [u8; 32] {
     let kind = [StoredExternalWorkKindV1::Sign.tag()];
     let envelope_generation = entry.envelope_generation.to_le_bytes();
@@ -9120,7 +8827,6 @@ fn outbox_sign_work_digest(entry: &StoredOutboxEntryV1) -> [u8; 32] {
         ],
     )
 }
-
 fn outbox_submit_work_digest(entry: &StoredOutboxEntryV1) -> [u8; 32] {
     let kind = [StoredExternalWorkKindV1::Submit.tag()];
     let envelope_generation = entry.envelope_generation.to_le_bytes();
@@ -9141,7 +8847,6 @@ fn outbox_submit_work_digest(entry: &StoredOutboxEntryV1) -> [u8; 32] {
         ],
     )
 }
-
 fn outbox_lookup_work_digest(
     entry: &StoredOutboxEntryV1,
     cursor: ModerationFinalizedCursorV1,
@@ -9166,7 +8871,6 @@ fn outbox_lookup_work_digest(
     material.extend_from_slice(entry.transaction_id.as_ref().unwrap_or(&zero));
     domain_hash(EXTERNAL_WORK_DIGEST_DOMAIN_V1, &[&material])
 }
-
 fn handoff_work_digest(handoff: &ModerationTerminalHandoffV1) -> [u8; 32] {
     let kind = [StoredExternalWorkKindV1::Handoff.tag()];
     let destination = [match handoff.kind {
@@ -9188,7 +8892,6 @@ fn handoff_work_digest(handoff: &ModerationTerminalHandoffV1) -> [u8; 32] {
         ],
     )
 }
-
 fn external_work_lease_token(identity: [u8; 32], claim: &StoredExternalWorkClaimV1) -> [u8; 32] {
     let kind = [claim.kind.tag()];
     let generation = claim.generation.to_le_bytes();
@@ -9209,7 +8912,6 @@ fn external_work_lease_token(identity: [u8; 32], claim: &StoredExternalWorkClaim
         ],
     )
 }
-
 fn external_work_claim(
     kind: StoredExternalWorkKindV1,
     identity: [u8; 32],
@@ -9234,7 +8936,6 @@ fn external_work_claim(
     claim.lease_token = external_work_lease_token(identity, &claim);
     Ok(claim)
 }
-
 fn reset_sign_claim(entry: &mut StoredOutboxEntryV1) {
     entry.baseline_finalized_height = 0;
     entry.baseline_finalized_block_hash = [0; 32];
@@ -9244,7 +8945,6 @@ fn reset_sign_claim(entry: &mut StoredOutboxEntryV1) {
     entry.state = StoredOutboxStateV1::Ready;
     entry.work_claim = None;
 }
-
 fn recover_external_work_after_restart(
     state: &mut ModerationOrchestratorCheckpointV1,
 ) -> Result<bool, ModerationOrchestratorError> {
@@ -9256,14 +8956,12 @@ fn recover_external_work_after_restart(
     if !has_claims {
         return Ok(false);
     }
-
     // A process restart is not evidence that another replica's durable lease
     // has expired. Only the sealed finalized-ledger time may release a claim;
     // preserving live claims prevents overlapping sign, submit, lookup, and
     // terminal-handoff calls across replicas that share the checkpoint CAS.
     recover_expired_external_work_claims(state)
 }
-
 fn recover_expired_external_work_claims(
     state: &mut ModerationOrchestratorCheckpointV1,
 ) -> Result<bool, ModerationOrchestratorError> {
@@ -9309,7 +9007,6 @@ fn recover_expired_external_work_claims(
     }
     Ok(recovered)
 }
-
 fn outbox_claim_position(
     state: &ModerationOrchestratorCheckpointV1,
     kind: StoredExternalWorkKindV1,
@@ -9321,7 +9018,6 @@ fn outbox_claim_position(
             && entry.work_claim.as_ref() == Some(claim)
     })
 }
-
 fn handoff_claim_position(
     state: &ModerationOrchestratorCheckpointV1,
     claim: &StoredExternalWorkClaimV1,
@@ -9332,7 +9028,6 @@ fn handoff_claim_position(
             && entry.work_claim.as_ref() == Some(claim)
     })
 }
-
 fn retired_envelope_disposition_after_lookup(
     record: &StoredRetiredEnvelopeV1,
     lookup: ModerationSubmissionLookupV1,
@@ -9376,28 +9071,24 @@ fn retired_envelope_disposition_after_lookup(
         | ModerationSubmissionLookupV1::Unknown => record.disposition,
     }
 }
-
 fn pop_proof_payload_digest(payload: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(POP_PROOF_PAYLOAD_DIGEST_DOMAIN_V1);
     hasher.update(payload);
     *hasher.finalize().as_bytes()
 }
-
 fn appeal_key(entry: &ModerationFinalizedAppealViewV1) -> (String, String) {
     (
         entry.appeal.intake.case_id.clone(),
         entry.appeal.intake.round_id.clone(),
     )
 }
-
 fn case_key(entry: &ModerationFinalizedCaseViewV1) -> (String, String) {
     (
         entry.case.spec.context.case_id.clone(),
         entry.case.spec.round_id.clone(),
     )
 }
-
 fn require_strict_key_order<T: Ord + Clone>(
     previous: &mut Option<T>,
     current: &T,
@@ -9411,7 +9102,6 @@ fn require_strict_key_order<T: Ord + Clone>(
     *previous = Some(current.clone());
     Ok(())
 }
-
 fn require_record_scope(
     case_id: &str,
     round_id: &str,
@@ -9425,21 +9115,18 @@ fn require_record_scope(
     }
     Ok(())
 }
-
 fn handoff_label(kind: ModerationTerminalHandoffKindV1) -> &'static str {
     match kind {
         ModerationTerminalHandoffKindV1::Settlement => "terminal_settlement",
         ModerationTerminalHandoffKindV1::Publication => "terminal_publication",
     }
 }
-
 fn panel_notification_scope_digest(case_id: &str, round_id: &str) -> [u8; 32] {
     domain_hash(
         PANEL_NOTIFICATION_SCOPE_DOMAIN_V1,
         &[case_id.as_bytes(), round_id.as_bytes()],
     )
 }
-
 fn panel_notification_worker_id(
     network_id: &iroha_data_model::NetworkId,
     handle: &str,
@@ -9455,7 +9142,6 @@ fn panel_notification_worker_id(
         ],
     )
 }
-
 fn panel_notification_id(
     network_id: &iroha_data_model::NetworkId,
     source_operation_id: [u8; 32],
@@ -9487,7 +9173,6 @@ fn panel_notification_id(
         ],
     )
 }
-
 fn new_panel_notification_entry(
     network_id: &iroha_data_model::NetworkId,
     source_operation_id: [u8; 32],
@@ -9537,7 +9222,6 @@ fn new_panel_notification_entry(
     refresh_panel_notification_record_digest(&mut entry);
     entry
 }
-
 fn panel_notification_lease_token(
     notification_id: [u8; 32],
     worker_id: [u8; 32],
@@ -9562,7 +9246,6 @@ fn panel_notification_lease_token(
         ],
     )
 }
-
 fn panel_notification_backoff_ms(attempts: u32) -> u64 {
     let shift = attempts.saturating_sub(1).min(63);
     MODERATION_PANEL_NOTIFICATION_BACKOFF_BASE_MS_V1
@@ -9570,14 +9253,12 @@ fn panel_notification_backoff_ms(attempts: u32) -> u64 {
         .unwrap_or(u64::MAX)
         .min(MODERATION_PANEL_NOTIFICATION_BACKOFF_MAX_MS_V1)
 }
-
 fn clear_panel_notification_claim(entry: &mut StoredPanelNotificationV1) {
     entry.claimed_by = None;
     entry.lease_token = None;
     entry.claimed_at_unix_ms = None;
     entry.lease_expires_at_unix_ms = None;
 }
-
 fn dead_letter_panel_notification(
     entry: &mut StoredPanelNotificationV1,
     reason: ModerationPanelNotificationDeadLetterReasonV1,
@@ -9591,7 +9272,6 @@ fn dead_letter_panel_notification(
     entry.dead_lettered_at_unix_ms = Some(at_unix_ms);
     refresh_panel_notification_record_digest(entry);
 }
-
 fn validate_panel_notification_clock(
     state: &ModerationOrchestratorCheckpointV1,
     observed_unix_ms: u64,
@@ -9609,7 +9289,6 @@ fn validate_panel_notification_clock(
     }
     Ok(())
 }
-
 fn preflight_expired_panel_notification_claims(
     state: &ModerationOrchestratorCheckpointV1,
     now_unix_ms: u64,
@@ -9631,7 +9310,6 @@ fn preflight_expired_panel_notification_claims(
     }
     Ok(())
 }
-
 fn recover_expired_panel_notification_claims(
     state: &mut ModerationOrchestratorCheckpointV1,
     now_unix_ms: u64,
@@ -9670,7 +9348,6 @@ fn recover_expired_panel_notification_claims(
     }
     Ok(())
 }
-
 fn panel_notification_status(
     entry: &StoredPanelNotificationV1,
 ) -> Result<ModerationPanelNotificationStatusV1, ModerationOrchestratorError> {
@@ -9738,7 +9415,6 @@ fn panel_notification_status(
         }
     }
 }
-
 fn panel_notification_record_digest(entry: &StoredPanelNotificationV1) -> [u8; 32] {
     let notification = &entry.notification;
     let kind = [notification.kind.tag()];
@@ -9817,11 +9493,9 @@ fn panel_notification_record_digest(entry: &StoredPanelNotificationV1) -> [u8; 3
         ],
     )
 }
-
 fn refresh_panel_notification_record_digest(entry: &mut StoredPanelNotificationV1) {
     entry.record_digest = panel_notification_record_digest(entry);
 }
-
 fn stored_dead_letter_reason_tag(reason: StoredDeadLetterReasonV1) -> u8 {
     match reason {
         StoredDeadLetterReasonV1::PermanentRejection => 0,
@@ -9831,7 +9505,6 @@ fn stored_dead_letter_reason_tag(reason: StoredDeadLetterReasonV1) -> u8 {
         StoredDeadLetterReasonV1::HandoffRetryExhausted => 4,
     }
 }
-
 fn durable_dead_letter_source_record_digest(
     entry: &StoredDeadLetterV1,
 ) -> Result<[u8; 32], ModerationOrchestratorError> {
@@ -9854,7 +9527,6 @@ fn durable_dead_letter_source_record_digest(
         ],
     ))
 }
-
 fn native_operation_record_digest(
     entry: &StoredOperationV1,
 ) -> Result<[u8; 32], ModerationOrchestratorError> {
@@ -9865,7 +9537,6 @@ fn native_operation_record_digest(
     })?;
     Ok(domain_hash(NATIVE_OPERATION_RECORD_DOMAIN_V1, &[&bytes]))
 }
-
 fn completed_handoff_record_digest(
     entry: &StoredCompletedHandoffV1,
 ) -> Result<[u8; 32], ModerationOrchestratorError> {
@@ -9894,7 +9565,6 @@ fn completed_handoff_record_digest(
         ],
     ))
 }
-
 fn panel_notification_resolution_record_digest(
     terminal_record: &ModerationPanelNotificationArchiveRecordV1,
     resolution: &ModerationDeadLetterResolutionV1,
@@ -9915,7 +9585,6 @@ fn panel_notification_resolution_record_digest(
         ],
     ))
 }
-
 fn validate_dead_letter_resolution_shape(
     resolution: &ModerationDeadLetterResolutionV1,
 ) -> Result<(), ModerationOrchestratorError> {
@@ -9939,7 +9608,6 @@ fn validate_dead_letter_resolution_shape(
     }
     Ok(())
 }
-
 fn dead_letter_resolution_message(resolution: &ModerationDeadLetterResolutionV1) -> [u8; 32] {
     domain_hash(
         DEAD_LETTER_RESOLUTION_DOMAIN_V1,
@@ -9962,7 +9630,6 @@ fn dead_letter_resolution_message(resolution: &ModerationDeadLetterResolutionV1)
         ],
     )
 }
-
 fn verify_dead_letter_resolution_signature(
     resolution: &ModerationDeadLetterResolutionV1,
     signature: [u8; 64],
@@ -9976,7 +9643,6 @@ fn verify_dead_letter_resolution_signature(
         .verify(&public_key, &dead_letter_resolution_message(resolution))
         .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)
 }
-
 fn unresolved_dead_letter_record_digest(
     state: &ModerationOrchestratorCheckpointV1,
     identity: [u8; 32],
@@ -10020,7 +9686,6 @@ fn unresolved_dead_letter_record_digest(
             .and_then(durable_dead_letter_source_record_digest),
     }
 }
-
 fn dead_letter_redrive_is_available(
     state: &ModerationOrchestratorCheckpointV1,
     identity: [u8; 32],
@@ -10051,7 +9716,6 @@ fn dead_letter_redrive_is_available(
         }),
     }
 }
-
 fn unresolved_dead_letter_incident_time(
     state: &ModerationOrchestratorCheckpointV1,
     identity: [u8; 32],
@@ -10077,7 +9741,6 @@ fn unresolved_dead_letter_incident_time(
             .ok_or(ModerationOrchestratorError::PanelNotificationArchiveRejected),
     }
 }
-
 fn panel_notification_outbox_digest(state: &ModerationOrchestratorCheckpointV1) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(PANEL_NOTIFICATION_OUTBOX_DOMAIN_V1);
@@ -10220,11 +9883,9 @@ fn panel_notification_outbox_digest(state: &ModerationOrchestratorCheckpointV1) 
     }
     *hasher.finalize().as_bytes()
 }
-
 fn refresh_panel_notification_outbox_digest(state: &mut ModerationOrchestratorCheckpointV1) {
     state.panel_notification_outbox_digest = panel_notification_outbox_digest(state);
 }
-
 include!("moderation_orchestrator/panel_notification_archive_lineage.rs");
 fn panel_notification_archive_decode_limits(max_bytes: usize, max_records: usize) -> DecodeLimits {
     DecodeLimits::new(
@@ -10235,7 +9896,6 @@ fn panel_notification_archive_decode_limits(max_bytes: usize, max_records: usize
         128,
     )
 }
-
 fn verify_panel_notification_archive_artifact_with_bounds(
     max_bytes: usize,
     _checkpoint_max_bytes: u64,
@@ -10391,7 +10051,6 @@ fn verify_panel_notification_archive_artifact_with_bounds(
     }
     Ok(artifact)
 }
-
 /// Strictly validate a canonical archive artifact at the dedicated slot-55 broker boundary.
 ///
 /// All signable values are derived internally from canonical bytes. The caller cannot supply
@@ -10434,7 +10093,6 @@ pub fn validate_moderation_panel_notification_archive_artifact_for_broker_v1(
         source_attestation_digest: artifact.head.source_attestation_digest,
     })
 }
-
 fn validate_moderation_panel_notification_archive_artifact_source_for_broker_v1(
     artifact: &ModerationPanelNotificationArchiveArtifactV1,
     expected: &ModerationPanelNotificationArchiveBrokerExpectationV1<'_>,
@@ -10458,7 +10116,6 @@ fn validate_moderation_panel_notification_archive_artifact_source_for_broker_v1(
     }
     Ok(())
 }
-
 /// Validate an installed historical archive artifact without pinning it to the current signer.
 ///
 /// Historical signer bindings are authenticated by the minimal embedded epoch
@@ -10497,7 +10154,6 @@ pub fn validate_moderation_panel_notification_archive_readback_for_broker_v1(
         source_attestation_digest: artifact.head.source_attestation_digest,
     })
 }
-
 /// Strictly validate canonical signed archive-head bytes for the existing slot-20
 /// `ModerationPublicationHandoff` broker op116.
 ///
@@ -10556,7 +10212,6 @@ pub fn validate_moderation_panel_notification_archive_head_for_broker_v1(
     };
     Ok((head, validation))
 }
-
 /// Build one deterministic generation-one archive fixture for broker protocol tests.
 ///
 /// The fixed seeds are test material, never production credentials. Every signature,
@@ -10572,7 +10227,6 @@ pub fn moderation_panel_notification_archive_broker_fixture_v1()
             .try_into()
             .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)
     }
-
     fn sign_message(
         key: &KeyPair,
         message: [u8; 32],
@@ -10583,7 +10237,6 @@ pub fn moderation_panel_notification_archive_broker_fixture_v1()
             .try_into()
             .map_err(|_| ModerationOrchestratorError::PanelNotificationArchiveInvalid)
     }
-
     let archive_signing_seed = [0xA9; 32];
     let checkpoint_attestation_signing_seed = [0xC9; 32];
     let archive_key = KeyPair::try_from_seed(archive_signing_seed.to_vec(), Algorithm::Ed25519)
@@ -10878,7 +10531,6 @@ pub fn moderation_panel_notification_archive_broker_fixture_v1()
             + MODERATION_PANEL_NOTIFICATION_ARCHIVE_WRAPPER_MAX_BYTES_V1,
     })
 }
-
 fn verify_panel_notification_archive_artifact(
     config: &ModerationOrchestratorConfigV1,
     network_id: &iroha_data_model::NetworkId,
@@ -10919,7 +10571,6 @@ fn verify_panel_notification_archive_artifact(
     }
     Ok(artifact)
 }
-
 fn verify_panel_notification_archive_readback(
     config: &ModerationOrchestratorConfigV1,
     network_id: &iroha_data_model::NetworkId,
@@ -10941,7 +10592,6 @@ fn verify_panel_notification_archive_readback(
     verify_panel_notification_archive_head(&head)?;
     Ok((artifact, head))
 }
-
 fn load_verified_panel_notification_archive_head(
     config: &ModerationOrchestratorConfigV1,
     network_id: &iroha_data_model::NetworkId,
@@ -10958,7 +10608,6 @@ fn load_verified_panel_notification_archive_head(
     }
     Ok(head)
 }
-
 fn verify_current_panel_notification_archive_readback(
     config: &ModerationOrchestratorConfigV1,
     network_id: &iroha_data_model::NetworkId,
@@ -10992,7 +10641,6 @@ fn verify_current_panel_notification_archive_readback(
         _ => Err(ModerationOrchestratorError::PanelNotificationArchiveInvalid),
     }
 }
-
 fn map_panel_notification_archive_error(
     error: ModerationPanelNotificationArchiveExternalErrorV1,
 ) -> ModerationOrchestratorError {
@@ -11008,7 +10656,6 @@ fn map_panel_notification_archive_error(
         }
     }
 }
-
 fn map_checkpoint_store_attestation_error(
     error: ModerationCheckpointStoreExternalErrorV1,
 ) -> ModerationOrchestratorError {
@@ -11024,7 +10671,6 @@ fn map_checkpoint_store_attestation_error(
         }
     }
 }
-
 fn map_panel_notification_archive_publication_error(
     error: ModerationHandoffFailureV1,
 ) -> ModerationOrchestratorError {
@@ -11040,7 +10686,6 @@ fn map_panel_notification_archive_publication_error(
         }
     }
 }
-
 fn verify_published_panel_notification_archive_head_readback(
     publication_sink: &QualifiedModerationTerminalHandoffSinkV1,
     expected: Option<&ModerationPanelNotificationArchiveHeadV1>,
@@ -11057,7 +10702,6 @@ fn verify_published_panel_notification_archive_head_readback(
     }
     Ok(())
 }
-
 fn checkpoint_decode_limits(max_bytes: u64) -> Result<DecodeLimits, ModerationOrchestratorError> {
     let max_bytes = usize::try_from(max_bytes).map_err(|_| {
         ModerationOrchestratorError::InvalidConfiguration(
@@ -11072,7 +10716,6 @@ fn checkpoint_decode_limits(max_bytes: u64) -> Result<DecodeLimits, ModerationOr
         128,
     ))
 }
-
 fn ensure_secure_parent(path: &Path) -> Result<(), ModerationOrchestratorError> {
     let parent = path.parent().ok_or_else(|| {
         ModerationOrchestratorError::InvalidConfiguration(
@@ -11121,7 +10764,6 @@ fn ensure_secure_parent(path: &Path) -> Result<(), ModerationOrchestratorError> 
     }
     Ok(())
 }
-
 fn read_bounded_file(
     path: &Path,
     max_bytes: u64,
@@ -11188,7 +10830,6 @@ fn read_bounded_file(
     }
     Ok(Some(bytes))
 }
-
 fn validate_checkpoint_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -11216,7 +10857,6 @@ fn validate_checkpoint_metadata(
     }
     Ok(())
 }
-
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ModerationOrchestratorError> {
     ensure_secure_parent(path)?;
     if let Ok(metadata) = fs::symlink_metadata(path) {
@@ -11379,7 +11019,6 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), ModerationOrchestratorE
     }
     result
 }
-
 /// Orchestrator failure.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ModerationOrchestratorError {

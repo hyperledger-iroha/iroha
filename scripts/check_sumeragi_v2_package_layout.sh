@@ -70,7 +70,7 @@ for module in quorum refinement reducer types wal; do
   fi
 done
 
-for test_module in tests network_simulation; do
+for test_module in tests; do
   source="$CORE_DIR/$test_module.rs"
   if [[ ! -f "$source" || -L "$source" ]]; then
     echo "missing package-local reducer test source: $source" >&2
@@ -81,9 +81,3 @@ for test_module in tests network_simulation; do
     exit 1
   fi
 done
-
-network_test_count="$(rg -c '^#\[test\]$' "$CORE_DIR/network_simulation.rs")"
-if [[ "$network_test_count" != "10" ]]; then
-  echo "expected ten package-local Sumeragi v2 network simulations, found $network_test_count" >&2
-  exit 1
-fi

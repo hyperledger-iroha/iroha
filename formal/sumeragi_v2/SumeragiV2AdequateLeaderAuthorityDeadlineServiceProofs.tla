@@ -2337,7 +2337,7 @@ AdequateLeaderFixedPreCandidateOwnerIsExact(
        [] owner.ownerKind = "TickPacket" ->
             /\ packet \in asyncTransport
             /\ packet.item.envelope.recipient = owner.node
-            /\ packet.item.source = owner.source
+            /\ packet.authenticatedSource = owner.source
             /\ AdequateLeaderTargetWireIdentity(
                  packet.item, target, leaderContext,
                  leader, leaderView, subject)
@@ -2345,7 +2345,7 @@ AdequateLeaderFixedPreCandidateOwnerIsExact(
             /\ packet \in OverdueResponsivePackets
             /\ packet = ExactDecisionTargetNeutralSelectedOverduePacket
             /\ packet.item.envelope.recipient = owner.node
-            /\ packet.item.source = owner.source
+            /\ packet.authenticatedSource = owner.source
             /\ AdequateLeaderTargetWireIdentity(
                  packet.item, target, leaderContext,
                  leader, leaderView, subject)

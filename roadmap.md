@@ -19,6 +19,28 @@ Completed history lives in [`status.md`](./status.md).
   the SF1 Rust/TypeScript/Go manifest rows only through the authorized council
   signer; never reuse the signature over the retired manifest digest.
 
+## Build-efficiency closeout
+
+- Preserve the reviewed 5,067,263-line first-party Rust baseline and the
+  4,560,536-line ten-percent ceiling. The current 5,014,603-line ratchet leaves
+  a 454,067-line gap; do not redefine the baseline, count moved test code as a
+  physical reduction, or weaken required runtime, security, consensus, SDK, or
+  release-evidence behavior to close it.
+- Add the new source and fixture files to the eventual signed commit, then rerun
+  the strict SDK source-closure guard from the tracked candidate. Keep the
+  staged merge-resolution layer and unstaged optimization layer reviewable
+  until that signed commit is prepared.
+- Obtain the reviewed workspace lockfile that matches the merged manifests
+  without locally regenerating `Cargo.lock`. From that immutable candidate, run
+  the full locked workspace build and tests, strict all-target/all-feature
+  Clippy, ABI and canonical wire goldens, focused Sumeragi/Kura recovery suites,
+  and representative four-validator deterministic consensus tests.
+- Capture comparable `valid: true` cold/warm and compiler-work reports for the
+  baseline and candidate with identical source, lock, toolchain, arguments,
+  environment, and host. Expand compile-unit coverage beyond the current
+  data-model graph to the daemon, CLI, and workspace release lanes before
+  claiming reduced compiler work or runtime performance neutrality.
+
 ## Exact network identity completion
 
 Signed queries, ordinary transactions, peer authentication, core consensus
@@ -50,9 +72,12 @@ Revision-4 implementation facts are recorded in `status.md`. Older Sumeragi
 V1/revision-3 checkpoint lists elsewhere in this file are historical and do
 not add release gates. Guarded formatting, explicit production `iroha_core`
 library compilation, profile-tool compilation, Swarm/Kagami prepared-bundle
-regressions, generated-artifact determinism, exact profile-config admission,
-and public consensus wire roundtrips are complete. The outstanding revision-4
-work is limited to:
+regressions, deterministic Swarm/Kagami profile-bundle regeneration, exact
+profile-config admission, and public consensus wire roundtrips are complete.
+The five checked-in OpenAPI artifacts remain stale and require deterministic
+regeneration from a clean exact candidate; the dirty unsigned development
+checkout is not release provenance. The outstanding revision-4 work is limited
+to:
 
 - Close the autonomous carrier terminal-gating, signed-bootstrap roll-forward,
   and lifecycle-retention release gate from one final source seal. Run the
@@ -518,9 +543,13 @@ tests pass.
 The validator-only, prepared-bundle Compose redesign passes its focused
 `iroha_swarm` suite (24 tests) and all four Kagami positive/mismatch
 regressions. The zero-chain genesis, three generated Compose manifests, and
-dev/Taira profile bundles are refreshed and deterministic; exact generated
-profile configs also pass runtime admission. Daemon config-digest execution
-remains blocked by the unrelated Bootle-Lantern lib-test compile error.
+dev/Taira profile bundles are refreshed and deterministic. Taira generation
+now pins all three reviewed network frame caps, chain discriminant `369`, and
+the canonical fee, stake, slash, and gas protocol accounts; all 18 tracked
+Taira bundle outputs were regenerated together. Exact generated profile
+configs also pass runtime admission. This development-tree regeneration is not
+a live Taira rollout or release receipt. Daemon config-digest execution remains
+blocked by the unrelated Bootle-Lantern lib-test compile error.
 
 Do not promote the private audit ledger to complete until those source-bound
 commands and the final reconciliation pass are recorded.
@@ -532,7 +561,8 @@ exact verified copy of the pinned installed Node dependency graph, and clean up
 safely under Bash 3.2 even when preflight rejects the checkout.
 Closure still requires a clean double regeneration, synchronized manifests and
 version maps, an explicit generated-client versus hand-maintained-SDK policy,
-the external Ed25519 HSM envelope, and a production gate run with
+an independently administered external software Ed25519 envelope, and a
+production gate run with
 `OPENAPI_REQUIRE_SIGNED=1` and the approved operator allowlist.
 
 ## SoraFS V1 Governance DAG deployment closure
@@ -694,8 +724,8 @@ evidence.
 
 ## Sumeragi V2 production multilane release closure
 
-On the current tree, the independent 87-leg release inventory contract is
-sealed at 857 production tests across 40 modules, 524 G-UNIT rows, and four
+On the current tree, the independent 88-leg release inventory contract is
+sealed at 854 production tests across 40 modules, 525 G-UNIT rows, and four
 mandatory four-peer gates; the aggregate proof checker hash-binds that guard.
 Fresh guard and mutation execution against this source is pending. The
 package-layout preflight and aggregate checker also bind the sole reviewed
@@ -717,11 +747,13 @@ The production source now contains the Native evidence, autonomous execution,
 automatic lifecycle, diagnostics, SDK model, and versioned-wire paths mapped by
 [`specs/sumeragi_v2_multilane_closure_ledger.md`](./specs/sumeragi_v2_multilane_closure_ledger.md).
 The former autonomous `execution_batch.is_none()` exclusion and its in-scope
-TODO are gone. One explicitly classified in-scope marker remains at the
-carrier-silent Queue-install/startup-activation seam for the still-open
-`Crash`/`Recover` lifecycle-cursor reconciliation; the closure ledger does not
-claim that cursor is already implemented. This is source implementation
-closure for the other mapped rows, not release completion.
+TODO are gone. The former carrier-silent Queue-install/startup-activation
+lifecycle-cursor marker is also gone: the four named recovery actions now have
+source-bound extraction seams and the open-action tuple is empty. This is
+structural source closure, not formal execution or release completion. The
+separate generic lifecycle-coordinator replacement remains intentionally
+unwired and is classified outside the current `ML-*` finish scope; that
+classification advances no ledger row or release gate.
 The deferred authority-paid receipt-settlement spend lease and generic Verus
 effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
 classified outside the multilane closure ledger.
@@ -739,16 +771,17 @@ tests. The isolated `iroha_core` library check also passed before the final
 reader deduplication, with post-edit startup-binding and B/A/B regressions
 green. This focused evidence does not replace the complete release gates.
 
-The static release inventory now matches `857/857` production tests across 40
-modules and `524/524` focused `G-UNIT` entries. Its canonical 525-line TSV has
+The static release inventory now matches `854/854` production tests across 40
+modules and `525/525` focused `G-UNIT` entries. Its canonical 526-line TSV has
 SHA-256
-`bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`.
+`dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
 The separate canonical production module/test TSV has SHA-256
-`090d4aa1d2ed4be9a55f4d6f265c51896034077f2f1bc7e33d80bba5cd440afd`;
+`df90ef7d94284bc805ff55ead6c6d938ba0f681a1d39e7b929fc275e8019aefa`;
 the newest rows bind crash-safe autonomous lifecycle terminal completion,
-startup reconciliation before lane-work activation, ten deterministic network
-simulations, and the exact pre-mutation terminal-sweep partition.
-The 318-entry core group additionally source-seals grouped Native prevote
+startup reconciliation before lane-work activation, and the exact pre-mutation
+terminal-sweep partition. The duplicate inline V2 core network simulations
+are retired; the standalone `iroha_sumeragi_core` harness remains.
+The 319-entry core group additionally source-seals grouped Native prevote
 budget rejection before Kura/WSV mutation, historical source-bundle
 authentication, crash-safe latest-index and prune-V2 recovery, cross-route
 manifest-barrier isolation, durable Native signing-boundary drift rejection,
@@ -756,7 +789,7 @@ atomic grouped reservation commit, exact
 QueuePlan obligation authentication, ApplyCarrier authorization, and canonical
 historical autonomous recovery into exactly-once merge application. This is
 source inventory consistency, not execution evidence.
-Schema 5 machine-maps 30 conceptual multilane rows to 99 exact mutation
+Schema 5 machine-maps 34 conceptual multilane rows to 106 exact mutation
 configurations. The authenticated Kura retention contract binds 44 production
 symbols, three ordered checks, and 14 mutations with no pending source check;
 the final pre-self-documentation source manifest is
@@ -766,18 +799,20 @@ multilane model/source contract suite passes `171/171` under pinned Python 3.12
 with strict warnings, and the static
 Apalache-runner contract passes all 14 fail-closed controls. No current TLC or
 Apalache engine run is claimed. The newly bound non-retireable lane transport
-is intentionally fail-closed at applied-height handoff; concrete production
-trace extraction plus drain/restart/liveness evidence remain mandatory.
+is intentionally fail-closed at applied-height handoff; formal operational
+correspondence plus drain/restart/liveness evidence remain mandatory.
 
 The Rust-owned protocol-4 grouped fixture contains 55 negative controls and
 hashes to
-`8ea1bcf77d11c482e2752bd058c06daa9bd50cd543e53570708b300883573053`;
-its suite-source manifest hashes to
-`4c21e1fcf5589a3c8177c3ef533542655cdbe6082d726c0fb8ee2bcdf56df913`;
+`48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
+its grouped and diagnostics suite-source manifests hash to
+`7934d109b6dcb66a7954f30c256d99453ff793508219dd3bd347121cd61c376e`
+and
+`65204d542c0dbe9c4291c6c6d6c83851dfcbc2402137f9af7d86b9a40ab4aae0`;
 the synchronized 48-line wire TSV hashes to
-`f4ed50fb3db8aba9a8f50c542a58b72099c162e5cb927637c83634bca5120ae7`.
+`aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
-`59`, Swift `4`, Kotlin `6`, and Java `5` tests. Previously recorded direct
+`60`, Swift `4`, Kotlin `6`, and Java `5` tests. Previously recorded direct
 OpenAPI `7/7`, Python `58/58`, and JavaScript `56/56` results predate this
 fixture and do not attest it; one archived aggregate source/distribution replay
 remains open under `G-SDK`.
@@ -787,19 +822,19 @@ production actually accepts: schema V2 in the `LaneExecutablePayloadV1`
 container, QueuePlan journal V4, and reservation journal V5. Schema 5 of the
 multilane binding ledger keeps this as the
 `inflight_first_release_layout_contract`, with the explicit
-`composed_state_action_relation_no_trace_extraction` claim, and source-binds
+`composed_state_action_relation_with_source_bound_trace_extraction` claim, and source-binds
 the exact payload, reservation, queue-order, Kura persistence/recovery, runner,
 and release-receipt consumers. The schema-5 structural/source-binding checks,
-exact 857-test production inventory, 524-test G-UNIT source inventory, 12
+exact 854-test production inventory, 525-test G-UNIT source inventory, 12
 fail-closed layout tests, two receipt parser tests, and 12 Apalache-runner
 contract controls require a fresh source-bound rerun. The ledger retains the
 distinct fifth layout-only Apalache result after the four refinement rows. The
-G-UNIT inventory has 525 TSV lines and SHA-256
-`bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`.
+G-UNIT inventory has 526 TSV lines and SHA-256
+`dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`.
 The TLC trace normalizer also imports on the supported Xcode Python 3.9 runtime
 again and passes all 15 focused tests. No TLC or Apalache engine execution is
-claimed by those static checks, and the total Rust transition projection
-remains open.
+claimed by those static checks, and formal correspondence between concrete
+Rust executions and the source-bound transition partition remains open.
 
 The remaining work is evidence-driven and must stay in order:
 
@@ -837,24 +872,26 @@ The remaining work is evidence-driven and must stay in order:
   predate this final refactor and do not attest it. Re-run the focused and complete
   merge-sidecar/lane/runner/worker/core tests, formatting, clippy, codec guard,
   proof-ledger and TLAPS-sharding tests, proof checker, and source-fidelity
-  mutations before promotion, then finish the remaining 857-test,
+  mutations before promotion, then finish the remaining 854-test,
   40-module production inventory legs and archived G-UNIT execution.
   The asynchronous reply-route product's 54/54 structural TLAPS projection is
   complete; its V2 inductive-safety, successor-isolation, and temporal-product
   obligations remain in the formal dependency queue.
-- Finish `G-UNIT` with a fresh archived run of all 524 source-bound focused tests
+- Finish `G-UNIT` with a fresh archived run of all 525 source-bound focused tests
   across core multilane and queue-journal code, `iroha_data_model`, Torii, and
   the integration-support library, then complete and archive the Rust-owned
   control-corpus replay across OpenAPI, both Python surfaces, JavaScript
   source/distribution, Swift, Kotlin, and Java for
   `ML-API-04`/`G-SDK`. The current protocol-4 corpus has 55 negative controls,
   fixture SHA-256
-  `8ea1bcf77d11c482e2752bd058c06daa9bd50cd543e53570708b300883573053`,
-  suite-source manifest SHA-256
-  `4c21e1fcf5589a3c8177c3ef533542655cdbe6082d726c0fb8ee2bcdf56df913`,
+  `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`,
+  grouped/diagnostics suite-source manifest SHA-256 values
+  `7934d109b6dcb66a7954f30c256d99453ff793508219dd3bd347121cd61c376e`
+  and
+  `65204d542c0dbe9c4291c6c6d6c83851dfcbc2402137f9af7d86b9a40ab4aae0`,
   and wire-TSV SHA-256
-  `f4ed50fb3db8aba9a8f50c542a58b72099c162e5cb927637c83634bca5120ae7`.
-  The current harness inventories OpenAPI `7`, Python `62`, JavaScript `59`,
+  `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
+  The current harness inventories OpenAPI `7`, Python `62`, JavaScript `60`,
   Swift `4`, Kotlin `6`, and Java `5` tests. The predecessor fixture's direct
   subset results are not an archived all-surface replay and do not attest this
   corpus; the aggregate source/distribution harness remains required.
@@ -937,8 +974,11 @@ Repository conformance and synthetic fixture aggregates are not promotion
 evidence. L1 requires the live four-voting-validator, multi-provider,
 dual-gateway, dual-Governance-DAG deployment, resilience/load/24-hour soak
 evidence, and exactly 17 fresh payload-free summaries under one deployment
-context. L2 requires the externally HSM-signed ordered `SFM-1`, `SF-1`,
-`SF-2`, `SF-2c`, `SF-3`, `SF-4`, `SF-5b`, `SF-6`, and `SF-8a` envelope.
+context. L2 requires the ordered `SFM-1`, `SF-1`, `SF-2`, `SF-2c`, `SF-3`,
+`SF-4`, `SF-5b`, `SF-6`, and `SF-8a` envelope signed by an independently
+administered external software Ed25519 signer. Its binding must pin
+`signing_provider=authenticated_external_signer`, `signing_backend=software`,
+and `signer_qualification=software-key-qualified`.
 Promotion is allowed only when both deterministic runs emit `status=ready`,
 `summary_file_count=17`, `recognized_summary_count=17`, every lane is valid,
 no critical/high vulnerability remains, and rollback is usable.
@@ -961,9 +1001,11 @@ before opening any archive, consensus, node-handle, or outbox state. The exact
 opaque-preflight consumption/revalidation and main daemon startup-order tests
 are green; remaining L0 execution includes clean workspace gates and final
 artifact provenance. Seven focused Rust `EscrowId` hard-cut
-regressions and the aggregate production-readiness regression suite passed all
-459 tests in two complete runs. Neither local result substitutes for native
-qualification or genuine L1/L2 evidence.
+regressions and the latest complete aggregate production-readiness regression
+run passed all 465 current tests; earlier complete runs covered the then-current
+459-test suite. A second complete 465-test final-tree replay remains required.
+Neither local result substitutes for native qualification or genuine L1/L2
+evidence.
 PDP, PoR, and PoTR production failure handoff uses the exact-chain durable
 native transaction forwarder, and storage work is gated by the finalized
 native task cursor, revision, lease owner, generation, and expiry. The
@@ -26763,15 +26805,19 @@ launch. Direct production-runner entry fails before another candidate helper.
 The bootstrap neither times out nor output-captures the runner and never
 signals its process group; an escaped internal deadline stays visibly
 incomplete.
-Its exact `PATH` consists of the archived protected tools plus a private
-`runner-bin` populated only by exact-target symlinks from a digest-pinned
-canonical manifest. Tool sources and all ancestors must be trusted-owner and
-non-writable. Runner stdout/stderr inherit owner-private regular files, so a
+Its outer `PATH` consists of archived protected tools plus a digest-pinned
+runner-tool closure. Before any candidate build child starts, the outer runner
+copies the named reviewed language/tool runtime closures to new private inodes and binds
+their source and destination inventories; the child receives only those private
+paths. Shell core utilities still come from admitted host system directories
+and remain a host-image prerequisite. Tool sources and all ancestors must be trusted-owner and non-writable.
+Runner stdout/stderr inherit owner-private regular files, so a
 blocked bootstrap stream cannot stall the runner; normal exit seals them
 read-only, while bootstrap-only interruption preserves active logs without an
 external completion marker. The successful runner retains its sealed source
 and identity for independent replay.
-The complete corridor then re-enters from a unique detached read-only worktree
+The complete corridor then re-enters from a unique independent clone made with
+`--no-local`, `--no-hardlinks`, and no alternates, sealed read-only,
 with external outputs. The chmod seal is a cooperative guard against ordinary
 writes, while detached committed source, the external bootstrap marker, and
 repeated identity checkpoints remain authoritative. The manifest binds modes
@@ -26780,8 +26826,9 @@ rejects escaping or writable-output symlinks plus hard-linked source files.
 
 The original checkout manifest and sealed manifest are both retained; every
 child completion uses the latter. One canonical aggregate receipt binds
-original HEAD/tree/`Cargo.lock`, all 81 pre-network legs and their exact
-829-test inventory, the formal harness lock/toolchain, matrix, chaos, and soak
+original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and their exact
+854-test inventory plus the separate exact 525-test G-UNIT inventory, the
+formal harness lock/toolchain, matrix, chaos, and soak
 evidence. The formal leg archives a tee-captured all-legs log plus
 `proof_coverage.json` and `proof_evidence.json`; receipt publication reruns the
 official proof checker. Every matrix summary row hashes its exact Cargo log,
@@ -26799,26 +26846,30 @@ repository's pinned 1.93.1 toolchain after Git/Rust semantic-environment cleanup
 and run with an isolated configuration-free `CARGO_HOME`; exact tool paths,
 versions, and hashes are receipt-bound.
 
-The current release-support suites are green at 11/11 seed-matrix, 189/189
-release-receipt, and 71/71 protected-bootstrap tests. The source-bound release
-gate now requires exactly 3,676 proof-fidelity cases and 26 formal-launcher
-cases. The source-derived proof-fidelity composition is 3,633 ledger/checker
-cases, 28 pinned-Verus evidence cases, and 15 TLC-normalizer cases. It includes
+The current release-support suites collect 302 release-receipt and 252
+protected-bootstrap tests without selector inflation. The source-bound release
+gate now requires exactly 5,291 proof-fidelity cases and 26 formal-launcher
+cases. The source-derived proof-fidelity composition is 5,189 ledger/checker
+cases, 28 pinned-Verus evidence cases, 15 TLC-normalizer cases, eight
+reviewed-Rust closure cases, 31 Native/passive multilane source-contract cases,
+and twenty selected layout/wire cases. It includes
 the new fail-closed mutations for exact-request coalescing, exact-output
 lifecycle source seals, and durable Apply-tombstone monotonicity. Fresh
 settled-tree collection and execution of both
 preflights remain pending; the derived totals and prior runs are not promoted
 as final release evidence.
 
-The receipt is published only at the exact bootstrap-owned path with mode
-`0400`, one link, exclusive staging, complete writes, no-clobber linking, and
-identity-checked cleanup. Publication revalidates and synchronizes every bound
+The receipt is published with mode `0400`, one link, an exclusive fully synced
+stage, and one no-replace rename. Publication revalidates and synchronizes every bound
 artifact, then every evidence directory bottom-up, and repeats the transitive
 closure with the receipt included; any file, directory, or `fsync` failure is
-fail-closed. The bootstrap validates the retained source and invokes its
-separately protected archived receipt validator in exact `--verify-existing`
-mode before publishing a no-clobber external marker bound to the receipt,
-source identity, validator, and sealed runner logs. There is no mutable pointer.
+fail-closed. The protected outer runner invokes the separately archived receipt
+validator in exact `--verify-existing` mode; that validator alone publishes the
+no-clobber acknowledgment. Only then may the protected runtime helper prune
+disposable runtime/cache/target state and publish the retained result and exact
+inventory. The bootstrap authenticates that acknowledgment, result, inventory,
+source identity, and sealed runner logs before external completion. There is no
+mutable pointer.
 Malformed, incomplete, cross-source, semantically mismatched, and
 digest-mismatched evidence is rejected. This authenticates the
 signed candidate and runner relative to operator-protected inputs, but does not

@@ -7171,7 +7171,9 @@ TimeoutDecisionRequestIngressOwner(source, target, qc) ==
   /\ TimeoutDecisionKernelSource(source, target, qc)
   /\ \E request \in AsyncNetworkItems:
        /\ CommitCertificateRequestTo(target, source, request)
-       /\ ExactIngressOwns(request)
+       /\ \E laneSource \in AsyncIngressSources:
+            request \in SequenceSet(
+              IngressLane(request.envelope.recipient, laneSource))
 
 TimeoutDecisionRequestServeOwner(source, target, qc) ==
   /\ TimeoutDecisionKernelSource(source, target, qc)
@@ -9025,7 +9027,7 @@ PROOF
                      sourceRank, packet, known, budget,
                      actionKind, actionSource)
     <2> DEFINE Recipient == packet.item.envelope.recipient
-    <2> DEFINE Source == packet.item.source
+    <2> DEFINE Source == packet.authenticatedSource
     <2> DEFINE Item == OldestDueSourcePacket(Recipient, Source).item
     <2>1. /\ AsyncStrongTypeInvariant
            /\ gst
@@ -9043,8 +9045,7 @@ PROOF
            /\ DueSourcePackets(Recipient, Source) # {}
            /\ ResponsivePacketPairAt(
                 initialContext, Recipient, Source)
-           /\ Recipient \in AsyncCurrentResponsiveVoters
-                           \cup asyncHistoricalRecoveryTargets
+           /\ Recipient \in AsyncTimedServiceNodes
       BY <2>1, <2>2,
          OverdueResponsivePacketUsesFairIngressPair, Isa
          DEF Recipient, Source, ResponsivePacketPairAt,
@@ -9056,7 +9057,8 @@ PROOF
              AsyncResponsiveArchiveServers
     <2>4. /\ AsyncItemTyped(Item)
            /\ Item.envelope.recipient = Recipient
-           /\ Item.source = Source
+           /\ OldestDueSourcePacket(
+                Recipient, Source).authenticatedSource = Source
       BY <2>2, <2>3, OldestDueSourcePacketFacts
          DEF Item, AsyncPacketTyped
     <2>5. CASE DueIngressPacketCanEnter(Recipient, Source)
@@ -9085,7 +9087,11 @@ PROOF
                    Recipient
         <4>2. CASE Recipient \notin asyncHistoricalRecoveryTargets
           <5>1. Recipient \in AsyncCurrentResponsiveVoters
-            BY <2>3, <4>2
+            BY <2>1, <2>3, <3>1, <4>2, Isa
+               DEF AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
+                   AsyncResponsiveAppliedArchiveServers,
+                   AsyncResponsiveOnlineArchiveServers,
+                   AsyncResponsiveArchiveServers
           <5>2. ENABLED PostGstRunNode(Recipient)
             BY <2>1, <3>1, <5>1,
                GstResponsiveUnappliedRunNodeIsEnabled
@@ -9096,10 +9102,17 @@ PROOF
                    Recipient
         <4> QED BY <4>1, <4>2
       <3>2. CASE NodeHasApplication(Recipient)
-        <4>1. Recipient \in AsyncCurrentResponsiveVoters
-          BY <2>2, <2>3, <3>2, Isa
+        <4>1. Recipient \in AsyncArchiveIoServiceNodes
+          BY <2>1, <2>2, <2>3, <3>2, Isa
              DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
-                 AsyncHistoricalRecoveryTypeInvariant
+                 AsyncHistoricalRecoveryTypeInvariant,
+                 OverdueResponsivePackets,
+                 AsyncPacketOwnsClockDeadline,
+                 AsyncTimedServiceNodes,
+                 AsyncArchiveIoServiceNodes,
+                 AsyncResponsiveAppliedArchiveServers,
+                 AsyncResponsiveOnlineArchiveServers,
+                 AsyncResponsiveArchiveServers
         <4>2. CASE IngressDepth(Recipient) = 0
           <5>1. OldestDueSourcePacket(Recipient, Source)
                    \in OverdueResponsivePackets
@@ -10385,8 +10398,9 @@ THEOREM TimeoutPhysicalControlPacketAdmissionPreservesExactHandoff ==
        /\ AsyncCandidateServiceLifecycleInvariant
        /\ TimeoutPhysicalControlPacketOwner(item)
        /\ packet \in TimeoutPhysicalControlExactPackets(item)
-       /\ packet = OldestDueSourcePacket(recipient, item.source)
-       /\ AdmitIngressPacket(recipient, item.source)
+       /\ packet = OldestDueSourcePacket(
+            recipient, packet.authenticatedSource)
+       /\ AdmitIngressPacket(recipient, packet.authenticatedSource)
        => \/ TimeoutPhysicalControlTerminal(item)'
           \/ TimeoutPhysicalControlIngressOwner(item)'
           \/ TimeoutPhysicalControlCandidateOwner(item)'
@@ -10403,8 +10417,10 @@ BY AsyncCandidateServiceTombstoneRejectsTransportReadmission,
        ExactDeliveryCandidateOwns,
        AdmitIngressPacket, AdmitHiddenPacket,
        CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
-       IngressHasCoalescingOwner, IngressPacketPolicyRejected,
-       IngressLane, IngressResourceSource, SequenceSet,
+       IngressHasCoalescingOwnerVia, IngressHasCoalescingOwner,
+       IngressPacketPolicyRejected,
+       IngressLane, IngressResourceSourceVia,
+       IngressResourceSource, SequenceSet,
        CandidateScheduled, DeliveryCandidate
 
 THEOREM TimeoutPhysicalControlIngressDrainPreservesExactHandoff ==

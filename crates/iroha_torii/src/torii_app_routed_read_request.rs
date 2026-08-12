@@ -186,6 +186,7 @@ where
                     plan.typed_limits.max_total_allocated_bytes(),
                 ))
             }
+            Ok(value) => Ok(value),
             Err(error) if error.is_decode_resource_limit() => {
                 Err(app_routed_read_request_capacity_response(
                     "typed Norito decode resources",
@@ -242,6 +243,7 @@ where
     })
 }
 
+#[allow(unsafe_code)]
 fn validate_app_routed_read_form(
     raw: &[u8],
     plan: ToriiRoutedReadRequestDecodePlan,
@@ -322,6 +324,7 @@ where
                 plan.typed_limits.max_total_allocated_bytes(),
             ))
         }
+        Ok(value) => Ok(value),
         Err(error) if error.is_decode_resource_limit() => {
             Err(app_routed_read_request_capacity_response(
                 "typed decode resources",
@@ -578,6 +581,7 @@ impl<'a> ToriiFormLossyChars<'a> {
 impl Iterator for ToriiFormLossyChars<'_> {
     type Item = char;
 
+    #[allow(unsafe_code)]
     fn next(&mut self) -> Option<Self::Item> {
         let mut probe = self.bytes.clone();
         let mut encoded = [0_u8; 4];
@@ -621,6 +625,7 @@ impl Iterator for ToriiFormLossyChars<'_> {
     }
 }
 
+#[allow(unsafe_code)]
 fn torii_exact_form_component(
     raw: &[u8],
     limit: usize,
@@ -650,6 +655,7 @@ fn torii_exact_form_component(
     Ok(unsafe { Box::from_raw(Box::into_raw(output) as *mut [u8]) })
 }
 
+#[allow(unsafe_code)]
 fn torii_allocate_exact_bytes(
     length: usize,
 ) -> Result<Box<[std::mem::MaybeUninit<u8>]>, norito::json::BoundedJsonError> {
@@ -680,6 +686,7 @@ impl norito::json::FastJsonWrite for ToriiRoutedReadFormJson<'_> {
         norito::json::write_json_unbounded(self, output);
     }
 
+    #[allow(unsafe_code)]
     fn write_json_to(
         &self,
         output: &mut dyn norito::json::JsonWriteSink,

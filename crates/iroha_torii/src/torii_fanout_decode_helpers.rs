@@ -965,6 +965,7 @@ impl OrdinaryQueryServerPolicy {
         let max_cursor_retained_items = max_page_items;
         let max_cursor_value_bytes =
             max_cursor_retained_items.checked_mul(max_source_item_bytes)?;
+        let max_request_graph_bytes = u64::try_from(ingress.decode_allocated_bytes).ok()?;
         let max_revalidation_archive_bytes = u64::try_from(ingress.canonical_encoded_bytes).ok()?;
         let revalidation_decode_limits = QueryFanoutMemoryEnvelope::decode_limits_for(
             ingress.canonical_encoded_bytes,
@@ -975,6 +976,7 @@ impl OrdinaryQueryServerPolicy {
             max_page_items,
             max_source_item_bytes,
             max_response_bytes,
+            max_request_graph_bytes,
             max_revalidation_archive_bytes,
             revalidation_decode_limits,
         )
@@ -1006,6 +1008,7 @@ impl OrdinaryQueryServerPolicy {
             max_cursor_retained_items,
             max_cursor_value_bytes,
             max_cursor_retained_bytes,
+            max_request_graph_bytes,
             max_revalidation_archive_bytes,
             revalidation_decode_limits,
         )

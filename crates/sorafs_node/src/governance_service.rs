@@ -184,12 +184,10 @@ const CANONICAL_DECODE_ALLOCATION_MULTIPLIER: usize = 16;
 const CANONICAL_DECODE_MAX_TOTAL_ELEMENTS: usize = 4_000_000;
 const STEADY_IPFS_AUDIT_MAX_ENTRIES_PER_POLL: usize = 64;
 const STEADY_IPFS_AUDIT_MAX_BYTES_PER_POLL: u64 = 16 * 1024 * 1024;
-
 #[cfg(unix)]
 unsafe extern "C" {
     fn geteuid() -> std::os::raw::c_uint;
 }
-
 #[derive(Debug, Error)]
 /// Fail-closed Governance DAG service startup or reconciliation error.
 pub enum GovernanceDagServiceError {
@@ -218,7 +216,6 @@ pub enum GovernanceDagServiceError {
     #[error("service listener failed: {0}")]
     Listener(String),
 }
-
 #[derive(Clone, Default)]
 /// Deployment-owned runtime providers for the supervised Governance DAG service.
 ///
@@ -231,7 +228,6 @@ pub struct GovernanceDagServiceRuntimeProviders {
     head_authenticator: Option<Arc<dyn GovernanceDagRequestAuthenticator>>,
     checkpoint_store: Option<Arc<dyn GovernanceDagSealedCheckpointStore>>,
 }
-
 impl fmt::Debug for GovernanceDagServiceRuntimeProviders {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -242,7 +238,6 @@ impl fmt::Debug for GovernanceDagServiceRuntimeProviders {
             .finish()
     }
 }
-
 impl GovernanceDagServiceRuntimeProviders {
     /// Attach the rotation-aware Kubo/IPFS authenticator.
     #[must_use]
@@ -253,7 +248,6 @@ impl GovernanceDagServiceRuntimeProviders {
         self.ipfs_authenticator = Some(authenticator);
         self
     }
-
     /// Attach the rotation-aware signed-head CAS authenticator.
     #[must_use]
     pub fn with_head_authenticator(
@@ -263,7 +257,6 @@ impl GovernanceDagServiceRuntimeProviders {
         self.head_authenticator = Some(authenticator);
         self
     }
-
     /// Attach the sealed, monotonic checkpoint and publish-intent store.
     #[must_use]
     pub fn with_checkpoint_store(
@@ -274,7 +267,6 @@ impl GovernanceDagServiceRuntimeProviders {
         self
     }
 }
-
 /// Public stable-handle bindings requested from a deployment runtime registry.
 ///
 /// This value contains no credentials, private keys, provider diagnostics, or
@@ -291,14 +283,12 @@ pub struct GovernanceDagServiceRuntimeProviderBindingsV1 {
     checkpoint_store_handle: String,
     checkpoint_store_qualification: GovernanceDagRuntimeProviderQualificationV1,
 }
-
 impl GovernanceDagServiceRuntimeProviderBindingsV1 {
     /// Stable handle for the Kubo/IPFS authenticator.
     #[must_use]
     pub fn ipfs_authenticator_handle(&self) -> &str {
         &self.ipfs_authenticator_handle
     }
-
     /// Exact configured Kubo/IPFS authenticator qualification.
     #[must_use]
     pub const fn ipfs_authenticator_qualification(
@@ -306,19 +296,16 @@ impl GovernanceDagServiceRuntimeProviderBindingsV1 {
     ) -> GovernanceDagRuntimeProviderQualificationV1 {
         self.ipfs_authenticator_qualification
     }
-
     /// Exact configured IPFS endpoint, key, request-size, and timing policy.
     #[must_use]
     pub const fn ipfs_request_ingress_binding(&self) -> GovernanceDagRequestIngressBindingV1 {
         self.ipfs_request_ingress_binding
     }
-
     /// Stable handle for signed-head compare-and-swap authentication, when active.
     #[must_use]
     pub fn head_authenticator_handle(&self) -> Option<&str> {
         self.head_authenticator_handle.as_deref()
     }
-
     /// Exact configured signed-head authenticator qualification, when active.
     #[must_use]
     pub const fn head_authenticator_qualification(
@@ -326,7 +313,6 @@ impl GovernanceDagServiceRuntimeProviderBindingsV1 {
     ) -> Option<GovernanceDagRuntimeProviderQualificationV1> {
         self.head_authenticator_qualification
     }
-
     /// Exact configured signed-head endpoint, key, request-size, and timing policy, when active.
     #[must_use]
     pub const fn head_request_ingress_binding(
@@ -334,13 +320,11 @@ impl GovernanceDagServiceRuntimeProviderBindingsV1 {
     ) -> Option<GovernanceDagRequestIngressBindingV1> {
         self.head_request_ingress_binding
     }
-
     /// Stable handle for the sealed monotonic checkpoint store.
     #[must_use]
     pub fn checkpoint_store_handle(&self) -> &str {
         &self.checkpoint_store_handle
     }
-
     /// Exact configured sealed-checkpoint store qualification.
     #[must_use]
     pub const fn checkpoint_store_qualification(
@@ -349,7 +333,6 @@ impl GovernanceDagServiceRuntimeProviderBindingsV1 {
         self.checkpoint_store_qualification
     }
 }
-
 /// Redacted deployment-registry resolution failure.
 ///
 /// Variants deliberately carry no provider diagnostics because HSM, KMS, and
@@ -366,7 +349,6 @@ pub enum GovernanceDagServiceRuntimeProviderRegistryErrorV1 {
     #[error("Governance DAG runtime provider registry rejected the configured bindings")]
     RejectedBindings,
 }
-
 /// Deployment-owned factory for Governance DAG runtime providers.
 ///
 /// Implementations resolve only the stable handles in `bindings`. Credentials,
@@ -384,7 +366,6 @@ pub trait GovernanceDagServiceRuntimeProviderRegistryV1: Send + Sync {
         GovernanceDagServiceRuntimeProviderRegistryErrorV1,
     >;
 }
-
 /// Typed startup failure for the registry-aware Governance DAG launcher.
 #[derive(Debug, Error)]
 pub enum GovernanceDagServiceLauncherError {
@@ -398,7 +379,6 @@ pub enum GovernanceDagServiceLauncherError {
     #[error(transparent)]
     Service(#[from] GovernanceDagServiceError),
 }
-
 #[derive(Clone)]
 struct OpaqueAuthenticator {
     handle: String,
@@ -408,7 +388,6 @@ struct OpaqueAuthenticator {
     provider: Arc<dyn GovernanceDagRequestAuthenticator>,
     recent_outbound_nonces: Arc<Mutex<OutboundRequestNonceWindowV1>>,
 }
-
 /// Bounded sender-side sanity window for a malfunctioning signer that reuses
 /// a still-live nonce. Receiver replay protection belongs exclusively to the
 /// shared sealed replay namespace proven by `ingress_qualification`.
@@ -418,7 +397,6 @@ struct OutboundRequestNonceWindowV1 {
     order: VecDeque<[u8; 32]>,
     capacity: usize,
 }
-
 impl OutboundRequestNonceWindowV1 {
     fn new() -> Self {
         Self {
@@ -427,7 +405,6 @@ impl OutboundRequestNonceWindowV1 {
             capacity: GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1,
         }
     }
-
     fn observe(
         &mut self,
         nonce: [u8; 32],
@@ -454,7 +431,6 @@ impl OutboundRequestNonceWindowV1 {
         Ok(())
     }
 }
-
 impl fmt::Debug for OpaqueAuthenticator {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -481,7 +457,6 @@ impl fmt::Debug for OpaqueAuthenticator {
             .finish_non_exhaustive()
     }
 }
-
 impl OpaqueAuthenticator {
     fn try_new(
         expected_handle: &str,
@@ -540,7 +515,6 @@ impl OpaqueAuthenticator {
             recent_outbound_nonces: Arc::new(Mutex::new(OutboundRequestNonceWindowV1::new())),
         })
     }
-
     fn authenticate(
         &self,
         request: &GovernanceDagCanonicalRequestV1,
@@ -563,7 +537,6 @@ impl OpaqueAuthenticator {
         self.validate_envelope(request, &envelope)?;
         Ok(envelope)
     }
-
     fn assert_identity(&self) -> Result<(), GovernanceDagServiceError> {
         let ingress_qualification = self.provider.ingress_qualification().map_err(|_| {
             GovernanceDagServiceError::Network(
@@ -580,7 +553,6 @@ impl OpaqueAuthenticator {
         }
         Ok(())
     }
-
     fn validate_envelope(
         &self,
         request: &GovernanceDagCanonicalRequestV1,
@@ -602,12 +574,10 @@ impl OpaqueAuthenticator {
         })?;
         recent_outbound_nonces.observe(envelope.nonce(), envelope.expires_at_unix_secs(), now)
     }
-
     const fn ingress_binding(&self) -> GovernanceDagRequestIngressBindingV1 {
         self.ingress_qualification.binding()
     }
 }
-
 fn validate_request_auth_policy(
     public_key: [u8; 32],
     max_envelope_lifetime_secs: u64,
@@ -632,14 +602,12 @@ fn validate_request_auth_policy(
         GovernanceDagServiceError::Config(format!("{label} {reason}"))
     })
 }
-
 #[derive(Clone)]
 struct OpaqueCheckpointStore {
     handle: String,
     qualification: GovernanceDagRuntimeProviderQualificationV1,
     provider: Arc<dyn GovernanceDagSealedCheckpointStore>,
 }
-
 impl fmt::Debug for OpaqueCheckpointStore {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -648,7 +616,6 @@ impl fmt::Debug for OpaqueCheckpointStore {
             .finish_non_exhaustive()
     }
 }
-
 impl OpaqueCheckpointStore {
     fn try_new(
         expected_handle: &str,
@@ -696,7 +663,6 @@ impl OpaqueCheckpointStore {
             provider,
         })
     }
-
     fn assert_identity(&self) -> Result<(), GovernanceDagServiceError> {
         let qualification = self.provider.qualification().map_err(|_| {
             GovernanceDagServiceError::State(
@@ -711,13 +677,11 @@ impl OpaqueCheckpointStore {
         Ok(())
     }
 }
-
 #[derive(Debug)]
 struct SealedRequestAuthReplayStore<'a> {
     store: &'a OpaqueCheckpointStore,
     scope: GovernanceDagAuthenticationScope,
 }
-
 impl GovernanceDagRequestAuthenticationReplayStoreV1 for SealedRequestAuthReplayStore<'_> {
     fn consume_nonce(
         &mut self,
@@ -748,7 +712,6 @@ impl GovernanceDagRequestAuthenticationReplayStoreV1 for SealedRequestAuthReplay
         }
     }
 }
-
 /// Qualified receiver boundary for authenticated Governance DAG HTTP ingress.
 ///
 /// The receiver retains only public endpoint policy and one opaque, qualified
@@ -768,7 +731,6 @@ pub struct GovernanceDagSealedHttpRequestReceiverV1 {
     verification_policy: GovernanceDagRequestAuthenticationPolicyV1,
     replay_store: OpaqueCheckpointStore,
 }
-
 impl fmt::Debug for GovernanceDagSealedHttpRequestReceiverV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -791,7 +753,6 @@ impl fmt::Debug for GovernanceDagSealedHttpRequestReceiverV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl GovernanceDagSealedHttpRequestReceiverV1 {
     /// Bind public request policy to one exact production sealed-store adapter.
     ///
@@ -833,7 +794,6 @@ impl GovernanceDagSealedHttpRequestReceiverV1 {
             replay_store,
         })
     }
-
     /// Authenticate and durably consume one complete inbound HTTP request.
     ///
     /// The exact method, canonical URL, selected public headers, framing, and
@@ -933,25 +893,21 @@ impl GovernanceDagSealedHttpRequestReceiverV1 {
             .map_err(|error| GovernanceDagServiceError::Network(error.to_string()))?;
         Ok(verified.descriptor().clone())
     }
-
     /// Endpoint scope bound to this receiver.
     #[must_use]
     pub const fn scope(&self) -> GovernanceDagAuthenticationScope {
         self.scope
     }
-
     /// Maximum complete body size accepted by this receiver.
     #[must_use]
     pub const fn max_body_bytes(&self) -> u64 {
         self.max_body_bytes
     }
-
     /// Stable credential-free handle of the authoritative sealed replay store.
     #[must_use]
     pub fn checkpoint_store_handle(&self) -> &str {
         &self.replay_store.handle
     }
-
     /// Exact public qualification pinned for the sealed replay store.
     #[must_use]
     pub const fn checkpoint_store_qualification(
@@ -960,7 +916,6 @@ impl GovernanceDagSealedHttpRequestReceiverV1 {
         self.replay_store.qualification
     }
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct PublishedBlockV1 {
     sequence: u64,
@@ -972,7 +927,6 @@ struct PublishedBlockV1 {
     encoded_len: u64,
     ipfs_cid: String,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct BlockPrefixArchivePublicationV1 {
     canonical_url: String,
@@ -983,7 +937,6 @@ struct BlockPrefixArchivePublicationV1 {
     public_key: [u8; 32],
     signature: [u8; 64],
 }
-
 impl BlockPrefixArchivePublicationV1 {
     fn from_envelope(
         envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
@@ -1005,7 +958,6 @@ impl BlockPrefixArchivePublicationV1 {
         })
     }
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct BlockPrefixArchiveHeadV1 {
     generation: u64,
@@ -1020,7 +972,6 @@ struct BlockPrefixArchiveHeadV1 {
     predecessor_head_block_cid: Vec<u8>,
     publication: Option<BlockPrefixArchivePublicationV1>,
 }
-
 impl BlockPrefixArchiveHeadV1 {
     fn empty() -> Self {
         Self {
@@ -1038,13 +989,11 @@ impl BlockPrefixArchiveHeadV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct SignedBlockPrefixArchiveEntryV1 {
     published: PublishedBlockV1,
     signed_block_bytes: Vec<u8>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct SignedBlockPrefixArchiveV1 {
     version: u8,
@@ -1068,7 +1017,6 @@ struct SignedBlockPrefixArchiveV1 {
     archived_block_count: u64,
     blocks: Vec<SignedBlockPrefixArchiveEntryV1>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct MirrorIndexStorePayloadV1 {
     version: u8,
@@ -1077,7 +1025,6 @@ struct MirrorIndexStorePayloadV1 {
     mirror_blake3: [u8; 32],
     canonical_json: Vec<u8>,
 }
-
 impl MirrorIndexStorePayloadV1 {
     fn empty() -> Self {
         Self {
@@ -1088,7 +1035,6 @@ impl MirrorIndexStorePayloadV1 {
             canonical_json: Vec::new(),
         }
     }
-
     fn committed(
         checkpoint_generation: u64,
         publish_intent_blake3: [u8; 32],
@@ -1104,12 +1050,10 @@ impl MirrorIndexStorePayloadV1 {
         validate_mirror_index_store_payload(&payload)?;
         Ok(payload)
     }
-
     fn is_empty(&self) -> bool {
         self.checkpoint_generation == 0
     }
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct CheckpointBodyV1 {
     version: u8,
@@ -1125,7 +1069,6 @@ struct CheckpointBodyV1 {
     archive_head: BlockPrefixArchiveHeadV1,
     mirror_blocks: Vec<PublishedBlockV1>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct IntentBlockV1 {
     sequence: u64,
@@ -1137,7 +1080,6 @@ struct IntentBlockV1 {
     encoded_len: u64,
     ipfs_cid: Option<String>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct PublishIntentBodyV1 {
     version: u8,
@@ -1153,7 +1095,6 @@ struct PublishIntentBodyV1 {
     blocks: Vec<IntentBlockV1>,
     head_ipfs_cid: Option<String>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CheckpointCommitmentV1 {
     revision: [u8; 32],
@@ -1161,7 +1102,6 @@ struct CheckpointCommitmentV1 {
     block_count: u64,
     head_block_cid: Vec<u8>,
 }
-
 impl CheckpointCommitmentV1 {
     fn empty() -> Self {
         Self {
@@ -1172,19 +1112,16 @@ impl CheckpointCommitmentV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct RequestAuthReplayEntryV1 {
     nonce: [u8; 32],
     expires_at_unix_secs: u64,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct RequestAuthReplayStateV1 {
     version: u8,
     entries: Vec<RequestAuthReplayEntryV1>,
 }
-
 #[derive(Debug, Clone)]
 struct SourceBlock {
     block: GovernanceDagBlockV1,
@@ -1192,7 +1129,6 @@ struct SourceBlock {
     encoded_blake3: [u8; 32],
     payload_kind: String,
 }
-
 #[derive(Debug, Clone)]
 struct SourceSnapshot {
     index_blake3: [u8; 32],
@@ -1201,7 +1137,6 @@ struct SourceSnapshot {
     head_bytes: Vec<u8>,
     blocks: Vec<SourceBlock>,
 }
-
 #[derive(Debug, Clone)]
 struct SourcePrefix<'a> {
     head: GovernanceDagHeadV1,
@@ -1209,50 +1144,40 @@ struct SourcePrefix<'a> {
     blocks: &'a [SourceBlock],
     chain_blake3: [u8; 32],
 }
-
 trait SourceChainView {
     fn head(&self) -> &GovernanceDagHeadV1;
     fn head_bytes(&self) -> &[u8];
     fn blocks(&self) -> &[SourceBlock];
     fn chain_blake3(&self) -> [u8; 32];
 }
-
 impl SourceChainView for SourceSnapshot {
     fn head(&self) -> &GovernanceDagHeadV1 {
         &self.head
     }
-
     fn head_bytes(&self) -> &[u8] {
         &self.head_bytes
     }
-
     fn blocks(&self) -> &[SourceBlock] {
         &self.blocks
     }
-
     fn chain_blake3(&self) -> [u8; 32] {
         self.chain_blake3
     }
 }
-
 impl SourceChainView for SourcePrefix<'_> {
     fn head(&self) -> &GovernanceDagHeadV1 {
         &self.head
     }
-
     fn head_bytes(&self) -> &[u8] {
         &self.head_bytes
     }
-
     fn blocks(&self) -> &[SourceBlock] {
         self.blocks
     }
-
     fn chain_blake3(&self) -> [u8; 32] {
         self.chain_blake3
     }
 }
-
 fn source_chain_blake3_v1(head_bytes: &[u8], blocks: &[SourceBlock]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"sorafs.governance-dag.service-source-chain.v1\0");
@@ -1277,13 +1202,11 @@ fn source_chain_blake3_v1(head_bytes: &[u8], blocks: &[SourceBlock]) -> [u8; 32]
     hasher.update(head_bytes);
     *hasher.finalize().as_bytes()
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ProducerCommitGuard {
     record: GovernanceDagSealedStateRecord,
     checkpoint: RuntimeDagProducerCheckpointV1,
 }
-
 #[derive(Debug)]
 struct RuntimeConfig {
     source_dir: PathBuf,
@@ -1302,7 +1225,6 @@ struct RuntimeConfig {
     expected_publisher_peer_id: Vec<u8>,
     expected_public_key: [u8; 32],
 }
-
 impl RuntimeConfig {
     fn revalidate_source_root(&self) -> Result<(), GovernanceDagServiceError> {
         self.source_root_guard.revalidate().map_err(|err| {
@@ -1311,7 +1233,6 @@ impl RuntimeConfig {
             ))
         })
     }
-
     fn revalidate_state_root(&self) -> Result<(), GovernanceDagServiceError> {
         self.state_root_guard.revalidate().map_err(|err| {
             GovernanceDagServiceError::Filesystem(format!(
@@ -1320,7 +1241,6 @@ impl RuntimeConfig {
         })
     }
 }
-
 /// Public, non-secret identity binding for a Governance DAG mirror reader.
 ///
 /// The descriptor intentionally excludes filesystem paths, provider objects,
@@ -1337,26 +1257,22 @@ pub struct GovernanceDagMirrorReadBindingV1 {
     checkpoint_store_handle: String,
     checkpoint_store_qualification: GovernanceDagRuntimeProviderQualificationV1,
 }
-
 impl GovernanceDagMirrorReadBindingV1 {
     /// Return the producer's canonical, domain-separated root digest.
     #[must_use]
     pub const fn source_root_digest(&self) -> [u8; 32] {
         self.source_root_digest
     }
-
     /// Return the path-free digest of the retained physical source root.
     #[must_use]
     pub const fn source_root_identity_digest(&self) -> [u8; 32] {
         self.source_root_identity_digest
     }
-
     /// Return the stable handle of the expected producer signer.
     #[must_use]
     pub fn producer_signer_handle(&self) -> &str {
         &self.producer_signer_handle
     }
-
     /// Return the exact expected producer-signer qualification.
     #[must_use]
     pub const fn producer_signer_qualification(
@@ -1364,25 +1280,21 @@ impl GovernanceDagMirrorReadBindingV1 {
     ) -> GovernanceDagRuntimeProviderQualificationV1 {
         self.producer_signer_qualification
     }
-
     /// Return the expected producer publisher peer identifier.
     #[must_use]
     pub fn producer_publisher_peer_id(&self) -> &[u8] {
         &self.producer_publisher_peer_id
     }
-
     /// Return the expected producer's canonical Ed25519 public key.
     #[must_use]
     pub const fn producer_public_key(&self) -> [u8; 32] {
         self.producer_public_key
     }
-
     /// Return the stable handle of the sealed checkpoint store.
     #[must_use]
     pub fn checkpoint_store_handle(&self) -> &str {
         &self.checkpoint_store_handle
     }
-
     /// Return the exact sealed-checkpoint-store qualification.
     #[must_use]
     pub const fn checkpoint_store_qualification(
@@ -1391,28 +1303,24 @@ impl GovernanceDagMirrorReadBindingV1 {
         self.checkpoint_store_qualification
     }
 }
-
 /// Exact sealed-checkpoint identity authenticating one mirror snapshot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GovernanceDagMirrorCheckpointIdentityV1 {
     generation: u64,
     revision: [u8; 32],
 }
-
 impl GovernanceDagMirrorCheckpointIdentityV1 {
     /// Return the sealed monotonic checkpoint generation.
     #[must_use]
     pub const fn generation(self) -> u64 {
         self.generation
     }
-
     /// Return the complete sealed-record revision digest.
     #[must_use]
     pub const fn revision(self) -> [u8; 32] {
         self.revision
     }
 }
-
 /// One canonical mirror snapshot authenticated by exact durable identities.
 #[derive(Debug, PartialEq, Eq)]
 pub struct GovernanceDagMirrorSnapshotV1 {
@@ -1423,22 +1331,18 @@ pub struct GovernanceDagMirrorSnapshotV1 {
     mirror_store_record_digest: [u8; 32],
     checkpoint_identity: GovernanceDagMirrorCheckpointIdentityV1,
 }
-
 impl GovernanceDagMirrorSnapshotV1 {
     /// Borrow the canonical mirror JSON bytes.
     #[must_use]
     pub fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes
     }
-
     fn mirror(&self) -> &JsonValue {
         &self.mirror
     }
-
     fn checkpoint(&self) -> &CheckpointBodyV1 {
         &self.checkpoint
     }
-
     /// Return the typed mirror store generation and complete record digest.
     #[must_use]
     pub const fn mirror_store_identity(&self) -> (u64, [u8; 32]) {
@@ -1447,14 +1351,12 @@ impl GovernanceDagMirrorSnapshotV1 {
             self.mirror_store_record_digest,
         )
     }
-
     /// Return the sealed checkpoint identity that authenticates these bytes.
     #[must_use]
     pub const fn checkpoint_identity(&self) -> GovernanceDagMirrorCheckpointIdentityV1 {
         self.checkpoint_identity
     }
 }
-
 /// Cloneable, service-owned capability for coherent Governance DAG mirror reads.
 ///
 /// Each read consults the typed two-slot mirror and sealed checkpoint store
@@ -1468,19 +1370,16 @@ pub struct GovernanceDagMirrorReadHandleV1 {
     checkpoint_store: OpaqueCheckpointStore,
     readiness: Arc<GovernanceDagMirrorReadinessV1>,
 }
-
 #[derive(Debug)]
 struct GovernanceDagMirrorReadinessV1 {
     epoch: AtomicU64,
 }
-
 impl GovernanceDagMirrorReadinessV1 {
     fn new(bootstrap: bool) -> Self {
         Self {
             epoch: AtomicU64::new(u64::from(!bootstrap)),
         }
     }
-
     fn transition_to_parity(&self, ready: bool) {
         let desired_parity = u64::from(!ready);
         let _ = self
@@ -1490,15 +1389,12 @@ impl GovernanceDagMirrorReadinessV1 {
                 current.checked_add(increment)
             });
     }
-
     fn mark_unready(&self) {
         self.transition_to_parity(false);
     }
-
     fn mark_ready(&self) {
         self.transition_to_parity(true);
     }
-
     fn begin_read(&self) -> Result<u64, GovernanceDagServiceError> {
         let epoch = self.epoch.load(Ordering::Acquire);
         if epoch != 0 && epoch & 1 == 1 {
@@ -1508,7 +1404,6 @@ impl GovernanceDagMirrorReadinessV1 {
         }
         Ok(epoch)
     }
-
     fn finish_read(&self, expected: u64) -> Result<(), GovernanceDagServiceError> {
         if self.epoch.load(Ordering::Acquire) != expected {
             return Err(GovernanceDagServiceError::Unavailable(
@@ -1518,7 +1413,6 @@ impl GovernanceDagMirrorReadinessV1 {
         Ok(())
     }
 }
-
 impl fmt::Debug for GovernanceDagMirrorReadHandleV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1528,7 +1422,6 @@ impl fmt::Debug for GovernanceDagMirrorReadHandleV1 {
             .finish_non_exhaustive()
     }
 }
-
 impl GovernanceDagMirrorReadHandleV1 {
     fn try_new(
         config: &RuntimeConfig,
@@ -1606,13 +1499,11 @@ impl GovernanceDagMirrorReadHandleV1 {
         handle.assert_bindings()?;
         Ok(handle)
     }
-
     /// Return the immutable, non-secret installation binding.
     #[must_use]
     pub const fn binding(&self) -> &GovernanceDagMirrorReadBindingV1 {
         &self.binding
     }
-
     /// Read one mirror generation coherent with an exact sealed checkpoint.
     ///
     /// Returns `Ok(None)` only for the authenticated bootstrap state where the
@@ -1634,7 +1525,6 @@ impl GovernanceDagMirrorReadHandleV1 {
                 "Governance DAG mirror has an active sealed publish intent".to_owned(),
             ));
         }
-
         let mirror_snapshot = self
             .state_root_guard
             .rooted_directory()
@@ -1645,7 +1535,6 @@ impl GovernanceDagMirrorReadHandleV1 {
                 ))
             })?;
         let mirror_payload = decode_mirror_index_store_payload(mirror_snapshot.payload())?;
-
         let (checkpoint_a, checkpoint_revision_a) = match (checkpoint_a, checkpoint_revision_a) {
             (None, None) => {
                 if readiness_epoch != 0 {
@@ -1692,7 +1581,6 @@ impl GovernanceDagMirrorReadHandleV1 {
             }
         };
         let mirror = verify_mirror_payload_against_checkpoint(&mirror_payload, &checkpoint_a)?;
-
         let (checkpoint_b, checkpoint_revision_b) = load_checkpoint(&self.checkpoint_store)?;
         let intent_identity_b = load_publish_intent(&self.checkpoint_store)?;
         if intent_identity_b != intent_identity_a {
@@ -1709,7 +1597,6 @@ impl GovernanceDagMirrorReadHandleV1 {
         }
         self.assert_bindings()?;
         self.readiness.finish_read(readiness_epoch)?;
-
         Ok(Some(GovernanceDagMirrorSnapshotV1 {
             canonical_bytes: mirror_payload.canonical_json,
             mirror,
@@ -1722,7 +1609,6 @@ impl GovernanceDagMirrorReadHandleV1 {
             },
         }))
     }
-
     /// Revalidate the retained roots, provider binding, and existing typed
     /// mirror store without requiring an initialized mirror checkpoint.
     pub(crate) fn assert_install_ready(&self) -> Result<(), GovernanceDagServiceError> {
@@ -1739,15 +1625,12 @@ impl GovernanceDagMirrorReadHandleV1 {
         let _ = decode_mirror_index_store_payload(mirror_snapshot.payload())?;
         self.assert_bindings()
     }
-
     fn mark_unready(&self) {
         self.readiness.mark_unready();
     }
-
     fn mark_ready(&self) {
         self.readiness.mark_ready();
     }
-
     fn assert_bindings(&self) -> Result<(), GovernanceDagServiceError> {
         self.source_root_guard.revalidate().map_err(|error| {
             GovernanceDagServiceError::Filesystem(format!(
@@ -1794,7 +1677,6 @@ impl GovernanceDagMirrorReadHandleV1 {
         Ok(())
     }
 }
-
 #[derive(Debug)]
 struct PinnedEndpoint {
     url: Url,
@@ -1803,34 +1685,28 @@ struct PinnedEndpoint {
     authenticator: OpaqueAuthenticator,
     authenticated_wire_body_max_bytes: u64,
 }
-
 #[derive(Debug)]
 enum HeadMode {
     SignedHttp(Box<PinnedEndpoint>),
     Ipns { name: String, key_name: String },
 }
-
 struct AuthenticatedResponse {
     response: reqwest::Response,
     authenticator: OpaqueAuthenticator,
     envelope: GovernanceDagRequestAuthenticationEnvelopeV1,
     descriptor: GovernanceDagCanonicalRequestV1,
 }
-
 impl Deref for AuthenticatedResponse {
     type Target = reqwest::Response;
-
     fn deref(&self) -> &Self::Target {
         &self.response
     }
 }
-
 #[derive(Debug, Clone)]
 enum PublicHead {
     Missing,
     Present { bytes: Vec<u8>, token: String },
 }
-
 #[derive(Debug, Clone, Default)]
 struct ServiceMetrics {
     publish_success_total: u64,
@@ -1846,7 +1722,6 @@ struct ServiceMetrics {
     validation_failure_total: u64,
     mirror_drift: u64,
 }
-
 #[derive(Debug, Clone, Default)]
 struct ApiSnapshot {
     live: bool,
@@ -1856,20 +1731,16 @@ struct ApiSnapshot {
     checkpoint: Option<CheckpointBodyV1>,
     metrics: ServiceMetrics,
 }
-
 #[derive(Clone)]
 struct ApiState(Arc<RwLock<ApiSnapshot>>);
-
 #[derive(Clone)]
 struct ServiceApiState {
     telemetry: ApiState,
     mirror_reader: GovernanceDagMirrorReadHandleV1,
 }
-
 struct GovernanceDagServiceLivenessGuard {
     readiness: Arc<GovernanceDagMirrorReadinessV1>,
 }
-
 impl GovernanceDagServiceLivenessGuard {
     fn new(reader: &GovernanceDagMirrorReadHandleV1) -> Self {
         Self {
@@ -1877,7 +1748,6 @@ impl GovernanceDagServiceLivenessGuard {
         }
     }
 }
-
 impl Drop for GovernanceDagServiceLivenessGuard {
     fn drop(&mut self) {
         // Read capabilities can outlive the runner (for example after task
@@ -1886,7 +1756,6 @@ impl Drop for GovernanceDagServiceLivenessGuard {
         self.readiness.mark_unready();
     }
 }
-
 struct Service {
     config: RuntimeConfig,
     mirror_store: TwoSlotStoreV1,
@@ -1906,7 +1775,6 @@ struct Service {
     steady_audit_generation: Option<u64>,
     steady_audit_cursor: usize,
 }
-
 /// Run the supervised Governance DAG publisher using injected runtime providers.
 ///
 /// The config contains only public endpoint policy, expected identities, and
@@ -1926,7 +1794,6 @@ pub async fn run_governance_dag_service(
     let view = load_service_config(config_path.as_ref())?;
     run_governance_dag_service_from_view(view, once, providers).await
 }
-
 /// Run the supervised Governance DAG publisher through a deployment registry.
 ///
 /// The registry receives only validated stable provider handles. The packaged
@@ -1948,7 +1815,6 @@ pub async fn run_governance_dag_service_with_runtime_registry(
     run_governance_dag_service_from_view(view, once, providers).await?;
     Ok(())
 }
-
 /// Qualify every runtime-only provider against one resolved service view.
 ///
 /// This performs the same exact handle/revision/policy checks as service
@@ -2026,7 +1892,6 @@ pub fn validate_governance_dag_service_runtime_providers(
     }
     Ok(())
 }
-
 fn resolve_runtime_registry_providers(
     view: &SorafsGovernanceDagServiceView,
     registry: Option<Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1>>,
@@ -2036,7 +1901,6 @@ fn resolve_runtime_registry_providers(
         registry.ok_or(GovernanceDagServiceLauncherError::MissingRuntimeProviderRegistry)?;
     Ok(registry.resolve(&bindings)?)
 }
-
 fn runtime_provider_bindings(
     view: &SorafsGovernanceDagServiceView,
 ) -> Result<GovernanceDagServiceRuntimeProviderBindingsV1, GovernanceDagServiceError> {
@@ -2165,7 +2029,6 @@ fn runtime_provider_bindings(
         checkpoint_store_qualification,
     })
 }
-
 fn configured_request_ingress_binding(
     scope: GovernanceDagAuthenticationScope,
     endpoint: &str,
@@ -2193,7 +2056,6 @@ fn configured_request_ingress_binding(
         GovernanceDagServiceError::Config(format!("{label} request-ingress binding is invalid"))
     })
 }
-
 fn configured_provider_qualification(
     revision: Option<u64>,
     policy_digest: Option<[u8; 32]>,
@@ -2214,7 +2076,6 @@ fn configured_provider_qualification(
     }
     Ok(qualification)
 }
-
 /// Run the supervised publisher from an already validated standalone view.
 ///
 /// Embedding launchers use this entrypoint so they do not need to re-read a
@@ -2242,7 +2103,6 @@ pub async fn run_governance_dag_service_from_view(
         .run()
         .await
 }
-
 /// Prepared continuous Governance DAG service owned by a supervisor.
 ///
 /// Construction completes provider qualification, source/state validation,
@@ -2252,7 +2112,6 @@ pub struct GovernanceDagServiceRunner {
     service: Service,
     listener: TcpListener,
 }
-
 impl GovernanceDagServiceRunner {
     /// Clone the service-owned coherent mirror read capability before the
     /// runner is moved into [`Self::run`] or [`Self::run_until`].
@@ -2260,7 +2119,6 @@ impl GovernanceDagServiceRunner {
     pub fn mirror_read_handle(&self) -> GovernanceDagMirrorReadHandleV1 {
         self.service.mirror_reader.clone()
     }
-
     /// Reconcile continuously until the listener exits or an operating-system
     /// shutdown signal is received.
     ///
@@ -2270,7 +2128,6 @@ impl GovernanceDagServiceRunner {
     pub async fn run(self) -> Result<(), GovernanceDagServiceError> {
         self.run_until(shutdown_signal()).await
     }
-
     /// Reconcile continuously until the listener exits or the embedding
     /// supervisor requests shutdown.
     ///
@@ -2296,7 +2153,6 @@ impl GovernanceDagServiceRunner {
             .with_graceful_shutdown(shutdown)
             .into_future();
         tokio::pin!(server);
-
         let mut interval = time::interval(self.service.config.poll_interval);
         interval.set_missed_tick_behavior(time::MissedTickBehavior::Skip);
         loop {
@@ -2321,7 +2177,6 @@ impl GovernanceDagServiceRunner {
         }
     }
 }
-
 /// Prepare a continuous Governance DAG service from a resolved view.
 ///
 /// The returned runner has already qualified all providers, opened and
@@ -2342,7 +2197,6 @@ pub async fn prepare_governance_dag_service_from_view(
         .map_err(|err| GovernanceDagServiceError::Listener(err.to_string()))?;
     Ok(GovernanceDagServiceRunner { service, listener })
 }
-
 async fn shutdown_signal() {
     let ctrl_c = async {
         let _ = signal::ctrl_c().await;
@@ -2361,7 +2215,6 @@ async fn shutdown_signal() {
         _ = terminate => {},
     }
 }
-
 fn load_service_config(
     path: &Path,
 ) -> Result<SorafsGovernanceDagServiceView, GovernanceDagServiceError> {
@@ -2375,7 +2228,6 @@ fn load_service_config(
     SorafsGovernanceDagServiceView::from_toml_source(TomlSource::new(path.to_owned(), table))
         .map_err(|err| GovernanceDagServiceError::Config(err.to_string()))
 }
-
 impl Service {
     async fn from_view(
         view: SorafsGovernanceDagServiceView,
@@ -2496,7 +2348,6 @@ impl Service {
                 )
             })?,
         )?;
-
         let ipfs_authenticator_handle =
             service
                 .ipfs_authenticator_handle
@@ -2632,7 +2483,6 @@ impl Service {
                 ));
             }
         };
-
         // Provider qualification above is deliberately complete before any
         // mutable directory, lock, sealed checkpoint, or publication endpoint
         // is opened.
@@ -2727,7 +2577,6 @@ impl Service {
         })
     }
 }
-
 fn secure_existing_directory(
     path: &Path,
     secret: bool,
@@ -2764,7 +2613,6 @@ fn secure_existing_directory(
     let canonical = guard.root().to_path_buf();
     Ok((canonical, guard))
 }
-
 fn secure_state_directory(
     path: &Path,
 ) -> Result<(PathBuf, GovernanceFilesystemRootGuard), GovernanceDagServiceError> {
@@ -2855,7 +2703,6 @@ fn secure_state_directory(
     }
     secure_existing_directory(path, true)
 }
-
 fn read_unrooted_regular_file(
     path: &Path,
     max_bytes: u64,
@@ -2922,7 +2769,6 @@ fn read_unrooted_regular_file(
     }
     Ok(bytes)
 }
-
 fn rooted_byte_limit(max_bytes: u64, label: &str) -> Result<usize, GovernanceDagServiceError> {
     usize::try_from(max_bytes).map_err(|_| {
         GovernanceDagServiceError::Filesystem(format!(
@@ -2930,7 +2776,6 @@ fn rooted_byte_limit(max_bytes: u64, label: &str) -> Result<usize, GovernanceDag
         ))
     })
 }
-
 fn read_rooted_file(
     root_guard: &GovernanceFilesystemRootGuard,
     relative: &Path,
@@ -2972,7 +2817,6 @@ fn read_rooted_file(
     })?;
     Ok(snapshot)
 }
-
 #[cfg(test)]
 fn verify_rooted_file_binding(
     root_guard: &GovernanceFilesystemRootGuard,
@@ -2994,7 +2838,6 @@ fn verify_rooted_file_binding(
         ))
     })
 }
-
 fn validate_regular_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -3034,17 +2877,14 @@ fn validate_regular_metadata(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(not(unix))]
 fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len()
 }
-
 fn acquire_service_lock(
     state_root_guard: &GovernanceFilesystemRootGuard,
 ) -> Result<RetainedFile, GovernanceDagServiceError> {
@@ -3083,15 +2923,12 @@ fn acquire_service_lock(
         ))),
     }
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut OpenOptions) {}
-
 #[cfg(all(
     target_os = "android",
     not(any(
@@ -3105,7 +2942,6 @@ fn set_no_follow_flag(_options: &mut OpenOptions) {}
 compile_error!(
     "Governance DAG service filesystem flags are not qualified for this Android architecture"
 );
-
 #[cfg(all(
     unix,
     not(any(
@@ -3120,12 +2956,10 @@ compile_error!(
     ))
 ))]
 compile_error!("Governance DAG service filesystem flags are not qualified for this Unix target");
-
 #[cfg(all(target_os = "android", target_arch = "riscv64"))]
 fn platform_no_follow_flag() -> i32 {
     0x400000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "aarch64", target_arch = "arm")
@@ -3133,7 +2967,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x8000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "x86", target_arch = "x86_64")
@@ -3141,7 +2974,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x20000
 }
-
 #[cfg(all(
     target_os = "linux",
     any(
@@ -3155,7 +2987,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x8000
 }
-
 #[cfg(all(
     target_os = "linux",
     not(any(
@@ -3169,7 +3000,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x20000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -3185,7 +3015,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 fn decode_fixed_hex<const N: usize>(
     value: &str,
     label: &str,
@@ -3206,7 +3035,6 @@ fn decode_fixed_hex<const N: usize>(
     out.copy_from_slice(&bytes);
     Ok(out)
 }
-
 fn decode_strong_ed25519_public_key_hex(
     value: &str,
     label: &str,
@@ -3229,7 +3057,6 @@ fn decode_strong_ed25519_public_key_hex(
     }
     Ok(bytes)
 }
-
 fn validate_public_token(value: &str, label: &str) -> Result<String, GovernanceDagServiceError> {
     if value.is_empty()
         || value.len() > MAX_PUBLIC_TOKEN_BYTES
@@ -3245,7 +3072,6 @@ fn validate_public_token(value: &str, label: &str) -> Result<String, GovernanceD
     }
     Ok(value.to_owned())
 }
-
 fn validate_runtime_handle(value: &str, label: &str) -> Result<String, GovernanceDagServiceError> {
     match validate_production_runtime_handle(value) {
         Ok(()) => Ok(value.to_owned()),
@@ -3257,14 +3083,12 @@ fn validate_runtime_handle(value: &str, label: &str) -> Result<String, Governanc
         )),
     }
 }
-
 fn current_unix_timestamp_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default()
 }
-
 const fn request_auth_replay_slot(
     scope: GovernanceDagAuthenticationScope,
 ) -> GovernanceDagSealedStateSlot {
@@ -3275,7 +3099,6 @@ const fn request_auth_replay_slot(
         }
     }
 }
-
 fn decode_request_auth_replay_state(
     record: &GovernanceDagSealedStateRecord,
     slot: GovernanceDagSealedStateSlot,
@@ -3328,7 +3151,6 @@ fn decode_request_auth_replay_state(
     }
     Ok(state)
 }
-
 fn consume_sealed_request_auth_nonce(
     store: &OpaqueCheckpointStore,
     slot: GovernanceDagSealedStateSlot,
@@ -3426,7 +3248,6 @@ fn consume_sealed_request_auth_nonce(
             "sealed request-auth replay compare-and-swap failed".to_owned(),
         )
     })?;
-
     let observed = load_sealed_record(store, slot)?.ok_or_else(|| {
         GovernanceDagServiceError::State(
             "sealed request-auth replay state disappeared after compare-and-swap".to_owned(),
@@ -3446,11 +3267,9 @@ fn consume_sealed_request_auth_nonce(
     }
     Ok(())
 }
-
 fn blake3_array(bytes: &[u8]) -> [u8; 32] {
     *blake3::hash(bytes).as_bytes()
 }
-
 fn durable_decode_limits(max_bytes: u64) -> DecodeLimits {
     let max = usize::try_from(max_bytes).unwrap_or(usize::MAX);
     DecodeLimits::new(
@@ -3461,7 +3280,6 @@ fn durable_decode_limits(max_bytes: u64) -> DecodeLimits {
         128,
     )
 }
-
 fn mirror_index_store_config() -> Result<TwoSlotStoreConfigV1, GovernanceDagServiceError> {
     TwoSlotStoreConfigV1::try_new(
         MIRROR_INDEX_STORE_NAME,
@@ -3475,7 +3293,6 @@ fn mirror_index_store_config() -> Result<TwoSlotStoreConfigV1, GovernanceDagServ
         ))
     })
 }
-
 fn validate_mirror_index_store_payload(
     payload: &MirrorIndexStorePayloadV1,
 ) -> Result<(), GovernanceDagServiceError> {
@@ -3524,7 +3341,6 @@ fn validate_mirror_index_store_payload(
     }
     Ok(())
 }
-
 fn encode_mirror_index_store_payload(
     payload: &MirrorIndexStorePayloadV1,
 ) -> Result<Vec<u8>, GovernanceDagServiceError> {
@@ -3539,7 +3355,6 @@ fn encode_mirror_index_store_payload(
     }
     Ok(encoded)
 }
-
 fn decode_mirror_index_store_payload(
     encoded: &[u8],
 ) -> Result<MirrorIndexStorePayloadV1, GovernanceDagServiceError> {
@@ -3569,14 +3384,12 @@ fn decode_mirror_index_store_payload(
     }
     Ok(payload)
 }
-
 fn load_mirror_index_store(
     config: &RuntimeConfig,
     store: &TwoSlotStoreV1,
 ) -> Result<(TwoSlotSnapshotV1, MirrorIndexStorePayloadV1), GovernanceDagServiceError> {
     load_mirror_index_store_from_root(&config.state_root_guard, store)
 }
-
 fn load_mirror_index_store_from_root(
     state_root_guard: &GovernanceFilesystemRootGuard,
     store: &TwoSlotStoreV1,
@@ -3599,7 +3412,6 @@ fn load_mirror_index_store_from_root(
     })?;
     Ok((snapshot, payload))
 }
-
 fn open_mirror_index_store(
     config: &RuntimeConfig,
 ) -> Result<TwoSlotStoreV1, GovernanceDagServiceError> {
@@ -3619,7 +3431,6 @@ fn open_mirror_index_store(
     let _ = load_mirror_index_store(config, &store)?;
     Ok(store)
 }
-
 fn reject_legacy_mirror_index_authority(
     config: &RuntimeConfig,
 ) -> Result<(), GovernanceDagServiceError> {
@@ -3663,7 +3474,6 @@ fn reject_legacy_mirror_index_authority(
     }
     config.revalidate_state_root()
 }
-
 fn mirror_json_value(
     payload: &MirrorIndexStorePayloadV1,
 ) -> Result<JsonValue, GovernanceDagServiceError> {
@@ -3679,7 +3489,6 @@ fn mirror_json_value(
         ))
     })
 }
-
 fn verify_mirror_payload_against_checkpoint(
     payload: &MirrorIndexStorePayloadV1,
     checkpoint: &CheckpointBodyV1,
@@ -3706,7 +3515,6 @@ fn verify_mirror_payload_against_checkpoint(
     }
     Ok(value)
 }
-
 fn verify_mirror_payload_against_intent(
     payload: &MirrorIndexStorePayloadV1,
     intent: &PublishIntentBodyV1,
@@ -3735,7 +3543,6 @@ fn verify_mirror_payload_against_intent(
     }
     Ok(())
 }
-
 fn request_auth_replay_decode_limits(max_bytes: usize) -> DecodeLimits {
     DecodeLimits::new(
         GOVERNANCE_DAG_REQUEST_AUTH_REPLAY_CACHE_CAPACITY_V1,
@@ -3745,7 +3552,6 @@ fn request_auth_replay_decode_limits(max_bytes: usize) -> DecodeLimits {
         128,
     )
 }
-
 fn load_checkpoint(
     store: &OpaqueCheckpointStore,
 ) -> Result<(Option<CheckpointBodyV1>, Option<[u8; 32]>), GovernanceDagServiceError> {
@@ -3777,7 +3583,6 @@ fn load_checkpoint(
     validate_checkpoint_body(&body)?;
     Ok((Some(body), Some(record.revision)))
 }
-
 fn save_checkpoint(
     store: &OpaqueCheckpointStore,
     expected_revision: Option<[u8; 32]>,
@@ -3796,7 +3601,6 @@ fn save_checkpoint(
         "checkpoint",
     )
 }
-
 fn checkpoint_commitment(
     checkpoint: Option<&CheckpointBodyV1>,
     revision: Option<[u8; 32]>,
@@ -3839,7 +3643,6 @@ fn checkpoint_commitment(
         )),
     }
 }
-
 fn validate_checkpoint_body(body: &CheckpointBodyV1) -> Result<(), GovernanceDagServiceError> {
     if body.version != CHECKPOINT_VERSION_V1
         || body.generation == 0
@@ -3899,7 +3702,6 @@ fn validate_checkpoint_body(body: &CheckpointBodyV1) -> Result<(), GovernanceDag
     }
     Ok(())
 }
-
 fn validate_published_block(block: &PublishedBlockV1) -> Result<(), GovernanceDagServiceError> {
     if block.governance_block_cid.len() != 32
         || block.governance_node_cid.len() != 32
@@ -3914,7 +3716,6 @@ fn validate_published_block(block: &PublishedBlockV1) -> Result<(), GovernanceDa
     }
     Ok(())
 }
-
 fn validate_block_prefix_archive_publication_fields(
     publication: &BlockPrefixArchivePublicationV1,
 ) -> Result<(), GovernanceDagServiceError> {
@@ -3944,7 +3745,6 @@ fn validate_block_prefix_archive_publication_fields(
     }
     Ok(())
 }
-
 fn validate_block_prefix_archive_head(
     head: &BlockPrefixArchiveHeadV1,
 ) -> Result<(), GovernanceDagServiceError> {
@@ -3996,7 +3796,6 @@ fn validate_block_prefix_archive_head(
         },
     )?)
 }
-
 fn block_prefix_archive_decode_limits(max_bytes: usize) -> DecodeLimits {
     DecodeLimits::new(
         SOURCE_ENTRY_HARD_CAP,
@@ -4006,7 +3805,6 @@ fn block_prefix_archive_decode_limits(max_bytes: usize) -> DecodeLimits {
         128,
     )
 }
-
 fn decode_signed_block_prefix_archive(
     bytes: &[u8],
     max_bytes: u64,
@@ -4039,7 +3837,6 @@ fn decode_signed_block_prefix_archive(
     validate_signed_block_prefix_archive(&archive)?;
     Ok(archive)
 }
-
 fn validate_signed_block_prefix_archive(
     archive: &SignedBlockPrefixArchiveV1,
 ) -> Result<(), GovernanceDagServiceError> {
@@ -4190,7 +3987,6 @@ fn validate_signed_block_prefix_archive(
     }
     Ok(())
 }
-
 fn load_publish_intent(
     store: &OpaqueCheckpointStore,
 ) -> Result<(Option<PublishIntentBodyV1>, Option<[u8; 32]>), GovernanceDagServiceError> {
@@ -4225,7 +4021,6 @@ fn load_publish_intent(
     validate_publish_intent(&body)?;
     Ok((Some(body), Some(record.revision)))
 }
-
 fn save_publish_intent(
     store: &OpaqueCheckpointStore,
     expected_revision: Option<[u8; 32]>,
@@ -4244,7 +4039,6 @@ fn save_publish_intent(
         "publish intent",
     )
 }
-
 fn load_sealed_record(
     store: &OpaqueCheckpointStore,
     slot: GovernanceDagSealedStateSlot,
@@ -4269,7 +4063,6 @@ fn load_sealed_record(
     }
     Ok(Some(record))
 }
-
 fn load_producer_commit_guard(
     config: &RuntimeConfig,
     store: &OpaqueCheckpointStore,
@@ -4349,7 +4142,6 @@ fn load_producer_commit_guard(
     }
     Ok(ProducerCommitGuard { record, checkpoint })
 }
-
 fn validate_source_against_producer_guard(
     config: &RuntimeConfig,
     source: &SourceSnapshot,
@@ -4392,7 +4184,6 @@ fn validate_source_against_producer_guard(
     config.revalidate_source_root()?;
     Ok(())
 }
-
 fn load_committed_source_snapshot(
     config: &RuntimeConfig,
     store: &OpaqueCheckpointStore,
@@ -4432,7 +4223,6 @@ fn load_committed_source_snapshot(
     config.revalidate_source_root()?;
     Ok(source)
 }
-
 fn save_sealed_record(
     store: &OpaqueCheckpointStore,
     slot: GovernanceDagSealedStateSlot,
@@ -4472,7 +4262,6 @@ fn save_sealed_record(
     }
     Ok(revision)
 }
-
 fn delete_publish_intent(
     store: &OpaqueCheckpointStore,
     expected_revision: Option<[u8; 32]>,
@@ -4499,7 +4288,6 @@ fn delete_publish_intent(
     }
     Ok(())
 }
-
 fn validate_publish_intent(body: &PublishIntentBodyV1) -> Result<(), GovernanceDagServiceError> {
     if body.version != PUBLISH_INTENT_VERSION_V1
         || body.generation == 0
@@ -4559,7 +4347,6 @@ fn validate_publish_intent(body: &PublishIntentBodyV1) -> Result<(), GovernanceD
     }
     Ok(())
 }
-
 fn publish_intent_is_monotonic_refinement(
     previous: &PublishIntentBodyV1,
     next: &PublishIntentBodyV1,
@@ -4599,7 +4386,6 @@ fn publish_intent_is_monotonic_refinement(
                     .is_none_or(|cid| next.ipfs_cid.as_ref() == Some(cid))
         })
 }
-
 fn resolve_index_relative_path(raw: &str) -> Result<PathBuf, GovernanceDagServiceError> {
     if raw.is_empty() || raw.contains('\\') {
         return Err(GovernanceDagServiceError::Source(
@@ -4625,7 +4411,6 @@ fn resolve_index_relative_path(raw: &str) -> Result<PathBuf, GovernanceDagServic
     }
     Ok(path)
 }
-
 fn digest_sidecar_path(path: &Path) -> PathBuf {
     let extension = path
         .extension()
@@ -4634,7 +4419,6 @@ fn digest_sidecar_path(path: &Path) -> PathBuf {
         .map_or_else(|| "blake3".to_owned(), |value| format!("{value}.blake3"));
     path.with_extension(extension)
 }
-
 fn read_verified_sidecar_file(
     root_guard: &GovernanceFilesystemRootGuard,
     relative: &Path,
@@ -4657,7 +4441,6 @@ fn read_verified_sidecar_file(
     }
     Ok(file.into_bytes())
 }
-
 fn decode_canonical<T>(bytes: &[u8], label: &str) -> Result<T, GovernanceDagServiceError>
 where
     for<'de> T: norito::NoritoDeserialize<'de>,
@@ -4685,7 +4468,6 @@ where
     }
     Ok(value)
 }
-
 fn required_json_string(map: &JsonMap, field: &str) -> Result<String, GovernanceDagServiceError> {
     map.get(field)
         .and_then(JsonValue::as_str)
@@ -4694,13 +4476,11 @@ fn required_json_string(map: &JsonMap, field: &str) -> Result<String, Governance
             GovernanceDagServiceError::Source(format!("runtime index is missing `{field}`"))
         })
 }
-
 fn required_json_u64(map: &JsonMap, field: &str) -> Result<u64, GovernanceDagServiceError> {
     map.get(field).and_then(JsonValue::as_u64).ok_or_else(|| {
         GovernanceDagServiceError::Source(format!("runtime index is missing `{field}`"))
     })
 }
-
 fn require_exact_runtime_index_fields(
     map: &JsonMap,
     expected: &[&str],
@@ -4713,7 +4493,6 @@ fn require_exact_runtime_index_fields(
     }
     Ok(())
 }
-
 fn optional_json_string(
     map: &JsonMap,
     field: &str,
@@ -4730,7 +4509,6 @@ fn optional_json_string(
             }),
     }
 }
-
 fn required_optional_json_string(
     map: &JsonMap,
     field: &str,
@@ -4750,7 +4528,6 @@ fn required_optional_json_string(
         ))),
     }
 }
-
 fn canonical_hex_vec(
     value: &str,
     expected_bytes: usize,
@@ -4768,7 +4545,6 @@ fn canonical_hex_vec(
     hex::decode(value)
         .map_err(|_| GovernanceDagServiceError::Source(format!("{label} is invalid hex")))
 }
-
 fn canonical_source_payload_bytes(
     payload: &GovernanceLogPayloadV1,
 ) -> Result<Vec<u8>, GovernanceDagServiceError> {
@@ -4797,13 +4573,11 @@ fn canonical_source_payload_bytes(
         }
         Ok(bytes)
     }
-
     macro_rules! encode {
         ($value:expr) => {
             encode_bounded($value)
         };
     }
-
     match payload {
         GovernanceLogPayloadV1::ProviderAdvert(value) => encode!(value),
         GovernanceLogPayloadV1::ReplicationOrder(value) => encode!(value),
@@ -4832,7 +4606,6 @@ fn canonical_source_payload_bytes(
         GovernanceLogPayloadV1::PorWeeklyReport(value) => encode!(value),
     }
 }
-
 #[cfg(test)]
 fn validate_expected_signer(
     block: &GovernanceDagBlockV1,
@@ -4857,7 +4630,6 @@ fn validate_expected_signer(
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn load_source_snapshot(
     config: &RuntimeConfig,
@@ -4876,7 +4648,6 @@ fn load_source_snapshot(
         })?;
     load_source_snapshot_from_committed(config, committed)
 }
-
 fn load_source_snapshot_from_committed(
     config: &RuntimeConfig,
     committed: RuntimeDagCommittedSnapshotV1,
@@ -4989,7 +4760,6 @@ fn load_source_snapshot_from_committed(
             "runtime index block_count does not match its blocks array".to_owned(),
         ));
     }
-
     let now = current_unix_timestamp_seconds();
     let latest_allowed = now.saturating_add(config.max_future_skew_secs);
     let mut blocks = Vec::with_capacity(block_values.len());
@@ -5161,7 +4931,6 @@ fn load_source_snapshot_from_committed(
             .entry(hex::encode(digest))
             .or_default()
             .push(JsonValue::from(position_u64));
-
         let source_payload_path_string = required_json_string(entry, "encoded_path")?;
         let source_payload_path = resolve_index_relative_path(&source_payload_path_string)?;
         let source_payload_bytes = read_verified_sidecar_file(
@@ -5265,7 +5034,6 @@ fn load_source_snapshot_from_committed(
             payload_kind: kind,
         });
     }
-
     let runtime_root = config
         .source_root_guard
         .rooted_directory()
@@ -5312,7 +5080,6 @@ fn load_source_snapshot_from_committed(
             "runtime DAG block inventory contains an unindexed or missing artifact".to_owned(),
         ));
     }
-
     let expected_by_digest = expected_by_digest
         .into_iter()
         .map(|(digest, positions)| (digest, JsonValue::Array(positions)))
@@ -5334,7 +5101,6 @@ fn load_source_snapshot_from_committed(
             "runtime index lookup maps are non-canonical or inconsistent".to_owned(),
         ));
     }
-
     let head_bytes = committed.head_bytes().to_vec();
     let head: GovernanceDagHeadV1 = decode_canonical(&head_bytes, "governance DAG head")?;
     validate_source_head_chain(&head, &decoded_blocks)?;
@@ -5385,7 +5151,6 @@ fn load_source_snapshot_from_committed(
     config.revalidate_source_root()?;
     Ok(source)
 }
-
 fn validate_source_head_chain(
     head: &GovernanceDagHeadV1,
     blocks: &[GovernanceDagBlockV1],
@@ -5404,7 +5169,6 @@ fn validate_source_head_chain(
     }
     Ok(())
 }
-
 async fn build_pinned_endpoint(
     raw: &str,
     authenticator: OpaqueAuthenticator,
@@ -5486,7 +5250,6 @@ async fn build_pinned_endpoint(
         ));
     }
     authenticator.assert_identity()?;
-
     let allow_private_endpoint = if ipfs_base {
         config.allow_private_ipfs_endpoint
     } else {
@@ -5521,7 +5284,6 @@ async fn build_pinned_endpoint(
         authenticated_wire_body_max_bytes,
     })
 }
-
 async fn resolve_endpoint_addresses<F>(
     resolution: F,
     timeout: Duration,
@@ -5556,7 +5318,6 @@ where
     }
     Ok(addresses)
 }
-
 fn is_publicly_routable(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => is_public_ipv4(ip),
@@ -5568,7 +5329,6 @@ fn is_publicly_routable(ip: IpAddr) -> bool {
         }
     }
 }
-
 fn is_public_ipv4(ip: Ipv4Addr) -> bool {
     let octets = ip.octets();
     !(ip.is_unspecified()
@@ -5584,7 +5344,6 @@ fn is_public_ipv4(ip: Ipv4Addr) -> bool {
         || (octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
         || (octets[0] == 198 && matches!(octets[1], 18 | 19)))
 }
-
 fn is_public_ipv6(ip: Ipv6Addr) -> bool {
     let segments = ip.segments();
     !(ip.is_unspecified()
@@ -5595,7 +5354,6 @@ fn is_public_ipv6(ip: Ipv6Addr) -> bool {
         || (segments[0] == 0x2001 && segments[1] == 0x0db8)
         || (segments[0] == 0x2001 && segments[1] == 0x0010))
 }
-
 impl PinnedEndpoint {
     fn validate_qualified_request_url(&self, url: &Url) -> Result<(), GovernanceDagServiceError> {
         let same_origin = url.scheme() == self.url.scheme()
@@ -5624,7 +5382,6 @@ impl PinnedEndpoint {
         }
         Ok(())
     }
-
     fn request(
         &self,
         method: Method,
@@ -5636,7 +5393,6 @@ impl PinnedEndpoint {
             .request(method, url)
             .header(header::ACCEPT_ENCODING.as_str(), "identity"))
     }
-
     async fn execute(
         &self,
         request: RequestBuilder,
@@ -5671,7 +5427,6 @@ impl PinnedEndpoint {
             descriptor,
         })
     }
-
     fn ipfs_url(
         &self,
         operation: &str,
@@ -5724,7 +5479,6 @@ impl PinnedEndpoint {
         Ok(url)
     }
 }
-
 fn canonical_outbound_request_descriptor(
     request: &reqwest::Request,
     scope: GovernanceDagAuthenticationScope,
@@ -5755,7 +5509,6 @@ fn canonical_outbound_request_descriptor(
         ))
     })
 }
-
 fn attach_request_authentication_headers(
     request: &mut reqwest::Request,
     envelope: &GovernanceDagRequestAuthenticationEnvelopeV1,
@@ -5772,7 +5525,6 @@ fn attach_request_authentication_headers(
     }
     Ok(())
 }
-
 async fn read_bounded_response(
     response: AuthenticatedResponse,
     max_bytes: u64,
@@ -5841,7 +5593,6 @@ async fn read_bounded_response(
     authenticator.assert_identity()?;
     Ok(body)
 }
-
 fn validate_ipfs_cid(value: &str) -> Result<String, GovernanceDagServiceError> {
     if !is_canonical_cid_v1(value) {
         return Err(GovernanceDagServiceError::Network(
@@ -5850,7 +5601,6 @@ fn validate_ipfs_cid(value: &str) -> Result<String, GovernanceDagServiceError> {
     }
     Ok(value.to_owned())
 }
-
 fn validate_ipfs_cid_for_bytes(
     value: &str,
     bytes: &[u8],
@@ -5868,11 +5618,9 @@ fn validate_ipfs_cid_for_bytes(
     }
     Ok(cid)
 }
-
 fn canonical_raw_sha256_cid(bytes: &[u8]) -> String {
     encode_base32_lower_no_pad(&canonical_sha256_cid_bytes(IPFS_RAW_CODEC, bytes))
 }
-
 fn canonical_ipfs_file_cid(bytes: &[u8]) -> Option<String> {
     if bytes.is_empty() {
         return None;
@@ -5884,7 +5632,6 @@ fn canonical_ipfs_file_cid(bytes: &[u8]) -> Option<String> {
     if chunk_count > IPFS_UNIXFS_MAX_FILE_LINKS {
         return None;
     }
-
     // `unixfs-v1-2025` encodes a file larger than one fixed 1 MiB chunk as
     // raw CIDv1 leaves beneath one canonical DAG-PB UnixFS File node. Iroha's
     // canonical object ceiling is far below 1,024 chunks, so this profile has
@@ -5903,7 +5650,6 @@ fn canonical_ipfs_file_cid(bytes: &[u8]) -> Option<String> {
         append_protobuf_bytes(&mut root, 2, &link);
         block_sizes.push(chunk_len);
     }
-
     let file_size = u64::try_from(bytes.len()).ok()?;
     let mut unixfs = Vec::with_capacity(block_sizes.len().saturating_mul(5).saturating_add(16));
     append_protobuf_varint(&mut unixfs, 1, 2); // UnixFS DataType::File
@@ -5918,12 +5664,10 @@ fn canonical_ipfs_file_cid(bytes: &[u8]) -> Option<String> {
         &root,
     )))
 }
-
 fn canonical_sha256_cid_bytes(codec: u64, bytes: &[u8]) -> Vec<u8> {
     const CID_VERSION_V1: u64 = 1;
     const SHA2_256_MULTIHASH: u64 = 0x12;
     const SHA2_256_DIGEST_LENGTH: u64 = 32;
-
     let digest = iroha_crypto::sha256(bytes);
     let mut cid = Vec::with_capacity(4 + digest.len());
     append_uvarint(&mut cid, CID_VERSION_V1);
@@ -5933,18 +5677,15 @@ fn canonical_sha256_cid_bytes(codec: u64, bytes: &[u8]) -> Vec<u8> {
     cid.extend_from_slice(&digest);
     cid
 }
-
 fn append_protobuf_bytes(encoded: &mut Vec<u8>, field: u64, bytes: &[u8]) {
     append_uvarint(encoded, (field << 3) | 2);
     append_uvarint(encoded, bytes.len() as u64);
     encoded.extend_from_slice(bytes);
 }
-
 fn append_protobuf_varint(encoded: &mut Vec<u8>, field: u64, value: u64) {
     append_uvarint(encoded, field << 3);
     append_uvarint(encoded, value);
 }
-
 fn append_uvarint(encoded: &mut Vec<u8>, mut value: u64) {
     while value >= 0x80 {
         encoded.push((value as u8 & 0x7f) | 0x80);
@@ -5952,10 +5693,8 @@ fn append_uvarint(encoded: &mut Vec<u8>, mut value: u64) {
     }
     encoded.push(value as u8);
 }
-
 fn encode_base32_lower_no_pad(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
-
     let mut accumulator = 0_u32;
     let mut bits = 0_u32;
     let mut encoded = String::with_capacity(1 + (bytes.len() * 8).div_ceil(5));
@@ -5980,7 +5719,6 @@ fn encode_base32_lower_no_pad(bytes: &[u8]) -> String {
     }
     encoded
 }
-
 fn is_canonical_cid_v1(value: &str) -> bool {
     if value.len() < 2
         || value.len() > MAX_IPFS_CID_BYTES
@@ -6032,7 +5770,6 @@ fn is_canonical_cid_v1(value: &str) -> bool {
         .is_some_and(|end| end == bytes.len());
     structurally_complete && encode_base32_lower_no_pad(&bytes) == value
 }
-
 fn decode_base32_lower_no_pad(value: &str) -> Option<Vec<u8>> {
     let mut accumulator = 0_u32;
     let mut bits = 0_u32;
@@ -6063,7 +5800,6 @@ fn decode_base32_lower_no_pad(value: &str) -> Option<Vec<u8>> {
     }
     (!bytes.is_empty()).then_some(bytes)
 }
-
 fn decode_canonical_uvarint(bytes: &[u8]) -> Option<(u64, usize)> {
     let mut value = 0_u64;
     for (index, byte) in bytes.iter().copied().take(10).enumerate() {
@@ -6081,7 +5817,6 @@ fn decode_canonical_uvarint(bytes: &[u8]) -> Option<(u64, usize)> {
     }
     None
 }
-
 async fn ipfs_add_verified(
     endpoint: &PinnedEndpoint,
     name: &str,
@@ -6093,7 +5828,6 @@ async fn ipfs_add_verified(
         .await
         .map(|(cid, _publication)| cid)
 }
-
 async fn ipfs_add_verified_with_publication(
     endpoint: &PinnedEndpoint,
     name: &str,
@@ -6162,7 +5896,6 @@ async fn ipfs_add_verified_with_publication(
     }
     Ok((cid, publication))
 }
-
 fn canonical_ipfs_multipart_body(
     name: &str,
     bytes: &[u8],
@@ -6225,12 +5958,10 @@ fn canonical_ipfs_multipart_body(
     }
     Ok((boundary, body))
 }
-
 fn ipfs_multipart_wire_overhead(boundary_len: usize, name_len: usize) -> Option<usize> {
     const DISPOSITION_PREFIX: &[u8] = b"Content-Disposition: form-data; name=\"file\"; filename=\"";
     const DISPOSITION_SUFFIX: &[u8] = b"\"\r\n";
     const CONTENT_TYPE: &[u8] = b"Content-Type: application/vnd.ipld.raw\r\n\r\n";
-
     // Prelude: `--BOUNDARY\r\n`, disposition, and content type.
     // Epilogue: `\r\n--BOUNDARY--\r\n`.
     2_usize
@@ -6244,7 +5975,6 @@ fn ipfs_multipart_wire_overhead(boundary_len: usize, name_len: usize) -> Option<
         .checked_add(boundary_len)?
         .checked_add(4)
 }
-
 /// Return the exact authenticated IPFS request-body ceiling for an object bound.
 ///
 /// The ingress receiver authenticates the complete deterministic multipart
@@ -6279,7 +6009,6 @@ pub fn authenticated_ipfs_wire_body_max_bytes(
         )
     })
 }
-
 fn block_prefix_archive_lengths_fit(
     canonical_bytes: usize,
     multipart_bytes: usize,
@@ -6291,7 +6020,6 @@ fn block_prefix_archive_lengths_fit(
         && u64::try_from(multipart_bytes)
             .is_ok_and(|multipart| multipart <= configured_request_bytes)
 }
-
 fn block_prefix_archive_filename(
     archive: &SignedBlockPrefixArchiveV1,
 ) -> Result<String, GovernanceDagServiceError> {
@@ -6320,7 +6048,6 @@ fn block_prefix_archive_filename(
         archive.archive_generation
     ))
 }
-
 #[cfg(test)]
 fn block_prefix_archive_add_descriptor(
     endpoint: &PinnedEndpoint,
@@ -6335,7 +6062,6 @@ fn block_prefix_archive_add_descriptor(
         endpoint.authenticated_wire_body_max_bytes,
     )
 }
-
 fn block_prefix_archive_add_descriptor_for_url(
     canonical_url: &str,
     archive: &SignedBlockPrefixArchiveV1,
@@ -6367,7 +6093,6 @@ fn block_prefix_archive_add_descriptor_for_url(
         )
     })
 }
-
 fn verify_block_prefix_archive_publication(
     archive: &SignedBlockPrefixArchiveV1,
     archive_bytes: &[u8],
@@ -6445,7 +6170,6 @@ fn verify_block_prefix_archive_publication(
             )
         })
 }
-
 async fn ipfs_pin(
     endpoint: &PinnedEndpoint,
     cid: &str,
@@ -6464,7 +6188,6 @@ async fn ipfs_pin(
     let _ = read_bounded_response(response, max_response_bytes).await?;
     Ok(())
 }
-
 async fn ipfs_verify_pin(
     endpoint: &PinnedEndpoint,
     cid: &str,
@@ -6497,7 +6220,6 @@ async fn ipfs_verify_pin(
     }
     Ok(())
 }
-
 async fn ipfs_cat(
     endpoint: &PinnedEndpoint,
     cid: &str,
@@ -6521,7 +6243,6 @@ async fn ipfs_cat(
     }
     read_bounded_response(response, expected_bytes).await
 }
-
 fn validate_remote_head(
     bytes: &[u8],
     source: &SourceSnapshot,
@@ -6563,7 +6284,6 @@ fn validate_remote_head(
     }
     Ok(head)
 }
-
 async fn fetch_signed_http_head(
     endpoint: &PinnedEndpoint,
     max_response_bytes: u64,
@@ -6595,7 +6315,6 @@ async fn fetch_signed_http_head(
     let bytes = read_bounded_response(response, max_response_bytes).await?;
     Ok(PublicHead::Present { bytes, token: etag })
 }
-
 fn strong_http_entity_tag(value: &HeaderValue) -> Option<String> {
     let bytes = value.as_bytes();
     if bytes.len() < 2
@@ -6610,7 +6329,6 @@ fn strong_http_entity_tag(value: &HeaderValue) -> Option<String> {
     }
     std::str::from_utf8(bytes).ok().map(str::to_owned)
 }
-
 async fn put_signed_http_head(
     endpoint: &PinnedEndpoint,
     bytes: &[u8],
@@ -6661,7 +6379,6 @@ async fn put_signed_http_head(
     }
     Ok(readback)
 }
-
 async fn resolve_ipns_head(
     ipfs: &PinnedEndpoint,
     name: &str,
@@ -6698,7 +6415,6 @@ async fn resolve_ipns_head(
     let bytes = ipfs_cat(ipfs, &cid, max_response_bytes, max_response_bytes).await?;
     Ok(PublicHead::Present { bytes, token: cid })
 }
-
 fn is_authenticated_ipns_absence(status: StatusCode, body: &[u8]) -> bool {
     if status == StatusCode::NOT_FOUND {
         return true;
@@ -6723,7 +6439,6 @@ fn is_authenticated_ipns_absence(status: StatusCode, body: &[u8]) -> bool {
             .and_then(JsonValue::as_str)
             .is_some_and(|kind| kind == "error")
 }
-
 struct IpnsHeadPublishRequest<'a> {
     name: &'a str,
     key_name: &'a str,
@@ -6733,7 +6448,6 @@ struct IpnsHeadPublishRequest<'a> {
     allow_bootstrap: bool,
     max_response_bytes: u64,
 }
-
 async fn publish_ipns_head(
     ipfs: &PinnedEndpoint,
     request: IpnsHeadPublishRequest<'_>,
@@ -6787,21 +6501,18 @@ async fn publish_ipns_head(
     }
     Ok(after)
 }
-
 fn public_head_identity(head: &PublicHead) -> Option<([u8; 32], String)> {
     match head {
         PublicHead::Missing => None,
         PublicHead::Present { bytes, token } => Some((blake3_array(bytes), token.clone())),
     }
 }
-
 fn public_head_digest(head: &PublicHead) -> Option<[u8; 32]> {
     match head {
         PublicHead::Missing => None,
         PublicHead::Present { bytes, .. } => Some(blake3_array(bytes)),
     }
 }
-
 impl Service {
     fn refresh_durable_state(&mut self) -> Result<(), GovernanceDagServiceError> {
         let (checkpoint, checkpoint_revision) = load_checkpoint(&self.checkpoint_store)?;
@@ -6870,7 +6581,6 @@ impl Service {
         self.intent_revision = intent_revision;
         Ok(())
     }
-
     fn assert_durable_state_unchanged(&self) -> Result<(), GovernanceDagServiceError> {
         let (_, checkpoint_revision) = load_checkpoint(&self.checkpoint_store)?;
         let (_, intent_revision) = load_publish_intent(&self.checkpoint_store)?;
@@ -6883,7 +6593,6 @@ impl Service {
         }
         Ok(())
     }
-
     async fn validate_initial_state(&mut self) -> Result<(), GovernanceDagServiceError> {
         self.refresh_durable_state()?;
         let source = load_committed_source_snapshot(&self.config, &self.checkpoint_store)?;
@@ -6919,7 +6628,6 @@ impl Service {
                 .await?;
             }
         }
-
         // Initial reconciliation must not publish. It establishes that the
         // authenticated public head is one of the durable crash-recovery
         // states the first reconciliation is permitted to advance.
@@ -6932,7 +6640,6 @@ impl Service {
             ));
         }
         self.assert_durable_state_unchanged()?;
-
         let require_ready_mirror = match (&self.checkpoint, &self.intent) {
             (Some(checkpoint), Some(intent))
                 if checkpoint.generation == intent.generation
@@ -7001,7 +6708,6 @@ impl Service {
         }
         Ok(())
     }
-
     async fn fetch_public_head(&self) -> Result<PublicHead, GovernanceDagServiceError> {
         match &self.head_mode {
             HeadMode::SignedHttp(endpoint) => {
@@ -7012,7 +6718,6 @@ impl Service {
             }
         }
     }
-
     async fn install_public_head(
         &self,
         bytes: &[u8],
@@ -7047,7 +6752,6 @@ impl Service {
             }
         }
     }
-
     async fn verify_block_prefix_archive_head(
         &self,
         expected: &BlockPrefixArchiveHeadV1,
@@ -7063,7 +6767,6 @@ impl Service {
             u64::try_from(BLOCK_PREFIX_ARCHIVE_MAX_CANONICAL_BYTES_V1).unwrap_or(u64::MAX);
         self.checkpoint_store.assert_identity()?;
         self.ipfs.authenticator.assert_identity()?;
-
         // Fetch by the sealed content address before checking local pin state.
         // A newly promoted Kubo replica can therefore recover the authenticated
         // tail instead of failing solely because its local pinset is cold.
@@ -7092,7 +6795,6 @@ impl Service {
                 "block-prefix archive target generation is ahead of durable state".to_owned(),
             ));
         }
-
         ipfs_pin(
             &self.ipfs,
             &expected.ipfs_cid,
@@ -7121,7 +6823,6 @@ impl Service {
         self.checkpoint_store.assert_identity()?;
         Ok(())
     }
-
     async fn archive_would_be_pruned_prefix<S: SourceChainView + ?Sized>(
         &mut self,
         intent: &mut PublishIntentBodyV1,
@@ -7201,7 +6902,6 @@ impl Service {
                     )
                 })?;
             }
-
             let (archive, archive_bytes, filename) = loop {
                 let blocks = block_prefix_archive_entries(source, &by_sequence, start, end)?;
                 let archive = SignedBlockPrefixArchiveV1 {
@@ -7271,7 +6971,6 @@ impl Service {
                 }
                 end = end.saturating_sub(1);
             };
-
             self.checkpoint_store.assert_identity()?;
             self.ipfs.authenticator.assert_identity()?;
             let (ipfs_cid, publication) = ipfs_add_verified_with_publication(
@@ -7334,7 +7033,6 @@ impl Service {
         }
         Ok(predecessor)
     }
-
     async fn reconcile_once(&mut self) -> Result<(), GovernanceDagServiceError> {
         let result = self.reconcile_once_inner().await;
         if result.is_err() {
@@ -7342,7 +7040,6 @@ impl Service {
         }
         result
     }
-
     async fn withdraw_readiness_after_reconciliation_failure(&self) {
         let mut state = self.api.0.write().await;
         state.ready = false;
@@ -7352,13 +7049,11 @@ impl Service {
         state.metrics.mirror_drift = 1;
         self.mirror_reader.mark_unready();
     }
-
     async fn withdraw_readiness(&self) {
         let mut state = self.api.0.write().await;
         state.ready = false;
         self.mirror_reader.mark_unready();
     }
-
     async fn reconcile_once_inner(&mut self) -> Result<(), GovernanceDagServiceError> {
         self.state_lock.verify().map_err(|error| {
             GovernanceDagServiceError::Filesystem(format!(
@@ -7400,7 +7095,6 @@ impl Service {
                 .await?;
             }
         }
-
         if let Some(checkpoint) = self.checkpoint.clone()
             && checkpoint.head_block_cid == source.head.head_block_cid
             && self.intent.is_none()
@@ -7417,9 +7111,7 @@ impl Service {
                 .await?;
             return Ok(());
         }
-
         self.withdraw_readiness().await;
-
         if self.intent.is_none() {
             let current = self.fetch_public_head().await?;
             if let PublicHead::Present { bytes, .. } = &current {
@@ -7501,7 +7193,6 @@ impl Service {
             self.intent_generation_floor = intent.generation;
             self.intent = Some(intent);
         }
-
         let mut intent = self.intent.take().ok_or_else(|| {
             GovernanceDagServiceError::State(
                 "durable publish intent disappeared before execution".to_owned(),
@@ -7527,7 +7218,6 @@ impl Service {
                 .await?;
             return Ok(());
         }
-
         let mut published_bytes = 0_u64;
         let mut pin_lag = 0_u64;
         for position in 0..intent.blocks.len() {
@@ -7587,7 +7277,6 @@ impl Service {
                 "head IPFS CID is missing after verified publication".to_owned(),
             )
         })?;
-
         let known_sequences = self
             .checkpoint
             .iter()
@@ -7649,7 +7338,6 @@ impl Service {
             &intent,
             mirror_bytes,
         )?;
-
         // The public-head CAS is the externally visible commit point. Repair
         // and revalidate every object referenced by the final mirror before
         // crossing it, including inherited mappings and crash-resumed intent
@@ -7662,7 +7350,6 @@ impl Service {
         )
         .await?;
         self.assert_durable_state_unchanged()?;
-
         let current = self.fetch_public_head().await?;
         if let PublicHead::Present { bytes, .. } = &current {
             validate_remote_head(bytes, &source, &self.config)?;
@@ -7736,7 +7423,6 @@ impl Service {
         }
         self.publish_api_snapshot(&source, &checkpoint, true).await
     }
-
     async fn ensure_published_objects<S: SourceChainView + ?Sized>(
         &self,
         source: &S,
@@ -7775,7 +7461,6 @@ impl Service {
         }
         Ok(())
     }
-
     async fn ensure_published_object(
         &self,
         filename: &str,
@@ -7801,7 +7486,6 @@ impl Service {
         }
         Ok(())
     }
-
     async fn verify_ipfs_object(
         &self,
         cid: &str,
@@ -7827,7 +7511,6 @@ impl Service {
         }
         Ok(())
     }
-
     async fn verify_steady_state(
         &self,
         source: &SourceSnapshot,
@@ -7870,7 +7553,6 @@ impl Service {
         require_public_matches_checkpoint(&public_readback, checkpoint)?;
         Ok(())
     }
-
     async fn verify_rotating_steady_state(
         &mut self,
         source: &SourceSnapshot,
@@ -7898,7 +7580,6 @@ impl Service {
                 "public head disappeared while auditing the checkpoint".to_owned(),
             ));
         }
-
         let retained_len = checkpoint.mirror_blocks.len();
         let mut audited_entries = 0_usize;
         let mut audited_bytes = 0_u64;
@@ -7953,7 +7634,6 @@ impl Service {
         require_public_matches_checkpoint(&public_readback, checkpoint)?;
         Ok(())
     }
-
     async fn publish_api_snapshot(
         &self,
         source: &SourceSnapshot,
@@ -7982,7 +7662,6 @@ impl Service {
         Ok(())
     }
 }
-
 fn authenticated_source_prefix<'a>(
     source: &'a SourceSnapshot,
     head_bytes: &[u8],
@@ -8036,7 +7715,6 @@ fn authenticated_source_prefix<'a>(
         chain_blake3,
     })
 }
-
 fn validate_checkpoint_against_source<'a>(
     checkpoint: Option<&CheckpointBodyV1>,
     source: &'a SourceSnapshot,
@@ -8094,7 +7772,6 @@ fn validate_checkpoint_against_source<'a>(
     }
     Ok(Some(prefix))
 }
-
 fn validate_intent_against_source<'a>(
     intent: &PublishIntentBodyV1,
     checkpoint: Option<&CheckpointBodyV1>,
@@ -8272,7 +7949,6 @@ fn validate_intent_against_source<'a>(
     }
     Ok(prefix)
 }
-
 fn require_public_matches_checkpoint(
     public: &PublicHead,
     checkpoint: &CheckpointBodyV1,
@@ -8291,7 +7967,6 @@ fn require_public_matches_checkpoint(
         )),
     }
 }
-
 fn retained_source_suffix<'a, S: SourceChainView + ?Sized>(
     source: &'a S,
 ) -> Result<Vec<&'a SourceBlock>, GovernanceDagServiceError> {
@@ -8301,7 +7976,6 @@ fn retained_source_suffix<'a, S: SourceChainView + ?Sized>(
         GOVERNANCE_DAG_MIRROR_MAX_BYTES_V1,
     )
 }
-
 fn retained_source_suffix_with_limits<'a, S: SourceChainView + ?Sized>(
     source: &'a S,
     max_entries: usize,
@@ -8338,7 +8012,6 @@ fn retained_source_suffix_with_limits<'a, S: SourceChainView + ?Sized>(
     retained.reverse();
     Ok(retained)
 }
-
 fn published_block_from_source(
     source: &SourceBlock,
     ipfs_cid: String,
@@ -8356,7 +8029,6 @@ fn published_block_from_source(
         ipfs_cid,
     })
 }
-
 fn insert_published_block(
     by_sequence: &mut BTreeMap<u64, PublishedBlockV1>,
     block: PublishedBlockV1,
@@ -8372,7 +8044,6 @@ fn insert_published_block(
     by_sequence.insert(block.sequence, block);
     Ok(())
 }
-
 fn merge_published_blocks<S: SourceChainView + ?Sized>(
     checkpoint: Option<&CheckpointBodyV1>,
     intent: &PublishIntentBodyV1,
@@ -8390,7 +8061,6 @@ fn merge_published_blocks<S: SourceChainView + ?Sized>(
         GOVERNANCE_DAG_MIRROR_MAX_BYTES_V1,
     )
 }
-
 fn published_blocks_by_sequence(
     checkpoint: Option<&CheckpointBodyV1>,
     intent: &PublishIntentBodyV1,
@@ -8423,7 +8093,6 @@ fn published_blocks_by_sequence(
     }
     Ok(by_sequence)
 }
-
 fn select_mirror_suffix<S: SourceChainView + ?Sized>(
     by_sequence: &BTreeMap<u64, PublishedBlockV1>,
     source: &S,
@@ -8470,7 +8139,6 @@ fn select_mirror_suffix<S: SourceChainView + ?Sized>(
         })
         .collect()
 }
-
 fn validate_block_prefix_archive_against_source<S: SourceChainView + ?Sized>(
     archive: &SignedBlockPrefixArchiveV1,
     source: &S,
@@ -8535,7 +8203,6 @@ fn validate_block_prefix_archive_against_source<S: SourceChainView + ?Sized>(
     }
     Ok(())
 }
-
 fn block_prefix_archive_entries<S: SourceChainView + ?Sized>(
     source: &S,
     by_sequence: &BTreeMap<u64, PublishedBlockV1>,
@@ -8575,7 +8242,6 @@ fn block_prefix_archive_entries<S: SourceChainView + ?Sized>(
         })
         .collect()
 }
-
 fn estimated_block_prefix_archive_entry_bytes(
     source_block: &SourceBlock,
     published: &PublishedBlockV1,
@@ -8592,7 +8258,6 @@ fn estimated_block_prefix_archive_entry_bytes(
             )
         })
 }
-
 fn mirror_index_value<S: SourceChainView + ?Sized>(
     source: &S,
     blocks: &[PublishedBlockV1],
@@ -8745,7 +8410,6 @@ fn mirror_index_value<S: SourceChainView + ?Sized>(
     root.insert("by_payload_kind".into(), JsonValue::Object(by_kind));
     Ok(JsonValue::Object(root))
 }
-
 fn verify_mirror_index_store(
     config: &RuntimeConfig,
     store: &TwoSlotStoreV1,
@@ -8754,7 +8418,6 @@ fn verify_mirror_index_store(
     let (_, payload) = load_mirror_index_store(config, store)?;
     verify_mirror_payload_against_checkpoint(&payload, checkpoint)
 }
-
 fn compare_and_swap_mirror_index_store(
     config: &RuntimeConfig,
     store: &TwoSlotStoreV1,
@@ -8779,7 +8442,6 @@ fn compare_and_swap_mirror_index_store(
     }
     Ok(readback)
 }
-
 fn commit_mirror_index_store(
     config: &RuntimeConfig,
     store: &TwoSlotStoreV1,
@@ -8813,7 +8475,6 @@ fn commit_mirror_index_store(
     if current == desired {
         return Ok(());
     }
-
     if current.is_empty() {
         // A hard-cut deployment deliberately starts empty even when its sealed
         // checkpoint predates this local representation. The checkpoint and
@@ -8837,11 +8498,9 @@ fn commit_mirror_index_store(
                 .to_owned(),
         ));
     }
-
     let committed = compare_and_swap_mirror_index_store(config, store, &snapshot, &desired)?;
     verify_mirror_payload_against_intent(&committed, intent)
 }
-
 fn verify_or_recover_mirror_index_store<S: SourceChainView + ?Sized>(
     config: &RuntimeConfig,
     store: &TwoSlotStoreV1,
@@ -8887,7 +8546,6 @@ fn verify_or_recover_mirror_index_store<S: SourceChainView + ?Sized>(
     let committed = compare_and_swap_mirror_index_store(config, store, &snapshot, &desired)?;
     verify_mirror_payload_against_checkpoint(&committed, checkpoint)
 }
-
 fn service_router(state: ServiceApiState) -> Router {
     Router::new()
         .route("/healthz", get(health_handler))
@@ -8916,7 +8574,6 @@ fn service_router(state: ServiceApiState) -> Router {
         )
         .with_state(state)
 }
-
 async fn health_handler(State(state): State<ServiceApiState>) -> Response {
     let snapshot = state.telemetry.0.read().await;
     let mut value = JsonMap::new();
@@ -8935,7 +8592,6 @@ async fn health_handler(State(state): State<ServiceApiState>) -> Response {
         &HeaderMap::new(),
     )
 }
-
 async fn readiness_handler(State(state): State<ServiceApiState>) -> Response {
     let ready = authenticated_mirror_snapshot(&state).await.is_ok();
     let snapshot = state.telemetry.0.read().await;
@@ -8962,11 +8618,9 @@ async fn readiness_handler(State(state): State<ServiceApiState>) -> Response {
         &HeaderMap::new(),
     )
 }
-
 async fn metrics_handler(State(state): State<ServiceApiState>) -> Response {
     metrics_response(&state.telemetry).await
 }
-
 async fn metrics_response(state: &ApiState) -> Response {
     let snapshot = state.0.read().await;
     let metrics = snapshot.metrics.clone();
@@ -9035,7 +8689,6 @@ sorafs_governance_dag_mirror_drift {}\n",
     );
     response
 }
-
 async fn authenticated_mirror_snapshot(
     state: &ServiceApiState,
 ) -> Result<GovernanceDagMirrorSnapshotV1, Response> {
@@ -9052,7 +8705,6 @@ async fn authenticated_mirror_snapshot(
         )),
     }
 }
-
 async fn dashboard_handler(State(state): State<ServiceApiState>, headers: HeaderMap) -> Response {
     let snapshot = match authenticated_mirror_snapshot(&state).await {
         Ok(snapshot) => snapshot,
@@ -9098,7 +8750,6 @@ async fn dashboard_handler(State(state): State<ServiceApiState>, headers: Header
     value.insert("payload_kind_counts".into(), JsonValue::Object(counts));
     json_response(StatusCode::OK, JsonValue::Object(value), &headers)
 }
-
 async fn head_handler(State(state): State<ServiceApiState>, headers: HeaderMap) -> Response {
     let snapshot = match authenticated_mirror_snapshot(&state).await {
         Ok(snapshot) => snapshot,
@@ -9115,7 +8766,6 @@ async fn head_handler(State(state): State<ServiceApiState>, headers: HeaderMap) 
     value.insert("head".into(), head);
     json_response(StatusCode::OK, JsonValue::Object(value), &headers)
 }
-
 async fn block_handler(
     State(state): State<ServiceApiState>,
     headers: HeaderMap,
@@ -9123,7 +8773,6 @@ async fn block_handler(
 ) -> Response {
     lookup_handler(state, headers, cid, "block_cid_hex", "block").await
 }
-
 async fn node_handler(
     State(state): State<ServiceApiState>,
     headers: HeaderMap,
@@ -9131,7 +8780,6 @@ async fn node_handler(
 ) -> Response {
     lookup_handler(state, headers, cid, "node_cid_hex", "node").await
 }
-
 async fn lookup_handler(
     state: ServiceApiState,
     headers: HeaderMap,
@@ -9173,7 +8821,6 @@ async fn lookup_handler(
     value.insert("block".into(), block);
     json_response(StatusCode::OK, JsonValue::Object(value), &headers)
 }
-
 async fn digest_handler(
     State(state): State<ServiceApiState>,
     headers: HeaderMap,
@@ -9216,7 +8863,6 @@ async fn digest_handler(
     value.insert("blocks".into(), JsonValue::Array(blocks));
     json_response(StatusCode::OK, JsonValue::Object(value), &headers)
 }
-
 async fn checkpoint_handler(State(state): State<ServiceApiState>, headers: HeaderMap) -> Response {
     let snapshot = match authenticated_mirror_snapshot(&state).await {
         Ok(snapshot) => snapshot,
@@ -9279,20 +8925,17 @@ async fn checkpoint_handler(State(state): State<ServiceApiState>, headers: Heade
     );
     json_response(StatusCode::OK, JsonValue::Object(value), &headers)
 }
-
 fn is_canonical_digest_hex(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
 }
-
 fn json_error(status: StatusCode, message: &str) -> Response {
     let mut value = JsonMap::new();
     value.insert("error".into(), JsonValue::from(message));
     json_response(status, JsonValue::Object(value), &HeaderMap::new())
 }
-
 fn json_response(status: StatusCode, value: JsonValue, request_headers: &HeaderMap) -> Response {
     let body = match json::to_json(&value) {
         Ok(body) => body,
@@ -9323,7 +8966,6 @@ fn json_response(status: StatusCode, value: JsonValue, request_headers: &HeaderM
     response.headers_mut().insert(header::ETAG, etag_header);
     response
 }
-
 fn empty_response(status: StatusCode) -> Response {
     let mut response = Response::new(Body::empty());
     *response.status_mut() = status;

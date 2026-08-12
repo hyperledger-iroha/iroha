@@ -1,0 +1,24 @@
+
+            fn boundaries(
+                bytes payload,
+                int scheme,
+                int tag_length,
+                int enabled,
+            ) {
+                let _verified = crypto::verify_signature(
+                    message: payload,
+                    signature: payload,
+                    public_key: payload,
+                    scheme: scheme,
+                );
+                let _sealed = crypto::sm4_ccm::seal(
+                    key: payload,
+                    nonce: payload,
+                    aad: payload,
+                    payload: payload,
+                    tag_length: tag_length,
+                );
+                ledger::trigger::set_enabled(Name::parse("scheduled"), enabled);
+                let _vrf = crypto::vrf::verify(request: payload);
+            }
+        

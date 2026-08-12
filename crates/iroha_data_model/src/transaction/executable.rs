@@ -30,8 +30,7 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub enum Executable {
         /// Ordered set of instructions.
-        #[cfg_attr(not(feature = "fast_dsl"), debug("{_0:?}"))]
-        #[cfg_attr(feature = "fast_dsl", debug("Instructions(..)"))]
+        #[debug("Instructions(..)")]
         Instructions(ConstVec<InstructionBox>),
         /// Invoke a deployed contract instance by reference.
         ContractCall(ContractInvocation),

@@ -1,0 +1,4 @@
+
+fn rhs() -> bool { return true; }
+fn both(bool value) -> bool { return value && rhs(); }
+fn either(bool value) -> bool { return value || rhs(); }

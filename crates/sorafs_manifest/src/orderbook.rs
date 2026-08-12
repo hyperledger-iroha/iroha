@@ -1,5 +1,4 @@
 #![allow(unexpected_cfgs)]
-
 //! Orderbook and streaming-settlement payload schemas for SoraFS (SFM-2).
 //!
 //! These Norito payloads provide the deterministic data-model foundation for
@@ -19,7 +18,6 @@ use crate::{
     deal::{BASIS_POINTS_PER_UNIT, DealAmountError, XorQuantity},
     provider_advert::SignatureAlgorithm,
 };
-
 /// Schema version for [`OrderRequestV1`].
 pub const ORDERBOOK_ORDER_VERSION_V1: u8 = 1;
 /// Schema version for [`OrderCancelV1`].
@@ -66,7 +64,6 @@ const ORDERBOOK_ORDER_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.orderbook.order-sign
 const ORDERBOOK_CANCEL_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.orderbook.cancel-signature.v1";
 const SETTLEMENT_RECEIPT_SIGNATURE_DOMAIN_V1: &[u8] =
     b"sorafs.orderbook.settlement-receipt-signature.v1";
-
 /// Order side in the XOR orderbook.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
@@ -76,7 +73,6 @@ pub enum OrderSideV1 {
     /// Provider asks to sell capacity/egress.
     Ask = 2,
 }
-
 /// SoraFS storage tier used by orderbook pricing.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
@@ -88,7 +84,6 @@ pub enum OrderTierV1 {
     /// Archive storage tier.
     Archive = 3,
 }
-
 /// Reason attached to an order-cancel request.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
@@ -102,7 +97,6 @@ pub enum OrderCancelReasonV1 {
     /// Order was replaced by a newer nonce/order.
     Replaced = 4,
 }
-
 /// Settlement channel lifecycle status.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
@@ -118,7 +112,6 @@ pub enum SettlementChannelStatusV1 {
     /// Channel was refunded.
     Refunded = 5,
 }
-
 /// Signature material attached to orderbook payloads.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct OrderbookSignatureV1 {
@@ -129,7 +122,6 @@ pub struct OrderbookSignatureV1 {
     /// Raw signature bytes.
     pub signature: Vec<u8>,
 }
-
 impl OrderbookSignatureV1 {
     fn validate(&self) -> Result<(), OrderbookValidationError> {
         if self.algorithm != SignatureAlgorithm::Ed25519 {
@@ -157,7 +149,6 @@ impl OrderbookSignatureV1 {
         Ok(())
     }
 }
-
 /// Canonical order-submission payload.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct OrderRequestV1 {
@@ -190,7 +181,6 @@ pub struct OrderRequestV1 {
     /// Signature over the canonical order submission bytes.
     pub signature: OrderbookSignatureV1,
 }
-
 impl OrderRequestV1 {
     /// Validate structural and policy constraints.
     pub fn validate(&self) -> Result<(), OrderbookValidationError> {
@@ -243,7 +233,6 @@ impl OrderRequestV1 {
         self.signature.validate()
     }
 }
-
 /// Derive the canonical identifier for an orderbook order.
 ///
 /// V1 hashes the SoraFS order-id domain separator, the nonce in little-endian
@@ -260,7 +249,6 @@ pub fn derive_orderbook_order_id_v1(owner_account: &[u8], nonce: u64) -> [u8; 32
     hasher.update(owner_account);
     *hasher.finalize().as_bytes()
 }
-
 /// Canonical order-cancel payload.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct OrderCancelV1 {
@@ -277,7 +265,6 @@ pub struct OrderCancelV1 {
     /// Signature over the canonical cancellation bytes.
     pub signature: OrderbookSignatureV1,
 }
-
 impl OrderCancelV1 {
     /// Validate structural and policy constraints.
     pub fn validate(&self) -> Result<(), OrderbookValidationError> {
@@ -294,7 +281,6 @@ impl OrderCancelV1 {
         self.signature.validate()
     }
 }
-
 /// Derive the canonical Ed25519 message digest for an order submission.
 ///
 /// The digest is BLAKE3 over a domain separator plus the canonical Norito order
@@ -309,7 +295,6 @@ pub fn order_request_signature_digest_v1(
     preflight_orderbook_payload_len(&signable, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1)?;
     orderbook_signature_digest(ORDERBOOK_ORDER_SIGNATURE_DOMAIN_V1, &signable)
 }
-
 /// Verify the signature attached to an order submission.
 pub fn verify_order_request_signature_v1(
     order: &OrderRequestV1,
@@ -318,7 +303,6 @@ pub fn verify_order_request_signature_v1(
     let digest = order_request_signature_digest_v1(order)?;
     verify_orderbook_signature_v1(&order.signature, &digest)
 }
-
 /// Sign an order submission with the canonical SFM-2 Ed25519 digest.
 ///
 /// The helper replaces the payload's signature material with the signing key's
@@ -334,7 +318,6 @@ pub fn sign_order_request_ed25519_v1(
     verify_order_request_signature_v1(&order)?;
     Ok(order)
 }
-
 /// Derive the canonical Ed25519 message digest for an order cancellation.
 ///
 /// The digest is BLAKE3 over a domain separator plus the canonical Norito cancel
@@ -347,7 +330,6 @@ pub fn order_cancel_signature_digest_v1(
     preflight_orderbook_payload_len(&signable, ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1)?;
     orderbook_signature_digest(ORDERBOOK_CANCEL_SIGNATURE_DOMAIN_V1, &signable)
 }
-
 /// Verify the signature attached to an order cancellation.
 pub fn verify_order_cancel_signature_v1(
     cancel: &OrderCancelV1,
@@ -356,7 +338,6 @@ pub fn verify_order_cancel_signature_v1(
     let digest = order_cancel_signature_digest_v1(cancel)?;
     verify_orderbook_signature_v1(&cancel.signature, &digest)
 }
-
 /// Sign an order cancellation with the canonical SFM-2 Ed25519 digest.
 ///
 /// The helper replaces the payload's signature material with the signing key's
@@ -372,7 +353,6 @@ pub fn sign_order_cancel_ed25519_v1(
     verify_order_cancel_signature_v1(&cancel)?;
     Ok(cancel)
 }
-
 /// Trade fill event emitted by a deterministic matcher/contract.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct TradeEventV1 {
@@ -397,7 +377,6 @@ pub struct TradeEventV1 {
     /// Unix timestamp (seconds) when the fill was recorded.
     pub timestamp_unix: u64,
 }
-
 impl TradeEventV1 {
     /// Validate structural and accounting constraints.
     pub fn validate(&self) -> Result<(), OrderbookValidationError> {
@@ -430,7 +409,6 @@ impl TradeEventV1 {
         Ok(())
     }
 }
-
 /// Deterministic result of matching one maker order with one taker order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderFillOutcomeV1 {
@@ -443,7 +421,6 @@ pub struct OrderFillOutcomeV1 {
     /// Gross fill value before maker/taker fees.
     pub gross_value: XorQuantity,
 }
-
 /// Order plus canonical admission sequence used for price-time priority.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct OrderBookEntryV1 {
@@ -452,7 +429,6 @@ pub struct OrderBookEntryV1 {
     /// Monotonic admission sequence assigned by the caller/runtime.
     pub sequence: u64,
 }
-
 /// Deterministic result of matching a full order-book snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrderBookMatchOutcomeV1 {
@@ -463,14 +439,12 @@ pub struct OrderBookMatchOutcomeV1 {
     /// Expired order identifiers skipped before matching.
     pub expired_order_ids: Vec<[u8; 32]>,
 }
-
 /// Decode an exact canonical V1 order request under production resource limits.
 pub fn decode_order_request_v1(
     bytes: &[u8],
 ) -> Result<OrderRequestV1, OrderbookPayloadDecodeError> {
     decode_order_request_v1_with_limits(bytes, ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1)
 }
-
 /// Decode an exact canonical V1 order request under caller-composed limits.
 pub fn decode_order_request_v1_with_limits(
     bytes: &[u8],
@@ -478,12 +452,10 @@ pub fn decode_order_request_v1_with_limits(
 ) -> Result<OrderRequestV1, OrderbookPayloadDecodeError> {
     decode_orderbook_payload_v1(bytes, limits)
 }
-
 /// Decode an exact canonical V1 order cancellation under production resource limits.
 pub fn decode_order_cancel_v1(bytes: &[u8]) -> Result<OrderCancelV1, OrderbookPayloadDecodeError> {
     decode_order_cancel_v1_with_limits(bytes, ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1)
 }
-
 /// Decode an exact canonical V1 order cancellation under caller-composed limits.
 pub fn decode_order_cancel_v1_with_limits(
     bytes: &[u8],
@@ -491,12 +463,10 @@ pub fn decode_order_cancel_v1_with_limits(
 ) -> Result<OrderCancelV1, OrderbookPayloadDecodeError> {
     decode_orderbook_payload_v1(bytes, limits)
 }
-
 /// Decode an exact canonical V1 trade event under production resource limits.
 pub fn decode_trade_event_v1(bytes: &[u8]) -> Result<TradeEventV1, OrderbookPayloadDecodeError> {
     decode_trade_event_v1_with_limits(bytes, ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1)
 }
-
 /// Decode an exact canonical V1 trade event under caller-composed limits.
 pub fn decode_trade_event_v1_with_limits(
     bytes: &[u8],
@@ -504,14 +474,12 @@ pub fn decode_trade_event_v1_with_limits(
 ) -> Result<TradeEventV1, OrderbookPayloadDecodeError> {
     decode_orderbook_payload_v1(bytes, limits)
 }
-
 /// Decode an exact canonical V1 settlement channel under production resource limits.
 pub fn decode_settlement_channel_v1(
     bytes: &[u8],
 ) -> Result<SettlementChannelV1, OrderbookPayloadDecodeError> {
     decode_settlement_channel_v1_with_limits(bytes, ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1)
 }
-
 /// Decode an exact canonical V1 settlement channel under caller-composed limits.
 pub fn decode_settlement_channel_v1_with_limits(
     bytes: &[u8],
@@ -519,14 +487,12 @@ pub fn decode_settlement_channel_v1_with_limits(
 ) -> Result<SettlementChannelV1, OrderbookPayloadDecodeError> {
     decode_orderbook_payload_v1(bytes, limits)
 }
-
 /// Decode an exact canonical V1 settlement receipt under production resource limits.
 pub fn decode_settlement_receipt_v1(
     bytes: &[u8],
 ) -> Result<SettlementReceiptV1, OrderbookPayloadDecodeError> {
     decode_settlement_receipt_v1_with_limits(bytes, ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1)
 }
-
 /// Decode an exact canonical V1 settlement receipt under caller-composed limits.
 pub fn decode_settlement_receipt_v1_with_limits(
     bytes: &[u8],
@@ -534,7 +500,6 @@ pub fn decode_settlement_receipt_v1_with_limits(
 ) -> Result<SettlementReceiptV1, OrderbookPayloadDecodeError> {
     decode_orderbook_payload_v1(bytes, limits)
 }
-
 fn decode_orderbook_payload_v1<T>(
     bytes: &[u8],
     limits: norito::DecodeLimits,
@@ -561,7 +526,6 @@ where
         }
     })
 }
-
 fn intersect_orderbook_decode_limits(limits: norito::DecodeLimits) -> norito::DecodeLimits {
     norito::DecodeLimits::new(
         limits
@@ -581,13 +545,11 @@ fn intersect_orderbook_decode_limits(limits: norito::DecodeLimits) -> norito::De
             .min(ORDERBOOK_PAYLOAD_DECODE_LIMITS_V1.max_nesting_depth()),
     )
 }
-
 #[derive(Debug, Clone)]
 struct WorkingOrderV1 {
     order: OrderRequestV1,
     sequence: u64,
 }
-
 /// Match one maker order with one taker order and return the deterministic fill.
 ///
 /// The fill uses the maker price, the minimum remaining quantity, and the maker
@@ -631,7 +593,6 @@ pub fn match_orders_v1(
             taker_tier: taker.tier,
         });
     }
-
     let (bid, ask) = if maker.side == OrderSideV1::Bid {
         (maker, taker)
     } else {
@@ -643,7 +604,6 @@ pub fn match_orders_v1(
             ask_price: ask.price_per_gib.clone(),
         });
     }
-
     let filled_gib = maker.remaining_gib.min(taker.remaining_gib);
     let gross_value = maker
         .price_per_gib
@@ -668,7 +628,6 @@ pub fn match_orders_v1(
         timestamp_unix,
     };
     trade.validate()?;
-
     Ok(OrderFillOutcomeV1 {
         trade,
         maker_remaining_gib: maker.remaining_gib - filled_gib,
@@ -676,7 +635,6 @@ pub fn match_orders_v1(
         gross_value,
     })
 }
-
 /// Match an order-book snapshot using deterministic price-time priority.
 ///
 /// Callers must supply entries in any order together with unique monotonic
@@ -691,13 +649,11 @@ pub fn match_order_book_v1(
     if timestamp_unix == 0 {
         return Err(OrderbookValidationError::InvalidTimestamp);
     }
-
     let mut seen_order_ids = BTreeSet::new();
     let mut seen_sequences = BTreeSet::new();
     let mut expired_order_ids = Vec::new();
     let mut bids = Vec::new();
     let mut asks = Vec::new();
-
     for entry in entries {
         entry.order.validate()?;
         if !seen_order_ids.insert(entry.order.order_id) {
@@ -714,7 +670,6 @@ pub fn match_order_book_v1(
             expired_order_ids.push((entry.sequence, entry.order.order_id));
             continue;
         }
-
         let working = WorkingOrderV1 {
             order: entry.order.clone(),
             sequence: entry.sequence,
@@ -724,7 +679,6 @@ pub fn match_order_book_v1(
             OrderSideV1::Ask => asks.push(working),
         }
     }
-
     let mut fills = Vec::new();
     let mut remaining = Vec::new();
     for tier in [OrderTierV1::Hot, OrderTierV1::Warm, OrderTierV1::Archive] {
@@ -740,12 +694,10 @@ pub fn match_order_book_v1(
             .collect::<Vec<_>>();
         sort_bids_by_price_time(&mut tier_bids);
         sort_asks_by_price_time(&mut tier_asks);
-
         while !tier_bids.is_empty() && !tier_asks.is_empty() {
             if tier_bids[0].order.price_per_gib < tier_asks[0].order.price_per_gib {
                 break;
             }
-
             let maker_is_bid = tier_bids[0].sequence < tier_asks[0].sequence;
             let (maker, taker) = if maker_is_bid {
                 (&tier_bids[0].order, &tier_asks[0].order)
@@ -755,7 +707,6 @@ pub fn match_order_book_v1(
             let trade_id =
                 derive_orderbook_trade_id_v1(fills.len() as u64, maker, taker, timestamp_unix);
             let fill = match_orders_v1(maker, taker, trade_id, timestamp_unix)?;
-
             if maker_is_bid {
                 tier_bids[0].order.remaining_gib = fill.maker_remaining_gib;
                 tier_asks[0].order.remaining_gib = fill.taker_remaining_gib;
@@ -764,7 +715,6 @@ pub fn match_order_book_v1(
                 tier_bids[0].order.remaining_gib = fill.taker_remaining_gib;
             }
             fills.push(fill);
-
             if tier_bids[0].order.remaining_gib == 0 {
                 tier_bids.remove(0);
             }
@@ -772,7 +722,6 @@ pub fn match_order_book_v1(
                 tier_asks.remove(0);
             }
         }
-
         remaining.extend(
             tier_bids
                 .into_iter()
@@ -790,7 +739,6 @@ pub fn match_order_book_v1(
             .cmp(rhs_sequence)
             .then_with(|| lhs_id.cmp(rhs_id))
     });
-
     Ok(OrderBookMatchOutcomeV1 {
         fills,
         remaining_orders: remaining.into_iter().map(|entry| entry.order).collect(),
@@ -800,7 +748,6 @@ pub fn match_order_book_v1(
             .collect(),
     })
 }
-
 /// Derive a deterministic trade id for full-book matching.
 #[must_use]
 pub fn derive_orderbook_trade_id_v1(
@@ -823,7 +770,6 @@ pub fn derive_orderbook_trade_id_v1(
     }
     trade_id
 }
-
 /// Derive the canonical settlement-channel identifier for a trade.
 ///
 /// A valid trade has exactly one first-release channel. Keeping this derivation
@@ -843,7 +789,6 @@ pub fn derive_orderbook_settlement_channel_id_v1(
     }
     Ok(channel_id)
 }
-
 fn sort_bids_by_price_time(entries: &mut [WorkingOrderV1]) {
     entries.sort_by(|lhs, rhs| {
         rhs.order
@@ -853,7 +798,6 @@ fn sort_bids_by_price_time(entries: &mut [WorkingOrderV1]) {
             .then_with(|| lhs.order.order_id.cmp(&rhs.order.order_id))
     });
 }
-
 fn sort_asks_by_price_time(entries: &mut [WorkingOrderV1]) {
     entries.sort_by(|lhs, rhs| {
         lhs.order
@@ -863,7 +807,6 @@ fn sort_asks_by_price_time(entries: &mut [WorkingOrderV1]) {
             .then_with(|| lhs.order.order_id.cmp(&rhs.order.order_id))
     });
 }
-
 /// Return the gross value represented by a trade event.
 pub fn trade_gross_value_v1(trade: &TradeEventV1) -> Result<XorQuantity, OrderbookValidationError> {
     trade.validate()?;
@@ -872,7 +815,6 @@ pub fn trade_gross_value_v1(trade: &TradeEventV1) -> Result<XorQuantity, Orderbo
         .checked_mul_u64(trade.filled_gib)
         .map_err(OrderbookValidationError::Amount)
 }
-
 /// Return the escrow amount needed to cover a trade value and both fee fields.
 pub fn trade_escrow_requirement_v1(
     trade: &TradeEventV1,
@@ -882,7 +824,6 @@ pub fn trade_escrow_requirement_v1(
         .and_then(|amount| amount.checked_add(&trade.taker_fee))
         .map_err(OrderbookValidationError::Amount)
 }
-
 /// Return the immutable maker-plus-taker fee custody for a trade.
 pub fn trade_fee_requirement_v1(
     trade: &TradeEventV1,
@@ -893,7 +834,6 @@ pub fn trade_fee_requirement_v1(
         .checked_add(&trade.taker_fee)
         .map_err(OrderbookValidationError::Amount)
 }
-
 /// Return the conservative native custody required to admit one full bid.
 ///
 /// The buyer can become either maker or taker. The counterparty's applicable
@@ -913,7 +853,6 @@ pub fn bid_order_escrow_requirement_v1(
     }
     validate_fee_bps(governed_max_maker_fee_bps)?;
     validate_fee_bps(governed_max_taker_fee_bps)?;
-
     let gross = bid
         .price_per_gib
         .checked_mul_u64(bid.quantity_gib)
@@ -927,7 +866,6 @@ pub fn bid_order_escrow_requirement_v1(
         .checked_add(&maximum_fee)
         .map_err(OrderbookValidationError::Amount)
 }
-
 /// Half-open byte range `[start, end)` covered by a settlement receipt.
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ByteRangeV1 {
@@ -936,7 +874,6 @@ pub struct ByteRangeV1 {
     /// End offset, exclusive.
     pub end: u64,
 }
-
 impl ByteRangeV1 {
     /// Return the byte length represented by the range.
     pub fn len(self) -> Result<u64, OrderbookValidationError> {
@@ -948,14 +885,12 @@ impl ByteRangeV1 {
                 end: self.end,
             })
     }
-
     /// Return true when the range covers no bytes.
     #[must_use]
     pub const fn is_empty(self) -> bool {
         self.end <= self.start
     }
 }
-
 /// Streaming settlement channel state.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct SettlementChannelV1 {
@@ -988,7 +923,6 @@ pub struct SettlementChannelV1 {
     /// Unix timestamp (seconds) when the channel last changed.
     pub updated_at_unix: u64,
 }
-
 impl SettlementChannelV1 {
     /// Validate structural and accounting constraints.
     pub fn validate(&self) -> Result<(), OrderbookValidationError> {
@@ -1046,7 +980,6 @@ impl SettlementChannelV1 {
         Ok(())
     }
 }
-
 /// Open a settlement channel for a trade using the canonical GiB-to-byte mapping.
 ///
 /// The channel locks the gross trade value plus both fee fields, providing a
@@ -1084,7 +1017,6 @@ pub fn open_settlement_channel_for_trade_v1(
     channel.validate()?;
     Ok(channel)
 }
-
 /// Ledger-derived economic split for one streaming receipt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettlementSplitV1 {
@@ -1095,7 +1027,6 @@ pub struct SettlementSplitV1 {
     /// Immutable trade-fee portion credited to treasury.
     pub fee_amount: XorQuantity,
 }
-
 /// Prorate remaining total and fee custody toward zero for delivered bytes.
 ///
 /// Both ratios use the same remaining-byte denominator. A final receipt
@@ -1133,7 +1064,6 @@ pub fn deterministic_settlement_split_v1(
         fee_amount,
     })
 }
-
 /// Signed streaming-settlement receipt for delivered bytes.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct SettlementReceiptV1 {
@@ -1168,48 +1098,39 @@ mod borrowed_norito {
 
     /// Borrowed value that delegates canonical Norito serialization.
     pub(super) struct Value<'a, T>(pub(super) &'a T);
-
     impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
         fn schema_hash() -> [u8; 16] {
             T::schema_hash()
         }
-
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
         ) -> Result<(), norito::core::Error> {
             self.0.serialize(writer)
         }
-
         fn encoded_len_hint(&self) -> Option<usize> {
             self.0.encoded_len_hint()
         }
-
         fn encoded_len_exact(&self) -> Option<usize> {
             self.0.encoded_len_exact()
         }
     }
-
     /// Borrowed vector that preserves the owned `Vec<T>` wire representation.
     pub(super) struct Vec<'a, T>(std::option::Option<&'a std::vec::Vec<T>>);
-
     impl<'a, T> Vec<'a, T> {
         /// Wrap an existing owned vector without cloning it.
         pub(super) fn borrowed(value: &'a std::vec::Vec<T>) -> Self {
             Self(Some(value))
         }
-
         /// Represent the canonical empty owned vector without allocating it.
         pub(super) fn empty() -> Self {
             Self(None)
         }
     }
-
     impl<T: NoritoSerialize> NoritoSerialize for Vec<'_, T> {
         fn schema_hash() -> [u8; 16] {
             <std::vec::Vec<T>>::schema_hash()
         }
-
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -1219,14 +1140,12 @@ mod borrowed_norito {
                 None => std::vec::Vec::<T>::new().serialize(writer),
             }
         }
-
         fn encoded_len_hint(&self) -> Option<usize> {
             match self.0 {
                 Some(value) => value.encoded_len_hint(),
                 None => std::vec::Vec::<T>::new().encoded_len_hint(),
             }
         }
-
         fn encoded_len_exact(&self) -> Option<usize> {
             match self.0 {
                 Some(value) => value.encoded_len_exact(),
@@ -1235,16 +1154,13 @@ mod borrowed_norito {
         }
     }
 }
-
 #[derive(NoritoSerialize)]
 struct OrderbookSignatureSigningViewWireV1<'a> {
     algorithm: SignatureAlgorithm,
     public_key: borrowed_norito::Vec<'a, u8>,
     signature: borrowed_norito::Vec<'a, u8>,
 }
-
 struct OrderbookSignatureSigningViewV1<'a>(OrderbookSignatureSigningViewWireV1<'a>);
-
 impl<'a> OrderbookSignatureSigningViewV1<'a> {
     fn from_signature(signature: &'a OrderbookSignatureV1) -> Self {
         Self(OrderbookSignatureSigningViewWireV1 {
@@ -1254,25 +1170,20 @@ impl<'a> OrderbookSignatureSigningViewV1<'a> {
         })
     }
 }
-
 impl norito::core::NoritoSerialize for OrderbookSignatureSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         OrderbookSignatureV1::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 #[derive(NoritoSerialize)]
 struct OrderRequestSigningViewWireV1<'a> {
     version: u8,
@@ -1290,9 +1201,7 @@ struct OrderRequestSigningViewWireV1<'a> {
     taker_fee_bps: u16,
     signature: OrderbookSignatureSigningViewV1<'a>,
 }
-
 struct OrderRequestSigningViewV1<'a>(OrderRequestSigningViewWireV1<'a>);
-
 impl<'a> OrderRequestSigningViewV1<'a> {
     fn from_order(order: &'a OrderRequestV1) -> Self {
         Self(OrderRequestSigningViewWireV1 {
@@ -1313,25 +1222,20 @@ impl<'a> OrderRequestSigningViewV1<'a> {
         })
     }
 }
-
 impl norito::core::NoritoSerialize for OrderRequestSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         OrderRequestV1::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 #[derive(NoritoSerialize)]
 struct OrderCancelSigningViewWireV1<'a> {
     version: u8,
@@ -1341,9 +1245,7 @@ struct OrderCancelSigningViewWireV1<'a> {
     nonce: u64,
     signature: OrderbookSignatureSigningViewV1<'a>,
 }
-
 struct OrderCancelSigningViewV1<'a>(OrderCancelSigningViewWireV1<'a>);
-
 impl<'a> OrderCancelSigningViewV1<'a> {
     fn from_cancel(cancel: &'a OrderCancelV1) -> Self {
         Self(OrderCancelSigningViewWireV1 {
@@ -1356,25 +1258,20 @@ impl<'a> OrderCancelSigningViewV1<'a> {
         })
     }
 }
-
 impl norito::core::NoritoSerialize for OrderCancelSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         OrderCancelV1::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 #[derive(NoritoSerialize)]
 struct SettlementReceiptSigningViewWireV1<'a> {
     version: u8,
@@ -1390,9 +1287,7 @@ struct SettlementReceiptSigningViewWireV1<'a> {
     issued_at_unix: u64,
     settlement_signature: OrderbookSignatureSigningViewV1<'a>,
 }
-
 struct SettlementReceiptSigningViewV1<'a>(SettlementReceiptSigningViewWireV1<'a>);
-
 impl<'a> SettlementReceiptSigningViewV1<'a> {
     fn from_receipt(receipt: &'a SettlementReceiptV1) -> Self {
         Self(SettlementReceiptSigningViewWireV1 {
@@ -1413,25 +1308,20 @@ impl<'a> SettlementReceiptSigningViewV1<'a> {
         })
     }
 }
-
 impl norito::core::NoritoSerialize for SettlementReceiptSigningViewV1<'_> {
     fn schema_hash() -> [u8; 16] {
         SettlementReceiptV1::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.0.encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
     }
 }
-
 impl SettlementReceiptV1 {
     /// Validate structural and accounting constraints.
     pub fn validate(&self) -> Result<(), OrderbookValidationError> {
@@ -1471,7 +1361,6 @@ impl SettlementReceiptV1 {
         self.settlement_signature.validate()
     }
 }
-
 /// Derive the canonical Ed25519 message digest for a settlement receipt.
 ///
 /// The digest is BLAKE3 over a domain separator plus the canonical Norito
@@ -1483,7 +1372,6 @@ pub fn settlement_receipt_signature_digest_v1(
     let signable = SettlementReceiptSigningViewV1::from_receipt(receipt);
     orderbook_signature_digest(SETTLEMENT_RECEIPT_SIGNATURE_DOMAIN_V1, &signable)
 }
-
 /// Verify the signature attached to a settlement receipt.
 pub fn verify_settlement_receipt_signature_v1(
     receipt: &SettlementReceiptV1,
@@ -1492,7 +1380,6 @@ pub fn verify_settlement_receipt_signature_v1(
     let digest = settlement_receipt_signature_digest_v1(receipt)?;
     verify_orderbook_signature_v1(&receipt.settlement_signature, &digest)
 }
-
 /// Sign a settlement receipt with the canonical SFM-2 Ed25519 digest.
 ///
 /// The helper replaces the receipt's settlement signature material with the
@@ -1509,7 +1396,6 @@ pub fn sign_settlement_receipt_ed25519_v1(
     verify_settlement_receipt_signature_v1(&receipt)?;
     Ok(receipt)
 }
-
 /// Apply a validated settlement receipt to a settlement channel.
 ///
 /// This helper enforces channel/trade binding, monotonic receipt time, remaining
@@ -1570,7 +1456,6 @@ pub fn apply_settlement_receipt_v1(
             expected_fee: expected_split.fee_amount,
         });
     }
-
     let remaining_bytes = channel.remaining_bytes - delivered;
     let status = if remaining_bytes == 0 {
         SettlementChannelStatusV1::Closed
@@ -1594,24 +1479,20 @@ pub fn apply_settlement_receipt_v1(
     next.validate()?;
     Ok(next)
 }
-
 fn orderbook_signature_digest<T: norito::core::NoritoSerialize>(
     domain: &[u8],
     payload: &T,
 ) -> Result<[u8; 32], OrderbookValidationError> {
     struct Blake3Writer<'a>(&'a mut Hasher);
-
     impl std::io::Write for Blake3Writer<'_> {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             self.0.update(bytes);
             Ok(bytes.len())
         }
-
         fn flush(&mut self) -> std::io::Result<()> {
             Ok(())
         }
     }
-
     let mut hasher = Hasher::new();
     hasher.update(domain);
     norito::core::write_frame_to_writer(payload, &mut Blake3Writer(&mut hasher)).map_err(
@@ -1621,7 +1502,6 @@ fn orderbook_signature_digest<T: norito::core::NoritoSerialize>(
     )?;
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn preflight_orderbook_payload_len<T: norito::core::NoritoSerialize>(
     payload: &T,
     maximum: usize,
@@ -1638,7 +1518,6 @@ fn preflight_orderbook_payload_len<T: norito::core::NoritoSerialize>(
     }
     Ok(length)
 }
-
 fn empty_ed25519_orderbook_signature(signing_key: &SigningKey) -> OrderbookSignatureV1 {
     OrderbookSignatureV1 {
         algorithm: SignatureAlgorithm::Ed25519,
@@ -1646,7 +1525,6 @@ fn empty_ed25519_orderbook_signature(signing_key: &SigningKey) -> OrderbookSigna
         signature: Vec::new(),
     }
 }
-
 fn verify_orderbook_signature_v1(
     signature: &OrderbookSignatureV1,
     digest: &[u8; 32],
@@ -1661,7 +1539,6 @@ fn verify_orderbook_signature_v1(
         }
     }
 }
-
 fn verify_ed25519_orderbook_signature(
     signature: &OrderbookSignatureV1,
     digest: &[u8; 32],
@@ -1670,19 +1547,16 @@ fn verify_ed25519_orderbook_signature(
     public_key.copy_from_slice(&signature.public_key);
     let verifying_key = crate::checked_ed25519_verifying_key_from_bytes(&public_key)
         .map_err(|err| OrderbookValidationError::InvalidPublicKey { reason: err })?;
-
     let mut signature_bytes = [0u8; SIGNATURE_LENGTH];
     signature_bytes.copy_from_slice(&signature.signature);
     let signature = crate::checked_ed25519_signature_from_bytes(&signature_bytes)
         .map_err(|reason| OrderbookValidationError::SignatureVerification { reason })?;
-
     verifying_key
         .verify_strict(digest, &signature)
         .map_err(|err| OrderbookValidationError::SignatureVerification {
             reason: err.to_string(),
         })
 }
-
 fn validate_digest(
     digest: [u8; 32],
     error: OrderbookValidationError,
@@ -1692,7 +1566,6 @@ fn validate_digest(
     }
     Ok(())
 }
-
 pub(crate) fn validate_owner_account_v1(
     owner_account: &[u8],
 ) -> Result<(), OrderbookValidationError> {
@@ -1710,14 +1583,12 @@ pub(crate) fn validate_owner_account_v1(
     }
     Ok(())
 }
-
 fn validate_fee_bps(fee_bps: u16) -> Result<(), OrderbookValidationError> {
     if fee_bps > BASIS_POINTS_PER_UNIT {
         return Err(OrderbookValidationError::InvalidFeeBps { fee_bps });
     }
     Ok(())
 }
-
 /// Failure to decode an attacker-controlled orderbook archive canonically.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum OrderbookPayloadDecodeError {
@@ -1748,7 +1619,6 @@ pub enum OrderbookPayloadDecodeError {
     #[error("orderbook payload is not the exact canonical Norito encoding")]
     NonCanonicalEncoding,
 }
-
 impl OrderbookPayloadDecodeError {
     /// Return whether decoding stopped at a caller-provided resource boundary.
     #[must_use]
@@ -1756,7 +1626,6 @@ impl OrderbookPayloadDecodeError {
         matches!(self, Self::DecodeResourceLimit)
     }
 }
-
 /// Validation errors for SoraFS orderbook payloads.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum OrderbookValidationError {
@@ -2063,7 +1932,6 @@ pub enum OrderbookValidationError {
     #[error(transparent)]
     Amount(DealAmountError),
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -2081,15 +1949,12 @@ mod tests {
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn id(seed: u8) -> [u8; 32] {
         [seed; 32]
     }
-
     fn account(seed: u8) -> Vec<u8> {
         vec![seed; 33]
     }
-
     fn signature() -> OrderbookSignatureV1 {
         OrderbookSignatureV1 {
             algorithm: SignatureAlgorithm::Ed25519,
@@ -2097,23 +1962,19 @@ mod tests {
             signature: vec![9; SIGNATURE_LENGTH],
         }
     }
-
     fn signing_key(seed: u8) -> SigningKey {
         SigningKey::from_bytes(&[seed; 32])
     }
-
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
         let mut bytes = Vec::new();
         norito::core::serialize_to_buffer(value, &mut bytes).expect("serialize explicit layout");
         bytes
     }
-
     fn encode_frame_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
         norito::to_bytes(value).expect("serialize explicit canonical frame")
     }
-
     fn supported_layouts() -> [u8; 8] {
         use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
 
@@ -2128,7 +1989,6 @@ mod tests {
             PACKED_SEQ | PACKED_STRUCT | COMPACT_LEN | FIELD_BITSET,
         ]
     }
-
     fn historical_signature_digest<T: norito::core::NoritoSerialize>(
         domain: &[u8],
         value: &T,
@@ -2139,12 +1999,10 @@ mod tests {
         hasher.update(&bytes);
         *hasher.finalize().as_bytes()
     }
-
     fn sign_order(order: OrderRequestV1, seed: u8) -> OrderRequestV1 {
         let key = signing_key(seed);
         sign_order_request_ed25519_v1(order, &key).expect("signed order")
     }
-
     fn cancel() -> OrderCancelV1 {
         OrderCancelV1 {
             version: ORDERBOOK_CANCEL_VERSION_V1,
@@ -2155,12 +2013,10 @@ mod tests {
             signature: signature(),
         }
     }
-
     fn sign_cancel(cancel: OrderCancelV1, seed: u8) -> OrderCancelV1 {
         let key = signing_key(seed);
         sign_order_cancel_ed25519_v1(cancel, &key).expect("signed cancel")
     }
-
     fn receipt() -> SettlementReceiptV1 {
         SettlementReceiptV1 {
             version: SETTLEMENT_RECEIPT_VERSION_V1,
@@ -2180,12 +2036,10 @@ mod tests {
             settlement_signature: signature(),
         }
     }
-
     fn sign_receipt(receipt: SettlementReceiptV1, seed: u8) -> SettlementReceiptV1 {
         let key = signing_key(seed);
         sign_settlement_receipt_ed25519_v1(receipt, &key).expect("signed receipt")
     }
-
     fn order() -> OrderRequestV1 {
         let owner_account = account(3);
         let nonce = 1;
@@ -2207,7 +2061,6 @@ mod tests {
             signature: signature(),
         }
     }
-
     fn book_order(
         seed: u8,
         side: OrderSideV1,
@@ -2226,15 +2079,12 @@ mod tests {
         refresh_order_id(&mut order);
         order
     }
-
     fn refresh_order_id(order: &mut OrderRequestV1) {
         order.order_id = derive_orderbook_order_id_v1(&order.owner_account, order.nonce);
     }
-
     fn book_entry(order: OrderRequestV1, sequence: u64) -> OrderBookEntryV1 {
         OrderBookEntryV1 { order, sequence }
     }
-
     fn snapshot_trade() -> TradeEventV1 {
         TradeEventV1 {
             version: ORDERBOOK_TRADE_EVENT_VERSION_V1,
@@ -2252,22 +2102,18 @@ mod tests {
             timestamp_unix: 1_800_000_100,
         }
     }
-
     fn snapshot_channel(trade: &TradeEventV1) -> SettlementChannelV1 {
         open_settlement_channel_for_trade_v1(trade, id(5), account(9), id(6), 1_800_000_100)
             .expect("snapshot channel should open")
     }
-
     #[derive(Debug)]
     struct DeterministicRng {
         state: u64,
     }
-
     impl DeterministicRng {
         fn new(seed: u64) -> Self {
             Self { state: seed }
         }
-
         fn next_u64(&mut self) -> u64 {
             let mut value = self.state;
             value ^= value << 13;
@@ -2276,12 +2122,10 @@ mod tests {
             self.state = value;
             value
         }
-
         fn range(&mut self, upper_exclusive: u64) -> u64 {
             self.next_u64() % upper_exclusive
         }
     }
-
     fn generated_account(scenario: u8, index: u8) -> Vec<u8> {
         let mut account = vec![0u8; 33];
         account[0] = 0xA0;
@@ -2289,7 +2133,6 @@ mod tests {
         account[2] = index;
         account
     }
-
     fn generated_tier(value: u64) -> OrderTierV1 {
         match value % 3 {
             0 => OrderTierV1::Hot,
@@ -2297,7 +2140,6 @@ mod tests {
             _ => OrderTierV1::Archive,
         }
     }
-
     fn generated_side(value: u64) -> OrderSideV1 {
         if value.is_multiple_of(2) {
             OrderSideV1::Bid
@@ -2305,7 +2147,6 @@ mod tests {
             OrderSideV1::Ask
         }
     }
-
     fn tier_index(tier: OrderTierV1) -> usize {
         match tier {
             OrderTierV1::Hot => 0,
@@ -2313,19 +2154,16 @@ mod tests {
             OrderTierV1::Archive => 2,
         }
     }
-
     fn side_index(side: OrderSideV1) -> usize {
         match side {
             OrderSideV1::Bid => 0,
             OrderSideV1::Ask => 1,
         }
     }
-
     fn add_quantity(totals: &mut [[u64; 2]; 3], tier: OrderTierV1, side: OrderSideV1, value: u64) {
         totals[tier_index(tier)][side_index(side)] =
             totals[tier_index(tier)][side_index(side)].saturating_add(value);
     }
-
     fn assert_match_invariants(
         entries: &[OrderBookEntryV1],
         outcome: &OrderBookMatchOutcomeV1,
@@ -2357,7 +2195,6 @@ mod tests {
             .copied()
             .collect::<BTreeSet<_>>();
         assert_eq!(actual_expired, expected_expired);
-
         let mut remaining_totals = [[0u64; 2]; 3];
         let mut remaining_ids = BTreeSet::new();
         let mut max_remaining_bid: [Option<u128>; 3] = [None, None, None];
@@ -2394,7 +2231,6 @@ mod tests {
                 }
             }
         }
-
         let mut filled_totals = [[0u64; 2]; 3];
         let mut trade_ids = BTreeSet::new();
         for fill in &outcome.fills {
@@ -2457,7 +2293,6 @@ mod tests {
                     .expect("taker fee should fit fixture limits")
             );
         }
-
         for tier in 0..3 {
             for side in 0..2 {
                 assert_eq!(
@@ -2474,19 +2309,16 @@ mod tests {
             }
         }
     }
-
     fn shuffle_entries(entries: &mut [OrderBookEntryV1], rng: &mut DeterministicRng) {
         for index in (1..entries.len()).rev() {
             let swap_with = rng.range((index + 1) as u64) as usize;
             entries.swap(index, swap_with);
         }
     }
-
     #[test]
     fn order_accepts_valid_payload() {
         assert_eq!(order().validate(), Ok(()));
     }
-
     #[test]
     fn order_requires_exact_provider_binding_only_for_asks() {
         let mut bid_with_provider = order();
@@ -2495,35 +2327,29 @@ mod tests {
             bid_with_provider.validate(),
             Err(OrderbookValidationError::BidProviderBindingForbidden),
         );
-
         let mut ask_without_provider = order();
         ask_without_provider.side = OrderSideV1::Ask;
         assert_eq!(
             ask_without_provider.validate(),
             Err(OrderbookValidationError::AskProviderBindingRequired),
         );
-
         ask_without_provider.provider_id = Some([0; 32]);
         assert_eq!(
             ask_without_provider.validate(),
             Err(OrderbookValidationError::InvalidProviderId),
         );
-
         ask_without_provider.provider_id = Some(id(9));
         assert_eq!(ask_without_provider.validate(), Ok(()));
     }
-
     #[test]
     fn order_accepts_owner_account_at_v1_byte_ceiling() {
         let mut bounded = order();
         bounded.owner_account = vec![0x42; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1];
         refresh_order_id(&mut bounded);
-
         assert_eq!(bounded.validate(), Ok(()));
         let signed = sign_order(bounded, 0x41);
         assert_eq!(verify_order_request_signature_v1(&signed), Ok(()));
     }
-
     #[test]
     fn order_rejects_owner_account_above_v1_byte_ceiling_before_id_or_signature_use() {
         let mut oversized = order();
@@ -2534,21 +2360,17 @@ mod tests {
             length: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1,
             max: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
         };
-
         assert_eq!(oversized.validate(), Err(expected.clone()));
         assert_eq!(order_request_signature_digest_v1(&oversized), Err(expected));
     }
-
     #[test]
     fn cancel_accepts_owner_account_at_v1_byte_ceiling() {
         let mut bounded = cancel();
         bounded.owner_account = vec![0x43; ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1];
-
         assert_eq!(bounded.validate(), Ok(()));
         let signed = sign_cancel(bounded, 0x42);
         assert_eq!(verify_order_cancel_signature_v1(&signed), Ok(()));
     }
-
     #[test]
     fn cancel_rejects_owner_account_above_v1_byte_ceiling_before_signature_use() {
         let mut oversized = cancel();
@@ -2558,11 +2380,9 @@ mod tests {
             length: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 + 1,
             max: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
         };
-
         assert_eq!(oversized.validate(), Err(expected.clone()));
         assert_eq!(order_cancel_signature_digest_v1(&oversized), Err(expected));
     }
-
     #[test]
     fn order_and_cancel_reject_inert_owner_accounts() {
         let mut invalid_order = order();
@@ -2572,7 +2392,6 @@ mod tests {
             invalid_order.validate(),
             Err(OrderbookValidationError::NonCanonicalOwnerAccount)
         );
-
         let mut invalid_cancel = cancel();
         invalid_cancel.owner_account = vec![0; 33];
         assert_eq!(
@@ -2580,7 +2399,6 @@ mod tests {
             Err(OrderbookValidationError::NonCanonicalOwnerAccount)
         );
     }
-
     #[test]
     fn order_id_derivation_binds_owner_and_nonce() {
         let owner = account(3);
@@ -2590,7 +2408,6 @@ mod tests {
         assert_ne!(order_id, derive_orderbook_order_id_v1(&owner, 2));
         assert_ne!(order_id, derive_orderbook_order_id_v1(&account(4), 1));
     }
-
     #[test]
     fn order_id_derivation_matches_cross_sdk_golden_vector() {
         assert_eq!(
@@ -2598,14 +2415,12 @@ mod tests {
             "9d91ad7700ca0c4762e031f9231aa38dd4502c6048c6ffa31d365e3c4e080b69"
         );
     }
-
     #[test]
     fn order_rejects_same_owner_retired_id_reuse_at_higher_nonce() {
         let original = order();
         let mut reused = original.clone();
         reused.nonce = original.nonce + 1;
         let expected_order_id = derive_orderbook_order_id_v1(&reused.owner_account, reused.nonce);
-
         assert_eq!(
             reused.validate(),
             Err(OrderbookValidationError::OrderIdDerivationMismatch {
@@ -2614,14 +2429,12 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn order_rejects_cross_owner_retired_id_reuse() {
         let original = order();
         let mut reused = original.clone();
         reused.owner_account = account(4);
         let expected_order_id = derive_orderbook_order_id_v1(&reused.owner_account, reused.nonce);
-
         assert_eq!(
             reused.validate(),
             Err(OrderbookValidationError::OrderIdDerivationMismatch {
@@ -2630,7 +2443,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn order_rejects_invalid_remaining_quantity() {
         let mut order = order();
@@ -2643,7 +2455,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn order_and_cancel_reject_zero_nonce() {
         let mut invalid_order = order();
@@ -2652,7 +2463,6 @@ mod tests {
             invalid_order.validate(),
             Err(OrderbookValidationError::ZeroNonce)
         );
-
         let mut invalid_cancel = cancel();
         invalid_cancel.nonce = 0;
         assert_eq!(
@@ -2660,7 +2470,6 @@ mod tests {
             Err(OrderbookValidationError::ZeroNonce)
         );
     }
-
     #[test]
     fn order_rejects_bad_ed25519_signature_lengths() {
         let mut order = order();
@@ -2672,7 +2481,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn orderbook_signatures_reject_reserved_multisig_material() {
         let mut receipt = receipt();
@@ -2684,7 +2492,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn settlement_receipt_size_preflight_accepts_boundary_and_rejects_one_over() {
         let receipt = receipt();
@@ -2698,7 +2505,6 @@ mod tests {
                 maximum: exact.saturating_sub(1),
             })
         );
-
         let mut oversized = receipt;
         oversized.settlement_signature.signature =
             vec![9; ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1];
@@ -2717,19 +2523,16 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn borrowed_order_and_cancel_signing_views_preserve_historical_frames_and_digests() {
         let order = sign_order(order(), 0x11);
         let mut owned_order = order.clone();
         owned_order.signature.signature.clear();
         let borrowed_order = OrderRequestSigningViewV1::from_order(&order);
-
         let cancel = sign_cancel(cancel(), 0x12);
         let mut owned_cancel = cancel.clone();
         owned_cancel.signature.signature.clear();
         let borrowed_cancel = OrderCancelSigningViewV1::from_cancel(&cancel);
-
         for flags in supported_layouts() {
             assert_eq!(
                 encode_frame_with_flags(&borrowed_order, flags),
@@ -2741,7 +2544,6 @@ mod tests {
                 encode_frame_with_flags(&owned_cancel, flags),
                 "borrowed cancellation signing frame changed for flags 0x{flags:02x}"
             );
-
             let _guard = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
             assert_eq!(
                 order_request_signature_digest_v1(&order).expect("stream order digest"),
@@ -2755,14 +2557,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn borrowed_settlement_receipt_signing_view_is_byte_exact_for_every_layout() {
         let receipt = sign_receipt(receipt(), 0x14);
         let mut owned = receipt.clone();
         owned.settlement_signature.signature.clear();
         let borrowed = SettlementReceiptSigningViewV1::from_receipt(&receipt);
-
         assert_eq!(
             <SettlementReceiptSigningViewV1<'_> as norito::core::NoritoSerialize>::schema_hash(),
             SettlementReceiptV1::schema_hash()
@@ -2771,7 +2571,6 @@ mod tests {
             norito::to_bytes(&borrowed).expect("encode borrowed signing view"),
             norito::to_bytes(&owned).expect("encode historical owned signing payload")
         );
-
         for flags in supported_layouts() {
             let owned_bytes = encode_bare_with_flags(&owned, flags);
             let borrowed_bytes = encode_bare_with_flags(&borrowed, flags);
@@ -2803,12 +2602,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn cancel_accepts_valid_payload() {
         assert_eq!(cancel().validate(), Ok(()));
     }
-
     #[test]
     fn signature_digests_ignore_signature_bytes_but_bind_public_key() {
         let signed = sign_order(order(), 0x11);
@@ -2818,36 +2615,29 @@ mod tests {
             order_request_signature_digest_v1(&signed),
             order_request_signature_digest_v1(&replaced_signature)
         );
-
         let mut replaced_key = signed.clone();
         replaced_key.signature.public_key = signing_key(0x12).verifying_key().to_bytes().to_vec();
         assert_ne!(
             order_request_signature_digest_v1(&signed),
             order_request_signature_digest_v1(&replaced_key)
         );
-
         let cancel = sign_cancel(cancel(), 0x13);
         assert!(order_cancel_signature_digest_v1(&cancel).is_ok());
-
         let receipt = sign_receipt(receipt(), 0x14);
         assert!(settlement_receipt_signature_digest_v1(&receipt).is_ok());
     }
-
     #[test]
     fn ed25519_signing_helpers_attach_public_key_and_verify_payloads() {
         let key = signing_key(0x41);
         let public_key = key.verifying_key().to_bytes().to_vec();
-
         let signed_order = sign_order_request_ed25519_v1(order(), &key).expect("signed order");
         assert_eq!(signed_order.signature.public_key, public_key);
         assert_eq!(signed_order.signature.signature.len(), SIGNATURE_LENGTH);
         assert_eq!(verify_order_request_signature_v1(&signed_order), Ok(()));
-
         let signed_cancel = sign_order_cancel_ed25519_v1(cancel(), &key).expect("signed cancel");
         assert_eq!(signed_cancel.signature.public_key, public_key);
         assert_eq!(signed_cancel.signature.signature.len(), SIGNATURE_LENGTH);
         assert_eq!(verify_order_cancel_signature_v1(&signed_cancel), Ok(()));
-
         let signed_receipt =
             sign_settlement_receipt_ed25519_v1(receipt(), &key).expect("signed receipt");
         assert_eq!(signed_receipt.settlement_signature.public_key, public_key);
@@ -2860,12 +2650,10 @@ mod tests {
             Ok(())
         );
     }
-
     #[test]
     fn verify_order_signature_accepts_valid_payload_and_rejects_tamper() {
         let signed = sign_order(order(), 0x15);
         assert_eq!(verify_order_request_signature_v1(&signed), Ok(()));
-
         let mut tampered = signed;
         tampered.price_per_gib = XorQuantity::try_from_micro(9_999_999)
             .expect("legacy micro-XOR value is representable");
@@ -2873,7 +2661,6 @@ mod tests {
             verify_order_request_signature_v1(&tampered),
             Err(OrderbookValidationError::SignatureVerification { .. })
         ));
-
         let mut nonce_tampered = sign_order(order(), 0x15);
         nonce_tampered.nonce += 1;
         nonce_tampered.order_id =
@@ -2883,27 +2670,22 @@ mod tests {
             Err(OrderbookValidationError::SignatureVerification { .. })
         ));
     }
-
     #[test]
     fn verify_order_signature_rejects_all_zero_signature_material() {
         let mut signed = sign_order(order(), 0x18);
         signed.signature.signature.fill(0);
-
         let err = verify_order_request_signature_v1(&signed)
             .expect_err("all-zero order signature must be rejected");
         assert!(matches!(err, OrderbookValidationError::InvalidSignature));
     }
-
     #[test]
     fn verify_order_signature_rejects_all_zero_public_key_material() {
         let mut signed = sign_order(order(), 0x19);
         signed.signature.public_key = vec![0; PUBLIC_KEY_LENGTH];
-
         let err = verify_order_request_signature_v1(&signed)
             .expect_err("all-zero order public key must be rejected");
         assert!(matches!(err, OrderbookValidationError::InvalidSignature));
     }
-
     #[test]
     fn verify_order_signature_rejects_malformed_ed25519_signature_r() {
         for (label, replacement_r, expected_reason) in [
@@ -2912,7 +2694,6 @@ mod tests {
         ] {
             let mut signed = sign_order(order(), 0x1A);
             signed.signature.signature[..PUBLIC_KEY_LENGTH].copy_from_slice(&replacement_r);
-
             let err = verify_order_request_signature_v1(&signed)
                 .expect_err("malformed order signature R must be rejected");
             assert!(
@@ -2925,19 +2706,16 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn verify_cancel_signature_accepts_valid_payload() {
         let signed = sign_cancel(cancel(), 0x16);
         assert_eq!(verify_order_cancel_signature_v1(&signed), Ok(()));
     }
-
     #[test]
     fn verify_settlement_receipt_signature_accepts_valid_payload() {
         let signed = sign_receipt(receipt(), 0x17);
         assert_eq!(verify_settlement_receipt_signature_v1(&signed), Ok(()));
     }
-
     #[test]
     fn trade_rejects_self_trade() {
         let trade = TradeEventV1 {
@@ -2957,7 +2735,6 @@ mod tests {
         };
         assert_eq!(trade.validate(), Err(OrderbookValidationError::SelfTrade));
     }
-
     #[test]
     fn bid_order_escrow_covers_full_limit_value_and_worst_role_fee() {
         let bid = order();
@@ -2967,7 +2744,6 @@ mod tests {
             required,
             XorQuantity::try_from_micro(15_307_500).expect("expected custody"),
         );
-
         let mut ask = bid;
         ask.side = OrderSideV1::Ask;
         ask.provider_id = Some(id(9));
@@ -2978,7 +2754,6 @@ mod tests {
             }),
         );
     }
-
     #[test]
     fn match_orders_creates_trade_and_remaining_quantities() {
         let mut maker = order();
@@ -2999,10 +2774,8 @@ mod tests {
         taker.quantity_gib = 4;
         taker.remaining_gib = 4;
         taker.taker_fee_bps = 10;
-
         let outcome =
             match_orders_v1(&maker, &taker, id(13), 1_700_000_000).expect("orders should match");
-
         assert_eq!(outcome.trade.maker_order_id, maker.order_id);
         assert_eq!(outcome.trade.taker_order_id, taker.order_id);
         assert_eq!(outcome.trade.price_per_gib, maker.price_per_gib);
@@ -3024,7 +2797,6 @@ mod tests {
         assert_eq!(outcome.taker_remaining_gib, 0);
         assert_eq!(outcome.trade.validate(), Ok(()));
     }
-
     #[test]
     fn match_orders_rejects_non_crossing_prices() {
         let mut maker = order();
@@ -3040,7 +2812,6 @@ mod tests {
         refresh_order_id(&mut taker);
         taker.price_per_gib = XorQuantity::try_from_micro(1_400_000)
             .expect("legacy micro-XOR value is representable");
-
         assert_eq!(
             match_orders_v1(&maker, &taker, id(13), 1_700_000_000),
             Err(OrderbookValidationError::PriceDoesNotCross {
@@ -3051,7 +2822,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn match_orders_compares_sub_micro_prices_exactly() {
         let ask_price: XorQuantity = "0.0000002".parse().expect("canonical sub-micro XOR price");
@@ -3067,7 +2837,6 @@ mod tests {
         taker.owner_account = account(22);
         taker.price_per_gib = bid_price.clone();
         refresh_order_id(&mut taker);
-
         assert_eq!(
             match_orders_v1(&maker, &taker, id(23), 1_700_000_000),
             Err(OrderbookValidationError::PriceDoesNotCross {
@@ -3075,14 +2844,12 @@ mod tests {
                 ask_price,
             })
         );
-
         maker.price_per_gib = "0.0000001".parse().expect("canonical sub-micro XOR price");
         taker.price_per_gib = "0.0000002".parse().expect("canonical sub-micro XOR price");
         let outcome = match_orders_v1(&maker, &taker, id(24), 1_700_000_000)
             .expect("sub-micro crossing prices must match without legacy projection");
         assert_eq!(outcome.trade.price_per_gib.to_string(), "0.0000001");
     }
-
     #[test]
     fn match_order_book_uses_price_time_priority_and_partial_fills() {
         let bid = book_order(21, OrderSideV1::Bid, 2_000_000, 10);
@@ -3100,7 +2867,6 @@ mod tests {
             1_700_000_000,
         )
         .expect("book should match");
-
         assert_eq!(outcome.fills.len(), 2);
         assert_eq!(outcome.fills[0].trade.maker_order_id, low_ask_id);
         assert_eq!(outcome.fills[0].trade.taker_order_id, bid_id);
@@ -3137,7 +2903,6 @@ mod tests {
         assert_eq!(outcome.remaining_orders[0].order_id, bid_id);
         assert_eq!(outcome.remaining_orders[0].remaining_gib, 3);
     }
-
     #[test]
     fn match_order_book_generated_streams_preserve_balance_and_no_crossing_remainder() {
         let now_unix = 1_700_000_000;
@@ -3180,19 +2945,15 @@ mod tests {
                 }
                 entries.push(book_entry(order, index as u64));
             }
-
             let outcome =
                 match_order_book_v1(&entries, now_unix).expect("generated book should match");
-
             assert_match_invariants(&entries, &outcome, now_unix);
         }
     }
-
     #[test]
     fn match_order_book_generated_streams_are_permutation_invariant() {
         let now_unix = 1_700_000_000;
         let mut rng = DeterministicRng::new(0x0123_4567_89ab_cdef);
-
         for scenario in 0..32u8 {
             let order_count = 18 + rng.range(18) as usize;
             let mut entries = Vec::with_capacity(order_count);
@@ -3231,16 +2992,13 @@ mod tests {
                 }
                 entries.push(book_entry(order, index as u64));
             }
-
             let expected =
                 match_order_book_v1(&entries, now_unix).expect("canonical book should match");
             assert_match_invariants(&entries, &expected, now_unix);
-
             let mut shuffled = entries.clone();
             shuffle_entries(&mut shuffled, &mut rng);
             let actual =
                 match_order_book_v1(&shuffled, now_unix).expect("shuffled book should match");
-
             assert_eq!(
                 actual, expected,
                 "matching must depend on canonical sequence, not input order, in scenario {scenario}"
@@ -3248,7 +3006,6 @@ mod tests {
             assert_match_invariants(&shuffled, &actual, now_unix);
         }
     }
-
     #[test]
     fn match_order_book_skips_expired_orders() {
         let mut expired_ask = book_order(31, OrderSideV1::Ask, 1_000_000, 5);
@@ -3256,26 +3013,22 @@ mod tests {
         let live_bid = book_order(32, OrderSideV1::Bid, 2_000_000, 5);
         let expired_ask_id = expired_ask.order_id;
         let live_bid_id = live_bid.order_id;
-
         let outcome = match_order_book_v1(
             &[book_entry(live_bid, 2), book_entry(expired_ask, 1)],
             1_700_000_000,
         )
         .expect("expired orders should be skipped");
-
         assert!(outcome.fills.is_empty());
         assert_eq!(outcome.expired_order_ids, vec![expired_ask_id]);
         assert_eq!(outcome.remaining_orders.len(), 1);
         assert_eq!(outcome.remaining_orders[0].order_id, live_bid_id);
         assert_eq!(outcome.remaining_orders[0].remaining_gib, 5);
     }
-
     #[test]
     fn match_order_book_rejects_duplicate_order_ids() {
         let bid = book_order(41, OrderSideV1::Bid, 2_000_000, 5);
         let duplicate_id = bid.order_id;
         let ask = bid.clone();
-
         assert_eq!(
             match_order_book_v1(&[book_entry(bid, 1), book_entry(ask, 2)], 1_700_000_000),
             Err(OrderbookValidationError::DuplicateOrderId {
@@ -3283,18 +3036,15 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn match_order_book_rejects_duplicate_sequences() {
         let bid = book_order(51, OrderSideV1::Bid, 2_000_000, 5);
         let ask = book_order(52, OrderSideV1::Ask, 1_000_000, 5);
-
         assert_eq!(
             match_order_book_v1(&[book_entry(bid, 7), book_entry(ask, 7)], 1_700_000_000),
             Err(OrderbookValidationError::DuplicateOrderSequence { sequence: 7 })
         );
     }
-
     #[test]
     fn open_settlement_channel_for_trade_locks_trade_value_and_fees() {
         let mut maker = order();
@@ -3317,7 +3067,6 @@ mod tests {
         let trade = match_orders_v1(&maker, &taker, id(13), 1_700_000_000)
             .expect("orders should match")
             .trade;
-
         let channel = open_settlement_channel_for_trade_v1(
             &trade,
             id(14),
@@ -3326,7 +3075,6 @@ mod tests {
             1_700_000_001,
         )
         .expect("channel should open");
-
         assert_eq!(channel.trade_id, trade.trade_id);
         assert_eq!(channel.total_bytes, 4 * BYTES_PER_GIB);
         assert_eq!(channel.remaining_bytes, channel.total_bytes);
@@ -3338,7 +3086,6 @@ mod tests {
         assert_eq!(channel.status, SettlementChannelStatusV1::Open);
         assert_eq!(channel.validate(), Ok(()));
     }
-
     #[test]
     fn settlement_channel_id_is_canonical_and_trade_bound() {
         let trade = snapshot_trade();
@@ -3349,7 +3096,6 @@ mod tests {
             derive_orderbook_settlement_channel_id_v1(&trade),
             Ok(channel_id)
         );
-
         let mut other = trade.clone();
         other.trade_id[0] ^= 1;
         assert_ne!(
@@ -3357,7 +3103,6 @@ mod tests {
                 .expect("other valid trade derives a channel id"),
             channel_id
         );
-
         let mut invalid = trade;
         invalid.trade_id = [0; 32];
         assert_eq!(
@@ -3365,7 +3110,6 @@ mod tests {
             Err(OrderbookValidationError::InvalidTradeId)
         );
     }
-
     #[test]
     fn channel_rejects_remaining_bytes_over_total() {
         let channel = SettlementChannelV1 {
@@ -3394,7 +3138,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn settlement_channel_enforces_canonical_buyer_account_boundaries() {
         let trade = snapshot_trade();
@@ -3403,7 +3146,6 @@ mod tests {
         channel
             .validate()
             .expect("buyer account at exact byte ceiling validates");
-
         channel.buyer_account.push(0x42);
         assert_eq!(
             channel.validate(),
@@ -3412,25 +3154,21 @@ mod tests {
                 max: ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1,
             })
         );
-
         channel.buyer_account = vec![0; 33];
         assert_eq!(
             channel.validate(),
             Err(OrderbookValidationError::NonCanonicalOwnerAccount)
         );
-
         channel.buyer_account.clear();
         assert_eq!(
             channel.validate(),
             Err(OrderbookValidationError::EmptyOwnerAccount)
         );
     }
-
     #[test]
     fn settlement_receipt_accepts_balanced_receipt() {
         assert_eq!(receipt().validate(), Ok(()));
     }
-
     #[test]
     fn settlement_receipt_rejects_imbalanced_receipt() {
         let receipt = SettlementReceiptV1 {
@@ -3460,7 +3198,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn settlement_accounting_preserves_sub_micro_amounts() {
         let one: XorQuantity = "0.0000001"
@@ -3472,7 +3209,6 @@ mod tests {
         let three: XorQuantity = "0.0000003"
             .parse()
             .expect("canonical sub-micro XOR quantity");
-
         let mut imbalanced = receipt();
         imbalanced.xor_debited = two.clone();
         imbalanced.provider_credit = two.clone();
@@ -3484,7 +3220,6 @@ mod tests {
                 credited_plus_fees: three.clone(),
             })
         );
-
         let trade = snapshot_trade();
         let mut channel = snapshot_channel(&trade);
         channel.xor_locked = two.clone();
@@ -3503,12 +3238,10 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn channel_rejects_closed_state_with_remaining_bytes() {
         let mut channel = snapshot_channel(&snapshot_trade());
         channel.status = SettlementChannelStatusV1::Closed;
-
         assert_eq!(
             channel.validate(),
             Err(OrderbookValidationError::ClosedChannelHasRemainingBytes {
@@ -3516,7 +3249,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn apply_settlement_receipt_closes_channel_when_fully_delivered() {
         let channel = SettlementChannelV1 {
@@ -3556,28 +3288,23 @@ mod tests {
             issued_at_unix: 1_800_000_200,
             settlement_signature: signature(),
         };
-
         let updated =
             apply_settlement_receipt_v1(&channel, &receipt).expect("receipt should apply");
-
         assert_eq!(updated.remaining_bytes, 0);
         assert_eq!(updated.xor_locked, XorQuantity::zero());
         assert_eq!(updated.status, SettlementChannelStatusV1::Closed);
         assert_eq!(updated.updated_at_unix, receipt.issued_at_unix);
         assert_eq!(updated.validate(), Ok(()));
     }
-
     #[test]
     fn deterministic_settlement_split_preserves_zero_fee_channels() {
         let total = XorQuantity::try_from_micro(101).expect("channel total");
         let split = deterministic_settlement_split_v1(&total, &XorQuantity::zero(), 3, 10)
             .expect("zero-fee split");
-
         assert_eq!(split.fee_amount, XorQuantity::zero());
         assert_eq!(split.provider_credit, split.xor_debited);
         assert!(split.xor_debited < total);
     }
-
     #[test]
     fn chunked_settlement_prorates_fee_and_consumes_final_rounding_dust_exactly() {
         let initial_total = XorQuantity::try_from_micro(101).expect("channel total");
@@ -3601,7 +3328,6 @@ mod tests {
         let mut total_debited = XorQuantity::zero();
         let mut total_provider_credit = XorQuantity::zero();
         let mut total_fees = XorQuantity::zero();
-
         for index in 0_u64..3 {
             let split = deterministic_settlement_split_v1(
                 &channel.xor_locked,
@@ -3637,7 +3363,6 @@ mod tests {
             channel =
                 apply_settlement_receipt_v1(&channel, &receipt).expect("apply sequential receipt");
         }
-
         assert_eq!(total_debited, initial_total);
         assert_eq!(total_fees, initial_fee);
         assert_eq!(
@@ -3651,7 +3376,6 @@ mod tests {
         assert_eq!(channel.remaining_fee_xor_locked, XorQuantity::zero());
         assert_eq!(channel.status, SettlementChannelStatusV1::Closed);
     }
-
     #[test]
     fn settlement_rejects_balanced_but_inflated_receipt_amounts() {
         let channel = SettlementChannelV1 {
@@ -3700,13 +3424,11 @@ mod tests {
             issued_at_unix: 1_800_000_200,
             settlement_signature: signature(),
         };
-
         assert!(matches!(
             apply_settlement_receipt_v1(&channel, &receipt),
             Err(OrderbookValidationError::SettlementSplitMismatch { .. })
         ));
     }
-
     #[test]
     fn apply_settlement_receipt_rejects_channel_mismatch() {
         let channel = SettlementChannelV1 {
@@ -3746,13 +3468,11 @@ mod tests {
             issued_at_unix: 1_800_000_200,
             settlement_signature: signature(),
         };
-
         assert_eq!(
             apply_settlement_receipt_v1(&channel, &receipt),
             Err(OrderbookValidationError::SettlementChannelMismatch)
         );
     }
-
     #[test]
     fn bounded_decoders_accept_exact_canonical_orderbook_archives() {
         let order = order();
@@ -3762,7 +3482,6 @@ mod tests {
             order
         );
     }
-
     #[test]
     fn bounded_decoder_rejects_oversized_archive_before_decode() {
         let archive = vec![0_u8; ORDERBOOK_PAYLOAD_MAX_CANONICAL_BYTES_V1 + 1];
@@ -3774,7 +3493,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn bounded_decoder_rejects_noncanonical_trailing_bytes() {
         let mut encoded = norito::to_bytes(&order()).expect("encode order");
@@ -3784,7 +3502,6 @@ mod tests {
             Err(OrderbookPayloadDecodeError::NonCanonicalEncoding)
         );
     }
-
     #[test]
     fn caller_decode_budget_cannot_be_loosened_or_bypassed() {
         let encoded = norito::to_bytes(&order()).expect("encode order");

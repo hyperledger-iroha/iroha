@@ -20,7 +20,7 @@ use thiserror::Error;
 use super::v2::VerifiedHeightContext;
 
 const FILE_MAGIC: &[u8; 8] = b"SUMV2CTX";
-const FRAME_VERSION: u16 = 3;
+const FRAME_VERSION: u16 = 1;
 const HASH_LEN: usize = 32;
 // Sumeragi v2 admits only BLS-normal validators. Its PoP is one canonical G2
 // signature, not an arbitrary consensus-signature-sized blob.
@@ -36,7 +36,7 @@ const MAX_CONTEXT_PAYLOAD_BYTES: usize =
     MAX_CONTEXT_FIXED_BYTES + wire::MAX_VALIDATORS_PER_HEIGHT * MAX_CONTEXT_BYTES_PER_VALIDATOR;
 const MAX_CONTEXT_FRAME_BYTES: usize = HEADER_LEN + MAX_CONTEXT_PAYLOAD_BYTES;
 
-/// Canonical context and PoPs required to reopen one reducer height.
+/// Canonical V1 context and PoPs required to reopen one reducer height.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct PersistedHeightContext {
     format_version: u16,
@@ -1173,8 +1173,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v2_frame_is_rejected() {
-        const LEGACY_VERSION: u16 = 2;
+    fn non_v1_frame_is_rejected() {
+        const UNSUPPORTED_VERSION: u16 = 2;
 
         let root = tempfile::tempdir().expect("tempdir");
         let store = V2ContextStore::open(root.path()).expect("open store");
@@ -1182,13 +1182,21 @@ mod tests {
         store.persist(&record).expect("persist current record");
         let path = store.path(record.context().height);
         let mut frame = fs::read(&path).expect("read context frame");
+        assert_eq!(
+            u16::from_le_bytes(
+                frame[FILE_MAGIC.len()..FILE_MAGIC.len() + std::mem::size_of::<u16>()]
+                    .try_into()
+                    .expect("context frame version has fixed width"),
+            ),
+            FRAME_VERSION,
+        );
         frame[FILE_MAGIC.len()..FILE_MAGIC.len() + std::mem::size_of::<u16>()]
-            .copy_from_slice(&LEGACY_VERSION.to_le_bytes());
-        fs::write(&path, frame).expect("write legacy context frame");
+            .copy_from_slice(&UNSUPPORTED_VERSION.to_le_bytes());
+        fs::write(&path, frame).expect("write unsupported context frame");
 
         assert!(matches!(
             store.load(record.context().height),
-            Err(V2ContextStoreError::UnsupportedVersion(LEGACY_VERSION))
+            Err(V2ContextStoreError::UnsupportedVersion(UNSUPPORTED_VERSION))
         ));
     }
 

@@ -1,0 +1,6 @@
+
+            fn main() {
+                ledger::trigger::register(Json::parse("{}"));
+                ledger::trigger::unregister(Name::parse("wake"));
+            }
+        

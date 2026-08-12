@@ -3503,10 +3503,9 @@ LeaderWireProductiveTransportIdentity(item) ==
        /\ IngressResourceSource(item) = AsyncUntrustedSource)
 
 LeaderWireIngressOwned(item) ==
-  /\ IngressResourceSource(item) \in AsyncIngressSources
-  /\ item \in SequenceSet(
-       IngressLane(item.envelope.recipient,
-                   IngressResourceSource(item)))
+  \E source \in AsyncIngressSources:
+    item \in SequenceSet(
+      IngressLane(item.envelope.recipient, source))
 
 LeaderWireCandidateOwned(item) ==
   IF item.kind = "CertifiedResponse"
@@ -3630,30 +3629,30 @@ LeaderWirePacket(packet) ==
   /\ packet \in AsyncPacketSet
   /\ LeaderWireItem(packet.item)
 
-LeaderWireIngressRemovalGate(item) ==
-  \/ /\ ~IngressHasCoalescingOwner(item)
-        /\ CanAdmitIngressItem(item)
-  \/ /\ IngressHasCoalescingOwner(item)
+LeaderWireIngressRemovalGate(item, authenticatedSource) ==
+  \/ /\ ~IngressHasCoalescingOwnerVia(item, authenticatedSource)
+        /\ CanAdmitIngressItemVia(item, authenticatedSource)
+  \/ /\ IngressHasCoalescingOwnerVia(item, authenticatedSource)
         /\ \/ item.kind # "CertifiedResponse"
            \/ CertifiedResponseClaimMatches(item)
   \/ IngressPacketPolicyRejected(item)
 
 LeaderWirePacketExitReady(packet) ==
   LET recipient == packet.item.envelope.recipient
-      transportSource == packet.item.source
+      transportSource == packet.authenticatedSource
       head == OldestDueSourcePacket(recipient, transportSource)
   IN /\ packet = head
-     /\ LeaderWireIngressRemovalGate(head.item)
+     /\ LeaderWireIngressRemovalGate(head.item, transportSource)
 
 LeaderWirePacketHeadOfLineShadowed(packet) ==
   LET recipient == packet.item.envelope.recipient
-      source == packet.item.source
+      source == packet.authenticatedSource
   IN /\ DueSourcePackets(recipient, source) # {}
      /\ packet # OldestDueSourcePacket(recipient, source)
 
 LeaderWireOverdueHeadOfLineShadowed(packet) ==
   LET recipient == packet.item.envelope.recipient
-      source == packet.item.source
+      source == packet.authenticatedSource
       head == OldestDueSourcePacket(recipient, source)
   IN /\ LeaderWirePacketHeadOfLineShadowed(packet)
      /\ head \in OverdueResponsivePackets
@@ -3667,7 +3666,7 @@ normalized resource lane.  This is distinct from ordinary overdue FIFO debt.
 ***************************************************************************)
 LeaderWireNonTimedOuterSourceShadowed(packet) ==
   LET recipient == packet.item.envelope.recipient
-      source == packet.item.source
+      source == packet.authenticatedSource
       head == OldestDueSourcePacket(recipient, source)
   IN /\ LeaderWirePacketHeadOfLineShadowed(packet)
      /\ source \notin AsyncTimedServiceNodes
@@ -3675,10 +3674,10 @@ LeaderWireNonTimedOuterSourceShadowed(packet) ==
 
 LeaderWirePacketAdmissionGateBlocked(packet) ==
   LET recipient == packet.item.envelope.recipient
-      transportSource == packet.item.source
+      transportSource == packet.authenticatedSource
       head == OldestDueSourcePacket(recipient, transportSource)
   IN /\ packet = head
-     /\ ~LeaderWireIngressRemovalGate(head.item)
+     /\ ~LeaderWireIngressRemovalGate(head.item, transportSource)
 
 LeaderWireDueTransportResidual(packet) ==
   /\ packet \in OverdueResponsivePackets
@@ -3733,7 +3732,7 @@ THEOREM ExitReadyLeaderWireHeadEnablesExactPacketRemoval ==
     /\ LeaderWirePacketExitReady(packet)
     => ENABLED (
          PostGstAdmitHiddenPacket(
-           packet.item.envelope.recipient, packet.item.source)
+           packet.item.envelope.recipient, packet.authenticatedSource)
            /\ packet \notin asyncTransport')
 BY AsyncStrongTypeProjectsAsyncType,
    GstResponsiveNodesAreUp,
@@ -4751,8 +4750,9 @@ THEOREM LeaderWirePacketAdmissionPreservesExactResolution ==
        /\ AsyncCandidateServiceLifecycleInvariant
        /\ LeaderWireCurrentContextWitnessIdentity(item)
        /\ packet \in OverdueResponsivePackets
-       /\ packet = OldestDueSourcePacket(recipient, item.source)
-       /\ AdmitIngressPacket(recipient, item.source)
+       /\ packet =
+            OldestDueSourcePacket(recipient, packet.authenticatedSource)
+       /\ AdmitIngressPacket(recipient, packet.authenticatedSource)
        => /\ LeaderWireTransportResolution(packet)'
           /\ (LeaderWireProductiveTransportIdentity(item)
                 => LeaderWireTransportHandoff(packet)')
@@ -4771,8 +4771,8 @@ BY PolicyRejectedLeaderWireAlreadyHasSemanticHandoff,
        AdmitIngressPacket, AdmitHiddenPacket,
        CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
        DropExactActiveLeaderWireRetry,
-       IngressHasCoalescingOwner, IngressPacketPolicyRejected,
-       IngressLane, IngressResourceSource, SequenceSet,
+       IngressHasCoalescingOwnerVia, IngressPacketPolicyRejected,
+       IngressLane, IngressResourceSourceVia, SequenceSet,
        CandidateScheduled, DeliveryCandidate
 
 THEOREM LeaderWireIngressDrainPreservesExactHandoff ==
@@ -6351,7 +6351,7 @@ BY IsaT(600)
        AsyncCommitCertificateResponseEnvelopeTyped,
        AsyncCertifiedRequestItems, AsyncCertifiedRequestHashes,
        AsyncCommitCertificateRequestItems,
-       AsyncUntrustedTransportCompletionItem,
+       AsyncUntrustedCertifiedResponseItem,
        AsyncUntrustedCompletionRequestWitness,
        AsyncUntrustedCompletionQcWitness,
        AsyncCertifiedRequestEnvelope,

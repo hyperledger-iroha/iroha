@@ -18585,6 +18585,7 @@ impl V2EffectServices for ProductionV2Services {
 pub(super) mod tests {
     include!("tests/v2_worker_main_00.rs");
     include!("tests/v2_worker_main_01.rs");
+    include!("tests/v2_worker_equivocation_and_selected_serve_fixture.rs");
     include!("v2_worker/applied_height_handoff_tests.rs");
     include!("v2_worker/upstream_reply_route_test.rs");
     include!("tests/v2_worker_main_02.rs");

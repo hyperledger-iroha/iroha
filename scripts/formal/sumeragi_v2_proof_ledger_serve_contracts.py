@@ -183,8 +183,6 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
         "ReserveExactServeCapacityVia",
     ): (
         "AsyncServeSourceAttemptRecords",
-        "ReserveExactServeCapacityVia",
-        "candidate.item.source",
         "AsyncServeOffQueueReservations",
         "AsyncServeIngressPredecessorCounts",
         "asyncNextServeAdmissionOrdinal",
@@ -199,8 +197,6 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
         "AdvanceExactServeCapacityVia",
     ): (
         "AsyncServeSourceAttemptRecords",
-        "AdvanceExactServeCapacityVia",
-        "candidate.item.source",
         "AsyncServeOffQueueReservations",
         "AsyncServeFamilyTombstoneRecords",
         "AsyncServeIngressPredecessorCounts",
@@ -403,8 +399,7 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderImmutableCandidatePayload",
     ): (
-        "AdequateLeaderRouteNeutralCandidateItem",
-        "AdequateLeaderRouteNeutralCandidateEvidence",
+        "AsyncCandidateSemanticStatement",
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
@@ -418,10 +413,12 @@ SERVE_LIFECYCLE_REQUIRED_OPERATOR_TOKENS = {
         "SumeragiV2AdequateLeaderServiceClosureProofs",
         "AdequateLeaderFrozenCandidatePayloadCarrier",
     ): (
-        "AdequateLeaderFrozenCandidateItemPayloadCarrier",
-        "AdequateLeaderFrozenCandidateEvidencePayloadCarrier",
-        "AsyncCommandClasses",
-        "AsyncWorkKinds",
+        "context",
+        "round",
+        "proposalRound",
+        "subject",
+        "AsyncCandidateSemanticPhases",
+        "executionCommitment",
     ),
     (
         "SumeragiV2AdequateLeaderServiceClosureProofs",
@@ -1008,7 +1005,7 @@ _SERVE_LIFECYCLE_REGRESSION_TEST_SHA256 = {
         "dc7fd3972ed40bfe639eb2602801003cdbc3a397ff3b8509ae5cc4404b537d2a"
     ),
     "certified_serve_terminal_replay_source_retains_retired_route_and_reconnects": (
-        "3108745b0f333abe232e1e70a725ae73bee5134fd1b4e6ba6383aecbed05a2a1"
+        "500a95efa15a2105f4ed42cf80160fc7d1ba18173ecbcad7baf394a48db4894c"
     ),
     "certified_serve_terminal_replay_waits_for_barrier_then_bypasses_full_serve_fifo": (
         "90c1c4bbb4c2cfea2f277d0864825da1eada534e2d18b383e800fb73dacc4c26"
@@ -1020,10 +1017,10 @@ _WORKER_TEST_INCLUDE_SOURCE_SHA256 = {
         "5c54036dc21414a420e214fc70e433c232d79332a482afed1850ea21c54d1069"
     ),
     "v2_worker_backpressure_cases.rs": (
-        "3eea597a791f102859e36a83438955c65bc98daff4df801f402ab883f2a0c4a0"
+        "f34cb362edeb6bef5fdd48d415430c335e6524d90e63501e8604d0d03d360a07"
     ),
     "v2_worker_serve_unsealed_cases.rs": (
-        "b328c4375cb16c5b6214a818b2548fe8f6c003e70b802f2d3069a597266b762b"
+        "a49afec0c61b432106c46b3c4fce99a8b6b23485b6a0a032e79f32d104d63b23"
     ),
     "v2_worker_serve_decision_restart_cases.rs": (
         "e6a04d1a8b5fd6ab63f88f2cae91d8d39a056c07d2fad6c7e12923d578c8cf73"
@@ -1039,7 +1036,7 @@ _WORKER_TEST_INCLUDE_TEST_COUNT = {
 
 _SERVE_TERMINAL_DISCHARGE_WORKER_ITEM_SHA256 = {
     "fully_authenticate_persisted_certified_serve_request": (
-        "ae5834c7f6d85a453e8e99c6572e43b3cdab2739b39bc290fae1f7fdaa449330"
+        "850bbd84bdbb6b00ad7f6a60189cb24ab78f2f859c1b853658c3877fe51d27de"
     ),
     "validate_persisted_certified_serve_terminal_outcomes": (
         "cc4cd229b6caf35425f3a055cd02f254e95df35fe88ce71eb2da7b1c28d8326d"
@@ -1129,7 +1126,7 @@ _SERVE_INGRESS_ORDINAL_STRUCT_SHA256 = {
         "87125ed4256f628874244f9a3d8e02e1d35be4f127e7b2c78ecd0d82366a6e35"
     ),
     "FairV2IngressEntry": (
-        "81d3ce89a1b7ea4f13c481084e5097c583cbad2c50a1c74929261f42c41c839e"
+        "c618e0fa2240c6622bc0c45988da2a03fafac5d26e377c6b2e46562e8d44e3be"
     ),
 }
 _SERVE_INGRESS_ORDINAL_REGRESSION_TEST_SHA256 = {
@@ -1511,7 +1508,7 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "fabc9cf096cec0f7c03ea8a13ebbdb00c9f6556feec6544fa2f4b719662b62f8"
     ),
     "open_with_aggregator_and_publication_with_capacity": (
-        "f080dd6418dbbfb1cbc3cc762c16a6ac9b3842eeb5e2934baf8e574e85d32719"
+        "ec34728709a11989ad8d0dafc0162f7848c0436a1fc68792362a36f1ff19e842"
     ),
     "dormant_producer_lifecycle": (
         "3103fd04b61950b06212a9e50f4ae43b4b8ad35949566680afb8f721c133155e"
@@ -1565,13 +1562,13 @@ _SERVICED_CANDIDATE_V4_ADAPTER_ITEM_SHA256 = {
         "e198c896e7ea6c3cc6862b48d6dc9432f578dc4e95231f621c3079d79855c77d"
     ),
     "step_with_defer_policy": (
-        "6e73112b7854bdfaa9c6a65baaa48eca1ade151d287519b1304198b323c3ef08"
+        "f61873fdbedf7727cc0c0575a67721e089fda4c9aac2d7e31eb45bbb096befc6"
     ),
     "drain_deferred_with_handoff_for_ordinals": (
-        "f29190e9610e499d032f231842a7aa47d78def2b4ce179d2eaafa5d99b3f27c6"
+        "b0f80b64612e436979c51bef1a607147f2fcc3c4c5b127a3738a4ca3410cc40f"
     ),
     "drive_effects": (
-        "98ff14c212f7c5f8b1756e7d8661a3ea502dfc334fc22ca592a7f85958909f29"
+        "7493eed9736bb149f208b8990ba5f1b69d1b9aa6645dc8c2ded7c91a87a20255"
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNTIME_STRUCT_SHA256 = {
@@ -1608,7 +1605,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "a9dcc40ab11d2af33c91c5449a24bd524289d8a00e89ea2cdfafe99b27ed2a86"
     ),
     "with_driver_and_lifecycle_ordinals": (
-        "c64394eb23aa7a0f2cebc630ac2c35558f6a31b54653d52bf4157cf065179b80"
+        "ba31ffeba2ffc96269ae8d531d5d5a6a01fc80a5af50346e672c54e9fea9bc53"
     ),
     "freeze_due_clock_owners": (
         "d28538a60f9391277b1db6c60b71ed694c1d776de425305c52f8703450ebae85"
@@ -1642,7 +1639,7 @@ _SERVICED_CANDIDATE_V4_RUNTIME_ITEM_SHA256 = {
         "539239fa96fca8ea08dc56ac89041b7be0bb6f5f3d33f65259ad8e7833173b69"
     ),
     "dispatch_one_adapter_deferred": (
-        "d87f6e86b65a0b37be7198f880ad2103a4e99c7eb72d2ad32b376865c40d45da"
+        "a4c901cdd676731f6cfd3c4dcb52718df366f65bc7ca5e8d1a54a841ec30cdab"
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNNER_ITEM_SHA256 = {
@@ -1748,13 +1745,13 @@ _SERVICED_CANDIDATE_V4_ADAPTER_REGRESSION_TEST_SHA256 = {
         "e2d69a7243f71d2818ffabcbdd78e9585c6245b447a882e8f6dc319067a956ee"
     ),
     "aggregate_carrier_and_priority_variants_coalesce_to_one_semantic_candidate": (
-        "232a2b6cc3059cf2a7d0525037eb6d26c30c6fe334ab47646c8c1531c0e61561"
+        "5101761ebb164505896814130b9260cce1644306e914d27f2a72fe5e5f701dd6"
     ),
     "serviced_candidate_capacity_exhaustion_never_evicts_an_old_owner": (
         "ed7172e200b6ebe76d6c6048a08e6610b83e709b66dc8e0dd972998d5e8f2b0f"
     ),
     "post_wal_oversized_continuation_fails_closed_and_replays_exact_record": (
-        "a357f97d00052efa6f464ac0571f3440c8ff94f8a459883be3d864adfb3ec91f"
+        "16780721067a755dc5d00dd752f5fb94f0038dff96878577ba8f2c94bcbc1a3b"
     ),
 }
 _SERVICED_CANDIDATE_V4_RUNTIME_REGRESSION_TEST_SHA256 = {
@@ -2007,3 +2004,104 @@ RETIRED_SYNTHETIC_FAIRNESS_SYMBOLS = (
     "ExactDecisionRequestLifecycleOwnedFairActionEnabledAtEpisode",
     "ExactDecisionRequestLifecycleOwnedFairActionConsumesEpisode",
 )
+
+
+def _timeout_capacity_regression_source_fidelity_errors(
+    path: Path,
+    source: str,
+) -> list[str]:
+    """Bind externalized adapter capacity regressions through reviewed source."""
+
+    errors: list[str] = []
+    test_context = (
+        ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
+    )
+    long_tests = {
+        "capacity_bypass_records_follow_current_lock_and_timeout_view",
+        "certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote",
+    }
+    items: dict[str, RustItem | None] = {}
+    for name, expected_sha256 in (
+        _TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256.items()
+    ):
+        item = _require_rust_item(path, source, name, errors)
+        items[name] = item
+        attributes = (
+            ("#[test]", "#[allow(clippy::too_many_lines)]")
+            if name in long_tests
+            else ("#[test]",)
+        )
+        _require_rust_item_context(
+            path,
+            item,
+            test_context,
+            f"TimeoutVote semantic-capacity regression {name}",
+            errors,
+            expected_attributes=attributes,
+        )
+        _require_rust_item_token_sha256(
+            path,
+            item,
+            expected_sha256,
+            f"TimeoutVote semantic-capacity regression {name}",
+            errors,
+        )
+
+    _require_rust_token_sequence(
+        path,
+        items.get("capacity_bypass_records_follow_current_lock_and_timeout_view"),
+        """
+assert_eq!(
+    adapter
+        .ingress_equivocations
+        .values()
+        .filter(|record| record.capacity_bypass)
+        .count(),
+    roster_len * 3
+);
+""",
+        "capacity-bypass regression must realize exactly one lock plus current and adjacent TimeoutVote rosters",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        items.get("certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote"),
+        """
+assert_eq!(adapter.current_tag().view(), current_round.view + 1);
+assert!(adapter.deferred_progress_inputs.is_empty());
+""",
+        "certified-timeout regression must advance the hung signer exactly one view and drain its deferred progress fence",
+        errors,
+    )
+
+    cross_view_name = (
+        "busy_deferred_source_identity_coalesces_across_consumer_view_change"
+    )
+    cross_view = _require_rust_item(path, source, cross_view_name, errors)
+    _require_rust_item_context(
+        path,
+        cross_view,
+        test_context,
+        "cross-view Busy-deferred semantic-owner regression",
+        errors,
+        expected_attributes=("#[test]", "#[allow(clippy::too_many_lines)]"),
+    )
+    _require_rust_item_token_sha256(
+        path,
+        cross_view,
+        _SERVICED_CANDIDATE_REGRESSION_TEST_SHA256[cross_view_name],
+        "cross-view Busy-deferred semantic-owner regression",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        cross_view,
+        """
+assert_eq!(retagged_candidate.0, original_candidate.0);
+assert_eq!(retagged_candidate.0.source_view(), first_round.view);
+assert_eq!(retagged_candidate.1, adapter.current_tag().view());
+""",
+        "cross-view Busy-deferred regression must retain source identity while advancing only its consumer episode",
+        errors,
+    )
+    return errors

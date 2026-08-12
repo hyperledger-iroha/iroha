@@ -8,7 +8,7 @@ use std::{
     env,
     ffi::OsStr,
     fs,
-    io::{self, Read as _, Write as _},
+    io::{self, Write as _},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::{Path, PathBuf},
     process::{Command as ProcessCommand, ExitCode, Stdio},
@@ -163,6 +163,7 @@ enum Command {
 }
 
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
+#[norito(decode_from_slice)]
 struct State {
     installed: bool,
     active: bool,
@@ -204,6 +205,7 @@ impl Default for State {
 }
 
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
+#[norito(decode_from_slice)]
 struct ConnectPayload {
     session_id: String,
     relay_endpoint: String,
@@ -227,6 +229,7 @@ struct ConnectPayload {
 }
 
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq, Default)]
+#[norito(decode_from_slice)]
 struct AppliedNetworkState {
     interface_name: String,
     dns_backend: Option<DnsBackendState>,
@@ -234,12 +237,14 @@ struct AppliedNetworkState {
 }
 
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
+#[norito(decode_from_slice)]
 enum DnsBackendState {
     Resolved { interface_name: String },
     ResolvConf { backup_path: String },
 }
 
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
+#[norito(decode_from_slice)]
 struct ExcludedRouteSnapshot {
     cidr: String,
     family: IpFamily,
@@ -249,6 +254,7 @@ struct ExcludedRouteSnapshot {
 type RouteViaDev = (Option<String>, Option<String>);
 
 #[derive(Debug, Clone, Copy, Encode, Decode, PartialEq, Eq)]
+#[norito(decode_from_slice)]
 enum IpFamily {
     V4,
     V6,

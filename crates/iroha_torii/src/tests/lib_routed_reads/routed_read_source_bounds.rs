@@ -1,5 +1,7 @@
 // Source-equivalence tests for application routed-read materialization.
 
+use iroha_data_model::Registrable as _;
+
 #[derive(
     Debug,
     PartialEq,
@@ -154,7 +156,7 @@ fn space_directory_bindings_borrowed_json_matches_legacy_shape() {
         catalog: &iroha_data_model::nexus::DataSpaceCatalog::default(),
     };
     let expected = norito::json::to_json_bounded_boxed(
-        &norito::json::json!({ "dataspaces": [], "uaid": uaid.to_string() }),
+        &norito::json!({ "dataspaces": [], "uaid": (uaid.to_string()) }),
         usize::MAX,
     )
     .expect("legacy empty binding response");

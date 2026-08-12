@@ -3,7 +3,7 @@
 #[cfg(test)]
 use std::sync::Mutex as StdMutex;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -2705,7 +2705,7 @@ impl ChaosState {
                 replication.provider_id,
             )
         };
-        let manifest_epoch = self.bump_replication();
+        let _manifest_epoch = self.bump_replication();
         let council_digest = *Hash::new(b"izanami-sorafs-council-digest").as_ref();
         let completion_authority = ProviderIngestCompletionAuthorityV1::new(
             self.treasury.id.clone(),

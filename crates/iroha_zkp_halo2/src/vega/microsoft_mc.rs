@@ -1,6 +1,16 @@
 //! First-party Microsoft Vega-MC compatibility implementation.
 
-use super::{VegaMdlProofDimensionsV1, engine::VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1};
+use super::{
+    VegaMdlProofDimensionsV1, VegaT256ScalarV1 as Scalar,
+    engine::VEGA_MDL_CANONICAL_VERIFIER_DIGEST_V1,
+};
+
+type ValidatedFixture = (
+    [u8; 32],
+    VegaMdlProofDimensionsV1,
+    Vec<Vec<Scalar>>,
+    Vec<Scalar>,
+);
 
 #[path = "microsoft_mc/sha256.rs"]
 mod sha256;
@@ -80,15 +90,7 @@ pub(super) fn scan_canonical_figure9_proof(proof: &[u8]) -> Result<(), wire::McC
 pub(super) fn validate_fixture(
     verifier_key: &[u8],
     proof: &[u8],
-) -> Result<
-    (
-        [u8; 32],
-        VegaMdlProofDimensionsV1,
-        Vec<Vec<super::VegaT256ScalarV1>>,
-        Vec<super::VegaT256ScalarV1>,
-    ),
-    wire::McCodecError,
-> {
+) -> Result<ValidatedFixture, wire::McCodecError> {
     let key = verifier_key::McVerifierKeyWire::decode(verifier_key)?;
     if key.encode()? != verifier_key {
         return Err(wire::McCodecError::InvalidEncoding);

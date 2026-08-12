@@ -1000,6 +1000,53 @@ def test_production_causal_fifo_source_link_rejects_order_and_proof_mutants(
         restore_runtime_source(mutated_path)
 
     mutated_path = write_runtime_item_mutation(
+        "reconcile_deferred_ingress_ownership",
+        "if !active.is_subset(&all_active)",
+        "if active.is_subset(&all_active)",
+    )
+    original = rebind_reviewed_rust_item_digests(
+        module,
+        mutated_path,
+        "reconcile_deferred_ingress_ownership",
+        (("impl", "<", "D", ":", "RuntimeDriver", ">", "SerializedV2Runtime", "<", "D", ">"),),
+        ((
+            module._AUTHENTICATED_DEFERRED_OWNERSHIP_RUST_ITEM_SHA256,
+            "reconcile_deferred_ingress_ownership",
+        ),),
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "deferred reconciliation must validate the authenticated subset" in error
+        for error in errors
+    ), errors
+    restore_reviewed_rust_item_digests(original)
+    restore_runtime_source(mutated_path)
+
+    fence_regression = (
+        "real_adapter_fence_completion_bypasses_only_preowned_fenced_fifo"
+    )
+    mutated_path = write_runtime_item_mutation(
+        fence_regression,
+        "RuntimeSelectedOwnerKind::PeriodicTimer",
+        "RuntimeSelectedOwnerKind::Fifo",
+    )
+    original = rebind_reviewed_rust_item_digests(
+        module,
+        mutated_path,
+        fence_regression,
+        (("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),),
+        ((module._PRODUCTION_CAUSAL_FIFO_RUST_ITEM_SHA256, fence_regression),),
+    )
+    errors = module._async_source_fidelity_errors(formal_dir)
+    assert any(
+        "preowned fenced FIFO regression must run and retire the bounded "
+        "pre-timeout periodic episode before Timeout signing" in error
+        for error in errors
+    ), errors
+    restore_reviewed_rust_item_digests(original)
+    restore_runtime_source(mutated_path)
+
+    mutated_path = write_runtime_item_mutation(
         "dispatch_one_adapter_deferred",
         "if !self.driver.deferred_work_is_serviceable()",
         "if self.driver.deferred_work_is_serviceable()",

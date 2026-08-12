@@ -1,0 +1,12 @@
+
+seiyaku CompilerFixture {
+
+view fn check() -> int {
+  let envelope = b"00";
+  if crypto::verify_proof(envelope) {
+    return 1;
+  }
+  return 0;
+}
+
+}

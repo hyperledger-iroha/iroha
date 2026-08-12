@@ -1,0 +1,15 @@
+
+        seiyaku WholeProgramDce {
+            fn helper(int value) -> int {
+                return value;
+            }
+
+            fn unused() -> int {
+                return 777;
+            }
+
+            view fn exposed(int value) -> int {
+                return helper(value);
+            }
+        }
+        

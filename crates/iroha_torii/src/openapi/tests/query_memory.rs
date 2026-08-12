@@ -1,11 +1,7 @@
 #[test]
 fn signed_query_operation_documents_memory_and_proxy_failures() {
-    let operation = query_paths()
-        .get(uri::QUERY)
-        .and_then(Value::as_object)
-        .and_then(|path| path.get("post"))
-        .and_then(Value::as_object)
-        .expect("signed-query POST operation");
+    let document = canonical_document();
+    let operation = openapi_operation(&document, uri::QUERY, "post");
     let responses = operation
         .get("responses")
         .and_then(Value::as_object)

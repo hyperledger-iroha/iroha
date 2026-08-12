@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>SoraFS protected evidence viewer</title>
+  <link rel="stylesheet" href="/v1/evidence/viewer/app.css">
+  <script defer src="/v1/evidence/viewer/app.js"></script>
+</head>
+<body>
+  <main aria-labelledby="viewer-title">
+    <header>
+      <p class="classification">Protected review session</p>
+      <h1 id="viewer-title">SoraFS evidence viewer</h1>
+      <p id="case-binding">Waiting for a case-bound manifest.</p>
+    </header>
+    <section id="warning" aria-live="polite">
+      <h2>Content warning</h2>
+      <p>This material may be distressing. Confirm only when you are ready to review it.</p>
+      <button id="reveal" type="button">I am ready to review</button>
+    </section>
+    <section id="stage" aria-label="Protected evidence" hidden>
+      <canvas id="evidence" width="1280" height="720"></canvas>
+      <div id="watermarks" aria-hidden="true">
+        <span></span><span></span><span></span>
+        <span></span><span></span><span></span>
+      </div>
+    </section>
+    <p id="status" role="status">No evidence frame loaded.</p>
+  </main>
+</body>
+</html>

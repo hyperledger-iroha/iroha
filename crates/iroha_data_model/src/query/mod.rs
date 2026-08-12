@@ -4,7 +4,6 @@
 //! dynamic dispatch. The [`crate::query::QueryBox`] alias wraps a `Box<dyn ErasedQuery + Send + Sync>` and is used
 //! throughout the data model whenever heterogeneous queries need to be passed
 //! around.
-
 #![allow(clippy::missing_inline_in_public_items)]
 
 use std::{
@@ -29,9 +28,6 @@ use iroha_version::Version;
 use norito::codec::{Decode, Encode};
 use parameters::{ForwardCursor, QueryParams};
 
-// Ensure `QueryWithFilter` is publicly re-exported in fast mode as well.
-#[cfg(feature = "fast_dsl")]
-pub use self::model::QueryWithFilter;
 pub use self::model::*;
 use self::{
     account::*, asset::*, block::*, domain::*, dsl::*, executor::*, nft::*, peer::*, permission::*,
@@ -62,7 +58,6 @@ use crate::{
     seal,
     trigger::{Trigger, TriggerId},
 };
-
 /// Structural error in a column-oriented iterable-query batch.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, displaydoc::Display, thiserror::Error)]
 pub enum QueryOutputBatchBoxTupleError {
@@ -90,12 +85,10 @@ pub enum QueryOutputBatchBoxTupleError {
         column: usize,
     },
 }
-
 /// Error returned when attempting to append different erased batch variants.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("cannot extend query-output batches of different types")]
 pub struct QueryOutputBatchBoxTypeMismatch;
-
 /// Error returned when a signed query fails request or signature validation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SignedQueryValidationError {
@@ -115,7 +108,6 @@ pub enum SignedQueryValidationError {
     #[error("Query request JSON exceeded its decode resource limit")]
     DecodeResourceLimit,
 }
-
 impl SignedQueryValidationError {
     /// Return whether validation stopped at an active decode resource bound.
     #[doc(hidden)]
@@ -124,7 +116,6 @@ impl SignedQueryValidationError {
         matches!(self, Self::DecodeResourceLimit)
     }
 }
-
 fn verify_query_signature_for_signer(
     signature: &SignatureOf<QueryRequestWithAuthority>,
     signer: &PublicKey,
@@ -145,22 +136,18 @@ fn verify_query_signature_for_signer(
         .verify(signer, payload)
         .map_err(|_| SignedQueryValidationError::InvalidSignature)
 }
-
 impl iroha_version::Version for SignedQuery {
     fn version(&self) -> u8 {
         1
     }
-
     fn supported_versions() -> core::ops::Range<u8> {
         1..2
     }
 }
-
 #[cfg(test)]
 mod signature_tests {
     include!("tests/signatures.rs");
 }
-
 impl iroha_version::codec::EncodeVersioned for SignedQuery {
     fn encode_versioned(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(1);
@@ -169,13 +156,11 @@ impl iroha_version::codec::EncodeVersioned for SignedQuery {
         bytes
     }
 }
-
 impl iroha_version::codec::DecodeVersioned for SignedQuery {
     fn decode_all_versioned(input: &[u8]) -> iroha_version::error::Result<Self> {
         iroha_version::codec::decode_exact_versioned(input)
     }
 }
-
 /// Norito-compatible JSON representations for query payloads.
 #[cfg(all(feature = "json", not(doc)))]
 pub mod json_wrappers {
@@ -191,20 +176,16 @@ pub mod json_wrappers {
         #[error("query request JSON exceeded its decode resource limit")]
         DecodeResourceLimit,
     }
-
     impl From<&'static str> for QueryRequestJsonError {
         fn from(message: &'static str) -> Self {
             Self::Invalid(message)
         }
     }
-
     /// JSON wrapper for iterable query parameters (roundtrip-capable).
     ///
-    /// Two encodings are supported:
-    /// - Non-`fast_dsl`: include a stable `wire` identifier and `payload_b64` for the erased query.
-    /// - `fast_dsl`: include `item_kind` and the fast-DSL payload parts as base64.
-    ///
-    /// Carries query parameters alongside the request.
+    /// Carries the canonical iterable-query item discriminator, encoded query
+    /// components, and query parameters alongside the request. The legacy
+    /// `wire` fields remain present as empty compatibility fields.
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[cfg_attr(
         feature = "json",
@@ -214,29 +195,24 @@ pub mod json_wrappers {
         /// Parameters controlling pagination, sorting, and projections.
         pub params: parameters::QueryParams,
         #[norito(default)]
-        /// Optional stable identifier of the erased query type for non-`fast_dsl` payloads.
+        /// Legacy erased-query identifier; canonical envelopes leave this empty.
         pub wire: Option<String>,
         #[norito(default)]
-        /// Base64-encoded erased query payload when `wire` is present.
+        /// Legacy erased-query payload; canonical envelopes leave this empty.
         pub payload_b64: Option<String>,
-        #[cfg(feature = "fast_dsl")]
         #[norito(default)]
-        /// Query item discriminator for `fast_dsl` envelopes.
+        /// Query item discriminator for canonical iterable-query envelopes.
         pub item_kind: Option<QueryItemKind>,
-        #[cfg(feature = "fast_dsl")]
         #[norito(default)]
-        /// Base64-encoded fast DSL query payload.
+        /// Base64-encoded concrete query payload.
         pub query_payload_b64: Option<String>,
-        #[cfg(feature = "fast_dsl")]
         #[norito(default)]
         /// Base64-encoded predicate fragment associated with the query, if any.
         pub predicate_b64: Option<String>,
-        #[cfg(feature = "fast_dsl")]
         #[norito(default)]
         /// Base64-encoded selector fragment narrowing the result set.
         pub selector_b64: Option<String>,
     }
-
     /// JSON wrapper for `QueryRequest` enum.
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[cfg_attr(
@@ -252,7 +228,6 @@ pub mod json_wrappers {
         /// Continuation token for paginated iterable queries.
         Continue(parameters::ForwardCursor),
     }
-
     /// JSON wrapper for `QueryRequestWithAuthority`.
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[cfg_attr(
@@ -277,7 +252,6 @@ pub mod json_wrappers {
         /// Request being authorised.
         pub request: QueryRequestJson,
     }
-
     /// JSON wrapper for the canonical `SignedQuery` form.
     #[derive(Debug, Clone, PartialEq, Eq)]
     #[cfg_attr(
@@ -290,7 +264,6 @@ pub mod json_wrappers {
         /// Canonical payload describing the authorised query.
         pub payload: QueryRequestWithAuthorityJson,
     }
-
     /// JSON wrapper for versioned `SignedQuery`.
     ///
     /// Version is a string per common versioned JSON conventions elsewhere.
@@ -305,7 +278,6 @@ pub mod json_wrappers {
         #[norito(rename = "canonical")]
         Canonical(SignedQueryCanonicalJson),
     }
-
     /// Convert a JSON-wrapped query request into the native query request.
     ///
     /// # Errors
@@ -318,114 +290,49 @@ pub mod json_wrappers {
             QueryRequestJson::Singular(q) => Ok(QueryRequest::Singular(q)),
             QueryRequestJson::Continue(c) => Ok(QueryRequest::Continue(c)),
             QueryRequestJson::Start(s) => {
-                #[cfg(not(feature = "fast_dsl"))]
-                {
-                    let wire = s.wire.ok_or("missing wire id")?;
-                    let payload_b64 = s.payload_b64.ok_or("missing payload")?;
-                    let bytes = base64_decode(payload_b64).map_err(|error| {
+                let item = s.item_kind.ok_or("missing item_kind")?;
+                let query_payload = s.query_payload_b64.ok_or("missing query_payload_b64")?;
+                let predicate_b64 = s.predicate_b64.ok_or("missing predicate_b64")?;
+                let selector_b64 = s.selector_b64.ok_or("missing selector_b64")?;
+                let decode = |encoded: String, invalid: &'static str| {
+                    base64_decode(encoded).map_err(|error| {
                         if error.is_decode_resource_limit() {
                             QueryRequestJsonError::DecodeResourceLimit
                         } else {
-                            QueryRequestJsonError::Invalid("invalid payload_b64")
+                            QueryRequestJsonError::Invalid(invalid)
                         }
-                    })?;
-                    let qb = super::decode_registered_query(&wire, &bytes)
-                        .ok_or("unknown query wire id")?
-                        .map_err(|error| {
-                            if error.is_decode_resource_limit() {
-                                QueryRequestJsonError::DecodeResourceLimit
-                            } else {
-                                QueryRequestJsonError::Invalid("failed to decode query payload")
-                            }
-                        })?;
-                    Ok(QueryRequest::Start(QueryWithParams {
-                        query: qb,
-                        params: s.params,
-                    }))
-                }
-                #[cfg(feature = "fast_dsl")]
-                {
-                    let item = s.item_kind.ok_or("missing item_kind")?;
-                    let query_payload = s.query_payload_b64.ok_or("missing query_payload_b64")?;
-                    let predicate_b64 = s.predicate_b64.ok_or("missing predicate_b64")?;
-                    let selector_b64 = s.selector_b64.ok_or("missing selector_b64")?;
-                    let decode = |encoded: String, invalid: &'static str| {
-                        base64_decode(encoded).map_err(|error| {
-                            if error.is_decode_resource_limit() {
-                                QueryRequestJsonError::DecodeResourceLimit
-                            } else {
-                                QueryRequestJsonError::Invalid(invalid)
-                            }
-                        })
-                    };
-                    let qp = decode(query_payload, "bad query_payload_b64")?;
-                    let pr = decode(predicate_b64, "bad predicate_b64")?;
-                    let se = decode(selector_b64, "bad selector_b64")?;
-                    Ok(QueryRequest::Start(QueryWithParams {
-                        query: (),
-                        query_payload: qp,
-                        item,
-                        predicate_bytes: pr,
-                        selector_bytes: se,
-                        params: s.params,
-                    }))
-                }
+                    })
+                };
+                let qp = decode(query_payload, "bad query_payload_b64")?;
+                let pr = decode(predicate_b64, "bad predicate_b64")?;
+                let se = decode(selector_b64, "bad selector_b64")?;
+                Ok(QueryRequest::Start(QueryWithParams {
+                    query: (),
+                    query_payload: qp,
+                    item,
+                    predicate_bytes: pr,
+                    selector_bytes: se,
+                    params: s.params,
+                }))
             }
         }
     }
-
     /// Convert a query request into its JSON wrapper form.
     pub fn query_request_to_json(req: &QueryRequest) -> QueryRequestJson {
         match req {
             QueryRequest::Singular(q) => QueryRequestJson::Singular(q.clone()),
             QueryRequest::Continue(c) => QueryRequestJson::Continue(c.clone()),
-            QueryRequest::Start(qwp) => {
-                #[cfg(not(feature = "fast_dsl"))]
-                {
-                    qwp.query_box().map_or_else(
-                        || {
-                            // Fallback: emit params only
-                            QueryRequestJson::Start(QueryWithParamsJson {
-                                params: qwp.params.clone(),
-                                wire: None,
-                                payload_b64: None,
-                            })
-                        },
-                        |qb| {
-                            let wire = super::query_wire_id((**qb).type_name_key()).to_string();
-                            let payload = (**qb).encode_bytes();
-                            QueryRequestJson::Start(QueryWithParamsJson {
-                                params: qwp.params.clone(),
-                                wire: Some(wire),
-                                payload_b64: Some(base64_encode(&payload)),
-                                #[cfg(feature = "fast_dsl")]
-                                item_kind: None,
-                                #[cfg(feature = "fast_dsl")]
-                                query_payload_b64: None,
-                                #[cfg(feature = "fast_dsl")]
-                                predicate_b64: None,
-                                #[cfg(feature = "fast_dsl")]
-                                selector_b64: None,
-                            })
-                        },
-                    )
-                }
-                #[cfg(feature = "fast_dsl")]
-                {
-                    QueryRequestJson::Start(QueryWithParamsJson {
-                        params: qwp.params.clone(),
-                        wire: None,
-                        payload_b64: None,
-                        item_kind: Some(qwp.item),
-                        query_payload_b64: Some(base64_encode(&qwp.query_payload)),
-                        predicate_b64: Some(base64_encode(&qwp.predicate_bytes)),
-                        selector_b64: Some(base64_encode(&qwp.selector_bytes)),
-                    })
-                }
-            }
+            QueryRequest::Start(qwp) => QueryRequestJson::Start(QueryWithParamsJson {
+                params: qwp.params.clone(),
+                wire: None,
+                payload_b64: None,
+                item_kind: Some(qwp.item),
+                query_payload_b64: Some(base64_encode(&qwp.query_payload)),
+                predicate_b64: Some(base64_encode(&qwp.predicate_bytes)),
+                selector_b64: Some(base64_encode(&qwp.selector_bytes)),
+            }),
         }
     }
-
     impl TryFrom<SignedQueryJson> for SignedQuery {
         type Error = SignedQueryValidationError;
         fn try_from(v: SignedQueryJson) -> Result<Self, Self::Error> {
@@ -458,7 +365,6 @@ pub mod json_wrappers {
             }
         }
     }
-
     impl From<&SignedQuery> for SignedQueryJson {
         fn from(sq: &SignedQuery) -> Self {
             let req_json = query_request_to_json(&sq.payload.request);
@@ -475,12 +381,10 @@ pub mod json_wrappers {
             })
         }
     }
-
     pub(super) fn base64_encode(bytes: &[u8]) -> String {
         use base64::engine::{Engine, general_purpose::STANDARD};
         STANDARD.encode(bytes)
     }
-
     fn base64_value(byte: u8) -> Option<u8> {
         match byte {
             b'A'..=b'Z' => Some(byte - b'A'),
@@ -491,7 +395,6 @@ pub mod json_wrappers {
             _ => None,
         }
     }
-
     /// Decode canonical padded base64 by reusing the owned JSON string buffer.
     ///
     /// Each four-byte input quantum is loaded before its three-byte output is
@@ -544,7 +447,6 @@ pub mod json_wrappers {
         bytes.truncate(written);
         Ok(bytes)
     }
-
     pub(super) fn base64_encode_to<S: norito::json::JsonWriteSink + ?Sized>(
         bytes: &[u8],
         output: &mut S,
@@ -589,32 +491,27 @@ pub mod json_wrappers {
         }
         output.push('"')
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
 
         #[derive(Default)]
         struct StringSink(String);
-
         impl norito::json::JsonWriteSink for StringSink {
             fn push(&mut self, value: char) -> Result<(), norito::json::BoundedJsonError> {
                 self.0.push(value);
                 Ok(())
             }
-
             fn push_str(&mut self, value: &str) -> Result<(), norito::json::BoundedJsonError> {
                 self.0.push_str(value);
                 Ok(())
             }
-
             fn reserve(&mut self, additional: usize) -> Result<(), norito::json::BoundedJsonError> {
                 self.0
                     .try_reserve(additional)
                     .map_err(|_| norito::json::BoundedJsonError::AllocationFailed)
             }
         }
-
         #[test]
         fn streaming_base64_matches_standard_encoding() {
             for input in [
@@ -630,7 +527,6 @@ pub mod json_wrappers {
                 assert_eq!(sink.0, format!("\"{}\"", base64_encode(input)));
             }
         }
-
         #[test]
         fn base64_decode_reuses_the_owned_input_allocation() {
             let encoded = String::from("YWJjZA==");
@@ -641,7 +537,6 @@ pub mod json_wrappers {
             assert_eq!(decoded.as_ptr(), allocation);
             assert_eq!(decoded.capacity(), capacity);
         }
-
         #[test]
         fn base64_decode_rejects_noncanonical_padding_and_tail_bits() {
             for invalid in ["A", "====", "AA=A", "AA==AAAA", "AB==", "AAB="] {
@@ -650,7 +545,6 @@ pub mod json_wrappers {
         }
     }
 }
-
 /// JSON utilities for assembling and parsing queries.
 #[cfg(feature = "json")]
 #[doc = "JSON conversion helpers used by query APIs."]
@@ -662,21 +556,13 @@ use crate::{
     ValidationFail,
     prelude::{InstructionBox, TransactionEntrypoint, TransactionRejectionReason},
 };
-
 /// Builder helpers for constructing query instances.
 #[doc = "Builder utilities for composing typed queries."]
 pub mod builder;
-// Use the full DSL by default; swap for a lightweight version under `fast_dsl`.
 /// Ergonomic DSL for building queries.
-#[cfg(not(feature = "fast_dsl"))]
-#[doc = "Declarative query DSL."]
+#[doc = "Canonical query DSL for filtering and projection."]
+#[path = "dsl_fast.rs"]
 pub mod dsl;
-/// Optimised DSL variant that avoids intermediate allocations.
-#[cfg(feature = "fast_dsl")]
-#[doc = "Optimized query DSL for fast evaluation."]
-pub mod dsl_fast;
-#[cfg(feature = "fast_dsl")]
-pub use dsl_fast as dsl;
 /// Query parameter types and helpers.
 #[doc = "Query parameter storage and cursor types."]
 pub mod parameters;
@@ -688,17 +574,13 @@ pub(crate) mod tx_predicate;
 pub trait SingularQuery: seal::SingularQuery {
     /// The type of the output of the query
     type Output;
-
     /// Execute the query. No-op by default
     fn execute(&self) {}
-
     /// Encode the query into bytes using Norito binary serialization
     fn dyn_encode(&self) -> Vec<u8>;
-
     /// Downcast to concrete type
     fn as_any(&self) -> &dyn Any;
 }
-
 /// A query that returns an iterable collection of values.
 ///
 /// Implementations are typically used through the [`QueryBox`] type alias
@@ -711,10 +593,19 @@ pub trait SingularQuery: seal::SingularQuery {
 pub trait Query: seal::Query + Send + Sync + 'static {
     /// The type of single element of the output collection
     type Item: HasProjection<PredicateMarker> + HasProjection<SelectorMarker, AtomType = ()>;
-
     /// Execute the query. No-op by default
     fn execute(&self) {}
-
+    /// Return the wire discriminator for this concrete iterable query.
+    ///
+    /// Most queries use the discriminator of their output item. Queries whose
+    /// payloads would otherwise be ambiguous can override this method with a
+    /// query-specific discriminator.
+    fn query_item_kind(&self) -> QueryItemKind
+    where
+        Self::Item: ItemKindTag,
+    {
+        <Self::Item as ItemKindTag>::kind()
+    }
     /// Encode the query into bytes using Norito binary serialization
     fn dyn_encode(&self) -> Vec<u8>
     where
@@ -722,7 +613,6 @@ pub trait Query: seal::Query + Send + Sync + 'static {
     {
         self.encode()
     }
-
     /// Return the exact fixed-v1 bare payload length without erasing through an owned buffer.
     #[doc(hidden)]
     fn dyn_encoded_len_exact(&self) -> Option<usize>
@@ -732,7 +622,6 @@ pub trait Query: seal::Query + Send + Sync + 'static {
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         norito::core::NoritoSerialize::encoded_len_exact(self)
     }
-
     /// Stream the fixed-v1 bare payload into an existing Norito encoder.
     #[doc(hidden)]
     fn dyn_encode_to(
@@ -744,7 +633,6 @@ pub trait Query: seal::Query + Send + Sync + 'static {
     {
         norito::codec::encode_adaptive_into(self, writer)
     }
-
     /// Downcast to concrete type
     fn as_any(&self) -> &dyn Any
     where
@@ -753,17 +641,14 @@ pub trait Query: seal::Query + Send + Sync + 'static {
         self
     }
 }
-
 /// Function signature used to construct a query from raw bytes.
 pub type QueryConstructor = fn(&[u8]) -> Result<QueryBox<QueryOutputBatchBox>, norito::Error>;
-
 #[derive(Clone, Copy)]
 struct QueryRegistryEntry {
     type_name: &'static str,
     wire_id: &'static str,
     ctor: QueryConstructor,
 }
-
 impl QueryRegistryEntry {
     fn collides_with(&self, other: &Self) -> bool {
         self.type_name != other.type_name
@@ -772,19 +657,16 @@ impl QueryRegistryEntry {
                 || self.wire_id == other.wire_id)
     }
 }
-
 /// Registry storing query constructors under both Rust type names and stable wire identifiers.
 #[derive(Default)]
 pub struct QueryRegistry {
     entries: Vec<QueryRegistryEntry>,
 }
-
 impl QueryRegistry {
     /// Create an empty registry.
     pub fn new() -> Self {
         Self::default()
     }
-
     /// Register a query type.
     #[must_use]
     pub fn register<T>(self) -> Self
@@ -793,7 +675,6 @@ impl QueryRegistry {
     {
         self.register_with_id::<T>(std::any::type_name::<T>())
     }
-
     /// Register a query type with an explicit, path-independent wire identifier.
     ///
     /// The concrete Rust [`std::any::type_name`] remains a valid lookup key for
@@ -811,7 +692,6 @@ impl QueryRegistry {
             let query = T::decode(&mut &*input)?;
             Ok(Box::new(query))
         }
-
         let entry = QueryRegistryEntry {
             type_name: std::any::type_name::<T>(),
             wire_id,
@@ -838,7 +718,6 @@ impl QueryRegistry {
         }
         self
     }
-
     fn assert_compatible_with(&self, other: &Self) {
         for entry in &other.entries {
             if let Some(previous) = self
@@ -853,7 +732,6 @@ impl QueryRegistry {
             }
         }
     }
-
     /// Decode a query using a registered Rust type name or stable wire identifier.
     pub fn decode(
         &self,
@@ -865,7 +743,6 @@ impl QueryRegistry {
             .find(|entry| entry.type_name == name || entry.wire_id == name)
             .map(|entry| (entry.ctor)(bytes))
     }
-
     /// Return the canonical wire identifier for a registered Rust type name.
     #[must_use]
     pub fn wire_id(&self, type_name: &str) -> Option<&'static str> {
@@ -875,7 +752,6 @@ impl QueryRegistry {
             .map(|entry| entry.wire_id)
     }
 }
-
 /// Build a [`QueryRegistry`] populated with the provided query types.
 #[macro_export]
 macro_rules! query_registry {
@@ -884,25 +760,20 @@ macro_rules! query_registry {
             $(.register::<$ty>())*
     };
 }
-
 static QUERY_REGISTRY: OnceLock<QueryRegistry> = OnceLock::new();
-
 static DEFAULT_QUERY_REGISTRY: OnceLock<QueryRegistry> = OnceLock::new();
-
 macro_rules! define_builtin_query_registry {
     ($($ty:ty => $wire_id:literal),* $(,)?) => {
         #[cfg(test)]
         const BUILTIN_QUERY_WIRE_ASSIGNMENTS: &[(&str, &str)] = &[
             $((stringify!($ty), $wire_id)),*
         ];
-
         fn build_builtin_query_registry() -> QueryRegistry {
             QueryRegistry::new()
                 $(.register_with_id::<$ty>($wire_id))*
         }
     };
 }
-
 define_builtin_query_registry! {
     ErasedIterQuery<crate::domain::Domain>
         => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::model::Domain>",
@@ -939,7 +810,6 @@ define_builtin_query_registry! {
     ErasedIterQuery<crate::nexus::FeeSponsorProgramId>
         => "iroha_data_model::query::ErasedIterQuery<iroha_data_model::nexus::fee_sponsor_program::FeeSponsorProgramId>",
 }
-
 /// Set the global query registry used to decode queries by type name or stable wire identifier.
 ///
 /// This should be called exactly once during application start-up. Subsequent
@@ -962,7 +832,6 @@ pub fn set_query_registry(registry: QueryRegistry) {
     builtin_query_registry().assert_compatible_with(&registry);
     let _ = QUERY_REGISTRY.set(registry);
 }
-
 fn query_wire_id_from_registries(
     type_name: &'static str,
     builtin: &QueryRegistry,
@@ -973,11 +842,9 @@ fn query_wire_id_from_registries(
         .or_else(|| installed.and_then(|registry| registry.wire_id(type_name)))
         .unwrap_or(type_name)
 }
-
 fn query_wire_id(type_name: &'static str) -> &'static str {
     query_wire_id_from_registries(type_name, builtin_query_registry(), QUERY_REGISTRY.get())
 }
-
 fn decode_query_from_registries(
     name: &str,
     bytes: &[u8],
@@ -988,18 +855,15 @@ fn decode_query_from_registries(
         .decode(name, bytes)
         .or_else(|| installed.and_then(|registry| registry.decode(name, bytes)))
 }
-
 fn decode_registered_query(
     name: &str,
     bytes: &[u8],
 ) -> Option<Result<QueryBox<QueryOutputBatchBox>, norito::Error>> {
     decode_query_from_registries(name, bytes, builtin_query_registry(), QUERY_REGISTRY.get())
 }
-
 fn builtin_query_registry() -> &'static QueryRegistry {
     DEFAULT_QUERY_REGISTRY.get_or_init(build_builtin_query_registry)
 }
-
 #[cfg(test)]
 #[path = "tests/wire_ids.rs"]
 mod wire_id_tests;
@@ -1014,12 +878,10 @@ mod model {
         prelude::{TransactionEntrypoint, TransactionResult},
         trigger::action,
     };
-
     /// An iterable query bundled with a filter.
     ///
-    /// This structure stores the query as a boxed trait object so heterogeneous
-    /// registry entries can be handled uniformly while predicates/selectors are
-    /// still being migrated to their final shape.
+    /// The concrete query payload is carried by [`QueryWithParams`]; this
+    /// structure contains the predicate and selector applied to its item type.
     #[derive(Decode, Encode, Constructor, IntoSchema)]
     pub struct QueryWithFilter<T>
     where
@@ -1028,17 +890,11 @@ mod model {
             + Send
             + Sync,
     {
-        /// Inner query wrapped in a trait object for dynamic dispatch.
-        #[cfg(not(feature = "fast_dsl"))]
-        #[cfg_attr(feature = "json", norito(skip))]
-        pub query: Box<dyn Query<Item = T> + Send + Sync>,
-        /// Placeholder in fast mode to avoid heavy trait object bounds/derives.
-        #[cfg(feature = "fast_dsl")]
+        /// Unit marker; the concrete query is encoded separately.
         pub query: (),
         pub predicate: CompoundPredicate<T>,
         pub selector: SelectorTuple<T>,
     }
-
     impl<T> QueryWithFilter<T>
     where
         T: HasProjection<PredicateMarker>
@@ -1046,34 +902,16 @@ mod model {
             + Send
             + Sync,
     {
-        /// Constructor that accepts the concrete query in non-`fast_dsl` builds and ignores it
-        /// in `fast_dsl` builds where the query payload is carried elsewhere.
+        /// Construct a filtered query whose concrete payload is carried elsewhere.
         #[inline]
         pub fn new_with_query(
-            #[cfg(not(feature = "fast_dsl"))] query: Box<dyn super::Query<Item = T> + Send + Sync>,
-            #[cfg(feature = "fast_dsl")] (): (),
+            (): (),
             predicate: CompoundPredicate<T>,
             selector: SelectorTuple<T>,
         ) -> Self {
-            #[cfg(not(feature = "fast_dsl"))]
-            {
-                Self::new(query, predicate, selector)
-            }
-            #[cfg(feature = "fast_dsl")]
-            {
-                Self::new((), predicate, selector)
-            }
+            Self::new((), predicate, selector)
         }
     }
-
-    #[allow(dead_code)]
-    fn predicate_default<T>() -> CompoundPredicate<T>
-    where
-        T: HasProjection<PredicateMarker>,
-    {
-        CompoundPredicate::PASS
-    }
-
     /// Type-erased iterable query used throughout the data model.
     ///
     /// This is an alias for `Box<dyn ErasedQuery<T> + Send + Sync>` enabling heterogeneous
@@ -1089,7 +927,6 @@ mod model {
         /// Encode the erased query into Norito bytes.
         fn erased_encode(&self) -> Vec<u8>;
     }
-
     impl<T: Encode> ErasedEncode for T {
         fn erased_encode(&self) -> Vec<u8> {
             self.encode()
@@ -1120,7 +957,6 @@ mod model {
         /// the concrete type.
         fn type_name_key(&self) -> &'static str;
     }
-
     impl<T, Q> ErasedQuery<T> for Q
     where
         Q: Query<Item = T> + ErasedEncode + Any + Send + Sync + norito::core::NoritoSerialize,
@@ -1145,10 +981,8 @@ mod model {
             std::any::type_name::<Self>()
         }
     }
-
     /// Type alias used for ergonomic query handling.
     pub type QueryBox<T> = Box<dyn ErasedQuery<T> + Send + Sync>;
-
     fn query_box_tuple_flags() -> u8 {
         let defaults = norito::core::default_encode_flags();
         let dynamic_mask = norito::core::header_flags::PACKED_SEQ;
@@ -1168,7 +1002,6 @@ mod model {
             }
         }
     }
-
     fn query_box_encoded_len(name: &str, payload_len: usize, flags: u8) -> Option<usize> {
         let name_len = name
             .len()
@@ -1179,7 +1012,6 @@ mod model {
             .checked_add(norito::core::len_prefix_len_with_flags(payload_len, flags))?
             .checked_add(payload_len)
     }
-
     impl norito::core::NoritoSerialize for QueryBox<QueryOutputBatchBox> {
         fn serialize(
             &self,
@@ -1206,7 +1038,6 @@ mod model {
                 query.encode_payload_to(&mut counter)?
             };
             let _flags = norito::core::DecodeFlagsGuard::enter_with_hint(flags, flags);
-
             let name_len = name
                 .len()
                 .checked_add(norito::core::len_prefix_len_with_flags(name.len(), flags))
@@ -1222,7 +1053,6 @@ mod model {
                 flags,
             )?;
             writer.write_all(name.as_bytes())?;
-
             let payload_field_len = payload_len
                 .checked_add(8)
                 .ok_or(norito::core::Error::LengthMismatch)?;
@@ -1242,11 +1072,9 @@ mod model {
             }
             Ok(())
         }
-
         fn encoded_len_hint(&self) -> Option<usize> {
             self.encoded_len_exact()
         }
-
         fn encoded_len_exact(&self) -> Option<usize> {
             let query = &**self;
             let name = query_wire_id(query.type_name_key());
@@ -1257,7 +1085,6 @@ mod model {
             query_box_encoded_len(name, query.encoded_payload_len_exact()?, flags)
         }
     }
-
     impl<'a> norito::core::NoritoDeserialize<'a> for QueryBox<QueryOutputBatchBox> {
         fn deserialize(
             archived: &'a norito::core::Archived<QueryBox<QueryOutputBatchBox>>,
@@ -1269,7 +1096,6 @@ mod model {
                 .expect("failed to decode query")
         }
     }
-
     /// An enum of all possible iterable query batches.
     ///
     /// We have an enum of batches instead of individual elements, because it makes it easier to check that the batches have elements of the same type and reduces serialization overhead.
@@ -1374,7 +1200,6 @@ mod model {
         /// Batch of fee sponsor program identifiers.
         FeeSponsorProgramId(Vec<crate::nexus::FeeSponsorProgramId>),
     }
-
     #[derive(Debug, Clone, PartialEq, Eq, Encode, IntoSchema)]
     #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
     /// Helper tuple to materialise batches into Norito collections.
@@ -1382,7 +1207,6 @@ mod model {
         /// Sequence of batches produced by an iterable query.
         pub(super) tuple: Vec<QueryOutputBatchBox>,
     }
-
     /// An enum of all possible singular queries
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, FromVariant)]
     #[cfg_attr(
@@ -1602,7 +1426,6 @@ mod model {
         #[doc(hidden)]
         __TestFallback,
     }
-
     /// An enum of all possible singular query outputs
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, FromVariant)]
     #[cfg_attr(
@@ -1809,7 +1632,6 @@ mod model {
         /// Non-fungible asset payload.
         Nft(crate::nft::Nft),
     }
-
     /// The results of a single iterable query request.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1828,188 +1650,121 @@ mod model {
         /// If not `None`, contains a cursor that can be used to fetch the next batch of results. Otherwise the current batch is the last one.
         pub continue_cursor: Option<ForwardCursor>,
     }
-
-    /// A type-erased iterable query, along with all the parameters needed to execute it
+    /// A canonical iterable-query envelope with all parameters needed to execute it.
     #[derive(Decode, Encode)]
     pub struct QueryWithParams {
-        /// Concrete query payload (absent when `fast_dsl` is enabled).
-        #[cfg(not(feature = "fast_dsl"))]
-        pub query: QueryBox<QueryOutputBatchBox>,
-        /// Placeholder to keep layout stable when `fast_dsl` is enabled.
-        #[cfg(feature = "fast_dsl")]
+        /// Unit marker preserving the canonical query envelope layout.
         pub query: (),
-        /// Encoded query payload for `fast_dsl` runs.
-        #[cfg(feature = "fast_dsl")]
+        /// Encoded concrete query payload.
         pub query_payload: Vec<u8>,
-        /// Item kind for `fast_dsl` queries.
-        #[cfg(feature = "fast_dsl")]
+        /// Query/item discriminator for the iterable query.
         pub item: QueryItemKind,
-        /// Encoded predicate used by `fast_dsl`.
-        #[cfg(feature = "fast_dsl")]
+        /// Encoded predicate.
         pub predicate_bytes: Vec<u8>,
-        /// Encoded selector used by `fast_dsl`.
-        #[cfg(feature = "fast_dsl")]
+        /// Encoded selector.
         pub selector_bytes: Vec<u8>,
         /// Cursor and pagination parameters.
         pub params: QueryParams,
     }
-
     impl Clone for QueryWithParams {
         fn clone(&self) -> Self {
-            #[cfg(feature = "fast_dsl")]
-            {
-                Self {
-                    query: (),
-                    query_payload: self.query_payload.clone(),
-                    item: self.item,
-                    predicate_bytes: self.predicate_bytes.clone(),
-                    selector_bytes: self.selector_bytes.clone(),
-                    params: self.params.clone(),
-                }
-            }
-
-            #[cfg(not(feature = "fast_dsl"))]
-            {
-                let type_name = self.query.type_name_key();
-                let payload = self.query.encode_bytes();
-                let query = decode_registered_query(type_name, &payload)
-                    .expect("QueryWithParams::clone: query type is not registered")
-                    .expect("QueryWithParams::clone: failed to decode boxed query");
-
-                Self {
-                    query,
-                    params: self.params.clone(),
-                }
+            Self {
+                query: (),
+                query_payload: self.query_payload.clone(),
+                item: self.item,
+                predicate_bytes: self.predicate_bytes.clone(),
+                selector_bytes: self.selector_bytes.clone(),
+                params: self.params.clone(),
             }
         }
     }
-
-    type FastDslParts<'a> = (QueryItemKind, &'a [u8], &'a [u8], &'a [u8]);
-
-    #[cfg(feature = "fast_dsl")]
-    const INVALID_FAST_DSL_COMPONENT: [u8; 4] = [0xFF; 4];
-
+    const INVALID_QUERY_COMPONENT: [u8; 4] = [0xFF; 4];
     impl QueryWithParams {
-        /// Convenience constructor from a boxed erased query and params.
+        /// Construct the canonical query envelope from an erased query and parameters.
         ///
-        /// - In non-`fast_dsl` builds, this stores the provided `query` directly.
-        /// - In `fast_dsl` builds, this extracts the predicate and selector from the
-        ///   type-erased iterable query and records its item kind and payload.
-        pub fn new(
-            #[cfg(not(feature = "fast_dsl"))] query: QueryBox<QueryOutputBatchBox>,
-            #[cfg(feature = "fast_dsl")] query: &QueryBox<QueryOutputBatchBox>,
-            params: QueryParams,
-        ) -> Self {
-            #[cfg(not(feature = "fast_dsl"))]
-            {
-                Self { query, params }
+        /// An erased carrier retains only the output item type, so it cannot
+        /// distinguish query types whose payload shapes are identical. Build
+        /// seller-, buyer-, and status-filtered escrow queries through
+        /// [`crate::query::builder::QueryBuilder`] (or construct this envelope
+        /// with the corresponding query-specific [`QueryItemKind`]) instead.
+        pub fn new(query: &QueryBox<QueryOutputBatchBox>, params: QueryParams) -> Self {
+            macro_rules! try_build {
+                ($item:ty, $kind:ident) => {
+                    if let Some(erased) = super::iter_query_inner::<$item>(query) {
+                        return Self {
+                            query: (),
+                            query_payload: erased.payload().to_vec(),
+                            item: QueryItemKind::$kind,
+                            predicate_bytes: norito::codec::Encode::encode(erased.predicate()),
+                            selector_bytes: norito::codec::Encode::encode(erased.selector()),
+                            params,
+                        };
+                    }
+                };
             }
-            #[cfg(feature = "fast_dsl")]
-            {
-                macro_rules! try_build {
-                    ($item:ty, $kind:ident) => {
-                        if let Some(erased) = super::iter_query_inner::<$item>(query) {
-                            return Self {
-                                query: (),
-                                query_payload: erased.payload().to_vec(),
-                                item: QueryItemKind::$kind,
-                                predicate_bytes: norito::codec::Encode::encode(erased.predicate()),
-                                selector_bytes: norito::codec::Encode::encode(erased.selector()),
-                                params,
-                            };
-                        }
-                    };
-                }
-                // Attempt for all supported item kinds
-                try_build!(crate::domain::Domain, Domain);
-                try_build!(crate::account::Account, Account);
-                try_build!(crate::account::AccountId, AccountId);
-                try_build!(crate::asset::value::Asset, Asset);
-                try_build!(crate::asset::definition::AssetDefinition, AssetDefinition);
-                try_build!(crate::repo::RepoAgreement, RepoAgreement);
-                try_build!(crate::nft::Nft, Nft);
-                try_build!(crate::rwa::Rwa, Rwa);
-                try_build!(crate::role::Role, Role);
-                try_build!(crate::role::RoleId, RoleId);
-                try_build!(crate::peer::PeerId, PeerId);
-                try_build!(crate::trigger::TriggerId, TriggerId);
-                try_build!(crate::trigger::Trigger, Trigger);
-                try_build!(crate::query::CommittedTransaction, CommittedTransaction);
-                try_build!(crate::block::SignedBlock, SignedBlock);
-                try_build!(crate::block::BlockHeader, BlockHeader);
-                try_build!(crate::proof::ProofRecord, ProofRecord);
-                try_build!(crate::nexus::FeeSponsorProgram, FeeSponsorProgram);
-                try_build!(crate::nexus::FeeSponsorProgramId, FeeSponsorProgramId);
-                try_build!(crate::permission::Permission, Permission);
-                try_build!(crate::oracle::FeedConfig, OracleFeedConfig);
-                try_build!(
-                    crate::events::data::oracle::FeedEventRecord,
-                    OracleFeedEventRecord
-                );
-                try_build!(
-                    crate::oracle::OracleProviderStatsRecord,
-                    OracleProviderStatsRecord
-                );
-                try_build!(crate::oracle::OracleDispute, OracleDispute);
-                try_build!(crate::oracle::OracleChangeProposal, OracleChangeProposal);
-                try_build!(crate::oracle::TwitterBindingRecord, TwitterBindingRecord);
-                try_build!(crate::oracle::DefiOracleAttestation, DefiOracleAttestation);
-                try_build!(crate::escrow::AssetEscrowRecord, AssetEscrowRecord);
-
-                // Keep the infallible constructor API, but encode an unsupported erased type as a
-                // deliberately noncanonical envelope. All three byte components fail decoding,
-                // and the query payload is not the canonical encoding of either domain query.
-                Self {
-                    query: (),
-                    query_payload: INVALID_FAST_DSL_COMPONENT.to_vec(),
-                    item: QueryItemKind::Domain,
-                    predicate_bytes: INVALID_FAST_DSL_COMPONENT.to_vec(),
-                    selector_bytes: INVALID_FAST_DSL_COMPONENT.to_vec(),
-                    params,
-                }
+            try_build!(crate::domain::Domain, Domain);
+            try_build!(crate::account::Account, Account);
+            try_build!(crate::account::AccountId, AccountId);
+            try_build!(crate::asset::value::Asset, Asset);
+            try_build!(crate::asset::definition::AssetDefinition, AssetDefinition);
+            try_build!(crate::repo::RepoAgreement, RepoAgreement);
+            try_build!(crate::nft::Nft, Nft);
+            try_build!(crate::rwa::Rwa, Rwa);
+            try_build!(crate::role::Role, Role);
+            try_build!(crate::role::RoleId, RoleId);
+            try_build!(crate::peer::PeerId, PeerId);
+            try_build!(crate::trigger::TriggerId, TriggerId);
+            try_build!(crate::trigger::Trigger, Trigger);
+            try_build!(crate::query::CommittedTransaction, CommittedTransaction);
+            try_build!(crate::block::SignedBlock, SignedBlock);
+            try_build!(crate::block::BlockHeader, BlockHeader);
+            try_build!(crate::proof::ProofRecord, ProofRecord);
+            try_build!(crate::nexus::FeeSponsorProgram, FeeSponsorProgram);
+            try_build!(crate::nexus::FeeSponsorProgramId, FeeSponsorProgramId);
+            try_build!(crate::permission::Permission, Permission);
+            try_build!(crate::oracle::FeedConfig, OracleFeedConfig);
+            try_build!(
+                crate::events::data::oracle::FeedEventRecord,
+                OracleFeedEventRecord
+            );
+            try_build!(
+                crate::oracle::OracleProviderStatsRecord,
+                OracleProviderStatsRecord
+            );
+            try_build!(crate::oracle::OracleDispute, OracleDispute);
+            try_build!(crate::oracle::OracleChangeProposal, OracleChangeProposal);
+            try_build!(crate::oracle::TwitterBindingRecord, TwitterBindingRecord);
+            try_build!(crate::oracle::DefiOracleAttestation, DefiOracleAttestation);
+            try_build!(crate::escrow::AssetEscrowRecord, AssetEscrowRecord);
+            // Keep the infallible constructor API, but encode an unsupported erased type as a
+            // deliberately noncanonical envelope. All three byte components fail decoding,
+            // and the query payload is not the canonical encoding of either domain query.
+            Self {
+                query: (),
+                query_payload: INVALID_QUERY_COMPONENT.to_vec(),
+                item: QueryItemKind::Domain,
+                predicate_bytes: INVALID_QUERY_COMPONENT.to_vec(),
+                selector_bytes: INVALID_QUERY_COMPONENT.to_vec(),
+                params,
             }
         }
-        /// Borrow the inner type-erased query box when available.
-        ///
-        /// In `fast_dsl` builds, the query payload is omitted and this returns `None`.
-        pub fn query_box(&self) -> Option<&QueryBox<QueryOutputBatchBox>> {
-            #[cfg(not(feature = "fast_dsl"))]
-            {
-                Some(&self.query)
-            }
-            #[cfg(feature = "fast_dsl")]
-            {
-                None
-            }
-        }
-
-        /// Access the fast-DSL payload components when available.
-        #[cfg(feature = "fast_dsl")]
-        pub fn fast_dsl_parts(&self) -> Option<FastDslParts<'_>> {
-            Some((
+        /// Access the canonical iterable-query payload components.
+        pub fn parts(&self) -> (QueryItemKind, &[u8], &[u8], &[u8]) {
+            (
                 self.item,
                 &self.predicate_bytes,
                 &self.selector_bytes,
                 &self.query_payload,
-            ))
-        }
-
-        /// Access the fast-DSL payload components when unavailable.
-        #[cfg(not(feature = "fast_dsl"))]
-        pub fn fast_dsl_parts(&self) -> Option<FastDslParts<'_>> {
-            let _ = self;
-            None
+            )
         }
     }
-
-    /// Item kind tag used in `fast_dsl` builds to indicate the target iterable type.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    #[cfg_attr(feature = "fast_dsl", derive(Decode, Encode, IntoSchema))]
+    /// Wire discriminator identifying an iterable query or its target item type.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
-    /// Categories of query items used for pagination and filtering.
+    /// Categories of iterable queries used for dispatch, pagination, and filtering.
     #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
     pub enum QueryItemKind {
         /// Domain items.
@@ -2068,186 +1823,160 @@ mod model {
         FeeSponsorProgram,
         /// Fee sponsor program identifier records.
         FeeSponsorProgramId,
+        /// Native asset escrows filtered by seller (wire tag 28).
+        ///
+        /// This query-specific tag is appended because seller and buyer query
+        /// payloads both encode as a single [`AccountId`]. The tag is therefore
+        /// the consensus-visible discriminator; existing variants above must
+        /// never be reordered.
+        AssetEscrowsBySeller,
+        /// Native asset escrows filtered by buyer (wire tag 29).
+        AssetEscrowsByBuyer,
+        /// Native asset escrows filtered by lifecycle status (wire tag 30).
+        AssetEscrowsByStatus,
     }
-
     /// Trait mapping item types to a `QueryItemKind` marker.
     ///
-    /// In `fast_dsl` builds this is implemented for each supported item type
-    /// and used to populate the item kind in requests. In non-`fast_dsl`
-    /// builds this trait is a no-op blanket impl so that code can be generic
-    /// over it without additional feature gating in bounds.
+    /// Implemented for each supported canonical iterable-query item type.
     pub trait ItemKindTag {
-        #[cfg(feature = "fast_dsl")]
         /// Return the [`QueryItemKind`] discriminator for the implementing type.
         fn kind() -> QueryItemKind;
     }
-
-    #[cfg(not(feature = "fast_dsl"))]
-    impl<T> ItemKindTag for T {}
-
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for Domain {
         fn kind() -> QueryItemKind {
             QueryItemKind::Domain
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for Account {
         fn kind() -> QueryItemKind {
             QueryItemKind::Account
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for AccountId {
         fn kind() -> QueryItemKind {
             QueryItemKind::AccountId
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for Asset {
         fn kind() -> QueryItemKind {
             QueryItemKind::Asset
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for AssetDefinition {
         fn kind() -> QueryItemKind {
             QueryItemKind::AssetDefinition
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for RepoAgreement {
         fn kind() -> QueryItemKind {
             QueryItemKind::RepoAgreement
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for Nft {
         fn kind() -> QueryItemKind {
             QueryItemKind::Nft
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for Rwa {
         fn kind() -> QueryItemKind {
             QueryItemKind::Rwa
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for Role {
         fn kind() -> QueryItemKind {
             QueryItemKind::Role
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for RoleId {
         fn kind() -> QueryItemKind {
             QueryItemKind::RoleId
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for PeerId {
         fn kind() -> QueryItemKind {
             QueryItemKind::PeerId
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for TriggerId {
         fn kind() -> QueryItemKind {
             QueryItemKind::TriggerId
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for Trigger {
         fn kind() -> QueryItemKind {
             QueryItemKind::Trigger
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for CommittedTransaction {
         fn kind() -> QueryItemKind {
             QueryItemKind::CommittedTransaction
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for SignedBlock {
         fn kind() -> QueryItemKind {
             QueryItemKind::SignedBlock
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for BlockHeader {
         fn kind() -> QueryItemKind {
             QueryItemKind::BlockHeader
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for crate::proof::ProofRecord {
         fn kind() -> QueryItemKind {
             QueryItemKind::ProofRecord
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for crate::oracle::FeedConfig {
         fn kind() -> QueryItemKind {
             QueryItemKind::OracleFeedConfig
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for crate::events::data::oracle::FeedEventRecord {
         fn kind() -> QueryItemKind {
             QueryItemKind::OracleFeedEventRecord
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for crate::oracle::OracleProviderStatsRecord {
         fn kind() -> QueryItemKind {
             QueryItemKind::OracleProviderStatsRecord
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for crate::oracle::OracleDispute {
         fn kind() -> QueryItemKind {
             QueryItemKind::OracleDispute
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for crate::oracle::OracleChangeProposal {
         fn kind() -> QueryItemKind {
             QueryItemKind::OracleChangeProposal
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for crate::oracle::TwitterBindingRecord {
         fn kind() -> QueryItemKind {
             QueryItemKind::TwitterBindingRecord
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for crate::oracle::DefiOracleAttestation {
         fn kind() -> QueryItemKind {
             QueryItemKind::DefiOracleAttestation
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for crate::permission::Permission {
         fn kind() -> QueryItemKind {
             QueryItemKind::Permission
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for crate::escrow::AssetEscrowRecord {
         fn kind() -> QueryItemKind {
             QueryItemKind::AssetEscrowRecord
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for crate::nexus::FeeSponsorProgram {
         fn kind() -> QueryItemKind {
             QueryItemKind::FeeSponsorProgram
         }
     }
-    #[cfg(feature = "fast_dsl")]
     impl ItemKindTag for crate::nexus::FeeSponsorProgramId {
         fn kind() -> QueryItemKind {
             QueryItemKind::FeeSponsorProgramId
@@ -2259,12 +1988,10 @@ mod model {
             "QueryWithParams".to_owned()
         }
     }
-
     impl iroha_schema::IntoSchema for QueryWithParams {
         fn type_name() -> String {
             "QueryWithParams".to_owned()
         }
-
         fn update_schema_map(map: &mut iroha_schema::MetaMap) {
             use iroha_schema::{Declaration, Metadata, NamedFieldsMeta};
             if !map.contains_key::<Self>() {
@@ -2278,7 +2005,6 @@ mod model {
             }
         }
     }
-
     /// A query request that can be sent to an Iroha peer.
     ///
     /// In case of HTTP API, the query request must also be signed (see [`QueryRequestWithAuthority`] and [`SignedQuery`]).
@@ -2291,7 +2017,6 @@ mod model {
         /// Continue an iterable query from a cursor.
         Continue(ForwardCursor),
     }
-
     /// An enum containing either a singular or an iterable query
     #[derive(Decode, Encode, IntoSchema)]
     pub enum AnyQueryBox {
@@ -2300,7 +2025,6 @@ mod model {
         /// Wrapped iterable query.
         Iterable(QueryWithParams),
     }
-
     /// A response to a [`QueryRequest`] from an Iroha peer
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2315,7 +2039,6 @@ mod model {
         /// Iterable query output.
         Iterable(QueryOutput),
     }
-
     /// A [`QueryRequest`], combined with an authority that wants to execute the query
     #[derive(Decode, Encode, IntoSchema)]
     pub struct QueryRequestWithAuthority {
@@ -2336,12 +2059,10 @@ mod model {
         /// Query payload.
         pub request: QueryRequest,
     }
-
     /// A signature of [`QueryRequestWithAuthority`] to be used in [`SignedQuery`]
     #[derive(Debug, Clone, PartialEq, Eq, IntoSchema)]
     /// Container type for `QuerySignature(pub` query data.
     pub struct QuerySignature(pub SignatureOf<QueryRequestWithAuthority>);
-
     #[cfg(not(feature = "ffi_import"))]
     impl<'a> norito::core::DecodeFromSlice<'a> for QuerySignature {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -2352,21 +2073,17 @@ mod model {
             Ok((QuerySignature(signature), used))
         }
     }
-
     #[cfg(not(feature = "ffi_import"))]
     impl norito::core::NoritoSerialize for QuerySignature {
         fn schema_hash() -> [u8; 16] {
             <SignatureOf<QueryRequestWithAuthority> as norito::core::NoritoSerialize>::schema_hash()
         }
-
         fn encoded_len_hint(&self) -> Option<usize> {
             norito::core::NoritoSerialize::encoded_len_hint(&self.0)
         }
-
         fn encoded_len_exact(&self) -> Option<usize> {
             norito::core::NoritoSerialize::encoded_len_exact(&self.0)
         }
-
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -2374,20 +2091,17 @@ mod model {
             norito::core::NoritoSerialize::serialize(&self.0, writer)
         }
     }
-
     #[cfg(not(feature = "ffi_import"))]
     impl<'de> norito::core::NoritoDeserialize<'de> for QuerySignature {
         fn schema_hash() -> [u8; 16] {
             <SignatureOf<QueryRequestWithAuthority> as norito::core::NoritoDeserialize>::schema_hash(
             )
         }
-
         fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
             let as_sig = archived.cast::<SignatureOf<QueryRequestWithAuthority>>();
             let sig = <SignatureOf<QueryRequestWithAuthority> as norito::core::NoritoDeserialize>::deserialize(as_sig);
             QuerySignature(sig)
         }
-
         fn try_deserialize(
             archived: &'de norito::core::Archived<Self>,
         ) -> Result<Self, norito::core::Error> {
@@ -2396,14 +2110,12 @@ mod model {
             Ok(QuerySignature(sig))
         }
     }
-
     #[cfg(feature = "json")]
     impl norito::json::FastJsonWrite for QuerySignature {
         fn write_json(&self, out: &mut String) {
             let encoded = super::json_wrappers::base64_encode(self.0.payload());
             norito::json::write_json_string(&encoded, out);
         }
-
         fn write_json_to(
             &self,
             out: &mut dyn norito::json::JsonWriteSink,
@@ -2411,7 +2123,6 @@ mod model {
             super::json_wrappers::base64_encode_to(self.0.payload(), out)
         }
     }
-
     #[cfg(feature = "json")]
     impl norito::json::JsonDeserialize for QuerySignature {
         fn json_deserialize(
@@ -2439,14 +2150,12 @@ mod model {
             Ok(QuerySignature(SignatureOf::from_signature(signature)))
         }
     }
-
     /// A signed and authorized query request
     #[derive(Encode, IntoSchema)]
     pub struct SignedQuery {
         pub signature: QuerySignature,
         pub payload: QueryRequestWithAuthority,
     }
-
     /// Verifiable source metadata for a transaction committed through a merge carrier.
     #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2471,7 +2180,6 @@ mod model {
         /// Typed Merkle root of result hashes in the same order.
         pub result_merkle_root: HashOf<MerkleTree<TransactionResult>>,
     }
-
     /// Response returned by [`FindTransactions`] query.
     #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -2502,7 +2210,6 @@ mod model {
         pub merge_inclusion: Option<CertifiedMergeTransactionInclusion>,
     }
 }
-
 impl CommittedTransaction {
     /// Verify this committed transaction's inclusion proofs against its exact carrier block.
     ///
@@ -2512,11 +2219,9 @@ impl CommittedTransaction {
     #[must_use]
     pub fn verify_inclusion_in_block(&self, block: &SignedBlock) -> bool {
         const MAX_MERKLE_LEAF_COUNT: u64 = 1_u64 << u32::BITS;
-
         if self.merge_inclusion.is_some() {
             return self.verify_certified_merge_inclusion_in_block(block);
         }
-
         if block.hash() != self.block_hash
             || self.entrypoint_hash != self.entrypoint.hash()
             || self.result_hash != self.result.hash()
@@ -2524,7 +2229,6 @@ impl CommittedTransaction {
         {
             return false;
         }
-
         let entrypoint_count = block.entrypoint_hashes().len();
         let result_count = block.result_hashes().len();
         let leaf_index = self.entrypoint_proof.leaf_index() as usize;
@@ -2543,7 +2247,6 @@ impl CommittedTransaction {
         if leaf_count.get() > MAX_MERKLE_LEAF_COUNT {
             return false;
         }
-
         let Some(entrypoint_root) = block.full_entry_merkle_root() else {
             return false;
         };
@@ -2552,14 +2255,12 @@ impl CommittedTransaction {
         };
         let entrypoint_commitment = MerkleTreeCommitment::new(entrypoint_root, leaf_count);
         let result_commitment = MerkleTreeCommitment::new(result_root, leaf_count);
-
         self.entrypoint_proof
             .verify(&self.entrypoint_hash, &entrypoint_commitment)
             && self
                 .result_proof
                 .verify(&self.result_hash, &result_commitment)
     }
-
     /// Verify this transaction's merge proofs against a compact reference from its carrier block.
     ///
     /// Ordinary block transactions return `false`; callers should verify those against the block
@@ -2570,7 +2271,6 @@ impl CommittedTransaction {
         reference: &CertifiedMergeLedgerReference,
     ) -> bool {
         const MAX_MERKLE_LEAF_COUNT: u64 = 1_u64 << u32::BITS;
-
         let Some(inclusion) = self.merge_inclusion.as_ref() else {
             return false;
         };
@@ -2603,7 +2303,6 @@ impl CommittedTransaction {
                 .result_proof
                 .verify(&self.result_hash, &result_commitment)
     }
-
     /// Verify this transaction against the exact signed carrier block.
     ///
     /// This additionally binds the compact merge reference to `block_hash`, so
@@ -2624,7 +2323,6 @@ impl CommittedTransaction {
                 })
     }
 }
-
 // Server-side predicate support for CommittedTransaction (feature-gated on std)
 /// Filters applied when matching committed transactions.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Encode, Decode)]
@@ -2674,7 +2372,6 @@ pub struct CommittedTxFilters {
     /// Require whether a result is present (`true`) or absent (`false`).
     pub result_exists: Option<bool>,
 }
-
 impl CommittedTxFilters {
     /// Helper associated with query processing.
     #[allow(clippy::too_many_lines)]
@@ -2812,9 +2509,7 @@ impl CommittedTxFilters {
         true
     }
 }
-
 impl crate::seal::SingularQuery for SingularQueryBox {}
-
 /// A type-erased iterable query retaining its predicate and selector.
 ///
 /// `ErasedIterQuery` allows storing queries with different concrete types in a
@@ -2834,11 +2529,9 @@ where
     /// `asset_definition` for `FindAccountsWithAsset`) are preserved.
     payload: Vec<u8>,
 }
-
 struct ErasedIterQueryStreaming<'a, T>(&'a ErasedIterQuery<T>)
 where
     T: HasProjection<PredicateMarker> + HasProjection<SelectorMarker, AtomType = ()> + Send + Sync;
-
 impl<T> norito::core::NoritoSerialize for ErasedIterQueryStreaming<'_, T>
 where
     T: HasProjection<PredicateMarker> + HasProjection<SelectorMarker, AtomType = ()> + Send + Sync,
@@ -2858,11 +2551,9 @@ where
         }
         Ok(())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         if norito::core::use_packed_struct() {
             return norito::core::NoritoSerialize::encoded_len_exact(self.0);
@@ -2879,7 +2570,6 @@ where
         Some(total)
     }
 }
-
 /// Attempt to extract a concrete `&QueryWithFilter<T>` from a type-erased iterable query.
 ///
 /// This enables downstream crates (e.g., visitor utilities) to dispatch on the
@@ -2897,7 +2587,6 @@ where
     let any: &dyn Any = &**q;
     any.downcast_ref::<ErasedIterQuery<T>>()
 }
-
 impl<T> seal::Query for ErasedIterQuery<T> where
     T: HasProjection<PredicateMarker>
         + HasProjection<SelectorMarker, AtomType = ()>
@@ -2906,7 +2595,6 @@ impl<T> seal::Query for ErasedIterQuery<T> where
         + 'static
 {
 }
-
 impl<T> Query for ErasedIterQuery<T>
 where
     T: HasProjection<PredicateMarker>
@@ -2916,28 +2604,23 @@ where
         + 'static,
 {
     type Item = QueryOutputBatchBox;
-
     fn dyn_encode(&self) -> Vec<u8> {
         norito::codec::encode_adaptive(&ErasedIterQueryStreaming(self))
     }
-
     fn dyn_encoded_len_exact(&self) -> Option<usize> {
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         norito::core::NoritoSerialize::encoded_len_exact(&ErasedIterQueryStreaming(self))
     }
-
     fn dyn_encode_to(
         &self,
         writer: &mut norito::core::Encoder<'_>,
     ) -> Result<usize, norito::core::Error> {
         norito::codec::encode_adaptive_into(&ErasedIterQueryStreaming(self), writer)
     }
-
     fn as_any(&self) -> &dyn Any {
         self
     }
 }
-
 impl<T> ErasedIterQuery<T>
 where
     T: HasProjection<PredicateMarker> + HasProjection<SelectorMarker, AtomType = ()> + Send + Sync,
@@ -2970,15 +2653,12 @@ where
     pub fn selector_cloned(&self) -> SelectorTuple<T> {
         self.selector.clone()
     }
-
     /// Borrow the encoded payload of the original concrete query.
     pub fn payload(&self) -> &[u8] {
         &self.payload
     }
 }
-
 // NOTE: Projection traits for QueryOutputBatchBox are provided generically in the DSL.
-
 impl<T> From<QueryWithFilter<T>> for QueryBox<QueryOutputBatchBox>
 where
     T: HasProjection<PredicateMarker>
@@ -2988,15 +2668,9 @@ where
         + 'static,
 {
     fn from(query: QueryWithFilter<T>) -> Self {
-        // Best-effort: downcast the erased query to known concrete types to
-        // capture its encoded payload. If downcast fails (e.g., in fast_dsl
-        // builds), fall back to an empty payload.
-        #[allow(unused_mut)]
-        let mut payload: Vec<u8> = Vec::new();
-        // NOTE: We cannot introspect the actual concrete type from the trait
-        // object here due to object-safety constraints (`as_any` requires Sized).
-        // Leave the payload empty in this construction path; the primary
-        // builder path (`QueryBuilder::execute`) preserves the payload.
+        // This conversion has no concrete query value to encode. The primary
+        // builder path carries the concrete payload explicitly.
+        let payload = Vec::new();
         Box::new(ErasedIterQuery::new(
             query.predicate,
             query.selector,
@@ -3004,7 +2678,6 @@ where
         ))
     }
 }
-
 #[cfg(feature = "fault_injection")]
 impl CommittedTransaction {
     /// Injects a set of fictitious instructions into the transaction payload to simulate tampering.
@@ -3016,11 +2689,9 @@ impl CommittedTransaction {
     ) {
         let additions: Vec<InstructionBox> =
             extra_instructions.into_iter().map(Into::into).collect();
-
         if additions.is_empty() {
             return;
         }
-
         match &mut self.entrypoint {
             TransactionEntrypoint::External(entrypoint) => {
                 entrypoint.inject_instructions(additions.clone());
@@ -3040,7 +2711,6 @@ impl CommittedTransaction {
         // Update the leaf hash to match the tampered entrypoint.
         self.entrypoint_hash = self.entrypoint.hash();
     }
-
     /// Swaps the transaction result between `Ok` and `Err` to simulate tampering.
     ///
     /// Only available when the `fault_injection` feature is enabled.
@@ -3057,7 +2727,6 @@ impl CommittedTransaction {
         self.result_hash = self.result.hash();
     }
 }
-
 impl QueryOutputBatchBox {
     // this is used in client cli to do type-erased iterable queries
     /// Extends this batch with another batch of the same type.
@@ -3124,7 +2793,6 @@ impl QueryOutputBatchBox {
         }
         Ok(())
     }
-
     /// Returns the number of rows in this batch column.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -3177,35 +2845,29 @@ impl QueryOutputBatchBox {
             Self::FeeSponsorProgramId(v) => v.len(),
         }
     }
-
     /// Returns `true` if this batch column contains no rows.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
-
 #[derive(Decode, Encode)]
 struct QueryOutputBatchBoxTupleCandidate {
     tuple: Vec<QueryOutputBatchBox>,
 }
-
 impl QueryOutputBatchBoxTupleCandidate {
     fn validate(self) -> Result<QueryOutputBatchBoxTuple, QueryOutputBatchBoxTupleError> {
         QueryOutputBatchBoxTuple::new(self.tuple)
     }
 }
-
 impl<'de> norito::core::NoritoDeserialize<'de> for QueryOutputBatchBoxTuple {
     fn schema_hash() -> [u8; 16] {
         <Self as norito::core::NoritoSerialize>::schema_hash()
     }
-
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("valid QueryOutputBatchBoxTuple archive must satisfy column invariants")
     }
-
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -3218,7 +2880,6 @@ impl<'de> norito::core::NoritoDeserialize<'de> for QueryOutputBatchBoxTuple {
             .map_err(|error| norito::core::Error::Message(error.to_string()))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for QueryOutputBatchBoxTuple {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (candidate, used) =
@@ -3229,7 +2890,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for QueryOutputBatchBoxTuple {
         Ok((batch, used))
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for QueryOutputBatchBoxTuple {
     fn json_deserialize(
@@ -3239,12 +2899,10 @@ impl norito::json::JsonDeserialize for QueryOutputBatchBoxTuple {
         struct Candidate {
             tuple: Vec<QueryOutputBatchBox>,
         }
-
         let candidate = Candidate::json_deserialize(parser)?;
         Self::new(candidate.tuple).map_err(|error| norito::json::Error::Message(error.to_string()))
     }
 }
-
 impl QueryOutputBatchBoxTuple {
     /// Constructs a validated column-oriented query batch.
     ///
@@ -3258,13 +2916,11 @@ impl QueryOutputBatchBoxTuple {
         Self::validate_columns(&tuple)?;
         Ok(Self { tuple })
     }
-
     /// Constructs a query batch containing exactly one column.
     #[must_use]
     pub fn from_batch(batch: QueryOutputBatchBox) -> Self {
         Self { tuple: vec![batch] }
     }
-
     fn validate_columns(
         tuple: &[QueryOutputBatchBox],
     ) -> Result<usize, QueryOutputBatchBoxTupleError> {
@@ -3284,7 +2940,6 @@ impl QueryOutputBatchBoxTuple {
         }
         Ok(expected)
     }
-
     /// Extends this batch tuple with another batch tuple of the same shape and types.
     ///
     /// The operation is atomic: validation completes before any column is mutated.
@@ -3299,13 +2954,11 @@ impl QueryOutputBatchBoxTuple {
                 actual: other.tuple.len(),
             });
         }
-
         for (column, (left, right)) in self.tuple.iter().zip(&other.tuple).enumerate() {
             if core::mem::discriminant(left) != core::mem::discriminant(right) {
                 return Err(QueryOutputBatchBoxTupleError::ColumnTypeMismatch { column });
             }
         }
-
         for (column, (self_batch, other_batch)) in
             self.tuple.iter_mut().zip(other.tuple).enumerate()
         {
@@ -3315,93 +2968,75 @@ impl QueryOutputBatchBoxTuple {
         }
         Ok(())
     }
-
     /// Returns the number of rows in this batch tuple.
     #[must_use]
     pub fn len(&self) -> usize {
         self.tuple.first().map_or(0, QueryOutputBatchBox::len)
     }
-
     /// Returns `true` if this batch tuple contains zero rows.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
     /// Returns the number of columns in this batch tuple.
     #[must_use]
     pub fn column_count(&self) -> usize {
         self.tuple.len()
     }
-
     /// Borrows the column batches in their selector order.
     #[must_use]
     pub fn columns(&self) -> &[QueryOutputBatchBox] {
         &self.tuple
     }
-
     /// Consumes the tuple and returns its column batches in selector order.
     #[must_use]
     pub fn into_columns(self) -> Vec<QueryOutputBatchBox> {
         self.tuple
     }
-
     /// Returns an iterator over the columns in this tuple.
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &QueryOutputBatchBox> {
         self.tuple.iter()
     }
 }
-
 impl TryFrom<Vec<QueryOutputBatchBox>> for QueryOutputBatchBoxTuple {
     type Error = QueryOutputBatchBoxTupleError;
-
     fn try_from(tuple: Vec<QueryOutputBatchBox>) -> Result<Self, Self::Error> {
         Self::new(tuple)
     }
 }
-
 impl From<QueryOutputBatchBox> for QueryOutputBatchBoxTuple {
     fn from(batch: QueryOutputBatchBox) -> Self {
         Self::from_batch(batch)
     }
 }
-
 impl IntoIterator for QueryOutputBatchBoxTuple {
     type Item = QueryOutputBatchBox;
     type IntoIter = QueryOutputBatchBoxIntoIter;
-
     fn into_iter(self) -> Self::IntoIter {
         QueryOutputBatchBoxIntoIter(self.tuple.into_iter())
     }
 }
-
 /// An iterator over the batches in a [`QueryOutputBatchBoxTuple`]
 pub struct QueryOutputBatchBoxIntoIter(vec::IntoIter<QueryOutputBatchBox>);
-
 impl Iterator for QueryOutputBatchBoxIntoIter {
     type Item = QueryOutputBatchBox;
-
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
     }
 }
-
 #[cfg(test)]
 #[path = "tests/query_output_batch_box_tuple.rs"]
 mod query_output_batch_box_tuple_tests;
 
 impl SingularQuery for SingularQueryBox {
     type Output = SingularQueryOutputBox;
-
     fn dyn_encode(&self) -> Vec<u8> {
         self.encode()
     }
-
     fn as_any(&self) -> &dyn Any {
         self
     }
 }
-
 impl QueryOutput {
     /// Create a new [`QueryOutput`] from the iroha response parts.
     pub fn new(
@@ -3417,7 +3052,6 @@ impl QueryOutput {
             continue_cursor,
         }
     }
-
     /// Create a new [`QueryOutput`] when the exact remaining count is intentionally not computed.
     pub fn new_bounded(
         batch: QueryOutputBatchBoxTuple,
@@ -3431,18 +3065,15 @@ impl QueryOutput {
             continue_cursor,
         }
     }
-
     /// Return an exact remaining count when available, or `0` when the exact count was omitted.
     pub fn remaining_items_hint(&self) -> u64 {
         self.remaining_items.unwrap_or(0)
     }
-
     /// Split this [`QueryOutput`] into its constituent parts.
     pub fn into_parts(self) -> (QueryOutputBatchBoxTuple, u64, Option<ForwardCursor>) {
         let remaining_items = self.remaining_items.unwrap_or(0);
         (self.batch, remaining_items, self.continue_cursor)
     }
-
     /// Split this [`QueryOutput`] into its parts without forcing an exact count.
     pub fn into_parts_with_count_mode(
         self,
@@ -3460,7 +3091,6 @@ impl QueryOutput {
         )
     }
 }
-
 impl QueryRequest {
     /// Construct the exact network-, time-, and nonce-bound payload an authority will sign.
     pub fn with_authority(
@@ -3480,7 +3110,6 @@ impl QueryRequest {
             request: self,
         }
     }
-
     #[cfg(test)]
     fn with_test_authority(self, authority: AccountId) -> QueryRequestWithAuthority {
         let genesis_hash = HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(
@@ -3495,7 +3124,6 @@ impl QueryRequest {
         )
     }
 }
-
 impl QueryWithParams {
     /// Borrow the parameters attached to this iterable query request.
     #[must_use]
@@ -3503,50 +3131,42 @@ impl QueryWithParams {
         &self.params
     }
 }
-
 impl QueryRequestWithAuthority {
     /// Return the exact genesis-lineage identity this request targets.
     #[must_use]
     pub const fn network_id(&self) -> NetworkId {
         self.network_id
     }
-
     /// Return the authority that issued this request.
     #[must_use]
     pub fn authority(&self) -> &AccountId {
         &self.authority
     }
-
     /// Return the underlying query payload.
     #[must_use]
     pub fn request(&self) -> &QueryRequest {
         &self.request
     }
-
     /// Return the signed Unix creation timestamp in milliseconds.
     #[must_use]
     pub const fn creation_time_ms(&self) -> u64 {
         self.creation_time_ms
     }
-
     /// Return the signed nonzero request lifetime in milliseconds.
     #[must_use]
     pub const fn time_to_live_ms(&self) -> NonZeroU64 {
         self.time_to_live_ms
     }
-
     /// Return the signed one-shot replay nonce.
     #[must_use]
     pub const fn nonce(&self) -> &[u8; 32] {
         &self.nonce
     }
-
     /// Consume `self`, returning its components.
     #[must_use]
     pub fn into_parts(self) -> (AccountId, QueryRequest) {
         (self.authority, self.request)
     }
-
     /// Sign this [`QueryRequestWithAuthority`], creating a [`SignedQuery`].
     ///
     /// # Errors
@@ -3559,13 +3179,11 @@ impl QueryRequestWithAuthority {
         key_pair: &iroha_crypto::KeyPair,
     ) -> Result<SignedQuery, iroha_crypto::Error> {
         let signature = SignatureOf::try_new(key_pair.private_key(), &self)?;
-
         Ok(SignedQuery {
             signature: QuerySignature(signature),
             payload: self,
         })
     }
-
     /// Sign this [`QueryRequestWithAuthority`], creating a [`SignedQuery`]
     #[inline]
     #[must_use]
@@ -3574,18 +3192,15 @@ impl QueryRequestWithAuthority {
             .expect("signing should succeed for a valid key pair and query request")
     }
 }
-
 impl SignedQuery {
     /// Get authority that has signed this query
     pub fn authority(&self) -> &AccountId {
         &self.payload.authority
     }
-
     /// Get the request that was signed
     pub fn request(&self) -> &QueryRequest {
         &self.payload.request
     }
-
     /// Verify that the single-key authority signed the complete query payload.
     ///
     /// Decoding a [`SignedQuery`] is intentionally structural only. Network
@@ -3617,7 +3232,6 @@ mod candidate {
         signature: QuerySignature,
         payload: QueryRequestWithAuthority,
     }
-
     impl SignedQueryCandidate {
         fn into_signed(self) -> SignedQuery {
             SignedQuery {
@@ -3626,7 +3240,6 @@ mod candidate {
             }
         }
     }
-
     impl<'a> norito::core::DecodeFromSlice<'a> for SignedQuery {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
             let _guard = norito::core::PayloadCtxGuard::enter(bytes);
@@ -3638,7 +3251,6 @@ mod candidate {
             Ok((candidate.into_signed(), used))
         }
     }
-
     impl<'de> norito::core::NoritoDeserialize<'de> for SignedQuery {
         fn deserialize(archived: &'de norito::core::Archived<SignedQuery>) -> Self {
             let candidate = <SignedQueryCandidate as norito::core::NoritoDeserialize>::deserialize(
@@ -3646,7 +3258,6 @@ mod candidate {
             );
             candidate.into_signed()
         }
-
         fn try_deserialize(
             archived: &'de norito::core::Archived<SignedQuery>,
         ) -> Result<Self, norito::core::Error> {
@@ -3657,9 +3268,7 @@ mod candidate {
             Ok(candidate.into_signed())
         }
     }
-
     // JSON deserialization for SignedQuery is disabled in non-json builds.
-
     #[cfg(test)]
     mod tests {
         use std::sync::LazyLock;
@@ -3675,7 +3284,6 @@ mod candidate {
                 candidate::SignedQueryCandidate, parameters,
             },
         };
-
         #[cfg(feature = "json")]
         #[test]
         fn query_with_params_json_defaults_optional_fields() {
@@ -3686,21 +3294,15 @@ mod candidate {
                 json::to_value(&params).expect("params to JSON"),
             );
             let value = json::Value::Object(map);
-
             let parsed: super::json_wrappers::QueryWithParamsJson =
                 json::from_value(value).expect("missing optional fields must default");
-
             assert!(parsed.wire.is_none());
             assert!(parsed.payload_b64.is_none());
-            #[cfg(feature = "fast_dsl")]
-            {
-                assert!(parsed.item_kind.is_none());
-                assert!(parsed.query_payload_b64.is_none());
-                assert!(parsed.predicate_b64.is_none());
-                assert!(parsed.selector_b64.is_none());
-            }
+            assert!(parsed.item_kind.is_none());
+            assert!(parsed.query_payload_b64.is_none());
+            assert!(parsed.predicate_b64.is_none());
+            assert!(parsed.selector_b64.is_none());
         }
-
         static ALICE_ID: LazyLock<AccountId> =
             LazyLock::new(|| AccountId::new(ALICE_KEYPAIR.public_key().clone()));
         static ALICE_KEYPAIR: LazyLock<KeyPair> = LazyLock::new(|| {
@@ -3714,7 +3316,6 @@ mod candidate {
             )
             .unwrap()
         });
-
         static BOB_KEYPAIR: LazyLock<KeyPair> = LazyLock::new(|| {
             KeyPair::new(
                 "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016"
@@ -3726,14 +3327,12 @@ mod candidate {
             )
             .unwrap()
         });
-
         fn multisig_authority() -> AccountId {
             let member =
                 MultisigMember::new(ALICE_KEYPAIR.public_key().clone(), 1).expect("valid member");
             let policy = MultisigPolicy::new(1, vec![member]).expect("valid multisig policy");
             AccountId::new_multisig(policy)
         }
-
         #[test]
         fn valid() {
             let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
@@ -3741,15 +3340,12 @@ mod candidate {
             ))
             .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
-
             let candidate = SignedQueryCandidate {
                 signature: signed_query.signature,
                 payload: signed_query.payload,
             };
-
             candidate.into_signed().verify_signature().unwrap();
         }
-
         #[test]
         fn invalid_signature() {
             let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
@@ -3757,19 +3353,16 @@ mod candidate {
             ))
             .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
-
             let mut candidate = SignedQueryCandidate {
                 signature: signed_query.signature,
                 payload: signed_query.payload,
             };
-
             // Corrupt the raw signature payload and rebuild the signature
             let mut sig_bytes = candidate.signature.0.payload().to_vec();
             let idx = sig_bytes.len() - 1;
             sig_bytes[idx] = sig_bytes[idx].wrapping_add(1);
             *candidate.signature.0 = iroha_crypto::Signature::try_from_bytes(&sig_bytes)
                 .expect("tampered query signature remains structurally admissible");
-
             let err = candidate
                 .into_signed()
                 .verify_signature()
@@ -3777,7 +3370,6 @@ mod candidate {
                 .expect("expected signature validation to fail");
             assert_eq!(err, SignedQueryValidationError::InvalidSignature);
         }
-
         #[test]
         fn malformed_ed25519_signature_r_rejected_before_verify() {
             const SMALL_ORDER_R: [u8; 32] = [
@@ -3789,7 +3381,6 @@ mod candidate {
                 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
                 0xff, 0xff, 0xff, 0x7f,
             ];
-
             for (label, replacement_r) in [
                 ("small-order", SMALL_ORDER_R),
                 ("noncanonical", NONCANONICAL_R),
@@ -3806,7 +3397,6 @@ mod candidate {
                 let mut sig_bytes = candidate.signature.0.payload().to_vec();
                 sig_bytes[..replacement_r.len()].copy_from_slice(&replacement_r);
                 *candidate.signature.0 = iroha_crypto::Signature::from_bytes(&sig_bytes);
-
                 let err = candidate
                     .into_signed()
                     .verify_signature()
@@ -3815,7 +3405,6 @@ mod candidate {
                 assert_eq!(err, SignedQueryValidationError::InvalidSignatureMaterial);
             }
         }
-
         #[test]
         fn malformed_mldsa_signature_lengths_rejected_before_verify() {
             let keypair = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::MlDsa)
@@ -3831,7 +3420,6 @@ mod candidate {
             let valid_signature = signed_query.signature.0.payload().to_vec();
             iroha_crypto::mldsa65_parse_signature(&valid_signature)
                 .expect("valid ML-DSA signed query signature parses");
-
             for (label, replacement_signature) in [
                 (
                     "short",
@@ -3850,7 +3438,6 @@ mod candidate {
                 };
                 *candidate.signature.0 =
                     iroha_crypto::Signature::from_bytes(&replacement_signature);
-
                 let err = candidate
                     .into_signed()
                     .verify_signature()
@@ -3859,7 +3446,6 @@ mod candidate {
                 assert_eq!(err, SignedQueryValidationError::InvalidSignatureMaterial);
             }
         }
-
         #[test]
         fn mismatching_authority() {
             let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
@@ -3868,12 +3454,10 @@ mod candidate {
             // signing with a wrong key here
             .with_test_authority(ALICE_ID.clone())
             .sign(&BOB_KEYPAIR);
-
             let candidate = SignedQueryCandidate {
                 signature: signed_query.signature,
                 payload: signed_query.payload,
             };
-
             let err = candidate
                 .into_signed()
                 .verify_signature()
@@ -3881,7 +3465,6 @@ mod candidate {
                 .expect("expected signature validation to fail");
             assert_eq!(err, SignedQueryValidationError::InvalidSignature);
         }
-
         #[test]
         fn multisig_authority_is_rejected_without_unwinding() {
             let signed_query = QueryRequest::Singular(SingularQueryBox::FindExecutorDataModel(
@@ -3895,7 +3478,6 @@ mod candidate {
                 signature: signed_query.signature,
                 payload,
             };
-
             let error = match candidate.into_signed().verify_signature() {
                 Ok(_) => panic!("multisig query authority must be rejected"),
                 Err(error) => error,
@@ -3904,7 +3486,6 @@ mod candidate {
         }
     }
 }
-
 #[cfg(test)]
 mod json_roundtrip_tests {
     use std::sync::LazyLock;
@@ -3913,8 +3494,6 @@ mod json_roundtrip_tests {
     use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
 
     use super::*;
-    #[cfg(not(feature = "fast_dsl"))]
-    use crate::query::domain::prelude::FindDomains;
     use crate::{
         account::{AccountId, MultisigMember, MultisigPolicy},
         domain::Domain,
@@ -3923,7 +3502,6 @@ mod json_roundtrip_tests {
             json_wrappers::{SignedQueryJson, query_request_from_json, query_request_to_json},
         },
     };
-
     static ALICE_ID: LazyLock<AccountId> =
         LazyLock::new(|| AccountId::new(ALICE_KEYPAIR.public_key().clone()));
     static ALICE_KEYPAIR: LazyLock<KeyPair> = LazyLock::new(|| {
@@ -3937,14 +3515,12 @@ mod json_roundtrip_tests {
         )
         .unwrap()
     });
-
     fn multisig_authority() -> AccountId {
         let member =
             MultisigMember::new(ALICE_KEYPAIR.public_key().clone(), 1).expect("valid member");
         let policy = MultisigPolicy::new(1, vec![member]).expect("valid multisig policy");
         AccountId::new_multisig(policy)
     }
-
     #[test]
     fn query_request_json_roundtrip_singular() {
         let req = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
@@ -3955,17 +3531,14 @@ mod json_roundtrip_tests {
             _ => panic!("expected FindParameters singular query"),
         }
     }
-
     #[test]
     fn signed_query_versioned_roundtrip() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
             .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
-
         let bytes = signed.encode_versioned();
         let decoded =
             SignedQuery::decode_all_versioned(&bytes).expect("versioned signed query must decode");
-
         assert_eq!(decoded.authority(), signed.authority());
         assert_eq!(
             query_request_to_json(decoded.request()),
@@ -3973,35 +3546,30 @@ mod json_roundtrip_tests {
         );
         assert_eq!(decoded.signature.0.payload(), signed.signature.0.payload());
     }
-
     #[test]
     fn signed_query_versioned_decode_rejects_empty_payload_without_decode_panic() {
         let err = match SignedQuery::decode_all_versioned(&[]) {
             Ok(_) => panic!("empty signed query payload must be rejected"),
             Err(err) => err,
         };
-
         assert!(matches!(err, iroha_version::error::Error::NotVersioned));
         assert!(
             !err.to_string().contains("panic during decode"),
             "empty payloads should not surface as decode panics: {err}"
         );
     }
-
     #[test]
     fn signed_query_versioned_decode_rejects_version_only_payload_without_decode_panic() {
         let err = match SignedQuery::decode_all_versioned(&[1]) {
             Ok(_) => panic!("version-only signed query payload must be rejected"),
             Err(err) => err,
         };
-
         assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
         assert!(
             !err.to_string().contains("panic during decode"),
             "truncated payloads should not surface as decode panics: {err}"
         );
     }
-
     #[test]
     fn signed_query_versioned_decode_rejects_trailing_bytes() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
@@ -4009,15 +3577,12 @@ mod json_roundtrip_tests {
             .sign(&ALICE_KEYPAIR);
         let mut bytes = signed.encode_versioned();
         bytes.push(0);
-
         let err = match SignedQuery::decode_all_versioned(&bytes) {
             Ok(_) => panic!("versioned signed query decoder must reject trailing bytes"),
             Err(err) => err,
         };
-
         assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
     }
-
     #[test]
     fn signed_query_versioned_decode_rejects_unsupported_version_without_decode_panic() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
@@ -4025,12 +3590,10 @@ mod json_roundtrip_tests {
             .sign(&ALICE_KEYPAIR);
         let mut bytes = signed.encode_versioned();
         bytes[0] = 2;
-
         let err = match SignedQuery::decode_all_versioned(&bytes) {
             Ok(_) => panic!("unsupported signed query version must be rejected"),
             Err(err) => err,
         };
-
         assert!(matches!(
             err,
             iroha_version::error::Error::UnsupportedVersion(_)
@@ -4040,13 +3603,11 @@ mod json_roundtrip_tests {
             "unsupported versions should not surface as decode panics: {err}"
         );
     }
-
     #[test]
     fn signed_query_versioned_decode_is_structural_then_signature_is_verified_explicitly() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
             .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
-
         let mut signature = signed.signature.0.payload().to_vec();
         let last = signature
             .last_mut()
@@ -4059,7 +3620,6 @@ mod json_roundtrip_tests {
             )),
             payload: signed.payload,
         };
-
         let decoded = SignedQuery::decode_all_versioned(&invalid.encode_versioned())
             .expect("decoding must not spend cryptographic work");
         assert_eq!(
@@ -4067,7 +3627,6 @@ mod json_roundtrip_tests {
             Err(SignedQueryValidationError::InvalidSignature)
         );
     }
-
     #[test]
     fn signed_query_decode_is_structural_then_multisig_authority_is_rejected_explicitly() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
@@ -4079,7 +3638,6 @@ mod json_roundtrip_tests {
             signature: signed.signature,
             payload,
         };
-
         let encoded = norito::to_bytes(&invalid).expect("encode multisig query fixture");
         let archived =
             norito::from_bytes::<SignedQuery>(&encoded).expect("archive multisig query fixture");
@@ -4090,7 +3648,6 @@ mod json_roundtrip_tests {
             decoded.verify_signature(),
             Err(SignedQueryValidationError::AuthorityNotSingleKey)
         );
-
         let decoded = SignedQuery::decode_all_versioned(&invalid.encode_versioned())
             .expect("versioned decode must remain structural");
         assert_eq!(
@@ -4098,24 +3655,20 @@ mod json_roundtrip_tests {
             Err(SignedQueryValidationError::AuthorityNotSingleKey)
         );
     }
-
     #[test]
     fn signed_query_json_rejects_malformed_ed25519_signature_r() {
         const SMALL_ORDER_R: [u8; 32] = [
             1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             0, 0, 0,
         ];
-
         const NONCANONICAL_R: [u8; 32] = [
             0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
             .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
@@ -4125,10 +3678,8 @@ mod json_roundtrip_tests {
             let mut signature = canonical.signature.0.payload().to_vec();
             signature[..replacement_r.len()].copy_from_slice(&replacement_r);
             *canonical.signature.0 = Signature::from_bytes(&signature);
-
             let decoded = SignedQuery::try_from(json)
                 .expect("JSON conversion must remain structural before ingress admission");
-
             assert_eq!(
                 decoded.verify_signature(),
                 Err(SignedQueryValidationError::InvalidSignatureMaterial),
@@ -4136,7 +3687,6 @@ mod json_roundtrip_tests {
             );
         }
     }
-
     #[test]
     fn signed_query_json_rejects_multisig_authority_without_unwinding() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
@@ -4145,7 +3695,6 @@ mod json_roundtrip_tests {
         let mut json = SignedQueryJson::from(&signed);
         let SignedQueryJson::Canonical(canonical) = &mut json;
         canonical.payload.authority = multisig_authority();
-
         let decoded = SignedQuery::try_from(json)
             .expect("JSON conversion must remain structural before ingress admission");
         assert_eq!(
@@ -4153,7 +3702,6 @@ mod json_roundtrip_tests {
             Err(SignedQueryValidationError::AuthorityNotSingleKey)
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn signed_query_json_requires_every_replay_context_field() {
@@ -4162,7 +3710,6 @@ mod json_roundtrip_tests {
             .sign(&ALICE_KEYPAIR);
         let canonical = SignedQueryJson::from(&signed);
         let value = norito::json::to_value(&canonical).expect("serialize signed query JSON");
-
         for field in ["network_id", "creation_time_ms", "time_to_live_ms", "nonce"] {
             let mut missing = value.clone();
             missing
@@ -4171,14 +3718,12 @@ mod json_roundtrip_tests {
                 .and_then(norito::json::Value::as_object_mut)
                 .expect("canonical signed-query payload object")
                 .remove(field);
-
             assert!(
                 norito::json::from_value::<SignedQueryJson>(missing).is_err(),
                 "signed-query JSON without `{field}` must fail closed"
             );
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn signed_query_json_rejects_zero_time_to_live() {
@@ -4196,13 +3741,11 @@ mod json_roundtrip_tests {
                 "time_to_live_ms".to_owned(),
                 norito::json::Value::from(0_u64),
             );
-
         assert!(
             norito::json::from_value::<SignedQueryJson>(value).is_err(),
             "signed-query JSON must reject a zero lifetime before admission"
         );
     }
-
     #[test]
     fn signed_query_decode_rejects_empty_signature_without_decode_panic() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
@@ -4215,7 +3758,6 @@ mod json_roundtrip_tests {
         let encoded = norito::to_bytes(&invalid).expect("encode invalid signed query fixture");
         let archived =
             norito::from_bytes::<SignedQuery>(&encoded).expect("archive invalid signed query");
-
         let err =
             match <SignedQuery as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived) {
                 Ok(_) => panic!("empty signed query signature must fail closed"),
@@ -4226,7 +3768,6 @@ mod json_roundtrip_tests {
             message.contains("empty") || message.contains("length mismatch"),
             "unexpected signed query decode error: {message}"
         );
-
         let err = match SignedQuery::decode_all_versioned(&invalid.encode_versioned()) {
             Ok(_) => panic!("empty signed query signature must be rejected"),
             Err(err) => err,
@@ -4241,7 +3782,6 @@ mod json_roundtrip_tests {
             "empty signatures should not surface as decode panics: {message}"
         );
     }
-
     #[test]
     fn signed_query_decode_rejects_all_zero_signature_without_decode_panic() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
@@ -4256,7 +3796,6 @@ mod json_roundtrip_tests {
         let encoded = norito::to_bytes(&invalid).expect("encode invalid signed query fixture");
         let archived =
             norito::from_bytes::<SignedQuery>(&encoded).expect("archive invalid signed query");
-
         let err =
             match <SignedQuery as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived) {
                 Ok(_) => panic!("all-zero signed query signature must fail closed"),
@@ -4267,7 +3806,6 @@ mod json_roundtrip_tests {
             message.contains("all zero"),
             "unexpected signed query decode error: {message}"
         );
-
         let err = match SignedQuery::decode_all_versioned(&invalid.encode_versioned()) {
             Ok(_) => panic!("all-zero signed query signature must be rejected"),
             Err(err) => err,
@@ -4282,75 +3820,8 @@ mod json_roundtrip_tests {
             "all-zero signatures should not surface as decode panics: {message}"
         );
     }
-
-    #[cfg(not(feature = "fast_dsl"))]
     #[test]
-    fn signed_query_json_roundtrip_start_non_fastdsl() {
-        // Initialize a minimal registry for erased domain iterable queries
-        set_query_registry(crate::query_registry![ErasedIterQuery<Domain>]);
-
-        // Build a simple iterable query box for domains
-        let qwf: QueryWithFilter<Domain> = QueryWithFilter::new_with_query(
-            Box::new(FindDomains),
-            CompoundPredicate::PASS,
-            SelectorTuple::default(),
-        );
-        let qb: QueryBox<QueryOutputBatchBox> = qwf.into();
-        let query_with_params = QueryWithParams {
-            query: qb,
-            params: parameters::QueryParams::default(),
-        };
-
-        let signed = QueryRequest::Start(query_with_params)
-            .with_test_authority(ALICE_ID.clone())
-            .sign(&ALICE_KEYPAIR);
-
-        // Wrap to JSON and back
-        let json = SignedQueryJson::from(&signed);
-        let back = SignedQuery::try_from(json).expect("json->native");
-
-        // Check shape
-        match back.request() {
-            QueryRequest::Start(q) => {
-                // Should reconstruct a boxed query in non-fast_dsl build
-                let qb = q.query_box().expect("query box present");
-                let ty = (**qb).type_name_key();
-                assert!(ty.contains("ErasedIterQuery"));
-            }
-            _ => panic!("expected Start request"),
-        }
-    }
-
-    #[cfg(not(feature = "fast_dsl"))]
-    #[test]
-    fn query_with_params_clone_preserves_boxed_query_in_non_fast_dsl() {
-        set_query_registry(crate::query_registry![ErasedIterQuery<Domain>]);
-
-        let qwf: QueryWithFilter<Domain> = QueryWithFilter::new_with_query(
-            Box::new(FindDomains),
-            CompoundPredicate::PASS,
-            SelectorTuple::default(),
-        );
-        let original = QueryWithParams {
-            query: qwf.into(),
-            params: parameters::QueryParams::default(),
-        };
-
-        let cloned = original.clone();
-        let Some(query_box) = cloned.query_box() else {
-            panic!("cloned query must retain boxed query");
-        };
-
-        assert_eq!(
-            (**query_box).type_name_key(),
-            "iroha_data_model::query::ErasedIterQuery<iroha_data_model::domain::model::Domain>"
-        );
-        assert_eq!(cloned.params, original.params);
-    }
-
-    #[cfg(feature = "fast_dsl")]
-    #[test]
-    fn signed_query_json_roundtrip_start_fastdsl() {
+    fn signed_query_json_roundtrip_start() {
         // Construct QueryWithParams directly with payload components
         use crate::query::QueryItemKind;
         let pred = norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS);
@@ -4366,26 +3837,22 @@ mod json_roundtrip_tests {
         let signed = QueryRequest::Start(qwp)
             .with_test_authority(ALICE_ID.clone())
             .sign(&ALICE_KEYPAIR);
-
         let json = SignedQueryJson::from(&signed);
         let back = SignedQuery::try_from(json).expect("json->native");
         match back.request() {
             QueryRequest::Start(q) => {
-                // fast_dsl carries () for query and separate payloads
+                // Canonical iterable queries carry () and separate payloads.
                 let _ = (&q.predicate_bytes, &q.selector_bytes, q.item);
             }
             _ => panic!("expected Start request"),
         }
     }
-
-    #[cfg(feature = "fast_dsl")]
     #[test]
-    fn query_with_params_fast_dsl_unknown_type_is_non_executable() {
+    fn query_with_params_unknown_type_is_non_executable() {
         use crate::query::{
             QueryItemKind,
             domain::prelude::{FindDomains, FindDomainsByAccountId},
         };
-
         let unknown: QueryBox<QueryOutputBatchBox> =
             Box::new(ErasedIterQuery::<QueryOutputBatchBox>::new(
                 CompoundPredicate::PASS,
@@ -4394,7 +3861,6 @@ mod json_roundtrip_tests {
             ));
         let built = QueryWithParams::new(&unknown, parameters::QueryParams::default());
         let invalid_component = [0xFF; 4];
-
         assert_eq!(built.item, QueryItemKind::Domain);
         assert_eq!(built.query_payload, invalid_component);
         assert_eq!(built.predicate_bytes, invalid_component);
@@ -4404,7 +3870,6 @@ mod json_roundtrip_tests {
             norito::codec::Encode::encode(&FindDomains),
             "the compatibility carrier must not encode the global domain query"
         );
-
         let mut parameterized_input = built.query_payload.as_slice();
         if let Ok(decoded) =
             <FindDomainsByAccountId as norito::codec::Decode>::decode(&mut parameterized_input)
@@ -4415,7 +3880,6 @@ mod json_roundtrip_tests {
                 "the compatibility carrier must not be a canonical parameterized domain query"
             );
         }
-
         let mut predicate_input = built.predicate_bytes.as_slice();
         assert!(
             <CompoundPredicate<Domain> as norito::codec::Decode>::decode(&mut predicate_input)
@@ -4423,10 +3887,8 @@ mod json_roundtrip_tests {
             "the compatibility carrier predicate must fail closed"
         );
     }
-
-    #[cfg(feature = "fast_dsl")]
     #[test]
-    fn query_with_params_fast_dsl_maps_previously_omitted_item_kinds() {
+    fn query_with_params_maps_all_supported_item_kinds() {
         let invalid_component = [0xFF; 4];
         let repo: QueryBox<QueryOutputBatchBox> =
             Box::new(ErasedIterQuery::<crate::repo::RepoAgreement>::new(
@@ -4437,7 +3899,6 @@ mod json_roundtrip_tests {
         let repo = QueryWithParams::new(&repo, parameters::QueryParams::default());
         assert_eq!(repo.item, QueryItemKind::RepoAgreement);
         assert_ne!(repo.predicate_bytes, invalid_component);
-
         let defi: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<
             crate::oracle::DefiOracleAttestation,
         >::new(
@@ -4449,10 +3910,8 @@ mod json_roundtrip_tests {
         assert_eq!(defi.item, QueryItemKind::DefiOracleAttestation);
         assert_ne!(defi.predicate_bytes, invalid_component);
     }
-
-    #[cfg(feature = "fast_dsl")]
     #[test]
-    fn query_with_params_clone_preserves_fast_dsl_parts() {
+    fn query_with_params_clone_preserves_canonical_parts() {
         use crate::query::QueryItemKind;
 
         let pred = norito::codec::Encode::encode(&CompoundPredicate::<Domain>::PASS);
@@ -4465,7 +3924,6 @@ mod json_roundtrip_tests {
             selector_bytes: sel,
             params: parameters::QueryParams::default(),
         };
-
         let cloned = original.clone();
         assert_eq!(cloned.item, QueryItemKind::Permission);
         assert_eq!(cloned.query_payload, vec![1, 2, 3, 4]);
@@ -4473,23 +3931,219 @@ mod json_roundtrip_tests {
         assert_eq!(cloned.selector_bytes, original.selector_bytes);
         assert_eq!(cloned.params, original.params);
     }
+    #[test]
+    fn query_item_kind_discriminants_are_canonical() {
+        let kinds = [
+            QueryItemKind::Domain,
+            QueryItemKind::Account,
+            QueryItemKind::AccountId,
+            QueryItemKind::Asset,
+            QueryItemKind::AssetDefinition,
+            QueryItemKind::RepoAgreement,
+            QueryItemKind::Nft,
+            QueryItemKind::Rwa,
+            QueryItemKind::Role,
+            QueryItemKind::RoleId,
+            QueryItemKind::PeerId,
+            QueryItemKind::TriggerId,
+            QueryItemKind::Trigger,
+            QueryItemKind::CommittedTransaction,
+            QueryItemKind::SignedBlock,
+            QueryItemKind::BlockHeader,
+            QueryItemKind::ProofRecord,
+            QueryItemKind::OracleFeedConfig,
+            QueryItemKind::OracleFeedEventRecord,
+            QueryItemKind::OracleProviderStatsRecord,
+            QueryItemKind::OracleDispute,
+            QueryItemKind::OracleChangeProposal,
+            QueryItemKind::TwitterBindingRecord,
+            QueryItemKind::DefiOracleAttestation,
+            QueryItemKind::Permission,
+            QueryItemKind::AssetEscrowRecord,
+            QueryItemKind::FeeSponsorProgram,
+            QueryItemKind::FeeSponsorProgramId,
+            QueryItemKind::AssetEscrowsBySeller,
+            QueryItemKind::AssetEscrowsByBuyer,
+            QueryItemKind::AssetEscrowsByStatus,
+        ];
+        for (index, kind) in kinds.into_iter().enumerate() {
+            let expected = u32::try_from(index)
+                .expect("query item index fits u32")
+                .to_le_bytes();
+            assert_eq!(norito::codec::Encode::encode(&kind), expected);
+        }
+        let unknown = u32::MAX.to_le_bytes();
+        let mut unknown_input = unknown.as_slice();
+        assert!(
+            <QueryItemKind as norito::codec::Decode>::decode(&mut unknown_input).is_err(),
+            "unknown query discriminants must fail closed"
+        );
+    }
+    #[test]
+    fn escrow_query_tags_disambiguate_identical_account_payloads() {
+        use crate::{
+            escrow::{AssetEscrowRecord, AssetEscrowStatus},
+            query::{
+                Query,
+                escrow::prelude::{
+                    FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
+                },
+            },
+        };
+        let account = AccountId::new(ALICE_KEYPAIR.public_key().clone());
+        let seller_query = FindAssetEscrowsBySeller {
+            seller: account.clone(),
+        };
+        let buyer_query = FindAssetEscrowsByBuyer { buyer: account };
+        let status_query = FindAssetEscrowsByStatus {
+            status: AssetEscrowStatus::Open,
+        };
+        let seller_payload = norito::codec::Encode::encode(&seller_query);
+        let buyer_payload = norito::codec::Encode::encode(&buyer_query);
+        let status_payload = norito::codec::Encode::encode(&status_query);
+        assert_eq!(
+            seller_payload, buyer_payload,
+            "seller and buyer bodies intentionally need an envelope discriminator"
+        );
+        assert_eq!(
+            seller_query.query_item_kind(),
+            QueryItemKind::AssetEscrowsBySeller
+        );
+        assert_eq!(
+            buyer_query.query_item_kind(),
+            QueryItemKind::AssetEscrowsByBuyer
+        );
+        assert_eq!(
+            status_query.query_item_kind(),
+            QueryItemKind::AssetEscrowsByStatus
+        );
+        let predicate_bytes =
+            norito::codec::Encode::encode(&CompoundPredicate::<AssetEscrowRecord>::PASS);
+        let selector_bytes =
+            norito::codec::Encode::encode(&SelectorTuple::<AssetEscrowRecord>::default());
+        let seller_envelope = QueryWithParams {
+            query: (),
+            query_payload: seller_payload.clone(),
+            item: QueryItemKind::AssetEscrowsBySeller,
+            predicate_bytes: predicate_bytes.clone(),
+            selector_bytes: selector_bytes.clone(),
+            params: parameters::QueryParams::default(),
+        };
+        let buyer_envelope = QueryWithParams {
+            query: (),
+            query_payload: buyer_payload.clone(),
+            item: QueryItemKind::AssetEscrowsByBuyer,
+            predicate_bytes: predicate_bytes.clone(),
+            selector_bytes: selector_bytes.clone(),
+            params: parameters::QueryParams::default(),
+        };
+        let status_envelope = QueryWithParams {
+            query: (),
+            query_payload: status_payload.clone(),
+            item: QueryItemKind::AssetEscrowsByStatus,
+            predicate_bytes,
+            selector_bytes,
+            params: parameters::QueryParams::default(),
+        };
+        let seller_wire = norito::codec::Encode::encode(&seller_envelope);
+        let buyer_wire = norito::codec::Encode::encode(&buyer_envelope);
+        let status_wire = norito::codec::Encode::encode(&status_envelope);
+        let tag_offset = norito::codec::Encode::encode(&()).len()
+            + norito::codec::Encode::encode(&seller_payload).len();
+        assert_eq!(&seller_wire[..tag_offset], &buyer_wire[..tag_offset]);
+        assert_eq!(
+            &seller_wire[tag_offset..tag_offset + 4],
+            &28_u32.to_le_bytes()
+        );
+        assert_eq!(
+            &buyer_wire[tag_offset..tag_offset + 4],
+            &29_u32.to_le_bytes()
+        );
+        assert_eq!(
+            &seller_wire[tag_offset + 4..],
+            &buyer_wire[tag_offset + 4..]
+        );
+        let status_tag_offset = norito::codec::Encode::encode(&()).len()
+            + norito::codec::Encode::encode(&status_payload).len();
+        assert_eq!(
+            &status_wire[status_tag_offset..status_tag_offset + 4],
+            &30_u32.to_le_bytes()
+        );
+        let mut seller_input = seller_wire.as_slice();
+        let decoded_seller = <QueryWithParams as norito::codec::Decode>::decode(&mut seller_input)
+            .expect("decode seller envelope");
+        assert!(seller_input.is_empty());
+        assert_eq!(decoded_seller.item, QueryItemKind::AssetEscrowsBySeller);
+        assert_eq!(decoded_seller.query_payload, seller_payload);
+        let mut buyer_input = buyer_wire.as_slice();
+        let decoded_buyer = <QueryWithParams as norito::codec::Decode>::decode(&mut buyer_input)
+            .expect("decode buyer envelope");
+        assert!(buyer_input.is_empty());
+        assert_eq!(decoded_buyer.item, QueryItemKind::AssetEscrowsByBuyer);
+        assert_eq!(decoded_buyer.query_payload, buyer_payload);
+        let mut status_input = status_wire.as_slice();
+        let decoded_status = <QueryWithParams as norito::codec::Decode>::decode(&mut status_input)
+            .expect("decode status envelope");
+        assert!(status_input.is_empty());
+        assert_eq!(decoded_status.item, QueryItemKind::AssetEscrowsByStatus);
+        assert_eq!(decoded_status.query_payload, status_payload);
+    }
+    #[test]
+    fn query_with_params_encoding_preserves_canonical_field_order() {
+        let query_payload = vec![0x11, 0x22];
+        let predicate_bytes = vec![0x33];
+        let selector_bytes = vec![0x44, 0x55, 0x66];
+        let params = parameters::QueryParams::default();
+        let query = QueryWithParams {
+            query: (),
+            query_payload: query_payload.clone(),
+            item: QueryItemKind::AssetEscrowRecord,
+            predicate_bytes: predicate_bytes.clone(),
+            selector_bytes: selector_bytes.clone(),
+            params: params.clone(),
+        };
+        let mut expected = norito::codec::Encode::encode(&());
+        expected.extend(norito::codec::Encode::encode(&query_payload));
+        expected.extend(norito::codec::Encode::encode(
+            &QueryItemKind::AssetEscrowRecord,
+        ));
+        expected.extend(norito::codec::Encode::encode(&predicate_bytes));
+        expected.extend(norito::codec::Encode::encode(&selector_bytes));
+        expected.extend(norito::codec::Encode::encode(&params));
+        assert_eq!(norito::codec::Encode::encode(&query), expected);
+    }
 }
 /// Use a custom syntax to implement [`Query`] for applicable types
 macro_rules! impl_iter_queries {
-    ($ty:ty => $item:ty $(, $($rest:tt)*)?) => {
+    ($ty:ty => [$item:ty, $kind:ident] $(, $($rest:tt)*)?) => {
         impl seal::Query for $ty {}
         impl Query for $ty {
             type Item = $item;
-
+            fn query_item_kind(&self) -> QueryItemKind {
+                QueryItemKind::$kind
+            }
             fn dyn_encode(&self) -> Vec<u8> {
                 self.encode()
             }
-
             fn as_any(&self) -> &dyn Any {
                 self
             }
         }
-
+        $(
+            impl_iter_queries!($($rest)*);
+        )?
+    };
+    ($ty:ty => $item:ty $(, $($rest:tt)*)?) => {
+        impl seal::Query for $ty {}
+        impl Query for $ty {
+            type Item = $item;
+            fn dyn_encode(&self) -> Vec<u8> {
+                self.encode()
+            }
+            fn as_any(&self) -> &dyn Any {
+                self
+            }
+        }
         $(
             impl_iter_queries!($($rest)*);
         )?
@@ -4497,23 +4151,19 @@ macro_rules! impl_iter_queries {
     // allow for a trailing comma
     () => {}
 }
-
 /// Use a custom syntax to implement [`SingularQueries`] for applicable types
 macro_rules! impl_singular_queries {
     ($ty:ty => $output:ty $(, $($rest:tt)*)?) => {
         impl seal::SingularQuery for $ty {}
         impl SingularQuery for $ty {
             type Output = $output;
-
             fn dyn_encode(&self) -> Vec<u8> {
                 self.encode()
             }
-
             fn as_any(&self) -> &dyn Any {
                 self
             }
         }
-
         $(
             impl_singular_queries!($($rest)*);
         )?
@@ -4521,7 +4171,6 @@ macro_rules! impl_singular_queries {
     // allow for a trailing comma
     () => {}
 }
-
 impl_iter_queries! {
     FindRoles => crate::role::Role,
     FindRoleIds => crate::role::RoleId,
@@ -4542,9 +4191,9 @@ impl_iter_queries! {
     FindActiveTriggerIds => crate::trigger::TriggerId,
     FindTriggers => crate::trigger::Trigger,
     escrow::FindAssetEscrows => crate::escrow::AssetEscrowRecord,
-    escrow::FindAssetEscrowsBySeller => crate::escrow::AssetEscrowRecord,
-    escrow::FindAssetEscrowsByBuyer => crate::escrow::AssetEscrowRecord,
-    escrow::FindAssetEscrowsByStatus => crate::escrow::AssetEscrowRecord,
+    escrow::FindAssetEscrowsBySeller => [crate::escrow::AssetEscrowRecord, AssetEscrowsBySeller],
+    escrow::FindAssetEscrowsByBuyer => [crate::escrow::AssetEscrowRecord, AssetEscrowsByBuyer],
+    escrow::FindAssetEscrowsByStatus => [crate::escrow::AssetEscrowRecord, AssetEscrowsByStatus],
     nexus::prelude::FindFeeSponsorPrograms => crate::nexus::FeeSponsorProgram,
     nexus::prelude::FindFeeSponsorProgramIds => crate::nexus::FeeSponsorProgramId,
     nexus::prelude::FindFeeSponsorProgramsBySponsor => crate::nexus::FeeSponsorProgram,
@@ -4564,7 +4213,6 @@ impl_iter_queries! {
     oracle::prelude::FindTwitterBindingsByUaid => crate::oracle::TwitterBindingRecord,
     oracle::prelude::FindDefiOracleAttestationsByKey => crate::oracle::DefiOracleAttestation,
 }
-
 impl_singular_queries! {
     FindParameters => crate::parameter::Parameters,
     FindExecutorDataModel => crate::executor::ExecutorDataModel,
@@ -4612,9 +4260,7 @@ impl_singular_queries! {
     domain::prelude::FindDomainById => crate::domain::Domain,
     nft::prelude::FindNftById => crate::nft::Nft,
 }
-
 // NOTE: Query DSL projection traits are provided generically in dsl module now.
-
 #[cfg(test)]
 mod trait_object_tests {
     use norito::codec::Encode;
@@ -4629,7 +4275,6 @@ mod trait_object_tests {
         value.serialize(&mut encoder).expect("encode bare value");
         bytes
     }
-
     #[test]
     fn query_box_streaming_wire_matches_owned_tuple_for_all_sequence_layouts() {
         let concrete = domain::FindDomains;
@@ -4642,7 +4287,6 @@ mod trait_object_tests {
             query_wire_id(query.type_name_key()).to_owned(),
             query.encode_bytes(),
         );
-
         for flags in [
             0,
             norito::core::header_flags::COMPACT_LEN,
@@ -4664,7 +4308,6 @@ mod trait_object_tests {
             }
         }
     }
-
     #[test]
     fn query_dyn_encode_matches_encode() {
         let q = domain::FindDomains;
@@ -4672,7 +4315,6 @@ mod trait_object_tests {
         let actual = Query::dyn_encode(&q);
         assert_eq!(actual, expected);
     }
-
     #[test]
     fn query_as_any_downcasts() {
         let q = domain::FindDomains;
@@ -4680,13 +4322,11 @@ mod trait_object_tests {
         let any = <domain::FindDomains as Query>::as_any(&q);
         assert!(any.downcast_ref::<domain::FindDomains>().is_some());
     }
-
     #[test]
     fn query_execute_does_not_panic() {
         let q = domain::FindDomains;
         Query::execute(&q);
     }
-
     #[test]
     fn singular_query_dyn_encode_matches_encode() {
         let q = FindExecutorDataModel;
@@ -4694,7 +4334,6 @@ mod trait_object_tests {
         let actual = SingularQuery::dyn_encode(&q);
         assert_eq!(actual, expected);
     }
-
     #[test]
     fn singular_query_as_any_downcasts() {
         let q = FindExecutorDataModel;
@@ -4706,73 +4345,51 @@ mod trait_object_tests {
                 .is_some()
         );
     }
-
     #[test]
     fn singular_query_execute_does_not_panic() {
         let q = FindExecutorDataModel;
         SingularQuery::execute(&q);
     }
-
     #[test]
     fn find_block_headers_has_selector_projection() {
         <block::FindBlockHeaders as HasProjection<SelectorMarker>>::atom(());
     }
-
     fn assert_predicate<T: HasProjection<PredicateMarker>>() {}
     fn assert_selector<T: HasProjection<SelectorMarker>>() {}
-
     #[test]
     fn committed_transaction_has_projection_impls() {
         assert_predicate::<CommittedTransaction>();
         assert_selector::<CommittedTransaction>();
     }
-
     #[test]
     fn iter_queries_have_projection_impls() {
         assert_predicate::<trigger::FindTriggers>();
         assert_selector::<trigger::FindTriggers>();
-
         assert_predicate::<asset::FindAssetsDefinitions>();
         assert_selector::<asset::FindAssetsDefinitions>();
-
         assert_predicate::<nft::FindNfts>();
         assert_selector::<nft::FindNfts>();
-
         assert_predicate::<rwa::FindRwas>();
         assert_selector::<rwa::FindRwas>();
-
         assert_predicate::<role::FindRoles>();
         assert_selector::<role::FindRoles>();
-
         assert_predicate::<peer::FindPeers>();
         assert_selector::<peer::FindPeers>();
-
         assert_predicate::<trigger::FindActiveTriggerIds>();
         assert_selector::<trigger::FindActiveTriggerIds>();
     }
-
     #[test]
     fn query_with_filter_converts() {
         use crate::query::dsl::{CompoundPredicate, SelectorTuple};
 
-        #[allow(clippy::unit_arg)]
         let q = QueryWithFilter::new(
-            {
-                #[cfg(not(feature = "fast_dsl"))]
-                {
-                    Box::new(domain::FindDomains)
-                }
-                #[cfg(feature = "fast_dsl")]
-                {}
-            },
+            (),
             CompoundPredicate::<crate::domain::Domain>::PASS,
             SelectorTuple::<crate::domain::Domain>::default(),
         );
-
         let _: QueryBox<QueryOutputBatchBox> = q.into();
     }
 }
-
 /// A macro reducing boilerplate when defining query types.
 macro_rules! queries {
     ($($($meta:meta)* $item:item)+) => {
@@ -4796,7 +4413,6 @@ macro_rules! queries {
         }
     };
 }
-
 include!("domain_queries.rs");
 
 pub mod sns {
@@ -4818,20 +4434,17 @@ pub mod sns {
             pub dataspace_id: DataSpaceId,
         }
     }
-
     impl FindDataspaceNameOwnerById {
         /// Return the queried dataspace identifier.
         pub fn dataspace_id(&self) -> DataSpaceId {
             self.dataspace_id
         }
     }
-
     /// Prelude re-exports for SNS queries.
     pub mod prelude {
         pub use super::FindDataspaceNameOwnerById;
     }
 }
-
 include!("musubi_queries.rs");
 
 pub mod trigger {
@@ -4849,13 +4462,11 @@ pub mod trigger {
         #[display("Find all trigger ids")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct FindActiveTriggerIds;
-
         /// Find all currently active (as in not disabled and/or expired) triggers.
         #[derive(Copy, Display)]
         #[display("Find all triggers")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct FindTriggers;
-
         /// Find a trigger by identifier.
         #[derive(Display)]
         #[display("Find trigger `{id}`")]
@@ -4865,7 +4476,6 @@ pub mod trigger {
             pub id: crate::trigger::TriggerId,
         }
     }
-
     impl FindTriggerById {
         /// Return the queried trigger identifier.
         pub fn trigger_id(&self) -> &crate::trigger::TriggerId {
@@ -4907,7 +4517,6 @@ pub mod transaction {
     //! Transaction query definitions.
     //!
     //! Queries related to transactions.
-
     #![allow(clippy::missing_inline_in_public_items)]
 
     use std::{format, string::String, vec::Vec};
@@ -4932,7 +4541,6 @@ pub mod block {
     //! Block query definitions.
     //!
     //! Queries related to blocks.
-
     #![allow(clippy::missing_inline_in_public_items)]
 
     use std::{format, string::String, vec::Vec};
@@ -4946,7 +4554,6 @@ pub mod block {
         #[display("Find all blocks")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct FindBlocks;
-
         /// [`FindBlockHeaders`] Iroha Query lists all block headers
         /// sorted by height in descending order
         #[derive(Copy, Display)]
@@ -4976,5 +4583,4 @@ pub mod prelude {
         sorafs::prelude::*, transaction::prelude::*, trigger::prelude::*,
     };
 }
-
 include!("query_tail_tests.rs");

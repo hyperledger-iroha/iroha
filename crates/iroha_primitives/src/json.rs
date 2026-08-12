@@ -70,14 +70,7 @@ impl IntoSchema for Json {
 
 impl norito::core::NoritoSerialize for Json {
     fn schema_hash() -> [u8; 16] {
-        #[cfg(feature = "schema-structural")]
-        {
-            norito::core::schema_hash_structural::<Self>()
-        }
-        #[cfg(not(feature = "schema-structural"))]
-        {
-            norito::core::type_name_schema_hash::<Self>()
-        }
+        norito::core::type_name_schema_hash::<Self>()
     }
 
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
@@ -98,14 +91,7 @@ impl norito::core::NoritoSerialize for Json {
 
 impl<'a> norito::core::NoritoDeserialize<'a> for Json {
     fn schema_hash() -> [u8; 16] {
-        #[cfg(feature = "schema-structural")]
-        {
-            norito::core::schema_hash_structural::<Self>()
-        }
-        #[cfg(not(feature = "schema-structural"))]
-        {
-            norito::core::type_name_schema_hash::<Self>()
-        }
+        norito::core::type_name_schema_hash::<Self>()
     }
 
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {

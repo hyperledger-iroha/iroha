@@ -1,0 +1,6 @@
+
+            error enum PaymentError { Unauthorized = 1001 }
+            fn authorize_payment(bool allowed) {
+                require(allowed, PaymentError::Unauthorized);
+            }
+        

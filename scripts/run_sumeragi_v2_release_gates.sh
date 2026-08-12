@@ -15,7 +15,8 @@ readonly repo_root="$(cd -- "${BASH_SOURCE[0]%/*}/.." && pwd -P)"
 # environment or executing any other candidate helper.  The sealed child is
 # validated through the same immutable bootstrap evidence propagated by this
 # outer process and through its own source-seal checkpoints below.
-if [[ "$profile" == "--release" ]]; then
+if [[ "$profile" == "--release" \
+  && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]; then
   for bootstrap_suffix in \
     COMPLETION \
     IDENTITY_ATTESTATION \
@@ -29,6 +30,14 @@ if [[ "$profile" == "--release" ]]; then
       exit 1
     fi
   done
+  if [[ -z "${SUMERAGI_V2_RELEASE_RUNTIME_HELPER:-}" \
+    || "$SUMERAGI_V2_RELEASE_RUNTIME_HELPER" != "${IROHA_RELEASE_RUNTIME_HELPER:-}" \
+    || -z "${SUMERAGI_V2_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256:-}" \
+    || "$SUMERAGI_V2_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256" \
+      != "${IROHA_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256:-}" ]]; then
+    echo "production release requires matching protected runtime-helper aliases" >&2
+    exit 1
+  fi
   if [[ -z "${SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256:-}" \
     || "${SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256}" \
       != "${IROHA_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256:-}" ]]; then
@@ -45,28 +54,9 @@ if [[ "$profile" == "--release" ]]; then
     echo "production release requires the bootstrap-archived Python" >&2
     exit 1
   fi
-  if [[ "${IROHA_RELEASE_SEALED_WORKTREE:-0}" == 1 ]]; then
-    if [[ -z "${IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT:-}" \
-      || -z "${IROHA_RELEASE_BOOTSTRAP_RUNNER:-}" ]]; then
-      echo "sealed release requires the authenticated outer candidate binding" >&2
-      exit 1
-    fi
-    "$bootstrap_python" -I -S \
-      "$repo_root/scripts/validate_sumeragi_v2_release_bootstrap.py" \
-      --candidate-root "$IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT" \
-      --runner "$IROHA_RELEASE_BOOTSTRAP_RUNNER" \
-      --profile --release \
-      --checkpoint sealed
-  else
-    "$bootstrap_python" -I -S \
-      "$repo_root/scripts/validate_sumeragi_v2_release_bootstrap.py" \
-      --candidate-root "$repo_root" \
-      --runner "$repo_root/scripts/run_sumeragi_v2_release_gates.sh" \
-      --profile --release \
-      --checkpoint entry
-    export IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT="$repo_root"
-    export IROHA_RELEASE_BOOTSTRAP_RUNNER="$repo_root/scripts/run_sumeragi_v2_release_gates.sh"
-  fi
+  # The protected bootstrap already authenticated the candidate identity,
+  # runner, tools, and closed launch environment. Do not execute a mutable
+  # candidate Python helper before constructing the independent mirror.
   for scaling_digest_name in \
     IROHA_RELEASE_SCALING_CONFIGURATION_SHA256 \
     IROHA_RELEASE_SCALING_IROHAD_SHA256 \
@@ -85,12 +75,8 @@ fi
 readonly inherited_cargo_cache_home="${CARGO_HOME:-${HOME:-}/.cargo}"
 cd "$repo_root"
 if [[ "$profile" == "--release" ]]; then
-  export IROHA_RELEASE_POLICY_PYTHON="$bootstrap_python"
+  export IROHA_RELEASE_POLICY_PYTHON="${IROHA_RELEASE_PYTHON_BIN:-$bootstrap_python}"
 fi
-source "${repo_root}/scripts/sumeragi_v2_release_process_policy.sh"
-release_gate_boundary "release-inventory:before" || exit $?
-bash ci/check_sumeragi_v2_multilane_release_inventory.sh
-release_gate_boundary "release-inventory:after-natural-completion" || exit $?
 # Every real-network leg in this parent shell must fail rather than translate a
 # socket/sandbox denial into a successful developer skip.
 export IROHA_TEST_REQUIRE_NETWORK=1
@@ -113,7 +99,16 @@ unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG_NOSYSTEM
 unset GIT_GRAFT_FILE GIT_SHALLOW_FILE GIT_EXEC_PATH GIT_TEMPLATE_DIR
 unset GIT_EXTERNAL_DIFF GIT_DIFF_OPTS GIT_PAGER GIT_ASKPASS SSH_ASKPASS
 unset GIT_SSH GIT_SSH_COMMAND GIT_PROTOCOL_FROM_USER GIT_ATTR_SOURCE
+while IFS='=' read -r inherited_name _; do
+  case "$inherited_name" in
+    GIT_TRACE|GIT_TRACE_*|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM)
+      unset "$inherited_name"
+      ;;
+  esac
+done < <(env)
 export GIT_NO_REPLACE_OBJECTS=1
+export GIT_OPTIONAL_LOCKS=0
+export GIT_NO_LAZY_FETCH=1
 export GIT_CONFIG_NOSYSTEM=1
 export GIT_CONFIG_GLOBAL=/dev/null
 unset RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER RUSTFLAGS RUSTDOCFLAGS
@@ -140,28 +135,9 @@ export GIT_CONFIG_KEY_1=core.fsmonitor
 export GIT_CONFIG_VALUE_1=false
 
 sha256_file() {
-  if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | awk '{print $1}'
-  else
-    shasum -a 256 "$1" | awk '{print $1}'
-  fi
-}
-
-source "${repo_root}/scripts/sumeragi_v2_prebuilt_bundle.sh"
-
-localnet_binary_attestation_valid() {
-  sumeragi_v2_localnet_binary_attestation_valid \
-    "$repo_root" "$IROHA_RELEASE_SOURCE_MANIFEST_SHA256"
-}
-
-ensure_source_bound_localnet_binaries() {
-  sumeragi_v2_ensure_source_bound_localnet_binaries \
-    "$repo_root" "$IROHA_RELEASE_SOURCE_MANIFEST_SHA256"
-}
-
-export_source_bound_localnet_binaries() {
-  sumeragi_v2_export_source_bound_localnet_binaries \
-    "$repo_root" "$IROHA_RELEASE_SOURCE_MANIFEST_SHA256"
+  python3 -I -S -c \
+    'from pathlib import Path; import hashlib, sys; print(hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest())' \
+    "$1"
 }
 
 canonical_executable() {
@@ -193,12 +169,44 @@ canonical_path() {
     "$1"
 }
 
+resolve_pinned_rust_tool_executable() {
+  local rustup_bin="$1"
+  local tool="$2"
+  local resolved_tool
+
+  resolved_tool="$(
+    RUSTUP_AUTO_INSTALL=0 "$rustup_bin" which --toolchain 1.93.1 "$tool"
+  )" || return 1
+  canonical_path "$resolved_tool"
+}
+
+if [[ "$profile" != "--release" && "${IROHA_RELEASE_PRIVATE_PR:-0}" != 1 ]]; then
+  pr_rustup_bin="$(canonical_executable rustup)" || {
+    echo "rustup is required to resolve the repository-pinned PR Rust tools" >&2
+    exit 1
+  }
+  pr_cargo_source="$(
+    resolve_pinned_rust_tool_executable "$pr_rustup_bin" cargo
+  )" || {
+    echo "the repository-pinned PR Cargo executable could not be resolved" >&2
+    exit 1
+  }
+  pr_rustc_source="$(
+    resolve_pinned_rust_tool_executable "$pr_rustup_bin" rustc
+  )" || {
+    echo "the repository-pinned PR rustc executable could not be resolved" >&2
+    exit 1
+  }
+  readonly pr_rustup_bin pr_cargo_source pr_rustc_source
+fi
+if [[ "${IROHA_RELEASE_PRIVATE_PR:-0}" != 1 ]]; then
+  unset RUSTUP_HOME
+fi
 release_identity_json() {
   python3 -I -S scripts/compute_workspace_source_manifest.py \
     --root "$repo_root" \
     --release-identity-json
 }
-
 identity_field() {
   local identity_path="$1"
   local field="$2"
@@ -206,11 +214,245 @@ identity_field() {
     'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))[sys.argv[2]])' \
     "$identity_path" "$field"
 }
+# PR validation is deliberately developer evidence, not signed release
+# evidence. Even so, execute every build-capable child in a private independent
+# clone with private runtime roots so neither the caller source nor its Cargo
+# cache can be written by build scripts.
+if [[ "$profile" == "--pr" && "${IROHA_RELEASE_PRIVATE_PR:-0}" != 1 ]]; then
+  pr_git_bin="$(canonical_git_executable)" || {
+    echo "Git is required to create the private PR validation clone" >&2
+    exit 1
+  }
+  pr_python_bin="$(canonical_executable python3)" || {
+    echo "Python is required to create the private PR validation roots" >&2
+    exit 1
+  }
+  pr_bash_bin="$(canonical_executable bash)" || {
+    echo "Bash is required to enter the private PR validation clone" >&2
+    exit 1
+  }
+  pr_git_default_exec_path="$("$pr_git_bin" --exec-path)"
+  pr_git_upload_pack_bin="$(canonical_path \
+    "$pr_git_default_exec_path/git-upload-pack")"
+  pr_git_index_pack_bin="$(canonical_path \
+    "$pr_git_default_exec_path/git-index-pack")"
+  pr_head="$("$pr_git_bin" -C "$repo_root" rev-parse --verify 'HEAD^{commit}')"
+  pr_tree="$("$pr_git_bin" -C "$repo_root" rev-parse --verify "$pr_head^{tree}")"
+  if [[ -n "$("$pr_git_bin" -C "$repo_root" status --porcelain=v2 --untracked-files=all)" \
+    || ! -f "$repo_root/Cargo.lock" || -L "$repo_root/Cargo.lock" ]]; then
+    echo "PR validation requires one clean committed source identity plus Cargo.lock" >&2
+    exit 1
+  fi
+  pr_lock_sha256="$(sha256_file "$repo_root/Cargo.lock")"
+  pr_helper_sha256="$(sha256_file "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache.py")"
+  pr_lock_mode="$(
+    "$pr_python_bin" -I -S -c \
+      'from pathlib import Path; import stat, sys; print(format(stat.S_IMODE(Path(sys.argv[1]).lstat().st_mode), "04o"))' \
+      "$repo_root/Cargo.lock"
+  )"
+  pr_temp_base=/private/tmp
+  [[ -d "$pr_temp_base" && ! -L "$pr_temp_base" ]] || pr_temp_base=/tmp
+  pr_temp_base="$(canonical_path "$pr_temp_base")"
+  pr_invocation_root="$("$pr_python_bin" -I -S - "$pr_temp_base" <<'PY'
+from pathlib import Path
+import tempfile
+import sys
+base = Path(sys.argv[1]).resolve(strict=True)
+print(Path(tempfile.mkdtemp(prefix="iroha-sumeragi-v2-pr.", dir=base)))
+PY
+  )"
+  pr_invocation_root="$(canonical_path "$pr_invocation_root")"
+  pr_helper_stage="$(mktemp "$pr_invocation_root/.release-helper.XXXXXX")" && cp -- "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache.py" "$pr_helper_stage" && chmod 0400 "$pr_helper_stage" && exec 9<"$pr_helper_stage" && rm -f -- "$pr_helper_stage" && [[ "$(sha256_file /dev/fd/9)" == "$pr_helper_sha256" ]] || { pr_stage_status=$?; [[ -z "${pr_helper_stage:-}" ]] || rm -f -- "$pr_helper_stage"; rmdir "$pr_invocation_root" || pr_stage_status=1; exit "$pr_stage_status"; }
+  run_pr_helper() {
+    "$pr_python_bin" -I -S -c 'import os,sys; os.lseek(9,0,os.SEEK_SET); data=os.fdopen(os.dup(9),"rb").read(8*1024*1024+1); len(data)<=8*1024*1024 or sys.exit("private PR helper is oversized"); sys.argv=["copy-release-runtime.py",*sys.argv[1:]]; exec(compile(data,"<protected-pr-helper>","exec"),{"__name__":"__main__"})' "$@"
+  }
+  cleanup_private_pr_invocation() {
+    local status=$?
+    run_pr_helper --cleanup-invocation \
+      --cleanup-base "$pr_temp_base" --invocation-root "$pr_invocation_root" \
+      --cleanup-prefix iroha-sumeragi-v2-pr. || status=1
+    trap - EXIT
+    exit "$status"
+  }
+  trap cleanup_private_pr_invocation EXIT
+  "$pr_python_bin" -I -S - \
+    "$repo_root" "$inherited_cargo_cache_home" "$pr_temp_base" \
+    "$pr_invocation_root" <<'PY'
+from pathlib import Path
+import os
+import stat
+import sys
+source = Path(sys.argv[1]).resolve(strict=True)
+cache = Path(sys.argv[2])
+base = Path(sys.argv[3]).resolve(strict=True)
+invocation = Path(sys.argv[4])
+metadata = invocation.lstat()
+if (
+    invocation.resolve(strict=True) != invocation
+    or invocation.parent != base
+    or stat.S_ISLNK(metadata.st_mode)
+    or not stat.S_ISDIR(metadata.st_mode)
+    or metadata.st_uid != os.geteuid()
+    or stat.S_IMODE(metadata.st_mode) != 0o700
+    or not cache.is_absolute()
+    or Path(os.path.abspath(cache)) != cache
+):
+    raise SystemExit("private PR invocation or inherited Cargo home is unsafe")
+cache = cache.resolve(strict=False)
+for left, right in ((invocation, source), (invocation, cache)):
+    if left == right or left in right.parents or right in left.parents:
+        raise SystemExit("private PR invocation overlaps caller source or Cargo home")
+PY
+  pr_source_root="$pr_invocation_root/source"
+  pr_target_root="$pr_invocation_root/target"
+  pr_artifact_root="$pr_invocation_root/artifacts"
+  pr_runtime_root="$pr_invocation_root/runtime"
+  pr_host_root="$pr_invocation_root/host"
+  mkdir -m 0700 -- \
+    "$pr_target_root" "$pr_artifact_root" "$pr_host_root" \
+    "$pr_host_root/home" "$pr_host_root/tmp" "$pr_host_root/cache" \
+    "$pr_host_root/cargo-home" "$pr_host_root/rustup-home"
+  export GIT_EXEC_PATH="$pr_git_default_exec_path"
+  "$pr_git_bin" -c core.hooksPath=/dev/null clone \
+    --no-local --no-hardlinks --no-checkout -- "$repo_root" "$pr_source_root"
+  if [[ -e "$pr_source_root/.git/objects/info/alternates" \
+    || -L "$pr_source_root/.git/objects/info/alternates" ]]; then
+    echo "private PR clone unexpectedly uses alternate Git objects" >&2
+    exit 1
+  fi
+  "$pr_git_bin" -c core.hooksPath=/dev/null \
+    -C "$pr_source_root" checkout --detach "$pr_head"
+  "$pr_git_bin" -c core.hooksPath=/dev/null \
+    -C "$pr_source_root" remote remove origin
+  cp -- "$repo_root/Cargo.lock" "$pr_source_root/Cargo.lock"
+  chmod "$pr_lock_mode" "$pr_source_root/Cargo.lock"
+  reproduced_pr_identity="$(
+    "$pr_python_bin" -I -S \
+      "$pr_source_root/scripts/compute_workspace_source_manifest.py" \
+      --root "$pr_source_root" --release-identity-json
+  )"
+  read -r reproduced_pr_head reproduced_pr_tree reproduced_pr_lock reproduced_pr_manifest <<<"$(
+    "$pr_python_bin" -I -S -c \
+      'import json,sys; d=json.loads(sys.argv[1]); print(d["head_commit"],d["head_tree"],d["cargo_lock_sha256"],d["workspace_source_manifest_sha256"])' \
+      "$reproduced_pr_identity"
+  )"
+  pr_caller_identity_unchanged() {
+    [[ "$("$pr_git_bin" -C "$repo_root" rev-parse --verify 'HEAD^{commit}')" == "$pr_head" \
+      && "$("$pr_git_bin" -C "$repo_root" rev-parse --verify "${pr_head}^{tree}")" == "$pr_tree" \
+      && -z "$("$pr_git_bin" -C "$repo_root" status --porcelain=v2 --untracked-files=all)" \
+      && "$(sha256_file "$repo_root/Cargo.lock")" == "$pr_lock_sha256" ]]
+  }
+  if [[ "$reproduced_pr_head" != "$pr_head" || "$reproduced_pr_tree" != "$pr_tree" \
+    || "$reproduced_pr_lock" != "$pr_lock_sha256" \
+    || ! "$reproduced_pr_manifest" =~ ^[0-9a-f]{64}$ ]] \
+    || ! pr_caller_identity_unchanged; then
+    echo "private PR clone does not reproduce one stable candidate identity" >&2
+    exit 1
+  fi
+  pr_clone_helper="$pr_source_root/scripts/copy_sumeragi_v2_release_cargo_cache.py"
+  if [[ "$(sha256_file "$pr_clone_helper")" != "$pr_helper_sha256" ]]; then
+    echo "private PR helper differs from the pre-clone source identity" >&2
+    exit 1
+  fi
+  pr_runtime_sources=(
+    "$pr_python_bin" "$pr_git_bin" "$pr_bash_bin" "$pr_cargo_source" "$pr_rustc_source"
+    "$pr_git_upload_pack_bin" "$pr_git_index_pack_bin"
+  )
+  pr_runtime_arguments=()
+  for pr_runtime_source in "${pr_runtime_sources[@]}"; do
+    pr_runtime_arguments+=(--runtime-source "$pr_runtime_source")
+  done
+  pr_runtime_inventory="$pr_invocation_root/runtime-input.json"
+  run_pr_helper --copy-runtime \
+    --runtime-root "$pr_runtime_root" --runtime-inventory "$pr_runtime_inventory" \
+    "${pr_runtime_arguments[@]}"
+  pr_bin="$pr_runtime_root/bin"
+  pr_cargo_cache_inventory="$pr_host_root/cargo-cache-input.json"
+  pr_cargo_source_home_state=absent
+  [[ -e "$inherited_cargo_cache_home" || -L "$inherited_cargo_cache_home" ]] \
+    && pr_cargo_source_home_state=present
+  run_pr_helper \
+    --source-cargo-home "$inherited_cargo_cache_home" \
+    --cargo-home "$pr_host_root/cargo-home" \
+    --inventory "$pr_cargo_cache_inventory"
+  pr_cargo_cache_inventory_sha256="$(sha256_file "$pr_cargo_cache_inventory")"
+  pr_runtime_inventory_sha256="$(sha256_file "$pr_runtime_inventory")"
+  "$pr_python_bin" -I -S "$pr_source_root/scripts/seal_workspace_source.py" \
+    --seal --root "$pr_source_root" --no-writable-paths
+  "$pr_python_bin" -I -S "$pr_source_root/scripts/seal_workspace_source.py" \
+    --verify --root "$pr_source_root" --no-writable-paths
+  set +e
+  (
+    cd "$pr_source_root" || exit 1
+    trap - EXIT
+    unset OLDPWD
+    exec 9<&-
+    /usr/bin/env -i \
+    IROHA_RELEASE_PRIVATE_PR=1 \
+    IROHA_RELEASE_PRIVATE_PR_SOURCE_SEALED=1 \
+    IROHA_RELEASE_INVOCATION_ROOT="$pr_invocation_root" \
+    IROHA_RELEASE_TEMP_BASE="$pr_temp_base" \
+    IROHA_RELEASE_WORKSPACE_TARGET="$pr_target_root" \
+    IROHA_RELEASE_ARTIFACT_ROOT="$pr_artifact_root" \
+    IROHA_RELEASE_CANCEL_REQUEST_PATH="$pr_invocation_root/cancel-request.json" \
+    IROHA_RELEASE_CARGO_HOME="$pr_host_root/cargo-home" \
+    IROHA_RELEASE_CARGO_CACHE_INPUT_INVENTORY="$pr_cargo_cache_inventory" \
+    IROHA_RELEASE_CARGO_CACHE_INPUT_INVENTORY_SHA256="$pr_cargo_cache_inventory_sha256" \
+    IROHA_RELEASE_RUNTIME_INVENTORY="$pr_runtime_inventory" \
+    IROHA_RELEASE_RUNTIME_INVENTORY_SHA256="$pr_runtime_inventory_sha256" \
+    IROHA_RELEASE_PR_BIN="$pr_bin" \
+    IROHA_RELEASE_CARGO_BIN="$pr_bin/cargo" \
+    IROHA_RELEASE_RUSTC_BIN="$pr_bin/rustc" \
+    IROHA_RELEASE_PR_PYTHON_BIN="$pr_bin/python3" \
+    GIT_EXEC_PATH="$pr_bin" \
+    CARGO_HOME="$pr_host_root/cargo-home" \
+    CARGO_TARGET_DIR="$pr_target_root" \
+    RUSTUP_HOME="$pr_host_root/rustup-home" \
+    HOME="$pr_host_root/home" TMPDIR="$pr_host_root/tmp" TMP="$pr_host_root/tmp" \
+    TEMP="$pr_host_root/tmp" XDG_CACHE_HOME="$pr_host_root/cache" PATH="$pr_bin:/usr/bin:/bin" LANG=C LC_ALL=C TZ=UTC PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 \
+    "$pr_bin/bash" "$pr_source_root/scripts/run_sumeragi_v2_release_gates.sh" --pr
+  )
+  pr_status=$?
+  set -e
+  run_pr_helper --verify-runtime-sources \
+    --runtime-root "$pr_runtime_root" --runtime-inventory "$pr_runtime_inventory" \
+    "${pr_runtime_arguments[@]}" || pr_status=1
+  [[ "$(sha256_file "$pr_runtime_inventory")" == "$pr_runtime_inventory_sha256" ]] || pr_status=1
+  run_pr_helper --verify-cache-sources \
+    --source-cargo-home "$inherited_cargo_cache_home" \
+    --cargo-home "$pr_host_root/cargo-home" \
+    --inventory "$pr_cargo_cache_inventory" || pr_status=1
+  [[ "$(sha256_file "$pr_cargo_cache_inventory")" == "$pr_cargo_cache_inventory_sha256" ]] || pr_status=1
+  if [[ "$pr_cargo_source_home_state" == absent \
+    && ( -e "$inherited_cargo_cache_home" || -L "$inherited_cargo_cache_home" ) ]]; then
+    echo "caller Cargo home appeared during private PR developer validation" >&2
+    pr_status=1
+  fi
+  pr_caller_identity_unchanged || { echo "caller source identity changed during private PR developer validation" >&2; pr_status=1; }
+  echo "private PR developer validation completed in an isolated disposable root" >&2
+  exit "$pr_status"
+fi
+if [[ "$profile" == "--pr" && "${IROHA_RELEASE_PRIVATE_PR:-0}" == 1 ]]; then
+  if [[ "${IROHA_RELEASE_PRIVATE_PR_SOURCE_SEALED:-0}" != 1 \
+    || "${PWD:-}" != "$repo_root" \
+    || ( -n "${OLDPWD:-}" && "$OLDPWD" != "$repo_root" ) \
+    || "${IROHA_RELEASE_PR_BIN:-}" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/runtime/bin" \
+    || ! -x "${IROHA_RELEASE_PR_PYTHON_BIN:-}" ]]; then
+    echo "private PR child did not enter its sealed source directly" >&2
+    exit 1
+  fi
+  "$IROHA_RELEASE_PR_PYTHON_BIN" -I -S \
+    "$repo_root/scripts/seal_workspace_source.py" \
+    --verify --root "$repo_root" --no-writable-paths
+  export PATH="$IROHA_RELEASE_PR_BIN:/usr/bin:/bin" GIT_EXEC_PATH="$IROHA_RELEASE_PR_BIN"
+fi
 
 # Production evidence never executes in the caller's mutable checkout. Require
-# one committed source tree, reproduce it in a unique detached worktree, copy
-# the separately-bound ignored Cargo.lock, and remove source write permission.
-# The complete corridor then re-enters this script from that sealed source.
+# one committed source tree, reproduce it in a fully independent clone without
+# alternates or shared object inodes, copy the separately-bound ignored
+# Cargo.lock, and remove source write permission. The complete corridor then
+# re-enters this script from that sealed source. The candidate's Git directory
+# is read-only throughout; no linked-worktree administrative state is created.
 if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]; then
   release_bootstrap_evidence_dir="$(
     canonical_path "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR"
@@ -224,21 +466,29 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     exit 1
   fi
   readonly release_bootstrap_evidence_dir
-  release_scaling_evidence_manifest="$(
+  release_runtime_helper="$(canonical_path "$SUMERAGI_V2_RELEASE_RUNTIME_HELPER")" || exit 1
+  if [[ "$release_runtime_helper" != "$release_bootstrap_evidence_dir/copy-release-runtime.py" \
+    || "$(sha256_file "$release_runtime_helper")" \
+      != "$SUMERAGI_V2_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256" ]]; then
+    echo "protected runtime helper escaped or changed after bootstrap" >&2
+    exit 1
+  fi
+  readonly release_runtime_helper
+  release_scaling_source_manifest="$(
     canonical_path "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
   )" || {
     echo "the configured G-SCALE evidence manifest is unavailable" >&2
     exit 1
   }
-  if [[ "$release_scaling_evidence_manifest" \
+  if [[ "$release_scaling_source_manifest" \
       != "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
-    || "${release_scaling_evidence_manifest##*/}" != scaling_evidence.json \
-    || ! -f "$release_scaling_evidence_manifest" \
-    || -L "$release_scaling_evidence_manifest" ]]; then
+    || "${release_scaling_source_manifest##*/}" != scaling_evidence.json \
+    || ! -f "$release_scaling_source_manifest" \
+    || -L "$release_scaling_source_manifest" ]]; then
     echo "G-SCALE evidence must be an absolute canonical regular non-symlink scaling_evidence.json" >&2
     exit 1
   fi
-  readonly release_scaling_evidence_manifest
+  readonly release_scaling_source_manifest
   release_git_bin="$(canonical_git_executable)" || {
     echo "a resolved Git executable is required for the release corridor" >&2
     exit 1
@@ -350,22 +600,25 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
   readonly candidate_identity_path candidate_identity_json candidate_manifest_sha256
   readonly candidate_head candidate_lock_mode
 
-  release_rustup_bin="$(canonical_executable rustup)" || {
-    echo "rustup is required to resolve the repository-pinned release toolchain" >&2
+  release_cargo_bin="$(canonical_executable cargo)" || {
+    echo "the authenticated release Cargo executable could not be resolved" >&2
     exit 1
   }
-  release_cargo_bin="$(
-    canonical_path "$("$release_rustup_bin" which --toolchain 1.93.1 cargo)"
-  )"
-  release_rustc_bin="$(
-    canonical_path "$("$release_rustup_bin" which --toolchain 1.93.1 rustc)"
-  )"
+  release_rustc_bin="$(canonical_executable rustc)" || {
+    echo "the authenticated release rustc executable could not be resolved" >&2
+    exit 1
+  }
   release_node_bin="$(canonical_executable node)" || {
     echo "a resolved Node executable is required for the release corridor" >&2
     exit 1
   }
-  readonly release_rustup_bin release_cargo_bin release_rustc_bin release_node_bin
-  release_cargo_version="$(run_cargo --version)" || {
+  release_swift_bin="$(canonical_executable swift)" || {
+    echo "the authenticated bootstrap tool inventory must provide Swift" >&2
+    exit 1
+  }
+  readonly release_cargo_bin release_rustc_bin release_node_bin release_swift_bin
+  export IROHA_RELEASE_CARGO_BIN="$release_cargo_bin"
+  release_cargo_version="$("$release_cargo_bin" --version)" || {
     echo "the repository-pinned Cargo version probe failed" >&2
     exit 1
   }
@@ -374,7 +627,7 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     || "$release_cargo_version" != "cargo 1.93.1 (083ac5135 2025-12-15)" \
     || ! -x "$release_rustc_bin" \
     || "$("$release_rustc_bin" --version)" != "rustc 1.93.1 (01f6ddf75 2026-02-11)" ]]; then
-    echo "rustup did not resolve the exact rust-toolchain.toml Cargo/rustc release pair" >&2
+    echo "the authenticated runner aliases do not expose the exact Cargo/rustc release pair" >&2
     exit 1
   fi
 
@@ -458,28 +711,67 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     exit 1
   }
 
-  # The authenticated bootstrap evidence directory is already one fresh,
-  # private external root. Keep the sealed source, Cargo target, and retained
-  # artifact roots as exact disjoint siblings below its single-use runner
-  # directory; no writable path or symlink is created inside sealed source.
-  release_invocation_root="${release_bootstrap_evidence_dir}/release-runner"
-  if [[ -e "$release_invocation_root" || -L "$release_invocation_root" ]]; then
-    echo "authenticated release invocation root already exists" >&2
-    exit 1
-  fi
-  mkdir -m 0700 -- "$release_invocation_root"
+  # Keep build-capable descendants in a fresh external root whose ancestry
+  # contains neither the caller source nor the protected bootstrap archive.
+  release_invocation_base=/private/tmp
+  [[ -d "$release_invocation_base" && ! -L "$release_invocation_base" ]] \
+    || release_invocation_base=/tmp
+  release_invocation_base="$(canonical_path "$release_invocation_base")"
+  release_invocation_root="$("$release_python_bin" -I -S - \
+    "$release_invocation_base" "$repo_root" "$release_bootstrap_evidence_dir" \
+    "$inherited_cargo_cache_home" <<'PY'
+from pathlib import Path
+import os
+import stat
+import sys
+import tempfile
+
+base = Path(sys.argv[1]).resolve(strict=True)
+metadata = base.lstat()
+if (
+    stat.S_ISLNK(metadata.st_mode)
+    or not stat.S_ISDIR(metadata.st_mode)
+    or not (metadata.st_uid == 0 and metadata.st_mode & stat.S_ISVTX)
+):
+    raise SystemExit("release invocation base is not a root-owned sticky directory")
+root = Path(tempfile.mkdtemp(prefix="iroha-sumeragi-v2-release.", dir=base))
+root.chmod(0o700)
+for raw in sys.argv[2:]:
+    other = Path(raw).resolve(strict=False)
+    if root == other or root in other.parents or other in root.parents:
+        root.rmdir()
+        raise SystemExit("release invocation overlaps a protected input root")
+print(root)
+PY
+  )"
   release_invocation_root="$(canonical_path "$release_invocation_root")" || {
     echo "the authenticated release invocation root could not be resolved" >&2
     exit 1
   }
   readonly release_invocation_root
+  release_invocation_retained=0
+  cleanup_release_invocation() {
+    local status=$?
+    if (( ! release_invocation_retained )); then
+      "$release_python_bin" -I -S "$release_runtime_helper" \
+        --cleanup-invocation --cleanup-base "$release_invocation_base" \
+        --invocation-root "$release_invocation_root" \
+        --cleanup-prefix iroha-sumeragi-v2-release. || status=1
+    fi
+    trap - EXIT
+    exit "$status"
+  }
+  trap cleanup_release_invocation EXIT
+  readonly release_invocation_base
   readonly sealed_repo_root="${release_invocation_root}/source"
   readonly release_target_root="${release_invocation_root}/target"
   readonly release_host_root="${release_invocation_root}/output"
   readonly release_cancel_request_path="${IROHA_RELEASE_CANCEL_REQUEST_PATH:-${release_invocation_root}/cancel-request.json}"
   readonly sealed_identity_path="${release_invocation_root}/sealed-identity.json"
   readonly aggregate_receipt_path="${release_host_root}/release/RELEASE_COMPLETED.json"
+  readonly release_outer_result_path="${release_bootstrap_evidence_dir}/release-runner-result.json"
   readonly release_signature_evidence_dir="$release_bootstrap_evidence_dir"
+  readonly release_git_exec_path="${release_signature_evidence_dir}/runner-bin"
   readonly release_signature_attestation="${release_signature_evidence_dir}/identity-attestation.json"
   readonly release_signature_transcript="${release_signature_evidence_dir}/identity-transcript.json"
   readonly release_signature_raw_commit="${release_signature_evidence_dir}/identity-raw-commit"
@@ -488,60 +780,209 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
   readonly release_signature_revocation="${release_signature_evidence_dir}/identity-revocation"
   readonly release_verified_git_bin="${release_signature_evidence_dir}/identity-git"
   readonly release_verified_ssh_keygen_bin="${release_signature_evidence_dir}/identity-ssh-keygen"
+  "$release_python_bin" -I -S - \
+    "$SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION" \
+    "$SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256" \
+    "$release_git_exec_path" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import os
+import stat
+import sys
+
+marker_path = Path(sys.argv[1])
+expected_marker_digest = sys.argv[2]
+exec_path = Path(sys.argv[3])
+marker_bytes = marker_path.read_bytes()
+if hashlib.sha256(marker_bytes).hexdigest() != expected_marker_digest:
+    raise SystemExit("bootstrap marker changed before Git helper validation")
+marker = json.loads(marker_bytes)
+tools = marker.get("runner", {}).get("tools", {})
+for name in ("git-upload-pack", "git-index-pack"):
+    record = tools.get(name)
+    alias = exec_path / name
+    if not isinstance(record, dict) or set(record) != {
+        "alias_name", "alias_path", "sha256", "size_bytes", "source_mode", "source_path"
+    }:
+        raise SystemExit(f"production release lacks authenticated Git helper {name}")
+    source = Path(record["source_path"])
+    alias_metadata = alias.lstat()
+    source_metadata = source.lstat()
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(source, flags)
+    try:
+        opened = os.fstat(descriptor)
+        digest = hashlib.sha256()
+        while block := os.read(descriptor, 1024 * 1024):
+            digest.update(block)
+        source_after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    path_after = source.lstat()
+    alias_after = alias.lstat()
+    stable_fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if (
+        record["alias_name"] != name
+        or record["alias_path"] != str(alias)
+        or not stat.S_ISLNK(alias_metadata.st_mode)
+        or os.readlink(alias) != str(source)
+        or source.resolve(strict=True) != source
+        or stat.S_ISLNK(source_metadata.st_mode)
+        or not stat.S_ISREG(source_metadata.st_mode)
+        or any(getattr(source_metadata, field) != getattr(opened, field) or getattr(opened, field) != getattr(source_after, field) or getattr(source_after, field) != getattr(path_after, field) for field in stable_fields)
+        or (alias_metadata.st_dev, alias_metadata.st_ino, alias_metadata.st_mode) != (alias_after.st_dev, alias_after.st_ino, alias_after.st_mode)
+        or os.readlink(alias) != str(source)
+        or source_metadata.st_uid not in {0, os.geteuid()}
+        or source_metadata.st_mode & 0o022
+        or source_metadata.st_mode & 0o111 == 0
+        or source_metadata.st_size != record["size_bytes"]
+        or format(stat.S_IMODE(source_metadata.st_mode), "04o") != record["source_mode"]
+        or digest.hexdigest() != record["sha256"]
+    ):
+        raise SystemExit(f"authenticated Git helper {name} changed")
+PY
   mkdir -m 0700 -- "$release_target_root" "$release_host_root"
-  (
-    export CARGO_TARGET_DIR="$release_target_root"
-    export IROHA_RELEASE_ARTIFACT_ROOT="$release_host_root"
-    export IROHA_RELEASE_CANCEL_REQUEST_PATH="$release_cancel_request_path"
-    require_disjoint_release_roots "$repo_root"
-  ) || exit $?
+  "$release_python_bin" -I -S - \
+    "$repo_root" "$release_target_root" "$release_host_root" <<'PY'
+from pathlib import Path
+import os
+import stat
+import sys
+
+roots = []
+for raw in sys.argv[1:]:
+    path = Path(raw)
+    observed = path.lstat()
+    if (
+        not path.is_absolute()
+        or Path(os.path.abspath(path)) != path
+        or path.resolve(strict=True) != path
+        or stat.S_ISLNK(observed.st_mode)
+        or not stat.S_ISDIR(observed.st_mode)
+    ):
+        raise SystemExit("release root is not one canonical real directory")
+    roots.append(path)
+for index, left in enumerate(roots):
+    for right in roots[index + 1 :]:
+        if left == right or left in right.parents or right in left.parents:
+            raise SystemExit("release source, target, and artifact roots overlap")
+PY
   mkdir -m 0700 -- \
+    "$release_host_root/home" \
     "$release_host_root/tmp" \
     "$release_host_root/cache" \
     "$release_host_root/cargo-home" \
     "$release_host_root/release"
-  for cargo_cache in registry git; do
-    if [[ -d "${inherited_cargo_cache_home}/${cargo_cache}" ]]; then
-      ln -s "$(canonical_path "${inherited_cargo_cache_home}/${cargo_cache}")" \
-        "$release_host_root/cargo-home/${cargo_cache}"
-    fi
-  done
+  readonly release_cargo_cache_input_inventory="${release_host_root}/cargo-cache-input.json"
   export PATH="${release_signature_evidence_dir}:${PATH}"
 
-  sealed_worktree_added=0
-  sealed_worktree_retained=0
-  cleanup_sealed_worktree() {
-    local status=$?
-    if ((sealed_worktree_added && ! sealed_worktree_retained)); then
-      if [[ -d "$sealed_repo_root" ]]; then
-        python3 -I -S "$repo_root/scripts/seal_workspace_source.py" \
-          --unseal --root "$sealed_repo_root" >/dev/null 2>&1 || status=1
-      fi
-      "$release_verified_git_bin" -c core.hooksPath=/dev/null \
-        -C "$repo_root" worktree remove --force "$sealed_repo_root" \
-        >/dev/null 2>&1 || status=1
-    fi
-    trap - EXIT
-    exit "$status"
-  }
-  trap cleanup_sealed_worktree EXIT
+  release_child_runtime="${release_invocation_root}/runtime"
+  release_child_bin="${release_child_runtime}/bin"
+  readonly release_child_runtime release_child_bin
 
+  export GIT_EXEC_PATH="$release_git_exec_path"
+  "$release_verified_git_bin" -c core.hooksPath=/dev/null clone \
+    --no-local --no-hardlinks --no-checkout -- \
+    "$repo_root" "$sealed_repo_root"
+  if [[ -e "$sealed_repo_root/.git/objects/info/alternates" \
+    || -L "$sealed_repo_root/.git/objects/info/alternates" ]]; then
+    echo "independent release mirror unexpectedly uses alternate objects" >&2
+    exit 1
+  fi
   "$release_verified_git_bin" -c core.hooksPath=/dev/null \
-    worktree add --detach "$sealed_repo_root" "$candidate_head"
-  sealed_worktree_added=1
+    -C "$sealed_repo_root" checkout --detach "$candidate_head"
+  "$release_verified_git_bin" -c core.hooksPath=/dev/null \
+    -C "$sealed_repo_root" remote remove origin
+  source_git_common_dir="$("$release_verified_git_bin" -C "$repo_root" \
+    rev-parse --path-format=absolute --git-common-dir)"
+  "$release_python_bin" -I -S - \
+    "$source_git_common_dir/objects" "$sealed_repo_root/.git/objects" <<'PY'
+from pathlib import Path
+import os
+import stat
+import sys
+
+source = Path(sys.argv[1]).resolve(strict=True)
+mirror = Path(sys.argv[2]).resolve(strict=True)
+for root, directories, files in os.walk(mirror, followlinks=False):
+    root_path = Path(root)
+    for name in (*directories, *files):
+        candidate = root_path / name
+        observed = candidate.lstat()
+        if stat.S_ISLNK(observed.st_mode):
+            raise SystemExit(f"release mirror object store contains a symlink: {candidate}")
+        if not stat.S_ISREG(observed.st_mode):
+            continue
+        relative = candidate.relative_to(mirror)
+        original = source / relative
+        try:
+            original_stat = original.stat()
+        except FileNotFoundError:
+            continue
+        if (observed.st_dev, observed.st_ino) == (
+            original_stat.st_dev,
+            original_stat.st_ino,
+        ):
+            raise SystemExit(
+                f"release mirror shares a Git object inode with the candidate: {relative}"
+            )
+PY
   cp -- "$release_signature_cargo_lock" "$sealed_repo_root/Cargo.lock"
   chmod "$candidate_lock_mode" "$sealed_repo_root/Cargo.lock"
   reproduced_identity_json="$(
-    python3 -I -S "$sealed_repo_root/scripts/compute_workspace_source_manifest.py" \
+    "$release_python_bin" -I -S \
+      "$sealed_repo_root/scripts/compute_workspace_source_manifest.py" \
       --root "$sealed_repo_root" \
       --release-identity-json
   )"
   if [[ "$reproduced_identity_json" != "$candidate_identity_json" ]]; then
-    echo "detached release worktree does not reproduce the candidate identity" >&2
+    echo "independent release mirror does not reproduce the candidate identity" >&2
     exit 1
   fi
+  if [[ "$(
+    "$release_python_bin" -I -S \
+      "$sealed_repo_root/scripts/compute_workspace_source_manifest.py" \
+      --root "$repo_root" --release-identity-json
+  )" != "$candidate_identity_json" ]]; then
+    echo "candidate identity changed while the independent mirror was created" >&2
+    exit 1
+  fi
+  release_runtime_sources=(
+    "$release_python_bin" "$release_git_bin" "$release_ssh_keygen_bin" "$release_bash_bin"
+    "$release_cargo_bin" "$release_rustc_bin" "$release_node_bin" "$release_swift_bin"
+    "$release_tlapm_bin" "$release_java_bin" "$release_verus_bin" "$release_cargo_verus_bin"
+    "$release_tla2tools_jar" "$release_tlapm_stdlib"
+    "$release_git_exec_path/git-upload-pack" "$release_git_exec_path/git-index-pack"
+  )
+  release_runtime_arguments=()
+  for release_runtime_source in "${release_runtime_sources[@]}"; do
+    release_runtime_arguments+=(--runtime-source "$release_runtime_source")
+  done
+  readonly release_runtime_inventory="$release_invocation_root/runtime-input.json"
+  "$release_python_bin" -I -S "$release_runtime_helper" \
+    --copy-runtime --runtime-root "$release_child_runtime" \
+    --runtime-inventory "$release_runtime_inventory" "${release_runtime_arguments[@]}"
+  readonly release_runtime_inventory_sha256="$(sha256_file "$release_runtime_inventory")"
+  "$release_python_bin" -I -S \
+    "$release_runtime_helper" \
+    --source-cargo-home "$inherited_cargo_cache_home" \
+    --cargo-home "$release_host_root/cargo-home" \
+    --inventory "$release_cargo_cache_input_inventory"
+  readonly release_cargo_cache_input_inventory_sha256="$(
+    sha256_file "$release_cargo_cache_input_inventory"
+  )"
+  readonly release_scaling_bundle="$release_invocation_root/scaling-evidence"
+  readonly release_scaling_inventory="$release_invocation_root/scaling-input.json"
+  readonly release_scaling_evidence_manifest="$release_scaling_bundle/scaling_evidence.json"
+  "$release_python_bin" -I -S "$release_runtime_helper" \
+    --copy-private-bundle \
+    --bundle-source "${release_scaling_source_manifest%/*}" \
+    --bundle-root "$release_scaling_bundle" \
+    --inventory "$release_scaling_inventory"
+  readonly release_scaling_inventory_sha256="$(sha256_file "$release_scaling_inventory")"
 
-  "$release_python_bin" - "$sealed_repo_root" <<'PY'
+  "$release_python_bin" -I -S - "$sealed_repo_root" <<'PY'
 from pathlib import Path
 import sys
 
@@ -555,23 +996,33 @@ for parent in root.parents:
             )
 PY
 
-  python3 -I -S "$sealed_repo_root/scripts/seal_workspace_source.py" \
+  "$release_python_bin" -I -S "$sealed_repo_root/scripts/seal_workspace_source.py" \
     --seal --root "$sealed_repo_root" --no-writable-paths
-  python3 -I -S "$sealed_repo_root/scripts/seal_workspace_source.py" \
+  "$release_python_bin" -I -S "$sealed_repo_root/scripts/seal_workspace_source.py" \
     --verify --root "$sealed_repo_root" --no-writable-paths
   # Keep both digests. The candidate manifest records the original checkout;
   # the sealed manifest may change because the manifest intentionally binds all
   # permission bits. Every child build/evidence item uses the sealed digest,
   # while the final receipt also binds candidate HEAD/tree/Cargo.lock.
   sealed_identity_json="$(
-    python3 -I -S "$sealed_repo_root/scripts/compute_workspace_source_manifest.py" \
+    "$release_python_bin" -I -S "$sealed_repo_root/scripts/compute_workspace_source_manifest.py" \
       --root "$sealed_repo_root" \
       --release-identity-json
   )"
+  sealed_manifest_sha256="$(
+    "$release_python_bin" -I -S -c \
+      'import json, sys; print(json.loads(sys.argv[1])["workspace_source_manifest_sha256"])' \
+      "$sealed_identity_json"
+  )"
+  readonly sealed_manifest_sha256
   printf '%s\n' "$sealed_identity_json" >"$sealed_identity_path"
   chmod 0400 "$sealed_identity_path"
+  readonly release_child_result_path="${release_host_root}/release-child-result.json"
 
   set +e
+  (
+    cd "$sealed_repo_root" || exit 1
+    /usr/bin/env -i \
     IROHA_RELEASE_SEALED_WORKTREE=1 \
     IROHA_RELEASE_SEALED_ROOT="$sealed_repo_root" \
     IROHA_RELEASE_HOST_ROOT="$release_host_root" \
@@ -579,60 +1030,280 @@ PY
     IROHA_RELEASE_ARTIFACT_ROOT="$release_host_root" \
     IROHA_RELEASE_CANCEL_REQUEST_PATH="$release_cancel_request_path" \
     IROHA_RELEASE_INVOCATION_ROOT="$release_invocation_root" \
-    IROHA_RELEASE_CANDIDATE_IDENTITY_PATH="$candidate_identity_path" \
+    IROHA_RELEASE_TEMP_BASE="$release_invocation_base" \
     IROHA_RELEASE_EXPECTED_IDENTITY_PATH="$sealed_identity_path" \
-    IROHA_RELEASE_AGGREGATE_RECEIPT_PATH="$aggregate_receipt_path" \
+    IROHA_RELEASE_CANDIDATE_SOURCE_MANIFEST_SHA256="$candidate_manifest_sha256" \
+    IROHA_RELEASE_CHILD_RESULT_PATH="$release_child_result_path" \
     IROHA_RELEASE_SCALING_CONFIGURATION_SHA256="$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \
     IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST="$release_scaling_evidence_manifest" \
     IROHA_RELEASE_SCALING_IROHAD_SHA256="$IROHA_RELEASE_SCALING_IROHAD_SHA256" \
     IROHA_RELEASE_SCALING_IROHA_CLI_SHA256="$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \
     IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256="$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \
-    IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT="$repo_root" \
-    IROHA_RELEASE_BOOTSTRAP_RUNNER="$repo_root/scripts/run_sumeragi_v2_release_gates.sh" \
-    IROHA_RELEASE_TLAPM_BIN="$release_tlapm_bin" \
-    IROHA_RELEASE_TLAPM_STDLIB="$release_tlapm_stdlib" \
-    IROHA_RELEASE_TLA2TOOLS_JAR="$release_tla2tools_jar" \
-    IROHA_RELEASE_VERUS_DIR="$release_verus_dir" \
-    IROHA_RELEASE_JAVA_BIN="$release_java_bin" \
-    IROHA_RELEASE_GIT_BIN="$release_verified_git_bin" \
-    IROHA_RELEASE_SSH_KEYGEN_BIN="$release_verified_ssh_keygen_bin" \
-    IROHA_RELEASE_SIGNATURE_ATTESTATION="$release_signature_attestation" \
-    IROHA_RELEASE_SIGNATURE_TRANSCRIPT="$release_signature_transcript" \
-    IROHA_RELEASE_SIGNATURE_RAW_COMMIT="$release_signature_raw_commit" \
-    IROHA_RELEASE_SIGNATURE_CARGO_LOCK="$release_signature_cargo_lock" \
-    IROHA_RELEASE_SIGNATURE_ALLOWED_SIGNERS="$release_signature_allowed_signers" \
-    IROHA_RELEASE_SIGNATURE_REVOCATION="$release_signature_revocation" \
-    IROHA_RELEASE_EXPECTED_GIT_SHA256="$SUMERAGI_V2_RELEASE_EXPECTED_GIT_SHA256" \
-    IROHA_RELEASE_EXPECTED_SSH_KEYGEN_SHA256="$SUMERAGI_V2_RELEASE_EXPECTED_SSH_KEYGEN_SHA256" \
-    IROHA_RELEASE_EXPECTED_SIGNER_FINGERPRINT="$SUMERAGI_V2_RELEASE_EXPECTED_SIGNER_FINGERPRINT" \
-    IROHA_RELEASE_EXPECTED_ALLOWED_SIGNERS_SHA256="$SUMERAGI_V2_RELEASE_EXPECTED_SSH_ALLOWED_SIGNERS_SHA256" \
-    IROHA_RELEASE_EXPECTED_REVOCATION_SHA256="$SUMERAGI_V2_RELEASE_EXPECTED_SSH_REVOCATION_SHA256" \
-    IROHA_RELEASE_CARGO_BIN="$release_cargo_bin" \
-    IROHA_RELEASE_RUSTC_BIN="$release_rustc_bin" \
-    IROHA_RELEASE_PYTHON_BIN="$release_python_bin" \
-    IROHA_RELEASE_NODE_BIN="$release_node_bin" \
-    IROHA_RELEASE_BASH_BIN="$release_bash_bin" \
+    IROHA_RELEASE_TLAPM_BIN="$release_child_bin/tlapm" \
+    IROHA_RELEASE_TLAPM_STDLIB="$release_child_runtime/tlapm-stdlib" \
+    IROHA_RELEASE_TLA2TOOLS_JAR="$release_child_runtime/tla2tools.jar" \
+    IROHA_RELEASE_VERUS_DIR="$release_child_bin" \
+    IROHA_RELEASE_JAVA_BIN="$release_child_bin/java" \
+    IROHA_RELEASE_GIT_BIN="$release_child_bin/git" \
+    GIT_EXEC_PATH="$release_child_bin" \
+    IROHA_RELEASE_SSH_KEYGEN_BIN="$release_child_bin/ssh-keygen" \
+    IROHA_RELEASE_CARGO_BIN="$release_child_bin/cargo" \
+    IROHA_RELEASE_RUSTC_BIN="$release_child_bin/rustc" \
+    IROHA_RELEASE_PYTHON_BIN="$release_child_bin/python3" \
+    IROHA_RELEASE_NODE_BIN="$release_child_bin/node" \
+    IROHA_RELEASE_BASH_BIN="$release_child_bin/bash" \
     IROHA_RELEASE_CARGO_HOME="$release_host_root/cargo-home" \
+    IROHA_RELEASE_CARGO_CACHE_INPUT_INVENTORY="$release_cargo_cache_input_inventory" \
+    IROHA_RELEASE_CARGO_CACHE_INPUT_INVENTORY_SHA256="$release_cargo_cache_input_inventory_sha256" \
+    IROHA_RELEASE_RUNTIME_INVENTORY="$release_runtime_inventory" \
+    IROHA_RELEASE_RUNTIME_INVENTORY_SHA256="$release_runtime_inventory_sha256" \
     CARGO_INCREMENTAL=0 \
+    HOME="$release_host_root/home" \
     TMPDIR="$release_host_root/tmp" \
-    XDG_CACHE_HOME="$release_host_root/cache" \
-    "$release_bash_bin" "$sealed_repo_root/scripts/run_sumeragi_v2_release_gates.sh" --release
+    TMP="$release_host_root/tmp" \
+    TEMP="$release_host_root/tmp" \
+    XDG_CACHE_HOME="$release_host_root/cache" LANG=C LC_ALL=C TZ=UTC PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 \
+    PATH="$release_child_bin" \
+    "$release_child_bin/bash" "$sealed_repo_root/scripts/run_sumeragi_v2_release_gates.sh" --release
+  )
   sealed_status=$?
   set -e
+  runtime_verification_status=0
+  "$release_python_bin" -I -S \
+    "$release_runtime_helper" \
+    --verify-runtime-sources --runtime-root "$release_child_runtime" \
+    --runtime-inventory "$release_runtime_inventory" \
+    "${release_runtime_arguments[@]}" || runtime_verification_status=$?
+  [[ "$(sha256_file "$release_runtime_inventory")" == "$release_runtime_inventory_sha256" ]] \
+    || runtime_verification_status=1
+  "$release_python_bin" -I -S "$release_runtime_helper" --verify-cache-sources \
+    --source-cargo-home "$inherited_cargo_cache_home" \
+    --cargo-home "$release_host_root/cargo-home" \
+    --inventory "$release_cargo_cache_input_inventory" || runtime_verification_status=$?
+  [[ "$(sha256_file "$release_cargo_cache_input_inventory")" == "$release_cargo_cache_input_inventory_sha256" ]] \
+    || runtime_verification_status=1
+  [[ "$(sha256_file "$release_scaling_inventory")" == "$release_scaling_inventory_sha256" ]] \
+    || runtime_verification_status=1
+  "$release_python_bin" -I -S "$release_runtime_helper" \
+    --verify-private-bundle \
+    --bundle-source "${release_scaling_source_manifest%/*}" \
+    --bundle-root "$release_scaling_bundle" \
+    --inventory "$release_scaling_inventory" || runtime_verification_status=$?
+  ((runtime_verification_status == 0)) || sealed_status=$runtime_verification_status
   if ((sealed_status == 0)); then
-    if [[ ! -s "$aggregate_receipt_path" || -L "$aggregate_receipt_path" ]]; then
-      echo "sealed release corridor passed without an aggregate receipt" >&2
+    child_result_fields="$(
+      "$release_python_bin" -I -S - \
+        "$release_child_result_path" "$release_host_root" \
+        "$sealed_manifest_sha256" <<'PY'
+from pathlib import Path
+import json
+import os
+import stat
+import sys
+
+path = Path(sys.argv[1])
+host = Path(sys.argv[2]).resolve(strict=True)
+before = path.lstat()
+flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+descriptor = os.open(path, flags)
+try:
+    opened = os.fstat(descriptor)
+    data = os.read(descriptor, 64 * 1024 + 1)
+    after = os.fstat(descriptor)
+finally:
+    os.close(descriptor)
+stable = ("st_dev", "st_ino", "st_mode", "st_uid", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns")
+if (
+    path != host / "release-child-result.json"
+    or path.resolve(strict=True) != path
+    or not stat.S_ISREG(opened.st_mode)
+    or opened.st_uid != os.geteuid()
+    or opened.st_nlink != 1
+    or stat.S_IMODE(opened.st_mode) != 0o400
+    or len(data) > 64 * 1024
+    or any(getattr(before, item) != getattr(opened, item) or getattr(opened, item) != getattr(after, item) for item in stable)
+):
+    raise SystemExit("release child-result file is unsafe")
+try:
+    result = json.loads(data)
+except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    raise SystemExit("release child-result is malformed") from error
+names = (
+    "corridor_completion", "formal_completion", "seed_completion",
+    "chaos_completion", "taira_completion", "g4p_completion",
+    "g12_seed_completion", "g12_fault_soak_completion",
+)
+if (
+    set(result) != {"schema_version", "release_source_manifest_sha256", *names}
+    or result["schema_version"] != 1
+    or result["release_source_manifest_sha256"] != sys.argv[3]
+    or data != (json.dumps(result, sort_keys=True, separators=(",", ":")) + "\n").encode()
+):
+    raise SystemExit("release child-result contract changed")
+values = []
+for name in names:
+    value = result[name]
+    if not isinstance(value, str) or "\t" in value or "\n" in value:
+        raise SystemExit(f"release child-result field is malformed: {name}")
+    item = Path(value)
+    metadata = item.lstat()
+    if (
+        item.resolve(strict=True) != item
+        or item == host
+        or host not in item.parents
+        or stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_nlink != 1
+        or metadata.st_size > 64 * 1024 * 1024
+    ):
+        raise SystemExit(f"release child-result evidence is unsafe: {name}")
+    values.append(value)
+print("\t".join(values))
+PY
+    )" || sealed_status=1
+  fi
+  if ((sealed_status == 0)); then
+    IFS=$'\t' read -r \
+      corridor_completion_path formal_completion_path seed_completion_path \
+      chaos_completion_path taira_completion_path \
+      multilane_four_peer_completion_path nexus_cross_completion_path \
+      nexus_cross_soak_completion_path child_result_extra \
+      <<<"$child_result_fields"
+    if [[ -n "${child_result_extra:-}" ]]; then
+      echo "release child-result emitted unexpected fields" >&2
+      sealed_status=1
+    fi
+  fi
+  rm -f -- "$release_child_result_path"
+  if ((sealed_status == 0)) && [[ "$(
+    "$release_python_bin" -I -S \
+      "$sealed_repo_root/scripts/compute_workspace_source_manifest.py" \
+      --root "$repo_root" --release-identity-json
+  )" != "$candidate_identity_json" ]]; then
+    echo "candidate identity changed while the sealed release child executed" >&2
+    sealed_status=1
+  fi
+  if ((sealed_status == 0)); then
+    release_receipt_arguments=(
+      --candidate-identity "$candidate_identity_path" \
+      --sealed-identity "$sealed_identity_path" \
+      --release-root "$sealed_repo_root" \
+      --bootstrap-completion "$SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION" \
+      --bootstrap-evidence-dir "$release_bootstrap_evidence_dir" \
+      --bootstrap-identity "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY" \
+      --bootstrap-attestation "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_ATTESTATION" \
+      --bootstrap-transcript "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_TRANSCRIPT" \
+      --expected-bootstrap-completion-sha256 \
+        "$SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256" \
+      --bootstrap-candidate-root "$repo_root" \
+      --bootstrap-runner "$repo_root/scripts/run_sumeragi_v2_release_gates.sh" \
+      --signature-attestation "$release_signature_attestation" \
+      --signature-transcript "$release_signature_transcript" \
+      --signature-raw-commit "$release_signature_raw_commit" \
+      --signature-cargo-lock "$release_signature_cargo_lock" \
+      --signature-allowed-signers "$release_signature_allowed_signers" \
+      --signature-revocation "$release_signature_revocation" \
+      --signature-git "$release_verified_git_bin" \
+      --signature-ssh-keygen "$release_verified_ssh_keygen_bin" \
+      --expected-git-sha256 "$SUMERAGI_V2_RELEASE_EXPECTED_GIT_SHA256" \
+      --expected-ssh-keygen-sha256 "$SUMERAGI_V2_RELEASE_EXPECTED_SSH_KEYGEN_SHA256" \
+      --expected-allowed-signers-sha256 \
+        "$SUMERAGI_V2_RELEASE_EXPECTED_SSH_ALLOWED_SIGNERS_SHA256" \
+      --expected-revocation-sha256 \
+        "$SUMERAGI_V2_RELEASE_EXPECTED_SSH_REVOCATION_SHA256" \
+      --expected-signer-fingerprint \
+        "$SUMERAGI_V2_RELEASE_EXPECTED_SIGNER_FINGERPRINT" \
+      --corridor-completion "$corridor_completion_path" \
+      --formal-completion "$formal_completion_path" \
+      --seed-completion "$seed_completion_path" \
+      --chaos-completion "$chaos_completion_path" \
+      --taira-completion "$taira_completion_path" \
+      --g4p-completion "$multilane_four_peer_completion_path" \
+      --g12-seed-completion "$nexus_cross_completion_path" \
+      --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \
+      --scaling-evidence-manifest "$release_scaling_evidence_manifest" \
+      --expected-scaling-trial-harness-sha256 \
+        "$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \
+      --expected-scaling-configuration-sha256 \
+        "$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \
+      --expected-scaling-irohad-sha256 "$IROHA_RELEASE_SCALING_IROHAD_SHA256" \
+      --expected-scaling-iroha-cli-sha256 "$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \
+      --repository-root "$sealed_repo_root" \
+      --output "$aggregate_receipt_path"
+    )
+    "$release_python_bin" -I -S \
+      "$sealed_repo_root/scripts/write_sumeragi_v2_release_receipt.py" \
+      "${release_receipt_arguments[@]}" || sealed_status=$?
+  fi
+  if ((sealed_status == 0)); then
+    release_validator_stdout="$release_invocation_root/receipt-validator.stdout"
+    release_validator_stderr="$release_invocation_root/receipt-validator.stderr"
+    set +e
+    "$release_python_bin" -I -S "$release_bootstrap_evidence_dir/validate-receipt.py" \
+      "${release_receipt_arguments[@]}" --verify-existing \
+      --validation-ack "$release_invocation_root/receipt-validation-ack.json" \
+      --source-manifest-sha256 "$sealed_manifest_sha256" \
+      >"$release_validator_stdout" 2>"$release_validator_stderr"
+    sealed_status=$?
+    set -e
+    if ((sealed_status != 0)); then
+      validator_status=$sealed_status
+      if "$release_python_bin" -I -S "$release_runtime_helper" \
+        --publish-validation-failure --invocation-root "$release_invocation_root" \
+        --bootstrap-evidence "$release_bootstrap_evidence_dir" \
+        --cleanup-base "$release_invocation_base" --cleanup-prefix iroha-sumeragi-v2-release. \
+        --source-manifest-sha256 "$sealed_manifest_sha256" \
+        --validator-exit-status "$validator_status"; then sealed_status=74; else sealed_status=2; fi
+    fi
+  fi
+  if ((sealed_status == 0)); then
+    "$release_python_bin" -I -S \
+      "$release_runtime_helper" \
+      --seal-release-result \
+      --invocation-root "$release_invocation_root" \
+      --bootstrap-evidence "$release_bootstrap_evidence_dir" \
+      --source-manifest-sha256 "$sealed_manifest_sha256" \
+      || sealed_status=$?
+  fi
+  if ((sealed_status == 0)); then
+    if [[ "$("$release_python_bin" -I -S \
+      "$sealed_repo_root/scripts/compute_workspace_source_manifest.py" \
+      --root "$repo_root" --release-identity-json)" != "$candidate_identity_json" ]]; then
+      echo "candidate identity changed during protected receipt publication" >&2
+      sealed_status=1
+    elif [[ ! -s "$aggregate_receipt_path" || -L "$aggregate_receipt_path" ]]; then
+      echo "protected outer release passed without an aggregate receipt" >&2
       sealed_status=1
     else
-      # The authenticated bootstrap must revalidate this exact sealed tree
-      # after the child exits. Retain the read-only worktree and its identity
-      # as durable release evidence; failed runs are still cleaned up.
-      sealed_worktree_retained=1
-      echo "aggregate release receipt: ${aggregate_receipt_path}" >&2
+      release_invocation_retained=1
+      echo "aggregate release receipt: ${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
+      echo "Sumeragi v2 production release gates passed, including exact 525/525 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${release_bootstrap_evidence_dir}/RELEASE_COMPLETED.json" >&2
     fi
   fi
   exit "$sealed_status"
 fi
+
+source "${repo_root}/scripts/sumeragi_v2_release_process_policy.sh"
+release_gate_boundary "release-inventory:before" || exit $?
+bash ci/check_sumeragi_v2_multilane_release_inventory.sh
+release_gate_boundary "release-inventory:after-natural-completion" || exit $?
+source "${repo_root}/scripts/sumeragi_v2_prebuilt_bundle.sh"
+
+localnet_binary_attestation_valid() {
+  sumeragi_v2_localnet_binary_attestation_valid \
+    "$repo_root" "$IROHA_RELEASE_SOURCE_MANIFEST_SHA256"
+}
+
+ensure_source_bound_localnet_binaries() {
+  sumeragi_v2_ensure_source_bound_localnet_binaries \
+    "$repo_root" "$IROHA_RELEASE_SOURCE_MANIFEST_SHA256"
+}
+
+export_source_bound_localnet_binaries() {
+  sumeragi_v2_export_source_bound_localnet_binaries \
+    "$repo_root" "$IROHA_RELEASE_SOURCE_MANIFEST_SHA256"
+}
 
 verify_release_identity() {
   local checkpoint="$1"
@@ -646,22 +1317,13 @@ verify_release_identity() {
     || -z "${CARGO_TARGET_DIR:-}" \
     || -z "${IROHA_RELEASE_CANCEL_REQUEST_PATH:-}" \
     || -z "${IROHA_RELEASE_EXPECTED_IDENTITY_PATH:-}" \
-    || -z "${IROHA_RELEASE_CANDIDATE_IDENTITY_PATH:-}" \
-    || -z "${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH:-}" \
+    || -z "${IROHA_RELEASE_CANDIDATE_SOURCE_MANIFEST_SHA256:-}" \
     || -z "${IROHA_RELEASE_SCALING_CONFIGURATION_SHA256:-}" \
     || -z "${IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST:-}" \
     || -z "${IROHA_RELEASE_SCALING_IROHAD_SHA256:-}" \
     || -z "${IROHA_RELEASE_SCALING_IROHA_CLI_SHA256:-}" \
     || -z "${IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256:-}" \
-    || -z "${IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT:-}" \
-    || -z "${IROHA_RELEASE_BOOTSTRAP_RUNNER:-}" \
     || -z "${IROHA_RELEASE_PYTHON_BIN:-}" \
-    || -z "${SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION:-}" \
-    || -z "${SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_ATTESTATION:-}" \
-    || -z "${SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_TRANSCRIPT:-}" \
-    || -z "${SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY:-}" \
-    || -z "${SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR:-}" \
-    || -z "${SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256:-}" \
     || "$IROHA_RELEASE_SEALED_ROOT" \
       != "$IROHA_RELEASE_INVOCATION_ROOT/source" \
     || "$IROHA_RELEASE_WORKSPACE_TARGET" \
@@ -669,40 +1331,46 @@ verify_release_identity() {
     || "$IROHA_RELEASE_ARTIFACT_ROOT" \
       != "$IROHA_RELEASE_INVOCATION_ROOT/output" \
     || "$IROHA_RELEASE_HOST_ROOT" != "$IROHA_RELEASE_ARTIFACT_ROOT" \
-    || "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH" \
-      != "$IROHA_RELEASE_HOST_ROOT/release/RELEASE_COMPLETED.json" \
-    || -z "${IROHA_RELEASE_SIGNATURE_ATTESTATION:-}" \
-    || -z "${IROHA_RELEASE_SIGNATURE_TRANSCRIPT:-}" \
-    || -z "${IROHA_RELEASE_SIGNATURE_RAW_COMMIT:-}" \
-    || -z "${IROHA_RELEASE_SIGNATURE_CARGO_LOCK:-}" \
-    || -z "${IROHA_RELEASE_SIGNATURE_ALLOWED_SIGNERS:-}" \
-    || -z "${IROHA_RELEASE_SIGNATURE_REVOCATION:-}" \
-    || -z "${IROHA_RELEASE_EXPECTED_GIT_SHA256:-}" \
-    || -z "${IROHA_RELEASE_EXPECTED_SSH_KEYGEN_SHA256:-}" \
-    || -z "${IROHA_RELEASE_EXPECTED_SIGNER_FINGERPRINT:-}" \
-    || -z "${IROHA_RELEASE_EXPECTED_ALLOWED_SIGNERS_SHA256:-}" \
-    || -z "${IROHA_RELEASE_EXPECTED_REVOCATION_SHA256:-}" \
+    || "${PWD:-}" != "$repo_root" \
+    || ( -n "${OLDPWD:-}" && "$OLDPWD" != "$repo_root" ) \
+    || "${HOME:-}" != "$IROHA_RELEASE_HOST_ROOT/home" \
+    || "${TMPDIR:-}" != "$IROHA_RELEASE_HOST_ROOT/tmp" \
+    || "${TMP:-}" != "$IROHA_RELEASE_HOST_ROOT/tmp" \
+    || "${TEMP:-}" != "$IROHA_RELEASE_HOST_ROOT/tmp" \
+    || "${XDG_CACHE_HOME:-}" != "$IROHA_RELEASE_HOST_ROOT/cache" \
     || ! -f "$IROHA_RELEASE_EXPECTED_IDENTITY_PATH" \
-    || ! -f "$IROHA_RELEASE_CANDIDATE_IDENTITY_PATH" \
-    || ! -f "$IROHA_RELEASE_SIGNATURE_ATTESTATION" \
-    || ! -f "$IROHA_RELEASE_SIGNATURE_TRANSCRIPT" \
-    || ! -f "$IROHA_RELEASE_SIGNATURE_RAW_COMMIT" \
-    || ! -f "$IROHA_RELEASE_SIGNATURE_CARGO_LOCK" \
-    || ! -f "$IROHA_RELEASE_SIGNATURE_ALLOWED_SIGNERS" \
-    || ! -f "$IROHA_RELEASE_SIGNATURE_REVOCATION" \
     || ! -f "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
     || -L "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" ]]; then
-    echo "production release corridor must run from its signed, sealed detached worktree" >&2
+    echo "production release corridor must run from its signed, sealed independent mirror" >&2
     return 1
   fi
-  local signature_digest_name
-  for signature_digest_name in \
-    IROHA_RELEASE_EXPECTED_GIT_SHA256 \
-    IROHA_RELEASE_EXPECTED_SSH_KEYGEN_SHA256 \
-    IROHA_RELEASE_EXPECTED_ALLOWED_SIGNERS_SHA256 \
-    IROHA_RELEASE_EXPECTED_REVOCATION_SHA256; do
-    if [[ ! "${!signature_digest_name}" =~ ^[0-9a-f]{64}$ ]]; then
-      echo "signed release trust anchor ${signature_digest_name} changed at ${checkpoint}" >&2
+  local withheld_name
+  for withheld_name in \
+    SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION \
+    SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_ATTESTATION \
+    SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_TRANSCRIPT \
+    SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY \
+    SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR \
+    SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256 \
+    IROHA_RELEASE_BOOTSTRAP_COMPLETION \
+    IROHA_RELEASE_BOOTSTRAP_IDENTITY_ATTESTATION \
+    IROHA_RELEASE_BOOTSTRAP_IDENTITY_TRANSCRIPT \
+    IROHA_RELEASE_BOOTSTRAP_IDENTITY \
+    IROHA_RELEASE_BOOTSTRAP_EVIDENCE_DIR \
+    IROHA_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256 \
+    IROHA_RELEASE_CANDIDATE_IDENTITY_PATH \
+    IROHA_RELEASE_AGGREGATE_RECEIPT_PATH \
+    IROHA_RELEASE_BOOTSTRAP_SOURCE_BINDING \
+    IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT \
+    IROHA_RELEASE_BOOTSTRAP_RUNNER \
+    IROHA_RELEASE_SIGNATURE_ATTESTATION \
+    IROHA_RELEASE_SIGNATURE_TRANSCRIPT \
+    IROHA_RELEASE_SIGNATURE_RAW_COMMIT \
+    IROHA_RELEASE_SIGNATURE_CARGO_LOCK \
+    IROHA_RELEASE_SIGNATURE_ALLOWED_SIGNERS \
+    IROHA_RELEASE_SIGNATURE_REVOCATION; do
+    if [[ -n "${!withheld_name:-}" ]]; then
+      echo "protected outer-only input ${withheld_name} reached the build child" >&2
       return 1
     fi
   done
@@ -717,10 +1385,6 @@ verify_release_identity() {
       return 1
     fi
   done
-  if [[ ! "$IROHA_RELEASE_EXPECTED_SIGNER_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then
-    echo "signed release fingerprint trust anchor changed at ${checkpoint}" >&2
-    return 1
-  fi
   local observed_scaling_manifest
   if ! observed_scaling_manifest="$(
     canonical_path "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
@@ -769,15 +1433,6 @@ verify_release_identity() {
     echo "release source seal changed at ${checkpoint}" >&2
     return 1
   fi
-  if ! "$IROHA_RELEASE_PYTHON_BIN" -I -S \
-    "$repo_root/scripts/validate_sumeragi_v2_release_bootstrap.py" \
-    --candidate-root "$IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT" \
-    --runner "$IROHA_RELEASE_BOOTSTRAP_RUNNER" \
-    --profile --release \
-    --checkpoint sealed; then
-    echo "authenticated bootstrap evidence changed at ${checkpoint}" >&2
-    return 1
-  fi
 }
 
 if [[ "$profile" == "--release" ]]; then
@@ -795,8 +1450,8 @@ if [[ "$profile" == "--release" ]]; then
   readonly IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256
 fi
 
-# Both profiles are release evidence. Bind the complete corridor, including the
-# PR matrix, to one checkout manifest and one content-addressed build root.
+# Production emits signed release evidence. PR runs developer validation with
+# the same source-bound matrix inside its private clone and runtime roots.
 release_source_manifest_sha256="$(
   python3 -I -S scripts/compute_workspace_source_manifest.py --root "$repo_root"
 )"
@@ -818,10 +1473,9 @@ if [[ "$profile" == "--release" ]]; then
   expected_manifest_sha256="$(
     identity_field "$IROHA_RELEASE_EXPECTED_IDENTITY_PATH" workspace_source_manifest_sha256
   )"
-  candidate_source_manifest_sha256="$(
-    identity_field "$IROHA_RELEASE_CANDIDATE_IDENTITY_PATH" workspace_source_manifest_sha256
-  )"
-  if [[ "$expected_manifest_sha256" != "$release_source_manifest_sha256" ]]; then
+  candidate_source_manifest_sha256="$IROHA_RELEASE_CANDIDATE_SOURCE_MANIFEST_SHA256"
+  if [[ "$expected_manifest_sha256" != "$release_source_manifest_sha256" \
+    || ! "$candidate_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
     echo "sealed release identity disagrees with the workspace source manifest" >&2
     exit 1
   fi
@@ -833,17 +1487,41 @@ export IROHA_RELEASE_HEAD_TREE="$release_head_tree"
 export IROHA_RELEASE_CARGO_LOCK_SHA256="$release_cargo_lock_sha256"
 export IROHA_RELEASE_CANDIDATE_SOURCE_MANIFEST_SHA256="$candidate_source_manifest_sha256"
 if [[ "$profile" != "--release" ]]; then
-  development_invocation_root="$(
-    mktemp -d /private/tmp/iroha-sumeragi-v2-pr.XXXXXX
-  )"
-  mkdir -m 0700 -- \
-    "$development_invocation_root/target" \
-    "$development_invocation_root/artifacts"
-  export IROHA_RELEASE_INVOCATION_ROOT="$development_invocation_root"
-  export IROHA_RELEASE_WORKSPACE_TARGET="$development_invocation_root/target"
-  export IROHA_RELEASE_ARTIFACT_ROOT="$development_invocation_root/artifacts"
-  export IROHA_RELEASE_CANCEL_REQUEST_PATH="$development_invocation_root/cancel-request.json"
+  if [[ "${IROHA_RELEASE_PRIVATE_PR:-0}" != 1 \
+    || "${IROHA_RELEASE_PRIVATE_PR_SOURCE_SEALED:-0}" != 1 \
+    || "$repo_root" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/source" \
+    || "${IROHA_RELEASE_WORKSPACE_TARGET:-}" \
+      != "${IROHA_RELEASE_INVOCATION_ROOT:-}/target" \
+    || "${IROHA_RELEASE_ARTIFACT_ROOT:-}" \
+      != "${IROHA_RELEASE_INVOCATION_ROOT:-}/artifacts" \
+    || "${IROHA_RELEASE_CARGO_HOME:-}" \
+      != "${IROHA_RELEASE_INVOCATION_ROOT:-}/host/cargo-home" \
+    || "${IROHA_RELEASE_CARGO_CACHE_INPUT_INVENTORY:-}" \
+      != "${IROHA_RELEASE_INVOCATION_ROOT:-}/host/cargo-cache-input.json" \
+    || "${IROHA_RELEASE_RUNTIME_INVENTORY:-}" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/runtime-input.json" \
+    || "${HOME:-}" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/host/home" \
+    || "${TMPDIR:-}" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/host/tmp" \
+    || "${TMP:-}" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/host/tmp" \
+    || "${TEMP:-}" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/host/tmp" \
+    || "${RUSTUP_HOME:-}" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/host/rustup-home" \
+    || "${XDG_CACHE_HOME:-}" \
+      != "${IROHA_RELEASE_INVOCATION_ROOT:-}/host/cache" \
+    || "${PATH:-}" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/runtime/bin:/usr/bin:/bin" \
+    || "${GIT_EXEC_PATH:-}" != "${IROHA_RELEASE_INVOCATION_ROOT:-}/runtime/bin" \
+    || ! -x "${IROHA_RELEASE_CARGO_BIN:-}" \
+    || ! -x "${IROHA_RELEASE_RUSTC_BIN:-}" \
+    || ! -x "${IROHA_RELEASE_PR_PYTHON_BIN:-}" \
+    || "$(sha256_file "$IROHA_RELEASE_CARGO_CACHE_INPUT_INVENTORY")" \
+      != "${IROHA_RELEASE_CARGO_CACHE_INPUT_INVENTORY_SHA256:-}" \
+    || "$(sha256_file "$IROHA_RELEASE_RUNTIME_INVENTORY")" \
+      != "${IROHA_RELEASE_RUNTIME_INVENTORY_SHA256:-}" ]]; then
+    echo "PR developer validation escaped its private clone or runtime roots" >&2
+    exit 1
+  fi
   export CARGO_TARGET_DIR="$IROHA_RELEASE_WORKSPACE_TARGET"
+  export CARGO_HOME="$IROHA_RELEASE_CARGO_HOME"
+  export CARGO="$IROHA_RELEASE_CARGO_BIN"
+  export RUSTC="$IROHA_RELEASE_RUSTC_BIN"
 fi
 require_external_cargo_target_dir "$repo_root"
 require_external_release_artifact_root "$repo_root"
@@ -873,7 +1551,9 @@ if [[ "$profile" == "--release" ]]; then
     IROHA_RELEASE_PYTHON_BIN \
     IROHA_RELEASE_NODE_BIN \
     IROHA_RELEASE_BASH_BIN \
-    IROHA_RELEASE_CARGO_HOME; do
+    IROHA_RELEASE_CARGO_HOME \
+    IROHA_RELEASE_CARGO_CACHE_INPUT_INVENTORY \
+    IROHA_RELEASE_CARGO_CACHE_INPUT_INVENTORY_SHA256; do
     if [[ -z "${!required_tool_path:-}" ]]; then
       echo "sealed release is missing pinned tool path ${required_tool_path}" >&2
       exit 1
@@ -889,7 +1569,7 @@ if [[ "$profile" == "--release" ]]; then
   export CARGO_HOME="$IROHA_RELEASE_CARGO_HOME"
   export CARGO="$IROHA_RELEASE_CARGO_BIN"
   export RUSTC="$IROHA_RELEASE_RUSTC_BIN"
-  export PATH="${IROHA_RELEASE_VERUS_DIR}:$(dirname "$IROHA_RELEASE_GIT_BIN"):$(dirname "$IROHA_RELEASE_SSH_KEYGEN_BIN"):$(dirname "$IROHA_RELEASE_CARGO_BIN"):$(dirname "$IROHA_RELEASE_RUSTC_BIN"):$(dirname "$IROHA_RELEASE_PYTHON_BIN"):$(dirname "$IROHA_RELEASE_NODE_BIN"):$(dirname "$IROHA_RELEASE_BASH_BIN"):${PATH}"
+  export PATH="${IROHA_RELEASE_VERUS_DIR}:$(dirname "$IROHA_RELEASE_GIT_BIN"):$(dirname "$IROHA_RELEASE_SSH_KEYGEN_BIN"):$(dirname "$IROHA_RELEASE_CARGO_BIN"):$(dirname "$IROHA_RELEASE_RUSTC_BIN"):$(dirname "$IROHA_RELEASE_PYTHON_BIN"):$(dirname "$IROHA_RELEASE_NODE_BIN"):$(dirname "$IROHA_RELEASE_BASH_BIN"):/usr/bin:/bin"
   for pinned_tool in git ssh-keygen cargo rustc python3 node bash; do
     pinned_variable="IROHA_RELEASE_${pinned_tool^^}_BIN"
     [[ "$pinned_tool" == python3 ]] && pinned_variable=IROHA_RELEASE_PYTHON_BIN
@@ -1206,16 +1886,6 @@ required_production_liveness_tests=(
   sumeragi::v2_core::tests::replay_resigns_same_subject_reproposal_fifo_without_relabelling_old_commit
   sumeragi::v2_core::tests::replay_accepts_strictly_higher_matching_prepare_qc_proposal
   sumeragi::v2_core::tests::future_prepare_qc_is_transactionally_ignored_without_retransmit_ownership
-  sumeragi::v2_core::network_simulation::lossy_offline_leader_simulations_commit_for_4_7_and_10_validators
-  sumeragi::v2_core::network_simulation::two_by_two_partition_cannot_advance_but_healing_retransmits_tc_and_commits
-  sumeragi::v2_core::network_simulation::historical_prepare_qc_uses_current_consumer_tag_after_timeout_install
-  sumeragi::v2_core::network_simulation::responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc
-  sumeragi::v2_core::network_simulation::asymmetric_partition_stalls_without_dual_quorum_then_heals_and_applies
-  sumeragi::v2_core::network_simulation::leader_crash_after_proposal_broadcast_does_not_block_the_remaining_quorum
-  sumeragi::v2_core::network_simulation::leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum
-  sumeragi::v2_core::network_simulation::corrupted_chunks_and_withheld_commit_evidence_recover_by_bounded_retransmission
-  sumeragi::v2_core::network_simulation::crash_after_proposal_wal_before_signature_replays_exact_intent
-  sumeragi::v2_core::network_simulation::taira_divergent_views_converge_and_commit_within_one_rotation
   sumeragi::v2_core::refinement::tests::durable_intent_refinement_accepts_exact_stutters_and_rejects_mutations
   sumeragi::v2_core::refinement::tests::locked_commit_progress_witness_accepts_exact_owners_and_rejects_mutations
   sumeragi::v2_core::refinement::tests::lock_and_commit_requires_one_current_vote_and_proposal_round
@@ -1700,6 +2370,9 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::direct_close_ack_retains_reply_route_from_lane_through_worker
   sumeragi::v2_runner::tests::empty_drain_after_peek_is_restart_required_without_panicking
   sumeragi::v2_runner::tests::relayed_generation_hint_preserves_reply_route_from_lane_through_worker
+  sumeragi::v2_lane_work::tests::production_adapter_stays_carrier_silent_until_exact_queue_activation
+  sumeragi::v2_apply::tests::deferred_canonical_carrier_owned_and_absent_groups_complete_before_gate_publication
+  sumeragi::v2_apply::tests::deferred_canonical_carrier_missing_after_queue_cleanup_keeps_startup_gate_closed
   sumeragi::v2_runner::tests::startup_reconciles_lifecycle_before_lane_work_activation
   sumeragi::v2_runner::tests::terminal_sweep_source_partitions_whole_units_before_any_mutation
   sumeragi::v2_runner::tests::local_producer_queue_custody_is_preflighted_before_cursor_mutation
@@ -2001,7 +2674,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=861
+readonly expected_production_liveness_test_count=854
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -2100,7 +2773,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
 done
 
 # Keep the multilane closure-critical focused tests explicit even when they do
-# not belong to the canonical 861-test liveness inventory above. The later
+# not belong to the canonical 854-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
 # Cargo's successful zero-test filtering.
@@ -2422,6 +3095,7 @@ required_multilane_core_focus_tests=(
   sumeragi::v2_apply::tests::historical_autonomous_recovery_reaches_exactly_once_canonical_merge_application
   sumeragi::v2_lifecycle_recovery::tests::every_lifecycle_recovery_cursor_cas_boundary_survives_restart
   sumeragi::v2_lifecycle_recovery::tests::local_producer_recovery_requires_the_exact_current_queue_owner
+  sumeragi::v2_apply::tests::deferred_canonical_carrier_missing_after_queue_cleanup_keeps_startup_gate_closed
   sumeragi::v2_runner::tests::local_producer_queue_custody_is_preflighted_before_cursor_mutation
 )
 required_multilane_queue_journal_focus_tests=(
@@ -2646,7 +3320,7 @@ required_multilane_config_fixtures_focus_tests=(
   minimal_config_snapshot
   retired_plan_journal_toggle_fails_during_config_parse_before_runtime_storage
 )
-readonly expected_multilane_focus_test_count=524
+readonly expected_multilane_focus_test_count=525
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_config_lib_focus_tests[@]}
@@ -2817,7 +3491,7 @@ require_g_unit_log_results() {
 
 # G-UNIT is an execution receipt, not a name-only inventory. Each crate-bound
 # leg invokes every exact non-ignored focus test above and archives one
-  # unambiguous one-test Cargo transcript per entry. The canonical 524-row TSV is
+  # unambiguous one-test Cargo transcript per entry. The canonical 525-row TSV is
 # hashed into the corridor completion and independently revalidated by the
 # aggregate receipt writer.
 if ((corridor_enabled)); then
@@ -2925,8 +3599,8 @@ if ((corridor_enabled)); then
   require_g_unit_log_results \
     "${required_multilane_integration_lib_focus_tests[@]}"
 
-  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 525 ]]; then
-    echo "G-UNIT inventory must contain one header and exactly 524 focused tests" >&2
+  if [[ "$(wc -l <"$corridor_g_unit_inventory" | tr -d '[:space:]')" != 526 ]]; then
+    echo "G-UNIT inventory must contain one header and exactly 525 focused tests" >&2
     exit 1
   fi
 fi
@@ -3023,7 +3697,6 @@ production_liveness_modules=(
   merge_sidecar::tests
   state::tests
   sumeragi::v2_core::tests
-  sumeragi::v2_core::network_simulation
   sumeragi::v2_core::refinement::tests
   sumeragi::v2_core::wal::byte_lifecycle_tests
   sumeragi::v2_core::reducer::source_link_tests
@@ -3066,7 +3739,6 @@ production_liveness_leg_ids=(
   production-merge-sidecar
   production-state-governance-unlock-audit
   production-v2-core
-  production-v2-core-network-simulation
   production-v2-core-refinement
   production-v2-core-wal
   production-v2-core-source-link
@@ -3208,23 +3880,23 @@ run_final_workspace_verification() {
   verify_release_identity "before final source-sealed full workspace verification"
   run_corridor_leg \
     source-sealed-workspace-build command 0 \
-    "cargo +1.93.1 build -j1 --locked --offline --workspace" \
+    "${IROHA_RELEASE_CARGO_BIN} build -j1 --locked --offline --workspace" \
     run_cargo build --locked --offline --workspace
   run_corridor_leg \
     source-sealed-workspace-tests command 0 \
-    "cargo +1.93.1 test -j1 --locked --offline --workspace" \
+    "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline --workspace" \
     run_cargo test --locked --offline --workspace
   run_corridor_leg \
     source-sealed-irohad-tests command 0 \
-    "cargo +1.93.1 test -j1 --locked --offline -p irohad --bin irohad --features test-network-message-control" \
+    "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline -p irohad --bin irohad --features test-network-message-control" \
     run_cargo test --locked --offline -p irohad --bin irohad --features test-network-message-control
   run_corridor_leg \
     source-sealed-workspace-clippy command 0 \
-    "cargo +1.93.1 clippy -j1 --locked --offline --workspace --all-targets -- -D warnings" \
+    "${IROHA_RELEASE_CARGO_BIN} clippy -j1 --locked --offline --workspace --all-targets -- -D warnings" \
     run_cargo clippy --locked --offline --workspace --all-targets -- -D warnings
   run_corridor_leg \
     source-sealed-workspace-format command 0 \
-    "cargo +1.93.1 fmt --all -- --check" \
+    "${IROHA_RELEASE_CARGO_BIN} fmt --all -- --check" \
     run_cargo fmt --all -- --check
   run_corridor_leg \
     source-sealed-legacy-codec-guard command 0 \
@@ -3722,10 +4394,10 @@ proof_fidelity_contract_files=(
   pytests/scripts/sumeragi_v2_multilane_wire_release_invariant_test.py::test_wire_release_invariant_rejects_semantic_source_mutation
 )
 proof_fidelity_contract_log="$(corridor_contract_log_path preflight-proof-fidelity)"
-# Collection is source-bound as 5,129 ledger/checker cases (including the
+# Collection is source-bound as 5,189 ledger/checker cases (including the
 # lexically executed case components), 28 pinned-Verus evidence cases,
-# 15 TLC-normalizer cases, eight reviewed-Rust closure cases, 29 Native/passive
-  # multilane source-contract cases, and eighteen cases from twelve selected
+# 15 TLC-normalizer cases, eight reviewed-Rust closure cases, 31 Native/passive
+# multilane source-contract cases, and twenty cases from twelve selected
 # layout/wire selectors.
 release_gate_boundary "preflight-proof-fidelity:before" || exit $?
 set +e
@@ -3735,15 +4407,15 @@ proof_fidelity_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_gate_boundary "preflight-proof-fidelity:after-natural-completion" || exit $?
 proof_fidelity_pass_summary="$(
-  grep -Ec '^5227 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
+  grep -Ec '^5291 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' "$proof_fidelity_contract_log" || true
 )"
 if ((proof_fidelity_pipeline_status[0] != 0 || proof_fidelity_pipeline_status[1] != 0)) \
   || [[ "$proof_fidelity_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5227 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 proof-fidelity preflight did not run exactly 5291 passing tests (pytest=${proof_fidelity_pipeline_status[0]}, tee=${proof_fidelity_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-proof-fidelity pytest 5227 \
+  preflight-proof-fidelity pytest 5291 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${proof_fidelity_contract_files[*]}" \
   "$proof_fidelity_contract_log" \
   "${proof_fidelity_pipeline_status[0]}" "${proof_fidelity_pipeline_status[1]}"
@@ -3820,10 +4492,10 @@ publish_corridor_completion() {
     echo "source-bound localnet binary bundle changed before corridor completion" >&2
     return 1
   fi
-  # 41 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
+  # 40 production-module + 9 G-UNIT + 2 exact data-model + 6 source-sealed
   # command + 6 Taira + 1 cross-SDK Rust + 1 Native AMX fixture + 6 grouped
-  # SDK + 6 diagnostics + 11 pytest legs = 89.
-  readonly expected_corridor_leg_count=89
+  # SDK + 6 diagnostics + 11 pytest legs = 88.
+  readonly expected_corridor_leg_count=88
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
@@ -3835,7 +4507,7 @@ publish_corridor_completion() {
     'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve(strict=True))' \
     "$JAVA_BIN")"
   corridor_java_sha256="$(sha256_file "$corridor_java_path")"
-  corridor_cargo_path="$(canonical_executable cargo)"
+  corridor_cargo_path="$(canonical_path "$IROHA_RELEASE_CARGO_BIN")"
   corridor_rustc_path="$(canonical_executable rustc)"
   corridor_python_path="$(canonical_executable python3)"
   corridor_node_path="$(canonical_executable node)"
@@ -3845,7 +4517,25 @@ publish_corridor_completion() {
   corridor_bash_path="$(canonical_executable bash)"
   corridor_git_path="$(canonical_executable git)"
   corridor_cargo_home="$(canonical_path "$CARGO_HOME")"
+  corridor_cargo_cache_input_inventory="$(canonical_path \
+    "$IROHA_RELEASE_CARGO_CACHE_INPUT_INVENTORY")"
+  corridor_cargo_cache_input_inventory_sha256="$(
+    sha256_file "$corridor_cargo_cache_input_inventory"
+  )"
+  if [[ "$corridor_cargo_cache_input_inventory_sha256" \
+    != "$IROHA_RELEASE_CARGO_CACHE_INPUT_INVENTORY_SHA256" ]]; then
+    echo "Cargo cache input inventory changed during the release corridor" >&2
+    return 1
+  fi
   corridor_cargo_version="$(run_cargo --version)"
+  corridor_cargo_cache_final_inventory="${IROHA_RELEASE_ARTIFACT_ROOT}/cargo-cache-final.json"
+  "$IROHA_RELEASE_PYTHON_BIN" -I -S \
+    "$repo_root/scripts/copy_sumeragi_v2_release_cargo_cache.py" \
+    --final --cargo-home "$corridor_cargo_home" \
+    --inventory "$corridor_cargo_cache_final_inventory"
+  corridor_cargo_cache_final_inventory_sha256="$(
+    sha256_file "$corridor_cargo_cache_final_inventory"
+  )"
   release_gate_boundary "corridor-completion:before-publication" || return $?
   corridor_completion_tmp="${corridor_evidence_dir}/.COMPLETED.tsv.$$"
   printf '%s\t%s\n' \
@@ -3886,6 +4576,19 @@ publish_corridor_completion() {
     git_path "$corridor_git_path" \
     git_sha256 "$(sha256_file "$corridor_git_path")" \
     cargo_home_path "$corridor_cargo_home" \
+    runtime_home_path "$HOME" \
+    runtime_tmpdir_path "$TMPDIR" \
+    runtime_tmp_path "$TMP" \
+    runtime_temp_path "$TEMP" \
+    runtime_cache_path "$XDG_CACHE_HOME" \
+    cargo_cache_input_inventory_path "$corridor_cargo_cache_input_inventory" \
+    cargo_cache_input_inventory_sha256 \
+      "$corridor_cargo_cache_input_inventory_sha256" \
+    cargo_cache_final_inventory_path "$corridor_cargo_cache_final_inventory" \
+    cargo_cache_final_inventory_sha256 \
+      "$corridor_cargo_cache_final_inventory_sha256" \
+    runtime_inventory_path "$IROHA_RELEASE_RUNTIME_INVENTORY" \
+    runtime_inventory_sha256 "$IROHA_RELEASE_RUNTIME_INVENTORY_SHA256" \
     repo_cargo_config_sha256 "$(sha256_file "$repo_root/.cargo/config.toml")" \
     native_amx_grouped_fixture_sha256 "$native_amx_grouped_fixture_sha256" \
     native_amx_grouped_suite_source_manifest_sha256 \
@@ -4188,61 +4891,68 @@ seed_completion_path="$(<"$seed_completion_path_file")"
 formal_completion_path="$(<"$formal_completion_path_file")"
 chaos_completion_path="$(<"$chaos_completion_path_file")"
 taira_completion_path="$(<"$taira_completion_path_file")"
-verify_release_identity "before aggregate release receipt publication"
-release_gate_boundary "aggregate-receipt:before-publication" || exit $?
-"$IROHA_RELEASE_PYTHON_BIN" -I -S scripts/write_sumeragi_v2_release_receipt.py \
-  --candidate-identity "$IROHA_RELEASE_CANDIDATE_IDENTITY_PATH" \
-  --sealed-identity "$IROHA_RELEASE_EXPECTED_IDENTITY_PATH" \
-  --release-root "$repo_root" \
-  --bootstrap-completion "$SUMERAGI_V2_RELEASE_BOOTSTRAP_COMPLETION" \
-  --bootstrap-evidence-dir "$SUMERAGI_V2_RELEASE_BOOTSTRAP_EVIDENCE_DIR" \
-  --bootstrap-identity "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY" \
-  --bootstrap-attestation "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_ATTESTATION" \
-  --bootstrap-transcript "$SUMERAGI_V2_RELEASE_BOOTSTRAP_IDENTITY_TRANSCRIPT" \
-  --expected-bootstrap-completion-sha256 \
-    "$SUMERAGI_V2_RELEASE_EXPECTED_BOOTSTRAP_COMPLETION_SHA256" \
-  --bootstrap-candidate-root "$IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT" \
-  --bootstrap-runner "$IROHA_RELEASE_BOOTSTRAP_RUNNER" \
-  --signature-attestation "$IROHA_RELEASE_SIGNATURE_ATTESTATION" \
-  --signature-transcript "$IROHA_RELEASE_SIGNATURE_TRANSCRIPT" \
-  --signature-raw-commit "$IROHA_RELEASE_SIGNATURE_RAW_COMMIT" \
-  --signature-cargo-lock "$IROHA_RELEASE_SIGNATURE_CARGO_LOCK" \
-  --signature-allowed-signers "$IROHA_RELEASE_SIGNATURE_ALLOWED_SIGNERS" \
-  --signature-revocation "$IROHA_RELEASE_SIGNATURE_REVOCATION" \
-  --signature-git "$IROHA_RELEASE_GIT_BIN" \
-  --signature-ssh-keygen "$IROHA_RELEASE_SSH_KEYGEN_BIN" \
-  --expected-git-sha256 "$IROHA_RELEASE_EXPECTED_GIT_SHA256" \
-  --expected-ssh-keygen-sha256 "$IROHA_RELEASE_EXPECTED_SSH_KEYGEN_SHA256" \
-  --expected-allowed-signers-sha256 "$IROHA_RELEASE_EXPECTED_ALLOWED_SIGNERS_SHA256" \
-  --expected-revocation-sha256 "$IROHA_RELEASE_EXPECTED_REVOCATION_SHA256" \
-  --expected-signer-fingerprint "$IROHA_RELEASE_EXPECTED_SIGNER_FINGERPRINT" \
-  --corridor-completion "$corridor_completion_path" \
-  --formal-completion "$formal_completion_path" \
-  --seed-completion "$seed_completion_path" \
-  --chaos-completion "$chaos_completion_path" \
-  --taira-completion "$taira_completion_path" \
-  --g4p-completion "$multilane_four_peer_completion_path" \
-  --g12-seed-completion "$nexus_cross_completion_path" \
-  --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \
-  --scaling-evidence-manifest "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
-  --expected-scaling-trial-harness-sha256 \
-    "$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \
-  --expected-scaling-configuration-sha256 \
-    "$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \
-  --expected-scaling-irohad-sha256 "$IROHA_RELEASE_SCALING_IROHAD_SHA256" \
-  --expected-scaling-iroha-cli-sha256 "$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \
-  --repository-root "$repo_root" \
-  --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
-aggregate_publication_status=0
-release_gate_boundary "aggregate-receipt:after-publication" \
-  || aggregate_publication_status=$?
-if ((aggregate_publication_status != 0)) \
-  || ! verify_release_identity "after aggregate release receipt publication"; then
-  rm -f -- "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
-  if ((aggregate_publication_status != 0)); then
-    exit "$aggregate_publication_status"
-  fi
-  exit 1
-fi
+verify_release_identity "before protected child-result publication"
+release_gate_boundary "child-result:before-publication" || exit $?
+"$IROHA_RELEASE_PYTHON_BIN" -I -S - \
+  "$IROHA_RELEASE_CHILD_RESULT_PATH" "$IROHA_RELEASE_HOST_ROOT" \
+  "$release_source_manifest_sha256" "$corridor_completion_path" \
+  "$formal_completion_path" "$seed_completion_path" \
+  "$chaos_completion_path" "$taira_completion_path" \
+  "$multilane_four_peer_completion_path" "$nexus_cross_completion_path" \
+  "$nexus_cross_soak_completion_path" <<'PY'
+from pathlib import Path
+import json
+import os
+import stat
+import sys
 
-echo "Sumeragi v2 production release gates passed, including exact 524/524 G-UNIT, strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+output = Path(sys.argv[1])
+host = Path(sys.argv[2]).resolve(strict=True)
+names = (
+    "corridor_completion", "formal_completion", "seed_completion",
+    "chaos_completion", "taira_completion", "g4p_completion",
+    "g12_seed_completion", "g12_fault_soak_completion",
+)
+if output != host / "release-child-result.json" or output.exists() or output.is_symlink():
+    raise SystemExit("release child-result output is unsafe")
+records = {}
+for name, raw in zip(names, sys.argv[4:], strict=True):
+    path = Path(raw)
+    metadata = path.lstat()
+    if (
+        path.resolve(strict=True) != path
+        or path == host
+        or host not in path.parents
+        or stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_nlink != 1
+        or metadata.st_size > 64 * 1024 * 1024
+    ):
+        raise SystemExit(f"release child-result path is unsafe: {name}")
+    records[name] = str(path)
+payload = {
+    "schema_version": 1,
+    "release_source_manifest_sha256": sys.argv[3],
+    **records,
+}
+data = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+temporary = output.with_name(".release-child-result.tmp")
+flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+descriptor = os.open(temporary, flags, 0o400)
+try:
+    os.write(descriptor, data)
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+try:
+    os.link(temporary, output, follow_symlinks=False)
+finally:
+    temporary.unlink(missing_ok=True)
+PY
+release_gate_boundary "child-result:after-publication" || {
+  rm -f -- "$IROHA_RELEASE_CHILD_RESULT_PATH"
+  exit $?
+}
+verify_release_identity "after protected child-result publication"
+echo "Sumeragi v2 production build corridor passed; protected outer receipt validation is pending" >&2

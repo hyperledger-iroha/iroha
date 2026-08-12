@@ -638,8 +638,11 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
    SoraFS council roots must be canonical Ed25519
    governance keys; never substitute validator, node identity, or provider
    advert keys.
-4. Render the per-validator bundle:
-   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
+4. Create an owner-private absolute render root and render the per-validator
+   bundle beneath it:
+   - `TAIRA_VALIDATOR_RENDER_ROOT="$(mktemp -d /private/var/tmp/iroha-taira-validator-render.XXXXXX)"`
+   - `chmod 0700 "${TAIRA_VALIDATOR_RENDER_ROOT}"`
+   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir "${TAIRA_VALIDATOR_RENDER_ROOT}/taira-validators"`
 5. Copy each validator's complete generated directory to that validator
    host's canonical `/etc/iroha/taira-validator` directory. Every rendered
 config binds signer sidecars and governance manifests to that same
@@ -1625,12 +1628,15 @@ available as an optional convenience for environments that do have Compose.
 1. Build or load an explicitly local development image and retain its local
    image ID for `TAIRA_IMAGE`; do not treat it as release authority.
    - `docker load < iroha3-<version>-linux-image.tar`
-2. Render the validator config bundle from your user-local roster and secrets:
-   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
+2. Create an owner-private absolute render root and render the validator config
+   bundle from your user-local roster and secrets:
+   - `TAIRA_VALIDATOR_RENDER_ROOT="$(mktemp -d /private/var/tmp/iroha-taira-validator-render.XXXXXX)"`
+   - `chmod 0700 "${TAIRA_VALIDATOR_RENDER_ROOT}"`
+   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir "${TAIRA_VALIDATOR_RENDER_ROOT}/taira-validators"`
 3. Install the rendered config and storage directories on the validator host:
    - `sudo install -d -m 0700 -o 1001 -g 1001 /etc/iroha/taira-validator`
    - `sudo install -d -o 1001 -g 1001 /var/lib/iroha/taira-validator-1`
-   - `sudo cp -a dist/taira-validators/taira-validator-1/. /etc/iroha/taira-validator/`
+   - `sudo cp -a "${TAIRA_VALIDATOR_RENDER_ROOT}/taira-validators/taira-validator-1/." /etc/iroha/taira-validator/`
    - install reviewed SoraFS admission envelopes, if any, under the rendered
      `/etc/iroha/taira-validator/sorafs_admission` directory
    - after installing all runtime inputs, run
@@ -1714,9 +1720,12 @@ away from the shipped MCP-enabled config:
      reviewed signer fingerprint, and authority-manifest SHA-256 in the rollout
      ticket; together they identify the exact candidate the later SoraSwap gate
      must approve
-3. Render the per-validator config bundle from a user-local roster file, then
-   copy the correct validator config onto the host, for example:
-   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
+3. Create an owner-private absolute render root, render the per-validator
+   config bundle from a user-local roster file, then copy the correct validator
+   config onto the host, for example:
+   - `TAIRA_VALIDATOR_RENDER_ROOT="$(mktemp -d /private/var/tmp/iroha-taira-validator-render.XXXXXX)"`
+   - `chmod 0700 "${TAIRA_VALIDATOR_RENDER_ROOT}"`
+   - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir "${TAIRA_VALIDATOR_RENDER_ROOT}/taira-validators"`
    - `validator_secrets.local.toml` must include every validator BLS private
      key, its dedicated Ed25519 `soranet_transport_public_key` and
      `soranet_transport_private_key`, and the shared `account_onboarding_*`, `torii_faucet_*`, and
@@ -1726,7 +1735,7 @@ away from the shipped MCP-enabled config:
      deployment values as fail-closed placeholders
    - `sudo install -d -m 0700 -o iroha -g iroha /etc/iroha/taira-validator`
    - `sudo install -d -m 0700 -o iroha -g iroha /var/lib/iroha/taira-validator-1`
-   - `sudo cp -a dist/taira-validators/taira-validator-1/. /etc/iroha/taira-validator/`
+   - `sudo cp -a "${TAIRA_VALIDATOR_RENDER_ROOT}/taira-validators/taira-validator-1/." /etc/iroha/taira-validator/`
    - preserve the generated `0600` modes; signer and governance paths already
      target this canonical install root and must not be rewritten
    - install reviewed SoraFS admission envelopes, if any, under

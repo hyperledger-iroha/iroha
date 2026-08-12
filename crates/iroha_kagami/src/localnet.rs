@@ -87,7 +87,6 @@ use crate::{
     },
     tui,
 };
-
 /// User-facing options for generating a bare-metal localnet.
 #[derive(Debug, Clone)]
 pub struct LocalnetOptions {
@@ -121,7 +120,6 @@ pub struct LocalnetOptions {
     /// Consensus mode to commit in signed genesis.
     pub consensus_mode: SumeragiConsensusMode,
 }
-
 impl Drop for LocalnetOptions {
     fn drop(&mut self) {
         if let Some(seed) = self.seed.as_mut() {
@@ -129,7 +127,6 @@ impl Drop for LocalnetOptions {
         }
     }
 }
-
 /// Asset definition plus optional minting target for sample generation.
 #[derive(Debug, Clone)]
 pub struct AssetSpec {
@@ -146,19 +143,16 @@ pub struct AssetSpec {
     /// Quantity to mint for this asset definition.
     pub quantity: u64,
 }
-
 #[derive(Debug, Clone)]
 enum HostKind {
     Ipv4(Ipv4Addr),
     Ipv6(Ipv6Addr),
     Name(String),
 }
-
 #[derive(Debug, Clone)]
 struct CanonicalHost {
     kind: HostKind,
 }
-
 impl CanonicalHost {
     fn parse(raw: &str, field: &str) -> Result<Self> {
         let trimmed = raw.trim();
@@ -197,7 +191,6 @@ impl CanonicalHost {
             kind: HostKind::Name(unbracketed.to_ascii_lowercase()),
         })
     }
-
     fn addr_literal(&self, port: u16) -> String {
         let addr = match &self.kind {
             HostKind::Ipv4(ipv4) => SocketAddr::from((ipv4.octets(), port)),
@@ -209,7 +202,6 @@ impl CanonicalHost {
         };
         addr.to_literal()
     }
-
     fn url_host(&self) -> String {
         match &self.kind {
             HostKind::Ipv4(ipv4) => ipv4.to_string(),
@@ -217,18 +209,15 @@ impl CanonicalHost {
             HostKind::Name(host) => host.clone(),
         }
     }
-
     fn torii_url(&self, port: u16) -> String {
         format!("http://{}:{port}/", self.url_host())
     }
 }
-
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ConsensusModeArg {
     Permissioned,
     Npos,
 }
-
 impl From<ConsensusModeArg> for SumeragiConsensusMode {
     fn from(value: ConsensusModeArg) -> Self {
         match value {
@@ -237,7 +226,6 @@ impl From<ConsensusModeArg> for SumeragiConsensusMode {
         }
     }
 }
-
 /// SORA network profiles that influence localnet defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SoraProfile {
@@ -250,7 +238,6 @@ pub enum SoraProfile {
     /// Public dataspace (Nexus) defaults.
     Nexus,
 }
-
 impl SoraProfile {
     fn consensus_policy(self) -> ConsensusPolicy {
         match self {
@@ -261,7 +248,6 @@ impl SoraProfile {
         }
     }
 }
-
 /// Localnet performance profiles for 10k TPS / 1s finality runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalnetPerfProfile {
@@ -270,7 +256,6 @@ pub enum LocalnetPerfProfile {
     /// 10k TPS / 1s finality baseline for NPoS mode.
     Throughput10kNpos,
 }
-
 #[derive(Debug, Clone, Copy)]
 struct LocalnetPerfProfileSpec {
     consensus_mode: SumeragiConsensusMode,
@@ -278,7 +263,6 @@ struct LocalnetPerfProfileSpec {
     block_max_transactions: u64,
     stake_amount: u64,
 }
-
 impl LocalnetPerfProfile {
     fn spec(self) -> LocalnetPerfProfileSpec {
         let consensus_mode = match self {
@@ -292,12 +276,10 @@ impl LocalnetPerfProfile {
             stake_amount: LOCALNET_STAKE_AMOUNT,
         }
     }
-
     fn consensus_mode(self) -> SumeragiConsensusMode {
         self.spec().consensus_mode
     }
 }
-
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SoraProfileArg {
     #[value(alias = "dataspaces")]
@@ -305,7 +287,6 @@ pub(crate) enum SoraProfileArg {
     #[value(alias = "public", alias = "sora-nexus", alias = "nexus-public")]
     Nexus,
 }
-
 /// Canonical restricted-dataspace presets supported by the localnet generator.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrivateDataspaceArg {
@@ -314,7 +295,6 @@ pub(crate) enum PrivateDataspaceArg {
     /// Central Bank of the UAE dataspace (id 12, lane 4).
     Cbuae,
 }
-
 impl From<SoraProfileArg> for SoraProfile {
     fn from(value: SoraProfileArg) -> Self {
         match value {
@@ -323,7 +303,6 @@ impl From<SoraProfileArg> for SoraProfile {
         }
     }
 }
-
 fn resolve_sora_profile(
     profile: Option<SoraProfileArg>,
     private_dataspace: Option<PrivateDataspaceArg>,
@@ -342,7 +321,6 @@ fn resolve_sora_profile(
         )),
     }
 }
-
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LocalnetPerfProfileArg {
     #[value(name = "10k-permissioned", alias = "throughput-10k-permissioned")]
@@ -350,7 +328,6 @@ pub(crate) enum LocalnetPerfProfileArg {
     #[value(name = "10k-npos", alias = "throughput-10k-npos")]
     Throughput10kNpos,
 }
-
 impl From<LocalnetPerfProfileArg> for LocalnetPerfProfile {
     fn from(value: LocalnetPerfProfileArg) -> Self {
         match value {
@@ -361,7 +338,6 @@ impl From<LocalnetPerfProfileArg> for LocalnetPerfProfile {
         }
     }
 }
-
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BuildLineArg {
     #[value(alias = "i2", alias = "2")]
@@ -369,7 +345,6 @@ pub(crate) enum BuildLineArg {
     #[value(alias = "i3", alias = "3")]
     Iroha3,
 }
-
 impl From<BuildLineArg> for BuildLine {
     fn from(value: BuildLineArg) -> Self {
         match value {
@@ -378,7 +353,6 @@ impl From<BuildLineArg> for BuildLine {
         }
     }
 }
-
 impl std::fmt::Display for BuildLineArg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let label = match self {
@@ -388,14 +362,12 @@ impl std::fmt::Display for BuildLineArg {
         f.write_str(label)
     }
 }
-
 pub(crate) fn consensus_mode_label(mode: SumeragiConsensusMode) -> &'static str {
     match mode {
         SumeragiConsensusMode::Permissioned => "permissioned",
         SumeragiConsensusMode::Npos => "npos",
     }
 }
-
 const DEFAULT_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const LOCALNET_CHAIN_ID_ENV: &str = "IROHA_LOCALNET_CHAIN_ID";
 pub(crate) const GENESIS_SEED: &[u8; 7] = b"genesis";
@@ -440,7 +412,6 @@ const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BURST: u32 = 600;
 const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC: u32 = 268_435_456; // 256 MiB
 /// Default critical consensus ingress bytes burst cap for localnet.
 const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST: u32 = 536_870_912; // 512 MiB
-
 fn localnet_sumeragi_body_bytes(validator_count: usize) -> Result<usize> {
     if validator_count > MAX_VALIDATORS_PER_HEIGHT {
         return Err(eyre!(
@@ -617,13 +588,11 @@ const RANS_SEED0_TABLE: &[u8] = include_bytes!(concat!(
     "/../../codec/rans/tables/rans_seed0.toml"
 ));
 const LOCALNET_RANS_TABLE_RELATIVE_PATH: &str = "codec/rans/tables/rans_seed0.toml";
-
 fn localnet_dataspace_fault_tolerance(peers: NonZeroU16) -> u32 {
     let peers = u32::from(peers.get());
     let fault_tolerance = peers.saturating_sub(1) / 3;
     fault_tolerance.max(1)
 }
-
 const LOCALNET_PAYNET_ALIAS_DATASPACE_ID: u64 = 10;
 const LOCALNET_CBUAE_ALIAS_DATASPACE_ID: u64 = 12;
 const LOCALNET_PAYNET_ALIAS_LANE_INDEX: u32 = 3;
@@ -631,13 +600,11 @@ const LOCALNET_CBUAE_ALIAS_LANE_INDEX: u32 = 4;
 const LOCALNET_NEXUS_ALIAS_LANE_COUNT: i64 = 5;
 #[cfg(test)]
 const LOCALNET_PAYNET_ALIAS_LANE_COUNT: i64 = 4;
-
 #[derive(Debug, Clone, Copy)]
 struct PrivateDataspaceRoute {
     matcher: &'static str,
     description: &'static str,
 }
-
 #[derive(Debug, Clone, Copy)]
 struct PrivateDataspaceSpec {
     alias: &'static str,
@@ -648,7 +615,6 @@ struct PrivateDataspaceSpec {
     account_routes: &'static [PrivateDataspaceRoute],
     transfer_routes: &'static [PrivateDataspaceRoute],
 }
-
 const PAYNET_ACCOUNT_ROUTES: &[PrivateDataspaceRoute] = &[
     PrivateDataspaceRoute {
         matcher: "*@paynet",
@@ -696,7 +662,6 @@ const CBUAE_TRANSFER_ROUTES: &[PrivateDataspaceRoute] = &[PrivateDataspaceRoute 
     description: "Route transfer destination alias scope cbuae to the CBUAE lane",
 }];
 const SBP_BOOTSTRAP_DOMAINS: &[&str] = &["hbl.sbp", "ubl.sbp"];
-
 fn private_dataspace_spec(sora_profile: Option<SoraProfile>) -> Option<PrivateDataspaceSpec> {
     match sora_profile? {
         SoraProfile::Dataspace => Some(PrivateDataspaceSpec {
@@ -729,7 +694,6 @@ fn private_dataspace_spec(sora_profile: Option<SoraProfile>) -> Option<PrivateDa
         SoraProfile::Nexus => None,
     }
 }
-
 fn localnet_uses_alias_multilane_catalog(sora_profile: Option<SoraProfile>) -> bool {
     matches!(
         sora_profile,
@@ -741,7 +705,6 @@ fn localnet_uses_alias_multilane_catalog(sora_profile: Option<SoraProfile>) -> b
         )
     )
 }
-
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::parse_fully_qualified(domain)
@@ -750,27 +713,21 @@ fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId 
             .expect("static asset definition name must remain valid"),
     )
 }
-
 pub(crate) fn canonical_asset_definition_literal(domain: &str, name: &str) -> String {
     canonical_asset_definition_id(domain, name).canonical_address()
 }
-
 fn localnet_stake_asset_definition_id() -> AssetDefinitionId {
     canonical_asset_definition_id(LOCALNET_NEXUS_DOMAIN, LOCALNET_STAKE_ASSET_NAME)
 }
-
 fn localnet_stake_asset_literal() -> String {
     canonical_asset_definition_literal(LOCALNET_NEXUS_DOMAIN, LOCALNET_STAKE_ASSET_NAME)
 }
-
 fn localnet_fee_asset_definition_id() -> AssetDefinitionId {
     canonical_asset_definition_id(LOCALNET_UNIVERSAL_DOMAIN, LOCALNET_STAKE_ASSET_NAME)
 }
-
 fn localnet_fee_asset_literal() -> String {
     canonical_asset_definition_literal(LOCALNET_UNIVERSAL_DOMAIN, LOCALNET_STAKE_ASSET_NAME)
 }
-
 fn localnet_fee_sponsor_program_id(sponsor: &AccountId) -> FeeSponsorProgramId {
     FeeSponsorProgramId::new(
         sponsor.clone(),
@@ -779,7 +736,6 @@ fn localnet_fee_sponsor_program_id(sponsor: &AccountId) -> FeeSponsorProgramId {
             .expect("static localnet fee sponsor program name must parse"),
     )
 }
-
 fn localnet_fee_sponsor_revision(
     program_id: FeeSponsorProgramId,
     fee_asset_id: AssetDefinitionId,
@@ -790,7 +746,6 @@ fn localnet_fee_sponsor_revision(
             asset_definition_id: None,
         })
     };
-
     FeeSponsorProgramRevision {
         program_id,
         revision: 1,
@@ -823,15 +778,12 @@ fn localnet_fee_sponsor_revision(
         }],
     }
 }
-
 const LOCALNET_FEE_ZK_VK_BACKEND: &str = "halo2/ipa";
 const LOCALNET_FEE_ZK_VK_UNSHIELD_NAME: &str = "vk_unshield";
 const LOCALNET_FEE_ASSET_SCALE: u32 = 9;
-
 fn localnet_fee_vk_unshield_id() -> VerifyingKeyId {
     VerifyingKeyId::new(LOCALNET_FEE_ZK_VK_BACKEND, LOCALNET_FEE_ZK_VK_UNSHIELD_NAME)
 }
-
 fn localnet_confidential_fee_vk_record(name: &str, version: u32) -> Result<VerifyingKeyRecord> {
     match name {
         LOCALNET_FEE_ZK_VK_UNSHIELD_NAME => {
@@ -841,7 +793,6 @@ fn localnet_confidential_fee_vk_record(name: &str, version: u32) -> Result<Verif
         _ => Err(eyre!("unknown localnet confidential verifier name: {name}")),
     }
 }
-
 fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, VerifyingKeyRecord); 1]>
 {
     Ok([(
@@ -849,15 +800,12 @@ fn localnet_confidential_fee_vk_registrations() -> Result<[(VerifyingKeyId, Veri
         localnet_confidential_fee_vk_record(LOCALNET_FEE_ZK_VK_UNSHIELD_NAME, 2)?,
     )])
 }
-
 fn localnet_sample_asset_literal() -> String {
     canonical_asset_definition_literal(LOCALNET_SAMPLE_ASSET_DOMAIN, LOCALNET_SAMPLE_ASSET_NAME)
 }
-
 fn localnet_kagemusha_asset_literal() -> String {
     LOCALNET_KAGEMUSHA_ASSET_ID.to_owned()
 }
-
 fn localnet_kagemusha_asset_spec_for_client(client_account_id: &AccountId) -> AssetSpec {
     AssetSpec {
         id: localnet_kagemusha_asset_literal(),
@@ -868,7 +816,6 @@ fn localnet_kagemusha_asset_spec_for_client(client_account_id: &AccountId) -> As
         quantity: LOCALNET_KAGEMUSHA_INITIAL_QUANTITY,
     }
 }
-
 fn requested_localnet_asset_spec(asset_definition_id: &str) -> Result<AssetSpec> {
     let id = asset_definition_id.trim();
     if id.is_empty() {
@@ -886,12 +833,10 @@ fn requested_localnet_asset_spec(asset_definition_id: &str) -> Result<AssetSpec>
         quantity: LOCALNET_REQUESTED_ASSET_INITIAL_QUANTITY,
     })
 }
-
 #[cfg(test)]
 fn effective_localnet_assets(extra_assets: &[AssetSpec]) -> Vec<AssetSpec> {
     effective_localnet_assets_for_client(extra_assets, &localnet_client_account_id())
 }
-
 fn effective_localnet_assets_for_client(
     extra_assets: &[AssetSpec],
     client_account_id: &AccountId,
@@ -916,7 +861,6 @@ fn effective_localnet_assets_for_client(
     }
     assets
 }
-
 /// Generate a bare-metal local network (no Docker): genesis, per-peer configs, start/stop scripts.
 #[derive(ClapArgs, Debug, Clone)]
 pub struct Args {
@@ -986,7 +930,6 @@ pub struct Args {
     #[arg(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
 }
-
 fn fresh_localnet_seed() -> Result<String> {
     let mut raw = [0_u8; 32];
     OsRng
@@ -996,7 +939,6 @@ fn fresh_localnet_seed() -> Result<String> {
     raw.zeroize();
     Ok(encoded)
 }
-
 fn resolve_requested_consensus_mode(
     explicit_mode: Option<ConsensusModeArg>,
     perf_profile: Option<LocalnetPerfProfile>,
@@ -1010,7 +952,6 @@ fn resolve_requested_consensus_mode(
         SumeragiConsensusMode::from,
     )
 }
-
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let build_line = BuildLine::from(self.build_line);
@@ -1061,7 +1002,6 @@ impl<T: Write> RunArgs<T> for Args {
         outcome
     }
 }
-
 struct Peer {
     public_key: iroha_crypto::PublicKey,
     private_key: iroha_crypto::ExposedPrivateKey,
@@ -1072,19 +1012,16 @@ struct Peer {
     api_port: u16,
     p2p_port: u16,
 }
-
 #[derive(Debug, Clone)]
 struct ResolvedHosts {
     bind: CanonicalHost,
     public: CanonicalHost,
 }
-
 #[derive(Debug, Clone)]
 struct BlsEntry {
     bls_pk: String,
     pop_hex: String,
 }
-
 /// Generate a self-contained localnet: configs, genesis, client config, scripts.
 ///
 /// # Errors
@@ -1092,7 +1029,6 @@ struct BlsEntry {
 pub fn generate_localnet<T: Write>(opts: &LocalnetOptions, writer: &mut BufWriter<T>) -> Outcome {
     generate_localnet_with_line(opts, writer, false)
 }
-
 #[allow(clippy::too_many_lines)]
 fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
     if let Some(block_ms) = opts.block_cadence_ms
@@ -1150,27 +1086,21 @@ fn validate_localnet_options(opts: &LocalnetOptions) -> Result<ResolvedHosts> {
         .sora_profile
         .map_or(ConsensusPolicy::Any, SoraProfile::consensus_policy);
     validate_consensus_mode_for_line(opts.build_line, opts.consensus_mode, consensus_policy)?;
-
     let bind = CanonicalHost::parse(&opts.bind_host, "--bind-host")?;
     let public = CanonicalHost::parse(&opts.public_host, "--public-host")?;
-
     Ok(ResolvedHosts { bind, public })
 }
-
 fn localnet_uses_npos(consensus_mode: SumeragiConsensusMode) -> bool {
     matches!(consensus_mode, SumeragiConsensusMode::Npos)
 }
-
 fn localnet_should_enable_nexus(sora_profile: Option<SoraProfile>, npos_bootstrap: bool) -> bool {
     sora_profile.is_some() || npos_bootstrap
 }
-
 #[derive(Debug, Clone, Copy)]
 struct LocalnetTxGossipOverrides {
     period_ms: u64,
     resend_ticks: u32,
 }
-
 fn localnet_gas_account_id(genesis_public_key: &iroha_crypto::PublicKey) -> Result<AccountId> {
     let gas_key_pair = iroha_crypto::KeyPair::try_from_seed(
         genesis_public_key
@@ -1183,11 +1113,9 @@ fn localnet_gas_account_id(genesis_public_key: &iroha_crypto::PublicKey) -> Resu
     .wrap_err("failed to derive localnet gas account key pair")?;
     Ok(AccountId::new(gas_key_pair.public_key().clone()))
 }
-
 fn account_id_raw_string(account_id: &AccountId) -> String {
     account_id.to_string()
 }
-
 fn account_id_runtime_literal(account_id: &AccountId, chain_discriminant: Option<u16>) -> String {
     chain_discriminant.map_or_else(
         || account_id_raw_string(account_id),
@@ -1198,19 +1126,16 @@ fn account_id_runtime_literal(account_id: &AccountId, chain_discriminant: Option
         },
     )
 }
-
 fn account_literal_for_chain_discriminant(raw: &str, chain_discriminant: u16) -> String {
     let account_id = AccountId::parse_encoded(raw)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .expect("known account literal must parse");
     account_id_runtime_literal(&account_id, Some(chain_discriminant))
 }
-
 #[cfg(test)]
 fn localnet_client_account_literal(chain_discriminant: Option<u16>) -> String {
     account_id_runtime_literal(&localnet_client_account_id(), chain_discriminant)
 }
-
 #[allow(clippy::too_many_lines)]
 fn generate_localnet_with_line<T: Write>(
     opts: &LocalnetOptions,
@@ -1237,7 +1162,6 @@ fn generate_localnet_with_line<T: Write>(
     write_localnet_gitignore(&out_dir)?;
     tui::status("Copying rANS tables");
     let rans_tables_path = copy_rans_tables(&out_dir)?;
-
     let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
     let chain_id = configured_chain_id();
     let chain_discriminant = known_chain_discriminant_for_chain_id(&chain_id);
@@ -1260,7 +1184,6 @@ fn generate_localnet_with_line<T: Write>(
     let runtime_bundle =
         write_localnet_runtime_bundle(&out_dir, &client_identity, &onboarding_identity)?;
     let sumeragi_body_bytes = localnet_sumeragi_body_bytes(peers.len())?;
-
     tui::status("Generating genesis manifest");
     let npos_bootstrap = localnet_uses_npos(opts.consensus_mode);
     let mcp_enabled = opts.sora_profile.is_some();
@@ -1473,7 +1396,6 @@ fn generate_localnet_with_line<T: Write>(
         genesis_expected_hash,
     )?;
     tui::status("Genesis staged and bootstrap-validated");
-
     tui::status("Writing peer configs");
     for (idx, peer) in peers.iter().enumerate() {
         let kura_dir = out_dir.join("storage").join(format!("peer{idx}"));
@@ -1553,7 +1475,6 @@ fn generate_localnet_with_line<T: Write>(
             .wrap_err_with(|| format!("write validator config {}", path.display()))?;
     }
     tui::status("Peer configs written and validated");
-
     tui::status("Writing start/stop scripts");
     let fee_asset_definition_id = localnet_fee_asset_literal();
     write_scripts(
@@ -1564,7 +1485,6 @@ fn generate_localnet_with_line<T: Write>(
         &client_account_literal,
         &fee_asset_definition_id,
     )?;
-
     tui::status("Writing client config");
     write_client_config(
         &out_dir,
@@ -1613,7 +1533,6 @@ fn generate_localnet_with_line<T: Write>(
         .wrap_err("harden fresh localnet private artifact tree")?;
     }
     tui::success("Localnet ready");
-
     writeln!(writer, "out_dir: {}", out_dir.display())?;
     writeln!(writer, "chain_id: {}", chain_id)?;
     writeln!(writer, "build_line: {}", build_line.as_str())?;
@@ -1680,7 +1599,6 @@ fn generate_localnet_with_line<T: Write>(
     )?;
     Ok(())
 }
-
 fn localnet_tx_gossip_overrides(block_cadence_ms: u64) -> Option<LocalnetTxGossipOverrides> {
     if block_cadence_ms > LOCALNET_PIPELINE_TIME_MS {
         return None;
@@ -1690,7 +1608,6 @@ fn localnet_tx_gossip_overrides(block_cadence_ms: u64) -> Option<LocalnetTxGossi
         resend_ticks: LOCALNET_TX_GOSSIP_RESEND_TICKS_FAST,
     })
 }
-
 fn build_peers(count: u16, seed: Option<&[u8]>, base_api: u16, base_p2p: u16) -> Result<Vec<Peer>> {
     (0..count)
         .map(|nth| {
@@ -1713,7 +1630,6 @@ fn build_peers(count: u16, seed: Option<&[u8]>, base_api: u16, base_p2p: u16) ->
         })
         .collect()
 }
-
 fn validate_port_ranges(peers: NonZeroU16, base_api_port: u16, base_p2p_port: u16) -> Result<()> {
     if base_api_port == 0 {
         return Err(eyre!("base_api_port must be > 0"));
@@ -1721,7 +1637,6 @@ fn validate_port_ranges(peers: NonZeroU16, base_api_port: u16, base_p2p_port: u1
     if base_p2p_port == 0 {
         return Err(eyre!("base_p2p_port must be > 0"));
     }
-
     let max_offset = u32::from(peers.get() - 1);
     let api_start = u32::from(base_api_port);
     let p2p_start = u32::from(base_p2p_port);
@@ -1741,7 +1656,6 @@ fn validate_port_ranges(peers: NonZeroU16, base_api_port: u16, base_p2p_port: u1
             peers
         ));
     }
-
     let ranges_overlap = api_start <= p2p_max && p2p_start <= api_max;
     if ranges_overlap {
         return Err(eyre!(
@@ -1751,10 +1665,8 @@ fn validate_port_ranges(peers: NonZeroU16, base_api_port: u16, base_p2p_port: u1
             peers
         ));
     }
-
     Ok(())
 }
-
 fn localnet_dataspace_catalog(
     sora_profile: Option<SoraProfile>,
     fault_tolerance: u32,
@@ -1789,7 +1701,6 @@ fn localnet_dataspace_catalog(
         entry.insert("fault_tolerance".into(), Value::Integer(fault_tolerance));
         catalog.push(Value::Table(entry));
     }
-
     let mut extra_dataspaces = match sora_profile {
         Some(SoraProfile::Nexus) => vec![
             (
@@ -1815,7 +1726,6 @@ fn localnet_dataspace_catalog(
             spec.dataspace_description,
         ));
     }
-
     for (alias, id, description) in extra_dataspaces {
         let mut entry = Table::new();
         entry.insert("alias".into(), Value::String(alias.to_owned()));
@@ -1828,16 +1738,13 @@ fn localnet_dataspace_catalog(
         entry.insert("fault_tolerance".into(), Value::Integer(fault_tolerance));
         catalog.push(Value::Table(entry));
     }
-
     catalog
 }
-
 #[derive(crate::json_macros::JsonSerialize)]
 struct LocalnetLaneManifestValidator {
     validator: String,
     peer_id: String,
 }
-
 #[derive(crate::json_macros::JsonSerialize)]
 struct LocalnetLaneManifest {
     lane: String,
@@ -1846,7 +1753,6 @@ struct LocalnetLaneManifest {
     validators: Vec<LocalnetLaneManifestValidator>,
     quorum: u32,
 }
-
 fn write_localnet_lane_manifests(
     out_dir: &Path,
     sora_profile: Option<SoraProfile>,
@@ -1856,7 +1762,6 @@ fn write_localnet_lane_manifests(
     let Some(spec) = private_dataspace_spec(sora_profile) else {
         return Ok(None);
     };
-
     let manifest_directory = out_dir.join("lane-manifests");
     fs::create_dir(&manifest_directory).wrap_err_with(|| {
         format!(
@@ -1910,7 +1815,6 @@ fn write_localnet_lane_manifests(
     })?;
     Ok(Some(manifest_directory))
 }
-
 fn localnet_dataspace_manifest_hash(id: i64) -> String {
     use std::fmt::Write as _;
 
@@ -1922,7 +1826,6 @@ fn localnet_dataspace_manifest_hash(id: i64) -> String {
     hex.push_str("000000000000000000000000000000000000000000000000");
     hex
 }
-
 #[expect(
     clippy::too_many_lines,
     reason = "the canonical lane matrices stay together so profile ordering remains auditable"
@@ -1933,7 +1836,6 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
     if !localnet_uses_alias_multilane_catalog(sora_profile) {
         return None;
     }
-
     let private_profile = matches!(
         sora_profile,
         Some(SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae)
@@ -2023,7 +1925,6 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
         }
         None => return None,
     };
-
     let mut catalog = Vec::new();
     for (index, alias, description, dataspace, visibility, governance) in lane_specs {
         let mut entry = Table::new();
@@ -2038,10 +1939,8 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
         entry.insert("metadata".into(), Value::Table(Table::new()));
         catalog.push(Value::Table(entry));
     }
-
     Some((lane_count, catalog))
 }
-
 #[allow(clippy::items_after_statements)]
 #[expect(
     clippy::too_many_lines,
@@ -2053,7 +1952,6 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Ta
     if !localnet_uses_alias_multilane_catalog(sora_profile) {
         return None;
     }
-
     fn rule(
         lane: u32,
         dataspace: &str,
@@ -2083,14 +1981,12 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Ta
             str::to_owned,
         );
         matcher.insert("description".into(), Value::String(description));
-
         let mut rule = Table::new();
         rule.insert("lane".into(), Value::Integer(i64::from(lane)));
         rule.insert("dataspace".into(), Value::String(dataspace.to_owned()));
         rule.insert("matcher".into(), Value::Table(matcher));
         Value::Table(rule)
     }
-
     let rules = match sora_profile {
         Some(SoraProfile::Nexus) => vec![
             rule(1, "governance", "instruction", "governance", None),
@@ -2177,7 +2073,6 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Ta
         }
         None => return None,
     };
-
     let mut policy = Table::new();
     policy.insert("default_lane".into(), Value::Integer(0));
     policy.insert(
@@ -2187,7 +2082,6 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Ta
     policy.insert("rules".into(), Value::Array(rules));
     Some(policy)
 }
-
 fn localnet_public_validator_lanes(sora_profile: Option<SoraProfile>) -> Vec<LaneId> {
     let mut lanes = vec![LaneId::SINGLE];
     match sora_profile {
@@ -2203,7 +2097,6 @@ fn localnet_public_validator_lanes(sora_profile: Option<SoraProfile>) -> Vec<Lan
     }
     lanes
 }
-
 fn configured_chain_id() -> String {
     std::env::var(LOCALNET_CHAIN_ID_ENV)
         .ok()
@@ -2211,7 +2104,6 @@ fn configured_chain_id() -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| DEFAULT_CHAIN_ID.to_owned())
 }
-
 #[derive(Clone, Copy)]
 struct RenderPeerFeatures<'a> {
     mcp_enabled: bool,
@@ -2223,7 +2115,6 @@ struct RenderPeerFeatures<'a> {
     onboarding_private_key_file: &'a Path,
     onboarding_token_hash: &'a [u8; 32],
 }
-
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn render_peer_config(
     peer: &Peer,
@@ -2272,13 +2163,11 @@ fn render_peer_config(
     let genesis_account_literal = account_id_runtime_literal(&genesis_account, chain_discriminant);
     let fee_sponsor_program_id =
         format!("{genesis_account_literal}/{LOCALNET_FEE_SPONSOR_PROGRAM_NAME}");
-
     let trusted_list = trusted_peers
         .iter()
         .cloned()
         .map(Value::String)
         .collect::<Vec<_>>();
-
     let pops = bls_entries
         .iter()
         .map(|entry| {
@@ -2291,7 +2180,6 @@ fn render_peer_config(
             Value::Table(t)
         })
         .collect::<Vec<_>>();
-
     let mut root = Table::new();
     root.insert("chain".into(), Value::String(chain_id.to_owned()));
     if let Some(chain_discriminant) = chain_discriminant {
@@ -2326,7 +2214,6 @@ fn render_peer_config(
         "telemetry_profile".into(),
         Value::String(LOCALNET_TELEMETRY_PROFILE.to_owned()),
     );
-
     let mut kura = Table::new();
     kura.insert(
         "store_dir".into(),
@@ -2337,14 +2224,12 @@ fn render_peer_config(
         Value::String(LOCALNET_KURA_FSYNC_MODE.to_owned()),
     );
     root.insert("kura".into(), Value::Table(kura));
-
     let mut soracloud_runtime = Table::new();
     soracloud_runtime.insert(
         "state_dir".into(),
         Value::String(runtime_state_root.to_string_lossy().into_owned()),
     );
     root.insert("soracloud_runtime".into(), Value::Table(soracloud_runtime));
-
     let mut tiered_state = Table::new();
     tiered_state.insert(
         "cold_store_root".into(),
@@ -2355,10 +2240,8 @@ fn render_peer_config(
         Value::String(da_store_root.to_string_lossy().into_owned()),
     );
     root.insert("tiered_state".into(), Value::Table(tiered_state));
-
     let mut sumeragi = Table::new();
     sumeragi.insert("role".into(), Value::String("validator".to_owned()));
-
     let mut queues = Table::new();
     queues.insert(
         "commands".into(),
@@ -2408,7 +2291,6 @@ fn render_peer_config(
         ),
     );
     sumeragi.insert("queues".into(), Value::Table(queues));
-
     let mut keys = Table::new();
     keys.insert(
         "allowed_algorithms".into(),
@@ -2424,7 +2306,6 @@ fn render_peer_config(
         ),
     );
     sumeragi.insert("keys".into(), Value::Table(keys));
-
     let mut nexus = Table::new();
     nexus.insert("enabled".into(), Value::Boolean(nexus_enabled));
     let mut fusion = Table::new();
@@ -2451,7 +2332,6 @@ fn render_peer_config(
             Value::String(gas_account_id.to_owned()),
         );
         nexus.insert("staking".into(), Value::Table(staking));
-
         let mut fees = Table::new();
         fees.insert("fee_asset_id".into(), Value::String(fee_asset_id));
         fees.insert("base_fee".into(), Value::String("0".to_owned()));
@@ -2497,7 +2377,6 @@ fn render_peer_config(
             Value::String(manifest_directory.to_string_lossy().into_owned()),
         );
         nexus.insert("registry".into(), Value::Table(registry));
-
         let mut parliament = Table::new();
         parliament.insert(
             "module_type".into(),
@@ -2521,7 +2400,6 @@ fn render_peer_config(
         nexus.insert("governance".into(), Value::Table(governance));
     }
     root.insert("nexus".into(), Value::Table(nexus));
-
     let mut block = Table::new();
     if let Some(max_transactions) = runtime_block_max_transactions {
         block.insert(
@@ -2549,7 +2427,6 @@ fn render_peer_config(
     );
     sumeragi.insert("block".into(), Value::Table(block));
     root.insert("sumeragi".into(), Value::Table(sumeragi));
-
     let mut pipeline = Table::new();
     if let Some(batch_max) = signature_batch_max_ed25519 {
         pipeline.insert(
@@ -2567,7 +2444,6 @@ fn render_peer_config(
         pipeline.insert("gas".into(), Value::Table(gas));
     }
     root.insert("pipeline".into(), Value::Table(pipeline));
-
     let mut queue = Table::new();
     queue.insert(
         "capacity".into(),
@@ -2582,7 +2458,6 @@ fn render_peer_config(
         Value::Integer(i64::try_from(LOCALNET_QUEUE_TTL_MS).expect("queue ttl fits i64")),
     );
     root.insert("queue".into(), Value::Table(queue));
-
     if npos_bootstrap {
         let mut crypto = Table::new();
         let allowed_signing = [
@@ -2616,7 +2491,6 @@ fn render_peer_config(
         crypto.insert("curves".into(), Value::Table(curves));
         root.insert("crypto".into(), Value::Table(crypto));
     }
-
     let mut streaming = Table::new();
     streaming.insert(
         "identity_public_key".into(),
@@ -2658,7 +2532,6 @@ fn render_peer_config(
     );
     streaming.insert("codec".into(), Value::Table(streaming_codec));
     root.insert("streaming".into(), Value::Table(streaming));
-
     if let Some(chain_discriminant) = chain_discriminant {
         let mut governance = Table::new();
         let citizenship_escrow_account = account_id_runtime_literal(
@@ -2708,18 +2581,15 @@ fn render_peer_config(
         governance.insert("sorafs_telemetry".into(), Value::Table(sorafs_telemetry));
         root.insert("gov".into(), Value::Table(governance));
     }
-
     let mut confidential = Table::new();
     confidential.insert("enabled".into(), Value::Boolean(true));
     confidential.insert("assume_valid".into(), Value::Boolean(false));
     root.insert("confidential".into(), Value::Table(confidential));
-
     let mut halo2 = Table::new();
     halo2.insert("enabled".into(), Value::Boolean(true));
     let mut zk = Table::new();
     zk.insert("halo2".into(), Value::Table(halo2));
     root.insert("zk".into(), Value::Table(zk));
-
     let mut genesis = Table::new();
     genesis.insert(
         "file".into(),
@@ -2737,7 +2607,6 @@ fn render_peer_config(
         )),
     );
     root.insert("genesis".into(), Value::Table(genesis));
-
     let mut logger = Table::new();
     logger.insert("format".into(), Value::String("compact".into()));
     logger.insert("level".into(), Value::String("info".into()));
@@ -2745,7 +2614,6 @@ fn render_peer_config(
         logger.insert("filter".into(), Value::String(filter.to_owned()));
     }
     root.insert("logger".into(), Value::Table(logger));
-
     let mut network = Table::new();
     network.insert(
         "address".into(),
@@ -2883,7 +2751,6 @@ fn render_peer_config(
         );
     }
     root.insert("network".into(), Value::Table(network));
-
     let mut torii = Table::new();
     torii.insert(
         "address".into(),
@@ -3004,7 +2871,6 @@ fn render_peer_config(
         "account_onboarding".into(),
         Value::Table(account_onboarding),
     );
-
     let mut faucet = Table::new();
     faucet.insert("enabled".into(), Value::Boolean(true));
     faucet.insert(
@@ -3058,7 +2924,6 @@ fn render_peer_config(
     // Local generated networks do not have finalized public Taira VRF seed material.
     faucet.insert("pow_vrf_seed_enabled".into(), Value::Boolean(false));
     torii.insert("faucet".into(), Value::Table(faucet));
-
     // torii.transport.norito_rpc
     let mut norito_rpc = Table::new();
     norito_rpc.insert("enabled".into(), Value::Boolean(true));
@@ -3072,10 +2937,8 @@ fn render_peer_config(
     transport.insert("norito_rpc".into(), Value::Table(norito_rpc));
     torii.insert("transport".into(), Value::Table(transport));
     root.insert("torii".into(), Value::Table(torii));
-
     toml::to_string(&Value::Table(root)).expect("serializing peer config to TOML")
 }
-
 fn generate_raw_genesis(
     genesis_public_key: &iroha_crypto::PublicKey,
     consensus_mode: SumeragiConsensusMode,
@@ -3096,7 +2959,6 @@ fn generate_raw_genesis(
         npos_epoch_seed,
     )
 }
-
 fn extend_genesis(
     genesis: RawGenesisTransaction,
     genesis_account_id: &AccountId,
@@ -3106,7 +2968,6 @@ fn extend_genesis(
 ) -> Result<RawGenesisTransaction> {
     let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
     let mut builder = genesis.into_builder().next_transaction();
-
     for idx in 0..extra_accounts {
         let (pk, _) = generate_account_key_pair(seed_bytes, &format!("acct{idx}").into_bytes())
             .wrap_err_with(|| format!("failed to generate localnet extra account key {idx}"))?;
@@ -3115,7 +2976,6 @@ fn extend_genesis(
             builder = builder.append_instruction(Register::account(Account::new(account_id)));
         }
     }
-
     for asset in assets {
         if registrations.accounts.insert(asset.owned_by.clone()) {
             builder =
@@ -3160,10 +3020,8 @@ fn extend_genesis(
             ));
         }
     }
-
     Ok(builder.build_raw())
 }
-
 fn localnet_npos_epoch_seed(chain_id: &ChainId) -> [u8; 32] {
     let mut epoch_seed: [u8; 32] =
         Hash::new(format!("iroha:localnet:npos-epoch-seed:v1:{chain_id}")).into();
@@ -3172,7 +3030,6 @@ fn localnet_npos_epoch_seed(chain_id: &ChainId) -> [u8; 32] {
     }
     epoch_seed
 }
-
 fn apply_localnet_npos_overrides(parameters: &mut Parameters, chain_id: &ChainId) {
     let mut npos = parameters
         .custom()
@@ -3185,14 +3042,12 @@ fn apply_localnet_npos_overrides(parameters: &mut Parameters, chain_id: &ChainId
     npos.epoch_seed = localnet_npos_epoch_seed(chain_id);
     parameters.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
 }
-
 fn localnet_custom_parameter_id(name: &str) -> CustomParameterId {
     CustomParameterId::new(
         name.parse()
             .expect("constant custom parameter name is valid"),
     )
 }
-
 fn localnet_ivm_gas_units_per_gas_payload(asset: &str) -> Json {
     let payload = format!(
         concat!(
@@ -3207,13 +3062,11 @@ fn localnet_ivm_gas_units_per_gas_payload(asset: &str) -> Json {
     );
     Json::from_str_norito(&payload).expect("localnet gas-rate payload must be valid JSON")
 }
-
 fn apply_localnet_ivm_gas_limit_override(parameters: &mut Parameters) {
     let gas_param_id = localnet_custom_parameter_id("ivm_gas_limit_per_block");
     let gas_param = CustomParameter::new(gas_param_id, Json::new(LOCALNET_IVM_GAS_LIMIT_PER_BLOCK));
     parameters.set_parameter(Parameter::Custom(gas_param));
 }
-
 fn apply_localnet_ivm_gas_fee_overrides(parameters: &mut Parameters) {
     let fee_asset_id = localnet_fee_asset_literal();
     let accepted_assets = CustomParameter::new(
@@ -3221,14 +3074,12 @@ fn apply_localnet_ivm_gas_fee_overrides(parameters: &mut Parameters) {
         Json::new(vec![fee_asset_id.clone()]),
     );
     parameters.set_parameter(Parameter::Custom(accepted_assets));
-
     let units_per_gas = CustomParameter::new(
         localnet_custom_parameter_id("ivm_gas_units_per_gas"),
         localnet_ivm_gas_units_per_gas_payload(&fee_asset_id),
     );
     parameters.set_parameter(Parameter::Custom(units_per_gas));
 }
-
 fn localnet_npos_stake_amount(parameters: &Parameters, requested: Option<u64>) -> Quantity {
     let requested = Quantity::from(requested.unwrap_or(LOCALNET_STAKE_AMOUNT));
     let min_self_bond = parameters
@@ -3238,7 +3089,6 @@ fn localnet_npos_stake_amount(parameters: &Parameters, requested: Option<u64>) -
         .map_or_else(|| requested.clone(), |params| params.min_self_bond);
     requested.max(min_self_bond).max(Quantity::from(1_u64))
 }
-
 fn apply_parameter_overrides(
     genesis: RawGenesisTransaction,
     block_cadence_ms: Option<u64>,
@@ -3283,7 +3133,6 @@ fn apply_parameter_overrides(
     if !should_update {
         return genesis;
     }
-
     parameters.block.max_transactions = block_max_transactions;
     if let Some(block_cadence_ms) = block_cadence_ms {
         parameters.sumeragi.block_cadence_ms =
@@ -3296,7 +3145,6 @@ fn apply_parameter_overrides(
     if include_npos {
         apply_localnet_ivm_gas_fee_overrides(&mut parameters);
     }
-
     let mut builder = genesis.into_builder();
     if let Some(block_cadence_ms) = block_cadence_ms {
         builder = builder.with_block_cadence_ms(
@@ -3310,10 +3158,8 @@ fn apply_parameter_overrides(
             builder = builder.append_parameter(parameter);
         }
     }
-
     builder.build_raw()
 }
-
 fn apply_localnet_crypto_overrides(
     genesis: RawGenesisTransaction,
     npos_bootstrap: bool,
@@ -3321,7 +3167,6 @@ fn apply_localnet_crypto_overrides(
     if !npos_bootstrap {
         return genesis;
     }
-
     let mut crypto = genesis.crypto().clone();
     if !crypto
         .allowed_signing
@@ -3344,10 +3189,8 @@ fn apply_localnet_crypto_overrides(
         .collect();
     crypto.allowed_curve_ids.sort_unstable();
     crypto.allowed_curve_ids.dedup();
-
     genesis.into_builder().with_crypto(crypto).build_raw()
 }
-
 fn append_peer_pop(genesis: RawGenesisTransaction, peers: &[Peer]) -> RawGenesisTransaction {
     genesis
         .into_builder()
@@ -3365,7 +3208,6 @@ fn append_peer_pop(genesis: RawGenesisTransaction, peers: &[Peer]) -> RawGenesis
         )
         .build_raw()
 }
-
 #[cfg(test)]
 fn append_localnet_contract_permissions(
     genesis: RawGenesisTransaction,
@@ -3377,7 +3219,6 @@ fn append_localnet_contract_permissions(
         &localnet_client_account_id(),
     )
 }
-
 fn append_localnet_service_accounts(
     genesis: RawGenesisTransaction,
     service_accounts: &[&AccountId],
@@ -3401,7 +3242,6 @@ fn append_localnet_service_accounts(
     }
     builder.build_raw()
 }
-
 fn append_localnet_alias_fee_bootstrap(
     genesis: RawGenesisTransaction,
     genesis_account_id: &AccountId,
@@ -3456,7 +3296,6 @@ fn append_localnet_alias_fee_bootstrap(
     }
     builder.build_raw()
 }
-
 fn localnet_alias_setup_request(
     genesis_account_id: &AccountId,
     operator_account_id: &AccountId,
@@ -3507,7 +3346,6 @@ fn localnet_alias_setup_request(
         ),
     ]))
 }
-
 fn append_localnet_alias_setup(
     genesis: RawGenesisTransaction,
     request: &AliasSetupPlanRequestV1,
@@ -3522,7 +3360,6 @@ fn append_localnet_alias_setup(
     }
     builder.build_raw()
 }
-
 fn write_localnet_alias_setup_intent(
     out_dir: &Path,
     request: &AliasSetupPlanRequestV1,
@@ -3534,7 +3371,6 @@ fn write_localnet_alias_setup_intent(
         .wrap_err_with(|| format!("write generated alias setup intent {}", path.display()))?;
     Ok(path)
 }
-
 fn append_localnet_onboarding_permissions(
     genesis: RawGenesisTransaction,
     onboarding_account_id: &AccountId,
@@ -3575,7 +3411,6 @@ fn append_localnet_onboarding_permissions(
     }
     Ok(builder.build_raw())
 }
-
 fn append_localnet_contract_permissions_for_client(
     genesis: RawGenesisTransaction,
     genesis_account_id: &AccountId,
@@ -3611,7 +3446,6 @@ fn append_localnet_contract_permissions_for_client(
             grants.push((permission, destination));
         }
     };
-
     push_unique(enact_governance, ALICE_ID.clone());
     push_unique(manage_verifying_keys.clone(), genesis_account_id.clone());
     push_unique(manage_verifying_keys, client_account_id.clone());
@@ -3620,14 +3454,12 @@ fn append_localnet_contract_permissions_for_client(
     if *client_account_id != *ALICE_ID {
         push_unique(manage_offline_escrow, client_account_id.clone());
     }
-
     let mut builder = genesis.into_builder();
     for (permission, destination) in grants {
         builder = builder.append_instruction(Grant::account_permission(permission, destination));
     }
     builder.build_raw()
 }
-
 struct BootstrapRegistrations {
     domains: BTreeSet<DomainId>,
     accounts: BTreeSet<AccountId>,
@@ -3635,7 +3467,6 @@ struct BootstrapRegistrations {
     zk_assets: BTreeSet<AssetDefinitionId>,
     verifying_keys: BTreeSet<VerifyingKeyId>,
 }
-
 impl BootstrapRegistrations {
     fn from_manifest(manifest: &RawGenesisTransaction) -> Self {
         let mut domains = BTreeSet::new();
@@ -3683,7 +3514,6 @@ impl BootstrapRegistrations {
         }
     }
 }
-
 #[cfg(test)]
 #[allow(clippy::too_many_lines)]
 fn append_localnet_npos_bootstrap(
@@ -3704,7 +3534,6 @@ fn append_localnet_npos_bootstrap(
         &localnet_client_account_id(),
     )
 }
-
 #[cfg(test)]
 fn append_localnet_npos_bootstrap_for_client(
     genesis: RawGenesisTransaction,
@@ -3726,7 +3555,6 @@ fn append_localnet_npos_bootstrap_for_client(
         client_account_id,
     )
 }
-
 #[expect(
     clippy::too_many_arguments,
     clippy::too_many_lines,
@@ -3754,7 +3582,6 @@ fn append_localnet_npos_bootstrap_for_services(
         .try_mul_decimal(&Numeric::from(lane_count))
         .map_err(|error| eyre!("localnet validator stake mint amount overflow: {error}"))?;
     let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
-
     let mut builder = genesis.into_builder().next_transaction();
     if !registrations.domains.contains(&nexus_domain) {
         builder = builder.append_instruction(Register::domain(Domain::new(nexus_domain.clone())));
@@ -3774,7 +3601,6 @@ fn append_localnet_npos_bootstrap_for_services(
             builder.append_instruction(Register::account(Account::new(gas_account_id.clone())));
         registrations.accounts.insert(gas_account_id.clone());
     }
-
     if !registrations.asset_defs.contains(&stake_asset_id) {
         let definition = AssetDefinition::new(
             stake_asset_id.clone(),
@@ -3814,7 +3640,6 @@ fn append_localnet_npos_bootstrap_for_services(
         ));
         registrations.zk_assets.insert(fee_asset_id.clone());
     }
-
     for peer in peers {
         let validator_id = AccountId::new(peer.public_key.clone());
         if !registrations.accounts.contains(&validator_id) {
@@ -3852,7 +3677,6 @@ fn append_localnet_npos_bootstrap_for_services(
             AssetId::new(fee_asset_id.clone(), onboarding_account_id.clone()),
         ));
     }
-
     let fee_sponsor_program_id = localnet_fee_sponsor_program_id(genesis_account_id);
     let fee_sponsor_revision =
         localnet_fee_sponsor_revision(fee_sponsor_program_id.clone(), fee_asset_id.clone());
@@ -3902,7 +3726,6 @@ fn append_localnet_npos_bootstrap_for_services(
             onboarding_account_id.clone(),
         ));
     }
-
     for lane_id in public_validator_lanes {
         builder = builder.next_transaction();
         for peer in peers {
@@ -3921,10 +3744,8 @@ fn append_localnet_npos_bootstrap_for_services(
             });
         }
     }
-
     Ok(builder.build_raw())
 }
-
 #[allow(clippy::too_many_lines)]
 fn append_private_dataspace_genesis_bootstrap_for_client(
     genesis: RawGenesisTransaction,
@@ -3971,7 +3792,6 @@ fn append_private_dataspace_genesis_bootstrap_for_client(
             quote_guard.clone(),
         ));
     }
-
     // Genesis executes these private-resource intents under the genesis authority while
     // retaining the client as their explicit owner. Grant only the exact scopes required
     // for that atomic bootstrap, then remove them before the transaction commits.
@@ -3989,7 +3809,6 @@ fn append_private_dataspace_genesis_bootstrap_for_client(
             }
         })
         .collect::<Vec<_>>();
-
     let mut seen_permissions = BTreeSet::<(AccountId, Permission)>::new();
     // Genesis bootstrap also pre-seeds management scopes for registered account labels.
     // Treat those as pre-existing so cleanup never revokes authority the manifest already had.
@@ -4038,7 +3857,6 @@ fn append_private_dataspace_genesis_bootstrap_for_client(
     temporary_genesis_permissions.retain(|permission| {
         seen_permissions.insert((genesis_account_id.clone(), permission.clone()))
     });
-
     let restricted_read_permission = Permission::from(CanReadRestrictedDataspace {
         dataspace: private_dataspace,
     });
@@ -4072,7 +3890,6 @@ fn append_private_dataspace_genesis_bootstrap_for_client(
             "private-dataspace bootstrap refuses a pre-existing restricted-reader role for `{client_account_id}`"
         ));
     }
-
     let mut builder = genesis.into_builder().next_transaction();
     // The universal bootstrap already registered this identity, but a private-lane
     // transaction needs a local account row before EnsureAlias can grant owner scopes or the
@@ -4098,7 +3915,6 @@ fn append_private_dataspace_genesis_bootstrap_for_client(
         restricted_read_permission.clone(),
         client_account_id.clone(),
     ));
-
     let universal_permissions = vec![
         Permission::from(CanManageAccountAlias {
             scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
@@ -4113,7 +3929,6 @@ fn append_private_dataspace_genesis_bootstrap_for_client(
             seen_permissions.insert((client_account_id.clone(), permission.clone()))
         })
         .collect::<Vec<_>>();
-
     // Keep the universal ingress role and ancillary universal permissions separate from the
     // private EnsureAlias transaction so the router never collapses either authorization world
     // into the universal coordinator. The private world receives the direct grant above, while
@@ -4130,15 +3945,12 @@ fn append_private_dataspace_genesis_bootstrap_for_client(
             client_account_id.clone(),
         ));
     }
-
     Ok(builder.build_raw())
 }
-
 struct GenesisConsensusPolicies {
     da_proof_policies: Option<DaProofPolicyBundle>,
     confidential_policy_hash: [u8; 32],
 }
-
 struct GenesisWriteContext<'a> {
     manifest: &'a RawGenesisTransaction,
     public_key: &'a iroha_crypto::PublicKey,
@@ -4149,7 +3961,6 @@ struct GenesisWriteContext<'a> {
     signed_path: &'a Path,
     policies: GenesisConsensusPolicies,
 }
-
 fn write_genesis(context: GenesisWriteContext<'_>) -> Result<HashOf<BlockHeader>> {
     let GenesisWriteContext {
         manifest,
@@ -4175,7 +3986,6 @@ fn write_genesis(context: GenesisWriteContext<'_>) -> Result<HashOf<BlockHeader>
     // form keeps genesis.json and genesis.signed.nrt semantically and canonically aligned.
     let persisted_genesis = RawGenesisTransaction::from_path(json_path)
         .wrap_err("failed to reload persisted genesis.json before signing")?;
-
     let genesis_key_pair =
         KeyPair::new(public_key.clone(), private_key.0).wrap_err("make genesis key pair")?;
     let (bound_manifest, block) = crate::genesis::bind_and_sign_staged_sumeragi_v2_context(
@@ -4208,7 +4018,6 @@ fn write_genesis(context: GenesisWriteContext<'_>) -> Result<HashOf<BlockHeader>
     file.write_all(&framed)?;
     Ok(expected_hash)
 }
-
 fn write_and_validate_genesis_expected_hash(
     expected_hash_path: &Path,
     signed_path: &Path,
@@ -4223,7 +4032,6 @@ fn write_and_validate_genesis_expected_hash(
             expected_hash
         ));
     }
-
     let canonical = expected_hash.to_string();
     let canonical_bytes = canonical.as_bytes();
     let has_canonical_syntax = canonical_bytes.len() == 64
@@ -4238,7 +4046,6 @@ fn write_and_validate_genesis_expected_hash(
             "generated genesis hash is not a canonical Iroha hash record: {canonical}"
         ));
     }
-
     let record = format!("{canonical}\n");
     write_owner_only_localnet_file(expected_hash_path, record.as_bytes()).wrap_err_with(|| {
         format!(
@@ -4269,7 +4076,6 @@ fn write_and_validate_genesis_expected_hash(
     }
     Ok(())
 }
-
 fn write_genesis_key_files(
     public_path: &Path,
     private_path: &Path,
@@ -4292,7 +4098,6 @@ fn write_genesis_key_files(
         write_owner_only_localnet_file(private_path, raw.as_slice())
             .wrap_err("write genesis private key")?;
     }
-
     let mut public = public_key.to_string();
     public.push('\n');
     let mut options = fs::OpenOptions::new();
@@ -4303,7 +4108,6 @@ fn write_genesis_key_files(
     file.write_all(public.as_bytes())
         .wrap_err_with(|| format!("write genesis public-key file {}", public_path.display()))
 }
-
 fn parse_localnet_peer_config(rendered_config: &str) -> Result<actual::Root> {
     let table = rendered_config.parse::<toml::Table>().map_err(|err| {
         eyre!(
@@ -4320,11 +4124,9 @@ fn parse_localnet_peer_config(rendered_config: &str) -> Result<actual::Root> {
         eyre!("failed to parse generated peer config while deriving consensus policies: {err:?}")
     })
 }
-
 fn resolve_localnet_da_proof_policies(config: &actual::Root) -> DaProofPolicyBundle {
     iroha_core::da::proof_policy_bundle(&config.nexus.lane_config)
 }
-
 pub(crate) fn generate_genesis_key_pair(
     base_seed: Option<&[u8]>,
     extra_seed: &[u8],
@@ -4348,7 +4150,6 @@ pub(crate) fn generate_genesis_key_pair(
     let (public_key, private_key) = key_pair.into_parts();
     Ok((public_key, ExposedPrivateKey(private_key)))
 }
-
 fn generate_account_key_pair(
     base_seed: Option<&[u8]>,
     extra_seed: &[u8],
@@ -4365,7 +4166,6 @@ fn generate_account_key_pair(
     let (public_key, private_key) = key_pair.into_parts();
     Ok((public_key, ExposedPrivateKey(private_key)))
 }
-
 fn generate_bls_key_pair(
     base_seed: Option<&[u8]>,
     extra_seed: &[u8],
@@ -4383,7 +4183,6 @@ fn generate_bls_key_pair(
     let (public_key, private_key) = kp.into_parts();
     Ok((public_key, ExposedPrivateKey(private_key), pop))
 }
-
 fn generate_soranet_transport_key_pair(
     base_seed: Option<&[u8]>,
     peer_index: &[u8],
@@ -4402,7 +4201,6 @@ fn generate_soranet_transport_key_pair(
     let (public_key, private_key) = key_pair.into_parts();
     Ok((public_key, ExposedPrivateKey(private_key)))
 }
-
 fn repo_root_path() -> PathBuf {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -4413,7 +4211,6 @@ fn repo_root_path() -> PathBuf {
         );
     root.canonicalize().unwrap_or(root)
 }
-
 fn resolve_target_dir(repo_root: &Path, target_dir: Option<&str>) -> PathBuf {
     target_dir.map_or_else(
         || repo_root.join("target"),
@@ -4427,7 +4224,6 @@ fn resolve_target_dir(repo_root: &Path, target_dir: Option<&str>) -> PathBuf {
         },
     )
 }
-
 fn default_irohad_bin_paths() -> (PathBuf, PathBuf) {
     let repo_root = repo_root_path();
     let target_dir = resolve_target_dir(&repo_root, env::var("CARGO_TARGET_DIR").ok().as_deref());
@@ -4436,7 +4232,6 @@ fn default_irohad_bin_paths() -> (PathBuf, PathBuf) {
         target_dir.join("release").join("iroha3d"),
     )
 }
-
 fn write_scripts(
     out_dir: &Path,
     peers: u16,
@@ -4456,7 +4251,6 @@ fn write_scripts(
         fee_asset_definition_id,
     )?;
     write_stop_script(&stop)?;
-
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -4466,10 +4260,8 @@ fn write_scripts(
         fs::set_permissions(&stop, PermissionsExt::from_mode(0o755))
             .wrap_err_with(|| format!("failed to mark {} executable", stop.display()))?;
     }
-
     Ok(())
 }
-
 #[allow(clippy::similar_names, clippy::too_many_lines)]
 fn write_start_script(
     start: &Path,
@@ -4700,7 +4492,6 @@ fn write_start_script(
     writeln!(start_file, "ensure_faucet_reserve")?;
     Ok(start_file.flush()?)
 }
-
 fn write_stop_script(stop: &Path) -> Result<()> {
     let mut stop_file = BufWriter::new(File::create(stop)?);
     writeln!(stop_file, "#!/usr/bin/env bash")?;
@@ -4793,7 +4584,6 @@ fn write_stop_script(stop: &Path) -> Result<()> {
     writeln!(stop_file, "done")?;
     Ok(stop_file.flush()?)
 }
-
 fn copy_rans_tables(out_dir: &Path) -> Result<PathBuf> {
     let canonical_out_dir = fs::canonicalize(out_dir).wrap_err_with(|| {
         format!(
@@ -4837,7 +4627,6 @@ fn copy_rans_tables(out_dir: &Path) -> Result<PathBuf> {
     }
     Ok(canonical_seed_path)
 }
-
 const CLIENT_ACCOUNT_DOMAIN: &str = "wonderland.universal";
 const CLIENT_ACCOUNT_PUBLIC: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -4850,26 +4639,22 @@ pub const GENESIS_PUBLIC_KEY_FILE: &str = "genesis.public_key";
 pub const GENESIS_EXPECTED_HASH_FILE: &str = "genesis.expected_hash";
 /// Owner-only genesis signing key emitted for offline custody.
 pub const GENESIS_PRIVATE_KEY_FILE: &str = "genesis.private_key";
-
 struct LocalnetClientIdentity {
     account_id: AccountId,
     public_key: iroha_crypto::PublicKey,
     private_key: Zeroizing<String>,
 }
-
 impl LocalnetClientIdentity {
     fn account_literal(&self, chain_discriminant: Option<u16>) -> String {
         account_id_runtime_literal(&self.account_id, chain_discriminant)
     }
 }
-
 struct LocalnetRuntimeBundle {
     operator_signer_key: PathBuf,
     onboarding_signer_key: PathBuf,
     onboarding_token_file: PathBuf,
     onboarding_token_hash: [u8; 32],
 }
-
 fn localnet_ephemeral_identity(
     base_seed: Option<&[u8]>,
     identity_label: &[u8],
@@ -4881,7 +4666,6 @@ fn localnet_ephemeral_identity(
         private_key: Zeroizing::new(private_key.to_string()),
     })
 }
-
 fn write_private_key_sidecar(path: &Path, private_key: &str) -> Result<()> {
     let mut contents = Zeroizing::new(Vec::with_capacity(private_key.len() + 1));
     contents.extend_from_slice(private_key.as_bytes());
@@ -4889,7 +4673,6 @@ fn write_private_key_sidecar(path: &Path, private_key: &str) -> Result<()> {
     crate::secure_fs::write_private_file_atomic(path, contents.as_slice())
         .wrap_err_with(|| format!("write private signer key {}", path.display()))
 }
-
 fn write_localnet_runtime_bundle(
     out_dir: &Path,
     operator: &LocalnetClientIdentity,
@@ -4898,13 +4681,11 @@ fn write_localnet_runtime_bundle(
     let runtime_dir = out_dir.join(LOCALNET_RUNTIME_DIRECTORY);
     crate::secure_fs::prepare_empty_private_directory(&runtime_dir)
         .wrap_err("prepare localnet runtime credential directory")?;
-
     let operator_signer_key = runtime_dir.join(LOCALNET_OPERATOR_SIGNER_KEY_FILE);
     let onboarding_signer_key = runtime_dir.join(LOCALNET_ONBOARDING_SIGNER_KEY_FILE);
     let onboarding_token_file = runtime_dir.join(LOCALNET_ONBOARDING_TOKEN_FILE);
     write_private_key_sidecar(&operator_signer_key, operator.private_key.as_str())?;
     write_private_key_sidecar(&onboarding_signer_key, onboarding.private_key.as_str())?;
-
     let mut token_entropy = [0_u8; 32];
     OsRng
         .try_fill_bytes(&mut token_entropy)
@@ -4914,7 +4695,6 @@ fn write_localnet_runtime_bundle(
     let onboarding_token_hash = *blake3::hash(token.as_bytes()).as_bytes();
     crate::secure_fs::write_private_file_atomic(&onboarding_token_file, token.as_bytes())
         .wrap_err("write localnet onboarding token")?;
-
     Ok(LocalnetRuntimeBundle {
         operator_signer_key,
         onboarding_signer_key,
@@ -4922,7 +4702,6 @@ fn write_localnet_runtime_bundle(
         onboarding_token_hash,
     })
 }
-
 fn write_localnet_gitignore(out_dir: &Path) -> Result<()> {
     let path = out_dir.join(".gitignore");
     fs::write(
@@ -4935,7 +4714,6 @@ fn write_localnet_gitignore(out_dir: &Path) -> Result<()> {
     )
     .wrap_err_with(|| format!("write protective ignore file {}", path.display()))
 }
-
 #[cfg(test)]
 #[path = "localnet/client_identity_test_support.rs"]
 mod localnet_test_helpers;
@@ -4948,7 +4726,6 @@ fn localnet_client_account_id() -> AccountId {
         .expect("localnet client public key must parse");
     AccountId::new(public_key)
 }
-
 fn write_owner_only_localnet_file(path: &Path, contents: &[u8]) -> Result<()> {
     #[cfg(unix)]
     {
@@ -4965,7 +4742,6 @@ fn write_owner_only_localnet_file(path: &Path, contents: &[u8]) -> Result<()> {
             .wrap_err_with(|| format!("write owner-only file {}", path.display()))?;
         Ok(())
     }
-
     #[cfg(not(unix))]
     {
         let mut file = fs::OpenOptions::new()
@@ -4977,7 +4753,6 @@ fn write_owner_only_localnet_file(path: &Path, contents: &[u8]) -> Result<()> {
             .wrap_err_with(|| format!("write localnet file {}", path.display()))
     }
 }
-
 fn write_client_config(
     out_dir: &Path,
     base_api_port: u16,
@@ -5029,12 +4804,10 @@ fn write_client_config(
         private_key = client.private_key.as_str(),
         public_key = client.public_key,
     );
-
     write_owner_only_localnet_file(&path, rendered.as_bytes())
         .wrap_err_with(|| format!("write operator client config {}", path.display()))?;
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn write_localnet_readme(
     out_dir: &Path,
@@ -5145,7 +4918,6 @@ fn write_localnet_readme(
         )
     })
 }
-
 fn localnet_script_command(private_custody: bool, script_name: &str) -> String {
     if private_custody {
         format!("bash ./{script_name}")
@@ -5153,7 +4925,6 @@ fn localnet_script_command(private_custody: bool, script_name: &str) -> String {
         format!("./{script_name}")
     }
 }
-
 #[cfg(test)]
 mod tests {
     #[cfg(unix)]
@@ -5191,13 +4962,11 @@ mod tests {
         );
         assert!("off".parse::<FsyncMode>().is_err());
     }
-
     #[cfg(unix)]
     #[test]
     fn owner_only_localnet_writer_sets_mode_before_write_and_refuses_overwrite() {
         let temp = tempfile::tempdir().expect("make private writer temp dir");
         let path = temp.path().join("peer0.toml");
-
         write_owner_only_localnet_file(&path, b"private_key = 'secret'\n")
             .expect("write owner-only config");
         let mode = fs::metadata(&path)
@@ -5206,7 +4975,6 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o600);
-
         let error = write_owner_only_localnet_file(&path, b"private_key = 'replacement'\n")
             .expect_err("owner-only writer must not overwrite an existing config");
         assert!(error.to_string().contains("create owner-only file"));
@@ -5215,7 +4983,6 @@ mod tests {
             "private_key = 'secret'\n"
         );
     }
-
     #[test]
     fn genesis_key_files_are_canonical_consistent_and_non_overwriting() {
         let temp = tempfile::tempdir().expect("make genesis key temp dir");
@@ -5226,7 +4993,6 @@ mod tests {
                 .expect("derive fixture genesis key")
                 .into_parts();
         let private_key = ExposedPrivateKey(private_key);
-
         write_genesis_key_files(
             &public_path,
             &private_path,
@@ -5235,7 +5001,6 @@ mod tests {
             false,
         )
         .expect("write genesis key files");
-
         let public_record = fs::read_to_string(&public_path).expect("read public key file");
         assert_eq!(public_record, format!("{public_key}\n"));
         let private_record = fs::read_to_string(&private_path).expect("read private key file");
@@ -5251,7 +5016,6 @@ mod tests {
         let reconstructed = KeyPair::from_private_key(private_key.0.clone())
             .expect("derive public key from private file");
         assert_eq!(reconstructed.public_key(), &public_key);
-
         #[cfg(unix)]
         assert_eq!(
             fs::metadata(&private_path)
@@ -5261,7 +5025,6 @@ mod tests {
                 & 0o777,
             0o600
         );
-
         assert!(
             write_genesis_key_files(
                 &public_path,
@@ -5274,7 +5037,6 @@ mod tests {
             "existing genesis key custody must never be overwritten"
         );
     }
-
     #[test]
     fn raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed() {
         let chain_id = ChainId::from("pk3");
@@ -5295,11 +5057,9 @@ mod tests {
         assert_eq!(npos.epoch_seed(), localnet_npos_epoch_seed(&chain_id));
         assert_ne!(npos.epoch_seed(), [0; 32]);
     }
-
     fn localnet_genesis_for_opts(opts: &LocalnetOptions) -> RawGenesisTransaction {
         localnet_genesis_for_opts_and_client(opts, &localnet_client_account_id())
     }
-
     fn localnet_genesis_for_opts_and_client(
         opts: &LocalnetOptions,
         client_account_id: &AccountId,
@@ -5401,7 +5161,6 @@ mod tests {
         }
         apply_localnet_crypto_overrides(genesis, npos_bootstrap)
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn private_profiles_seed_exact_sns_owners_and_least_privilege_permissions() {
@@ -5411,7 +5170,6 @@ mod tests {
             dataspace_id: u64,
             domains: &'static [&'static str],
         }
-
         for case in [
             Case {
                 profile: SoraProfile::PrivateSbp,
@@ -5453,7 +5211,6 @@ mod tests {
             let payment_amount: Quantity = LOCALNET_PRIVATE_SNS_LEASE_PAYMENT
                 .parse()
                 .expect("parse expected SNS lease payment");
-
             let manifest = localnet_genesis_for_opts_and_client(&opts, &client_account_id);
             let expected_normalized = manifest
                 .clone()
@@ -5537,7 +5294,6 @@ mod tests {
             assert_eq!(private_registration.object().label, None);
             assert_eq!(private_registration.object().uaid, None);
             assert!(private_registration.object().opaque_ids.is_empty());
-
             let expected_temporary_permissions = expected_intents
                 .iter()
                 .map(|intent| match intent {
@@ -5637,7 +5393,6 @@ mod tests {
             });
             assert_eq!(restricted_read_grant.destination(), &client_account_id);
             assert_eq!(restricted_read_grant.object(), &restricted_read_permission);
-
             let expected_universal_permissions = [
                 Permission::from(CanManageAccountAlias {
                     scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
@@ -5682,7 +5437,6 @@ mod tests {
                 expected_private_permissions,
                 "EnsureAlias must derive the exact manage/delegate/resolve owner bundle"
             );
-
             let observed_permissions = manifest
                 .instructions()
                 .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
@@ -5718,7 +5472,6 @@ mod tests {
                 observed_permissions, expected_direct_permissions,
                 "direct grants must contain the universal ancillary permissions and one private restricted-read capability"
             );
-
             let observed_restricted_read_grants = manifest
                 .instructions()
                 .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
@@ -5739,7 +5492,6 @@ mod tests {
                 )],
                 "fresh private genesis must materialize one exact direct read grant in the private execution world"
             );
-
             let expected_reader_role_id =
                 crate::genesis::private_dataspace_reader_role_id(case.alias, private_dataspace);
             let observed_reader_roles = manifest
@@ -5767,7 +5519,6 @@ mod tests {
                 vec![restricted_read_permission.clone()],
                 "the ingress role must hold only the exact restricted-dataspace read capability"
             );
-
             let universal_permission_batch = normalized
                 .transactions
                 .get(alias_setup_batch_index.saturating_add(1))
@@ -5843,7 +5594,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn private_profiles_stage_and_sign_role_based_restricted_read_bootstrap() {
         for (profile, alias, base_api_port, base_p2p_port) in [
@@ -5867,7 +5617,6 @@ mod tests {
                 block_cadence_ms: None,
                 consensus_mode: SumeragiConsensusMode::Npos,
             };
-
             generate_localnet(&opts, &mut BufWriter::new(Vec::new())).unwrap_or_else(|error| {
                 panic!("stage and sign {alias} private genesis: {error:#}")
             });
@@ -5879,12 +5628,10 @@ mod tests {
             );
         }
     }
-
     fn genesis_json_from_path(path: &Path) -> json::Value {
         let contents = fs::read_to_string(path).expect("read genesis");
         json::from_str(&contents).expect("parse genesis json")
     }
-
     fn genesis_parameters(manifest: &json::Value) -> Parameters {
         let transactions = manifest
             .get("transactions")
@@ -5897,7 +5644,6 @@ mod tests {
             .expect("parameters entry");
         json::from_value(params_value.clone()).expect("parse genesis parameters")
     }
-
     #[test]
     fn generated_configs_parse_with_current_schema() {
         let temp = tempfile::tempdir().expect("make temp dir");
@@ -5917,9 +5663,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let expected_hash_record = fs::read_to_string(temp.path().join(GENESIS_EXPECTED_HASH_FILE))
             .expect("read generated exact genesis hash");
         assert!(expected_hash_record.ends_with('\n'));
@@ -5930,12 +5674,10 @@ mod tests {
             .parse::<HashOf<BlockHeader>>()
             .expect("exact genesis hash parses");
         assert_eq!(expected_hash_record, format!("{expected_hash}\n"));
-
         let signed = fs::read(temp.path().join("genesis.signed.nrt"))
             .expect("read generated signed genesis");
         let decoded = decode_framed_signed_block(&signed).expect("decode generated signed genesis");
         assert_eq!(decoded.hash(), expected_hash);
-
         for index in 0..opts.peers.get() {
             let source = TomlSource::from_file(temp.path().join(format!("peer{index}.toml")))
                 .expect("read generated config");
@@ -5944,7 +5686,6 @@ mod tests {
             assert_eq!(config.genesis.expected_hash, expected_hash);
         }
     }
-
     #[test]
     fn generated_configs_for_user_localnet_parse() {
         let temp = tempfile::tempdir().expect("make temp dir");
@@ -5971,33 +5712,27 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let source =
             TomlSource::from_file(temp.path().join("peer0.toml")).expect("read generated config");
         actual::Root::from_toml_source(source).expect("generated config must parse");
     }
-
     #[test]
     fn requested_localnet_asset_spec_trims_and_uses_client_owner_with_initial_reserve() {
         let asset_id = localnet_sample_asset_literal();
         let spec = requested_localnet_asset_spec(&format!("  {asset_id}  ")).expect("asset spec");
         let client_account_id = localnet_client_account_id();
-
         assert_eq!(spec.id, asset_id);
         assert_eq!(spec.alias, None);
         assert_eq!(spec.owned_by, client_account_id);
         assert_eq!(spec.mint_to, spec.owned_by);
         assert_eq!(spec.quantity, LOCALNET_REQUESTED_ASSET_INITIAL_QUANTITY);
     }
-
     #[test]
     fn requested_localnet_asset_spec_rejects_blank_or_invalid_asset_definition_id() {
         assert!(requested_localnet_asset_spec("   ").is_err());
         assert!(requested_localnet_asset_spec("not-valid").is_err());
     }
-
     #[test]
     fn generated_localnet_registers_requested_asset_definition_for_client_owner() {
         let requested_asset_literal = localnet_sample_asset_literal();
@@ -6019,13 +5754,11 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         let manifest = localnet_genesis_for_opts(&opts);
         let requested_asset_id = AssetDefinitionId::parse_address_literal(&requested_asset_literal)
             .expect("requested asset id");
         let client_account_id = localnet_client_account_id();
         let requested_asset = AssetId::new(requested_asset_id.clone(), client_account_id.clone());
-
         let has_definition = manifest.instructions().any(|instruction| {
             instruction
                 .as_any()
@@ -6042,7 +5775,6 @@ mod tests {
             has_definition,
             "localnet must register requested asset definitions"
         );
-
         let has_owner_transfer = manifest.instructions().any(|instruction| {
             instruction
                 .as_any()
@@ -6059,7 +5791,6 @@ mod tests {
             has_owner_transfer,
             "requested asset definition ownership must transfer to the generated client signer"
         );
-
         let has_initial_mint = manifest.instructions().any(|instruction| {
             instruction
                 .as_any()
@@ -6074,7 +5805,6 @@ mod tests {
             "requested asset definitions must mint an initial reserve to the generated client signer"
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn generated_localnet_bootstraps_universal_kagemusha_asset() {
@@ -6094,7 +5824,6 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         let manifest = localnet_genesis_for_opts(&opts);
         let kagemusha_asset_id =
             AssetDefinitionId::parse_address_literal(LOCALNET_KAGEMUSHA_ASSET_ID)
@@ -6127,7 +5856,6 @@ mod tests {
             has_definition,
             "localnet must register the built-in asset used by universal Kagemusha protocols"
         );
-
         let has_alias_binding = manifest.instructions().any(|instruction| {
             instruction
                 .as_any()
@@ -6141,7 +5869,6 @@ mod tests {
             has_alias_binding,
             "localnet must bind the built-in Kagemusha asset alias"
         );
-
         let has_initial_mint = manifest.instructions().any(|instruction| {
             instruction
                 .as_any()
@@ -6157,7 +5884,6 @@ mod tests {
             has_initial_mint,
             "localnet must mint the built-in Kagemusha asset to the client signer"
         );
-
         let has_owner_transfer = manifest.instructions().any(|instruction| {
             instruction
                 .as_any()
@@ -6174,7 +5900,6 @@ mod tests {
             has_owner_transfer,
             "localnet must transfer Kagemusha asset ownership to the client signer"
         );
-
         let mut has_alias_manage = false;
         let mut has_manifest_publish = false;
         let mut manage_offline_escrow_grants = 0usize;
@@ -6255,7 +5980,6 @@ mod tests {
             "localnet genesis must not emit duplicate CanManageVerifyingKeys grants"
         );
     }
-
     #[test]
     fn permissioned_localnet_genesis_deduplicates_offline_escrow_grant() {
         let opts = LocalnetOptions {
@@ -6274,7 +5998,6 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
-
         let manifest = localnet_genesis_for_opts(&opts);
         let client_account_id = localnet_client_account_id();
         let expected_explicit_manage_offline_escrow_grants =
@@ -6289,13 +6012,11 @@ mod tests {
             .filter(|grant_permission| grant_permission.destination() == &client_account_id)
             .filter(|grant_permission| grant_permission.object().name() == "CanManageOfflineEscrow")
             .count();
-
         assert_eq!(
             offline_escrow_grants, expected_explicit_manage_offline_escrow_grants,
             "permissioned localnet genesis must not duplicate the offline escrow manager grant and must skip the redundant Alice bootstrap grant"
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn generated_localnet_needs_no_backend_offline_switch() {
@@ -6319,7 +6040,6 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         let mut command_output = BufWriter::new(Vec::new());
         generate_localnet_with_line(&opts, &mut command_output, true)
             .expect("generate fresh-custody localnet files");
@@ -6329,11 +6049,9 @@ mod tests {
                 .expect("flush localnet command output"),
         )
         .expect("localnet command output is UTF-8");
-
         let peer_config_text =
             fs::read_to_string(temp.path().join("peer0.toml")).expect("read generated peer config");
         let peer_cfg: toml::Value = toml::from_str(&peer_config_text).expect("parse peer config");
-
         let operator =
             localnet_ephemeral_identity(opts.seed.as_deref().map(str::as_bytes), b"operator-root")
                 .expect("derive generated operator");
@@ -6535,7 +6253,6 @@ mod tests {
                 "!.gitignore\n",
             )
         );
-
         #[cfg(unix)]
         {
             fn assert_private_tree_modes(root: &Path, path: &Path) {
@@ -6577,10 +6294,8 @@ mod tests {
                     relative.display()
                 );
             }
-
             assert_private_tree_modes(temp.path(), temp.path());
         }
-
         assert_eq!(
             peer_cfg
                 .get("settlement")
@@ -6590,7 +6305,6 @@ mod tests {
             "offline protocol support is universal and must not be represented as a localnet opt-in"
         );
     }
-
     #[test]
     fn generated_peer_config_includes_required_addr_literals() {
         let temp = tempfile::tempdir().expect("make temp dir");
@@ -6610,9 +6324,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
                 .expect("read generated peer config"),
@@ -6635,7 +6347,6 @@ mod tests {
             "soranet_transport_private_key is required"
         );
         assert!(peer_cfg.get("genesis").is_some(), "genesis is required");
-
         let network = peer_cfg
             .get("network")
             .and_then(toml::Value::as_table)
@@ -6661,14 +6372,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn generated_peers_use_dedicated_deterministic_soranet_transport_identities() {
         let seed = b"kagami-transport-identity-test";
         let peers = build_peers(4, Some(seed), 21_080, 24_337).expect("build peers");
         let replay = build_peers(4, Some(seed), 21_080, 24_337).expect("rebuild peers");
         let mut transport_public_keys = std::collections::BTreeSet::new();
-
         for (peer, replay_peer) in peers.iter().zip(&replay) {
             KeyPair::new(
                 peer.soranet_transport_public_key.clone(),
@@ -6704,7 +6413,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn generated_peer_config_allows_bls_signing_for_npos() {
         let temp = tempfile::tempdir().expect("make temp dir");
@@ -6724,9 +6432,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
                 .expect("read generated peer config"),
@@ -6745,7 +6451,6 @@ mod tests {
             "allowed_signing must include bls_normal for NPoS localnet"
         );
     }
-
     #[test]
     fn generated_genesis_allows_bls_signing_for_npos() {
         let temp = tempfile::tempdir().expect("make temp dir");
@@ -6765,9 +6470,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let manifest = localnet_genesis_for_opts(&opts);
         let crypto = manifest.crypto();
         assert!(
@@ -6786,7 +6489,6 @@ mod tests {
             "genesis allowed_curve_ids must include bls_normal for NPoS localnet"
         );
     }
-
     #[test]
     fn generated_peer_configs_include_peer_telemetry_urls() {
         let temp = tempfile::tempdir().expect("make temp dir");
@@ -6806,9 +6508,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
                 .expect("read generated peer config"),
@@ -6833,7 +6533,6 @@ mod tests {
                 "http://127.0.0.1:19083/",
             ],
         );
-
         let allowlist = peer_cfg
             .get("torii")
             .and_then(toml::Value::as_table)
@@ -6845,7 +6544,6 @@ mod tests {
             .filter_map(toml::Value::as_str)
             .collect::<Vec<_>>();
         assert_eq!(allowlist, LOCALNET_PREAUTH_ALLOW_CIDRS);
-
         let allowlist = peer_cfg
             .get("torii")
             .and_then(toml::Value::as_table)
@@ -6857,7 +6555,6 @@ mod tests {
             .filter_map(toml::Value::as_str)
             .collect::<Vec<_>>();
         assert_eq!(allowlist, LOCALNET_PREAUTH_ALLOW_CIDRS);
-
         let internal_trust = peer_cfg
             .get("torii")
             .and_then(toml::Value::as_table)
@@ -6869,7 +6566,6 @@ mod tests {
             .filter_map(toml::Value::as_str)
             .collect::<Vec<_>>();
         assert_eq!(internal_trust, LOCALNET_INTERNAL_API_TRUSTED_CIDRS);
-
         assert_eq!(
             peer_cfg
                 .get("torii")
@@ -6882,20 +6578,17 @@ mod tests {
             ),
             "localnet configs should pin the resolved Torii body-cap default explicitly"
         );
-
         let telemetry_enabled = peer_cfg
             .get("telemetry_enabled")
             .and_then(toml::Value::as_bool)
             .expect("telemetry_enabled boolean");
         assert!(telemetry_enabled);
-
         let telemetry_profile = peer_cfg
             .get("telemetry_profile")
             .and_then(toml::Value::as_str)
             .expect("telemetry_profile string");
         assert_eq!(telemetry_profile, LOCALNET_TELEMETRY_PROFILE);
     }
-
     #[test]
     fn generated_sora_profile_peer_config_includes_mcp_writer_profile() {
         let temp = tempfile::tempdir().expect("make temp dir");
@@ -6915,9 +6608,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
                 .expect("read generated peer config"),
@@ -6977,7 +6668,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(allow_prefixes, vec!["iroha."]);
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,
@@ -7001,9 +6691,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml")).expect("read generated config"),
         )
@@ -7127,7 +6815,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn localnet_tx_gossip_overrides_follow_fast_pipeline() {
         let overrides =
@@ -7139,7 +6826,6 @@ mod tests {
             "slow pipelines should keep default tx gossip cadence"
         );
     }
-
     #[test]
     fn perf_profile_permissioned_applies_bounded_runtime_limits() {
         let temp = tempfile::tempdir().expect("tmp dir");
@@ -7159,9 +6845,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
         let parsed = actual::Root::from_toml_source(source).expect("config should parse");
         assert_eq!(
@@ -7192,7 +6876,6 @@ mod tests {
             parsed.pipeline.signature_batch_max_ed25519,
             LOCALNET_SIGNATURE_BATCH_MAX_ED25519
         );
-
         let genesis_path = temp.path().join("genesis.json");
         let manifest = genesis_json_from_path(&genesis_path);
         let params = genesis_parameters(&manifest);
@@ -7202,7 +6885,6 @@ mod tests {
             LOCALNET_BLOCK_MAX_TRANSACTIONS
         );
     }
-
     #[test]
     fn perf_profile_npos_applies_election_and_runtime_limits() {
         let temp = tempfile::tempdir().expect("tmp dir");
@@ -7222,9 +6904,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
         let parsed = actual::Root::from_toml_source(source).expect("config should parse");
         let expected_filter: Directives = LOCALNET_PERF_LOGGER_FILTER
@@ -7240,12 +6920,10 @@ mod tests {
             LOCALNET_PERF_RUNTIME_BLOCK_MAX_TRANSACTIONS,
             "NPoS perf localnet should use the same bounded runtime proposal cap"
         );
-
         let genesis_path = temp.path().join("genesis.json");
         let manifest = genesis_json_from_path(&genesis_path);
         let params = genesis_parameters(&manifest);
         assert_eq!(params.sumeragi().block_cadence_ms().get(), 1_000);
-
         let npos = params
             .custom()
             .get(&SumeragiNposParameters::parameter_id())
@@ -7254,7 +6932,6 @@ mod tests {
         assert_eq!(npos.seat_band_pct(), 100);
         assert_eq!(npos.min_self_bond(), &Quantity::from(1_u64));
     }
-
     #[test]
     fn validate_localnet_options_rejects_perf_profile_mismatch() {
         let opts = LocalnetOptions {
@@ -7273,14 +6950,12 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
-
         let err = validate_localnet_options(&opts).expect_err("mismatch should fail");
         assert!(
             err.to_string().contains("perf-profile"),
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn test_build_uses_explicit_fixture_for_unseeded_genesis_helpers() {
         let (public_key, _) = generate_genesis_key_pair(None, GENESIS_SEED)
@@ -7290,7 +6965,6 @@ mod tests {
             REAL_GENESIS_ACCOUNT_KEYPAIR.public_key().clone()
         );
     }
-
     #[test]
     fn extra_account_keys_are_unique_when_unseeded() {
         let (first, _) =
@@ -7299,10 +6973,8 @@ mod tests {
             generate_account_key_pair(None, b"acct1").expect("second random account key");
         assert_ne!(first, second);
     }
-
     type ConsensusHandshakeMetaTest =
         iroha_data_model::parameter::system::ConsensusHandshakeMetadata;
-
     #[test]
     fn generated_genesis_handshake_meta_decodes() {
         let temp = tempfile::tempdir().expect("make temp dir");
@@ -7329,14 +7001,11 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let genesis_path = temp.path().join("genesis.signed.nrt");
         let bytes = fs::read(&genesis_path).expect("read signed genesis");
         let block =
             decode_framed_signed_block(&bytes).expect("decode signed genesis from framed payload");
-
         let mut found = None;
         for tx in block.external_transactions() {
             if let Executable::Instructions(batch) = tx.instructions() {
@@ -7354,7 +7023,6 @@ mod tests {
                 }
             }
         }
-
         let meta = found.expect("handshake metadata must be present");
         assert_eq!(
             meta.wire_protocol_version,
@@ -7366,7 +7034,6 @@ mod tests {
             "fingerprint must be hex-prefixed"
         );
     }
-
     #[test]
     fn localnet_signed_genesis_uses_first_release_npos_context() {
         let temp = tempfile::tempdir().expect("tmp dir");
@@ -7386,14 +7053,11 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
-
         let manifest = localnet_genesis_for_opts(&opts);
         assert_eq!(manifest.consensus_mode(), SumeragiConsensusMode::Npos);
         assert!(manifest.consensus_fingerprint().is_some());
     }
-
     #[test]
     fn default_block_cadence_is_injected_when_unset() {
         let temp = tempfile::tempdir().expect("tmp dir");
@@ -7413,19 +7077,15 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let genesis_path = temp.path().join("genesis.json");
         let manifest = genesis_json_from_path(&genesis_path);
-
         let params = genesis_parameters(&manifest);
         assert_eq!(
             params.sumeragi().block_cadence_ms().get(),
             LOCALNET_PIPELINE_TIME_MS
         );
     }
-
     #[test]
     fn localnet_sets_block_max_transactions() {
         let temp = tempfile::tempdir().expect("tmp dir");
@@ -7445,9 +7105,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let manifest = localnet_genesis_for_opts(&opts);
         let params = manifest
             .effective_parameters()
@@ -7458,7 +7116,6 @@ mod tests {
             "localnet should raise max transactions per block"
         );
     }
-
     #[test]
     fn localnet_npos_bootstraps_public_lane_stake() {
         use std::collections::BTreeSet;
@@ -7480,9 +7137,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let manifest = localnet_genesis_for_opts(&opts);
         let mut validators = Vec::new();
         let mut activations = Vec::new();
@@ -7527,7 +7182,6 @@ mod tests {
         for activate in &activations {
             assert_eq!(activate.lane_id, LaneId::SINGLE);
         }
-
         let peers = build_peers(
             opts.peers.get(),
             opts.seed.as_ref().map(String::as_bytes),
@@ -7553,7 +7207,6 @@ mod tests {
             "activation roster should match peers"
         );
     }
-
     #[test]
     fn localnet_npos_stake_amount_respects_min_self_bond() {
         let mut params = Parameters::default();
@@ -7563,11 +7216,9 @@ mod tests {
         };
         let expected = npos.min_self_bond.clone();
         params.set_parameter(Parameter::Custom(npos.into_custom_parameter()));
-
         let stake_amount = localnet_npos_stake_amount(&params, Some(LOCALNET_STAKE_AMOUNT));
         assert_eq!(stake_amount, expected);
     }
-
     fn assert_localnet_dataspace_catalog_quorum(out_dir: &Path, peer_count: NonZeroU16) {
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(out_dir.join("peer0.toml")).expect("read generated peer config"),
@@ -7579,7 +7230,6 @@ mod tests {
             .and_then(|nexus| nexus.get("dataspace_catalog"))
             .and_then(toml::Value::as_array)
             .expect("nexus dataspace catalog");
-
         let fault_tolerance = localnet_dataspace_fault_tolerance(peer_count);
         let committee_size = fault_tolerance
             .checked_mul(3)
@@ -7622,7 +7272,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn localnet_npos_validator_roster_and_quorum_match_peer_count() {
         use std::collections::BTreeSet;
@@ -7645,9 +7294,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
                 .expect("read seven-validator peer config"),
@@ -7673,7 +7320,6 @@ mod tests {
             Some(330 * 1024 * 1024),
             "seven validators, two authenticated non-validator sources, and anonymous delivery each need one isolated body quota"
         );
-
         let manifest = localnet_genesis_for_opts(&opts);
         let validators: Vec<_> = manifest
             .instructions()
@@ -7688,7 +7334,6 @@ mod tests {
             usize::from(peer_count.get()),
             "expected one public-lane validator per peer"
         );
-
         let peers = build_peers(
             peer_count.get(),
             opts.seed.as_ref().map(String::as_bytes),
@@ -7705,10 +7350,8 @@ mod tests {
             .map(|register| register.validator.clone())
             .collect();
         assert_eq!(actual, expected, "validator roster should match peers");
-
         assert_localnet_dataspace_catalog_quorum(temp.path(), peer_count);
     }
-
     #[test]
     fn localnet_body_ingress_budget_enforces_protocol_roster_limit() {
         localnet_sumeragi_body_bytes(MAX_VALIDATORS_PER_HEIGHT)
@@ -7730,7 +7373,6 @@ mod tests {
             "unexpected error: {error}"
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn nexus_localnet_alias_lanes_bind_dataspaces_and_seed_validators() {
@@ -7754,9 +7396,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
-
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
                 .expect("read generated peer config"),
@@ -7771,7 +7411,6 @@ mod tests {
             Some(LOCALNET_NEXUS_ALIAS_LANE_COUNT),
             "nexus profile should declare explicit alias-aware lane count"
         );
-
         let lane_catalog = nexus
             .get("lane_catalog")
             .and_then(toml::Value::as_array)
@@ -7806,7 +7445,6 @@ mod tests {
             lanes_by_alias.get("nexus"),
             Some(&("nexus".to_owned(), "public".to_owned()))
         );
-
         let dataspace_catalog = nexus
             .get("dataspace_catalog")
             .and_then(toml::Value::as_array)
@@ -7841,7 +7479,6 @@ mod tests {
                     .expect("CBUAE dataspace id fits i64")
             )
         );
-
         let manifest = localnet_genesis_for_opts(&opts);
         let mut registrations_by_lane = BTreeMap::<u32, usize>::new();
         let mut activations_by_lane = BTreeMap::<u32, usize>::new();
@@ -7863,7 +7500,6 @@ mod tests {
                     .or_default() += 1;
             }
         }
-
         let expected_lanes = BTreeSet::from([
             LaneId::SINGLE.as_u32(),
             LOCALNET_PAYNET_ALIAS_LANE_INDEX,
@@ -7895,7 +7531,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn private_dataspace_cli_selector_is_typed_and_fail_closed() {
         use clap::Parser as _;
@@ -7905,7 +7540,6 @@ mod tests {
             #[command(flatten)]
             localnet: Args,
         }
-
         let parsed = TestArgs::try_parse_from([
             "kagami-localnet-test",
             "--out-dir",
@@ -7924,7 +7558,6 @@ mod tests {
             .expect("resolve typed SBP private dataspace selector"),
             Some(SoraProfile::PrivateSbp)
         );
-
         assert!(
             TestArgs::try_parse_from([
                 "kagami-localnet-test",
@@ -7945,7 +7578,6 @@ mod tests {
             "private dataspace selection must reject the public Nexus profile"
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn private_dataspace_profiles_match_the_pk_routing_contract() {
@@ -7974,7 +7606,6 @@ mod tests {
             );
             toml::Value::Table(entry)
         }
-
         fn expected_lane(
             index: i64,
             alias: &str,
@@ -8007,7 +7638,6 @@ mod tests {
             entry.insert("metadata".into(), toml::Value::Table(toml::Table::new()));
             toml::Value::Table(entry)
         }
-
         struct Case {
             profile: SoraProfile,
             alias: &'static str,
@@ -8018,7 +7648,6 @@ mod tests {
             lane_description: &'static str,
             routes: &'static [(&'static str, &'static str, i64, &'static str)],
         }
-
         const SBP_ROUTES: &[(&str, &str, i64, &str)] = &[
             ("account", "*@sbp", 3, "sbp"),
             ("account", "*@hbl.sbp", 3, "sbp"),
@@ -8057,7 +7686,6 @@ mod tests {
                 routes: CBUAE_ROUTES,
             },
         ];
-
         for case in cases {
             let profile = Some(case.profile);
             let dataspace_catalog = localnet_dataspace_catalog(profile, 1);
@@ -8071,7 +7699,6 @@ mod tests {
                 ],
                 "private dataspace catalog must exactly match the canonical PK catalog"
             );
-
             let (lane_count, lane_catalog) =
                 localnet_lane_catalog(profile).expect("private lane catalog");
             assert_eq!(lane_count, case.lane_count);
@@ -8106,7 +7733,6 @@ mod tests {
                 ],
                 "private lane catalog must exactly match the canonical PK catalog (CBUAE leaves lane 3 sparse)"
             );
-
             let routing = localnet_routing_policy(profile).expect("private routing policy");
             let observed = routing
                 .get("rules")
@@ -8164,7 +7790,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn private_dataspace_manifests_use_the_selected_lane_alias() {
         use std::collections::BTreeSet;
@@ -8175,7 +7800,6 @@ mod tests {
             .iter()
             .map(|peer| PeerId::from(peer.public_key.clone()).to_string())
             .collect::<BTreeSet<_>>();
-
         for (profile, alias) in [
             (SoraProfile::PrivateSbp, "sbp"),
             (SoraProfile::PrivateCbuae, "cbuae"),
@@ -8197,7 +7821,6 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             assert_eq!(manifest_files, vec![format!("{alias}.manifest.json")]);
-
             let manifest: json::Value = json::from_str(
                 &fs::read_to_string(manifest_directory.join(format!("{alias}.manifest.json")))
                     .expect("read private lane manifest"),
@@ -8245,7 +7868,6 @@ mod tests {
             assert_eq!(manifest_peer_ids, expected_peer_ids);
         }
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn dataspace_localnet_binds_paynet_restricted_lane_before_genesis_signing() {
@@ -8269,9 +7891,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
-
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
                 .expect("read generated peer config"),
@@ -8286,7 +7906,6 @@ mod tests {
             Some(LOCALNET_PAYNET_ALIAS_LANE_COUNT),
             "dataspace profile should declare the PAYNET lane before genesis signing"
         );
-
         let lane_catalog = nexus
             .get("lane_catalog")
             .and_then(toml::Value::as_array)
@@ -8325,7 +7944,6 @@ mod tests {
                 Some("parliament".to_owned()),
             ))
         );
-
         let registry = nexus
             .get("registry")
             .and_then(toml::Value::as_table)
@@ -8405,7 +8023,6 @@ mod tests {
             paynet_manifest.get("quorum").and_then(json::Value::as_u64),
             Some(3)
         );
-
         let dataspace_catalog = nexus
             .get("dataspace_catalog")
             .and_then(toml::Value::as_array)
@@ -8433,7 +8050,6 @@ mod tests {
                     .expect("PAYNET dataspace id fits i64")
             )
         );
-
         let routing_policy = nexus
             .get("routing_policy")
             .and_then(toml::Value::as_table)
@@ -8456,7 +8072,6 @@ mod tests {
             account_rules,
             BTreeSet::from(["*@paynet".to_owned(), "*@mibank.paynet".to_owned()])
         );
-
         let manifest = localnet_genesis_for_opts(&opts);
         let validator_lanes = manifest
             .instructions()
@@ -8472,21 +8087,18 @@ mod tests {
             BTreeSet::from([LaneId::SINGLE.as_u32()]),
             "restricted PAYNET dataspace lane must not be bootstrapped as a public stake-elected lane"
         );
-
         let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
         let parsed = actual::Root::from_toml_source(source).expect("config should parse");
         let expected_hash = iroha_core::da::proof_policy_bundle_hash(&parsed.nexus.lane_config);
         let bytes = fs::read(temp.path().join("genesis.signed.nrt")).expect("read signed genesis");
         let block =
             decode_framed_signed_block(&bytes).expect("decode signed genesis from framed payload");
-
         assert_eq!(
             block.header().da_proof_policies_hash(),
             Some(expected_hash),
             "signed genesis should embed the PAYNET dataspace proof policy bundle from peer config"
         );
     }
-
     #[test]
     fn nexus_localnet_signed_genesis_uses_peer_config_da_proof_policies() {
         let temp = tempfile::tempdir().expect("tmp dir");
@@ -8506,19 +8118,15 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
-
         let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
         let parsed = actual::Root::from_toml_source(source).expect("config should parse");
         let expected_hash = iroha_core::da::proof_policy_bundle_hash(&parsed.nexus.lane_config);
         let expected_confidential_policy_hash =
             iroha_core::state::compute_genesis_confidential_policy_hash(&parsed.zk);
-
         let bytes = fs::read(temp.path().join("genesis.signed.nrt")).expect("read signed genesis");
         let block =
             decode_framed_signed_block(&bytes).expect("decode signed genesis from framed payload");
-
         assert_eq!(
             block.header().da_proof_policies_hash(),
             Some(expected_hash),
@@ -8534,7 +8142,6 @@ mod tests {
             "signed genesis should embed the same genesis confidential policy as peer configs",
         );
     }
-
     #[test]
     fn permissioned_localnet_pins_gas_limit_without_enabling_gas_fees() {
         let temp = tempfile::tempdir().expect("tmp dir");
@@ -8554,9 +8161,7 @@ mod tests {
             block_cadence_ms: Some(1_000),
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
         let params = genesis_parameters(&manifest);
         let gas_limit: u64 = params
@@ -8580,7 +8185,6 @@ mod tests {
             "permissioned localnet must not override peer gas rates to a charging value"
         );
     }
-
     #[test]
     fn block_cadence_override_is_signed_into_genesis() {
         let temp = tempfile::tempdir().expect("tmp dir");
@@ -8600,9 +8204,7 @@ mod tests {
             block_cadence_ms: Some(1_000),
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let genesis_path = temp.path().join("genesis.json");
         let manifest = genesis_json_from_path(&genesis_path);
         let params = genesis_parameters(&manifest);
@@ -8616,7 +8218,6 @@ mod tests {
             .try_into_any_norito()
             .expect("gas limit payload should decode");
         assert_eq!(gas_limit, LOCALNET_IVM_GAS_LIMIT_PER_BLOCK);
-
         let expected_fee_asset = localnet_fee_asset_literal();
         let accepted_assets: Vec<String> = params
             .custom()
@@ -8626,7 +8227,6 @@ mod tests {
             .try_into_any_norito()
             .expect("accepted assets payload should decode");
         assert_eq!(accepted_assets, vec![expected_fee_asset.clone()]);
-
         let units_per_gas = params
             .custom()
             .get(&localnet_custom_parameter_id("ivm_gas_units_per_gas"))
@@ -8637,7 +8237,6 @@ mod tests {
             &localnet_ivm_gas_units_per_gas_payload(&expected_fee_asset)
         );
     }
-
     #[test]
     fn npos_localnet_keeps_payload_for_fast_block_cadence() {
         let temp = tempfile::tempdir().expect("tmp dir");
@@ -8657,9 +8256,7 @@ mod tests {
             block_cadence_ms: Some(333),
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let genesis_path = temp.path().join("genesis.json");
         let manifest = genesis_json_from_path(&genesis_path);
         let params = genesis_parameters(&manifest);
@@ -8672,7 +8269,6 @@ mod tests {
         assert_eq!(npos.seat_band_pct(), 100);
         assert_eq!(npos.min_self_bond(), &Quantity::from(1_u64));
     }
-
     #[test]
     fn npos_localnet_keeps_genesis_under_transaction_cap() {
         let temp = tempfile::tempdir().expect("tmp dir");
@@ -8692,9 +8288,7 @@ mod tests {
             block_cadence_ms: Some(333),
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let genesis_path = temp.path().join("genesis.json");
         let transactions = RawGenesisTransaction::from_path(&genesis_path)
             .expect("parse generated genesis")
@@ -8706,7 +8300,6 @@ mod tests {
             "localnet genesis must stay within the block validation transaction cap"
         );
     }
-
     #[test]
     fn client_config_is_written_and_parsable() {
         let tmp = tempfile::tempdir().expect("tmp dir");
@@ -8753,7 +8346,6 @@ mod tests {
             "default localnet client config should not force an I105 prefix"
         );
     }
-
     #[test]
     fn client_config_records_chain_discriminant_when_known() {
         let tmp = tempfile::tempdir().expect("tmp dir");
@@ -8783,7 +8375,6 @@ mod tests {
             Some(369)
         );
     }
-
     #[test]
     fn generated_permissioned_localnet_grants_operator_exact_fee_asset_mint_permission() {
         let temp = tempfile::tempdir().expect("make temp dir");
@@ -8803,9 +8394,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
-
         let operator =
             localnet_ephemeral_identity(opts.seed.as_deref().map(str::as_bytes), b"operator-root")
                 .expect("derive generated operator");
@@ -8824,10 +8413,8 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-
         assert_eq!(operator_mint_permissions, vec![expected_permission]);
     }
-
     #[test]
     fn generated_nexus_localnet_mints_fee_asset_to_client_signer() {
         let temp = tempfile::tempdir().expect("make temp dir");
@@ -8847,9 +8434,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
-
         let contents =
             fs::read_to_string(temp.path().join("genesis.json")).expect("read generated genesis");
         let client_account_id = account_id_runtime_literal(
@@ -8870,7 +8455,6 @@ mod tests {
             "generated genesis should give the reused local faucet signer enough XOR for repeated claims"
         );
     }
-
     #[test]
     fn npos_localnet_seeds_exact_onboarding_fee_sponsor_program() {
         let opts = LocalnetOptions {
@@ -8895,7 +8479,6 @@ mod tests {
         let expected_program = localnet_fee_sponsor_program_id(&AccountId::new(genesis_public_key));
         let expected_client = localnet_client_account_id();
         let manifest = localnet_genesis_for_opts(&opts);
-
         let created = manifest
             .instructions()
             .filter_map(|instruction| {
@@ -8906,7 +8489,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(created.len(), 1);
         assert_eq!(created[0].program().id, expected_program);
-
         let staged = manifest
             .instructions()
             .filter_map(|instruction| {
@@ -8922,7 +8504,6 @@ mod tests {
             .revision()
             .validate()
             .expect("localnet sponsor revision must validate");
-
         let enrollment = manifest
             .instructions()
             .filter_map(|instruction| {
@@ -8933,7 +8514,6 @@ mod tests {
             .find(|enrollment| enrollment.program_id() == &expected_program)
             .expect("client enrollment for exact localnet program");
         assert_eq!(enrollment.beneficiary(), &expected_client);
-
         let has_exact_permission = manifest
             .instructions()
             .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
@@ -8946,7 +8526,6 @@ mod tests {
             .any(|permission| permission.program_id == expected_program);
         assert!(has_exact_permission);
     }
-
     #[test]
     fn generated_nexus_localnet_serves_xor_faucet_from_client_signer() {
         let temp = tempfile::tempdir().expect("make temp dir");
@@ -8966,9 +8545,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
-
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml")).expect("read peer config"),
         )
@@ -9020,7 +8597,6 @@ mod tests {
             Some(false)
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn generated_nexus_localnet_keeps_fee_asset_convertible_for_taira_wallets() {
@@ -9041,9 +8617,7 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
-
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml")).expect("read peer config"),
         )
@@ -9059,7 +8633,6 @@ mod tests {
             Some(true),
             "generated TAIRA configs must enable Halo2 verification for shielded sends"
         );
-
         let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
         let raw_genesis = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
             .expect("parse genesis");
@@ -9079,7 +8652,6 @@ mod tests {
                     .then_some(asset)
             })
             .expect("fee asset definition registration");
-
         assert_eq!(
             fee_asset.get("name").and_then(json::Value::as_str),
             Some("XOR"),
@@ -9097,7 +8669,6 @@ mod tests {
             fee_asset.get("confidential_policy").is_none(),
             "asset registration must not bypass canonical confidential verifier activation"
         );
-
         let unshield_vk_id = localnet_fee_vk_unshield_id();
         let zk_registration = raw_genesis
             .instructions()
@@ -9107,7 +8678,6 @@ mod tests {
                     .downcast_ref::<iroha_data_model::isi::zk::RegisterZkAsset>()
             })
             .expect("generated fee asset must emit a RegisterZkAsset instruction");
-
         assert!(
             zk_registration.asset() == &localnet_fee_asset_definition_id(),
             "generated fee asset must emit a RegisterZkAsset instruction for shield flows"
@@ -9117,7 +8687,6 @@ mod tests {
             &Some(unshield_vk_id.clone()),
             "generated fee asset must advertise an unshield verifier for withdrawals"
         );
-
         let vk_registrations = raw_genesis
             .instructions()
             .filter_map(|instruction| {
@@ -9138,7 +8707,6 @@ mod tests {
             "generated fee asset must register an active confidential unshield verifier"
         );
     }
-
     #[test]
     fn canonical_host_formats_ipv6_literals_and_urls() {
         let host = CanonicalHost::parse("::1", "--public-host").expect("ipv6 host");
@@ -9147,7 +8715,6 @@ mod tests {
         assert_eq!(body, "[::1]:8080");
         assert_eq!(host.url_host(), "[::1]");
     }
-
     #[test]
     fn canonical_host_lowercases_names() {
         let host = CanonicalHost::parse("LOCALHOST", "--public-host").expect("host");
@@ -9156,14 +8723,12 @@ mod tests {
         assert_eq!(body, "localhost:1337");
         assert_eq!(host.url_host(), "localhost");
     }
-
     #[test]
     fn canonical_host_rejects_host_with_port() {
         let err = CanonicalHost::parse("127.0.0.1:8080", "--public-host")
             .expect_err("host with port should fail");
         assert!(err.to_string().contains("without a port"));
     }
-
     #[test]
     fn canonical_host_rejects_unbalanced_brackets() {
         let err = CanonicalHost::parse("[::1", "--public-host")
@@ -9173,7 +8738,6 @@ mod tests {
             .expect_err("missing opening bracket should fail");
         assert!(err.to_string().contains("unmatched"));
     }
-
     #[test]
     fn client_config_renders_ipv6_torii_url() {
         let tmp = tempfile::tempdir().expect("tmp dir");
@@ -9192,7 +8756,6 @@ mod tests {
             fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
         assert!(contents.contains("torii_url = \"http://[::1]:8080/\""));
     }
-
     #[test]
     fn localnet_readme_records_only_base_seed_fingerprint_when_present() {
         let tmp = tempfile::tempdir().expect("tmp dir");
@@ -9245,7 +8808,6 @@ mod tests {
         );
         assert!(!contents.contains("Localnet app authority / escrow account"));
     }
-
     #[test]
     fn private_custody_readme_invokes_lifecycle_scripts_through_bash() {
         let tmp = tempfile::tempdir().expect("tmp dir");
@@ -9286,7 +8848,6 @@ mod tests {
         assert!(!contents.lines().any(|line| line == "./start.sh"));
         assert!(!contents.lines().any(|line| line == "./stop.sh"));
     }
-
     #[test]
     fn fresh_localnet_seed_uses_independent_256_bit_os_entropy() {
         let first = fresh_localnet_seed().expect("first OS-random seed");
@@ -9297,7 +8858,6 @@ mod tests {
         assert!(second.bytes().all(|byte| byte.is_ascii_hexdigit()));
         assert_ne!(first, second);
     }
-
     #[test]
     fn onboarding_tokens_remain_random_with_reproducible_identity_keys() {
         let operator = localnet_ephemeral_identity(Some(b"fixed-localnet-seed"), b"operator-root")
@@ -9311,7 +8871,6 @@ mod tests {
             .expect("write first runtime bundle");
         let second_bundle = write_localnet_runtime_bundle(second.path(), &operator, &onboarding)
             .expect("write second runtime bundle");
-
         assert_ne!(
             first_bundle.onboarding_token_hash, second_bundle.onboarding_token_hash,
             "a reproducible key seed must never make API tokens reproducible"
@@ -9322,7 +8881,6 @@ mod tests {
             .expect("read second onboarding token");
         assert_ne!(first_token, second_token);
     }
-
     fn mandatory_da_localnet_options(build_line: BuildLine, out_dir: PathBuf) -> LocalnetOptions {
         let consensus_mode = if build_line.is_iroha3() {
             SumeragiConsensusMode::Npos
@@ -9346,12 +8904,10 @@ mod tests {
             consensus_mode,
         }
     }
-
     fn assert_da_is_protocol_invariant_not_configuration(build_line: BuildLine) {
         let temp = tempfile::tempdir().expect("tmp dir");
         let opts = mandatory_da_localnet_options(build_line, temp.path().to_path_buf());
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
-
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
                 .expect("read generated peer config"),
@@ -9367,19 +8923,16 @@ mod tests {
                 "node-local v2 config must not contain sumeragi.{retired}"
             );
         }
-
         let manifest_json = fs::read_to_string(temp.path().join("genesis.json"))
             .expect("read generated genesis manifest");
         assert!(!manifest_json.contains("da_enabled"));
         assert!(!manifest_json.contains("collectors_k"));
     }
-
     #[test]
     fn every_build_line_omits_retired_da_configuration() {
         assert_da_is_protocol_invariant_not_configuration(BuildLine::Iroha2);
         assert_da_is_protocol_invariant_not_configuration(BuildLine::Iroha3);
     }
-
     #[test]
     fn rejects_overflowing_port_ranges() {
         let opts = LocalnetOptions {
@@ -9405,7 +8958,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn rejects_overlapping_port_ranges() {
         let opts = LocalnetOptions {
@@ -9431,7 +8983,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn rejects_zero_ports() {
         let opts = LocalnetOptions {
@@ -9457,7 +9008,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn validate_localnet_options_rejects_zero_block_cadence() {
         let opts = LocalnetOptions {
@@ -9482,7 +9032,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn validate_localnet_options_rejects_roster_above_protocol_maximum() {
         let oversized =
@@ -9503,7 +9052,6 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         let error = validate_localnet_options(&opts)
             .expect_err("the CLI must reject a roster above the wire-protocol limit");
         let expected = format!(
@@ -9514,7 +9062,6 @@ mod tests {
             "unexpected error: {error}"
         );
     }
-
     #[test]
     fn validate_localnet_options_rejects_non_three_f_plus_one_roster() {
         let opts = LocalnetOptions {
@@ -9533,7 +9080,6 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         let error = validate_localnet_options(&opts)
             .expect_err("the CLI must reject a non-3f+1 validator roster");
         assert!(
@@ -9541,7 +9087,6 @@ mod tests {
             "unexpected error: {error}"
         );
     }
-
     #[test]
     fn validate_localnet_options_rejects_sora_profile_on_iroha2() {
         let opts = LocalnetOptions {
@@ -9566,7 +9111,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn validate_localnet_options_rejects_every_profile_with_too_few_peers() {
         let opts = LocalnetOptions {
@@ -9592,7 +9136,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn validate_localnet_options_rejects_permissioned_on_sora_nexus() {
         let opts = LocalnetOptions {
@@ -9617,7 +9160,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn validate_localnet_options_rejects_permissioned_on_sora_dataspace() {
         let opts = LocalnetOptions {
@@ -9642,7 +9184,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn validate_localnet_options_allows_permissioned_on_iroha3() {
         let opts = LocalnetOptions {
@@ -9663,7 +9204,6 @@ mod tests {
         };
         validate_localnet_options(&opts).expect("permissioned should be allowed on Iroha3");
     }
-
     #[test]
     fn permissioned_iroha3_disables_nexus_in_peer_config() {
         let temp = tempfile::tempdir().expect("tmp dir");
@@ -9683,10 +9223,8 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Permissioned,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
             .expect("generate permissioned iroha3 localnet");
-
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
                 .expect("read generated peer config"),
@@ -9703,7 +9241,6 @@ mod tests {
             "permissioned iroha3 localnet should disable nexus"
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)] // End-to-end config assertions are kept together for this localnet scenario.
     fn npos_iroha3_without_sora_profile_enables_nexus_in_peer_config() {
@@ -9724,16 +9261,13 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
             .expect("generate npos iroha3 localnet");
-
         let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
             .expect("test localnet genesis key generation should succeed");
         let gas_account_id = localnet_gas_account_id(&genesis_public_key)
             .expect("test localnet gas account derivation should succeed");
-
         let peer_cfg: toml::Value = toml::from_str(
             &fs::read_to_string(temp.path().join("peer0.toml"))
                 .expect("read generated peer config"),
@@ -9807,7 +9341,6 @@ mod tests {
                 .and_then(toml::Value::as_str),
             Some(gas_account_id.as_str())
         );
-
         let pipeline = peer_cfg
             .get("pipeline")
             .and_then(toml::Value::as_table)
@@ -9823,9 +9356,7 @@ mod tests {
             Some(gas_account_id.as_str())
         );
     }
-
     include!("localnet/private_fee_and_account_tests.rs");
-
     #[test]
     fn account_id_runtime_literal_uses_encoded_literal() {
         let seed_bytes = Some(b"localnet-gas-runtime-literal".as_slice());
@@ -9836,7 +9367,6 @@ mod tests {
         let literal = account_id_runtime_literal(&gas_account_id, None);
         assert_eq!(literal, gas_account_id.to_string());
     }
-
     #[test]
     fn account_id_runtime_literal_respects_requested_chain_discriminant() {
         let seed_bytes = Some(b"localnet-gas-runtime-taira".as_slice());
@@ -9854,7 +9384,6 @@ mod tests {
             "localnet runtime literal must not use mainnet prefix under Taira"
         );
     }
-
     #[test]
     fn default_sorafs_telemetry_submitters_match_self_service_policy() {
         let submitters =
@@ -9864,7 +9393,6 @@ mod tests {
             "self-service telemetry should not pin default submitter accounts"
         );
     }
-
     #[test]
     fn localnet_npos_bootstrap_does_not_re_register_genesis_account() {
         let temp = tempfile::tempdir().expect("tmp dir");
@@ -9884,7 +9412,6 @@ mod tests {
             block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
-
         let manifest = localnet_genesis_for_opts(&opts);
         let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
@@ -9895,13 +9422,11 @@ mod tests {
             .filter_map(|instruction| instruction.as_any().downcast_ref::<Register<Account>>())
             .filter(|register| register.object.id == genesis_account_id)
             .count();
-
         assert_eq!(
             ivm_genesis_registrations, 0,
             "expected NPoS bootstrap to avoid re-registering the genesis controller under ivm"
         );
     }
-
     include!("localnet/path_and_script_tests.rs");
     #[test]
     fn start_script_includes_sora_flag_when_enabled() {
@@ -9924,17 +9449,14 @@ mod tests {
             "start script should include --sora when profile enabled"
         );
     }
-
     // Keep the generated rANS table contract tests in a focused child while
     // retaining their paths under `localnet::tests`.
     include!("localnet/rans_table_tests.rs");
-
     #[test]
     fn localnet_defaults_to_permissioned_without_profile_or_perf_preset() {
         let mode = resolve_requested_consensus_mode(None, None);
         assert_eq!(mode, SumeragiConsensusMode::Permissioned);
     }
-
     #[test]
     fn localnet_perf_profile_keeps_matching_consensus_mode() {
         let mode =

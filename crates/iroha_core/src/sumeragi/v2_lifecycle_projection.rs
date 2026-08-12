@@ -5,15 +5,23 @@ use iroha_data_model::block::consensus_v2 as wire;
 use norito::codec::Encode;
 use thiserror::Error;
 
+use super::replay_authority::{
+    CertifiedServeReplayEvidencePairV1, CertifiedServeTerminalReplayAuthorityPairV1,
+    exact_direct_signed_admission_authority,
+};
 use super::schema::{
-    AdmissionRequest, CandidateAdmission, CausalRoot, DurablePayloadReference,
-    DurableServeNegativeOutcome, InitialLifecycleState, LifecycleContext, LifecycleDigest,
-    LifecycleKey, LifecyclePhase, LifecycleRound, LifecycleStage, LifecycleStageKind,
-    LifecycleWorkClass, OwnerId, PhysicalGeometry, PhysicalSlot, PhysicalSlotId, PredecessorScope,
-    ProducerTurnAdmission, TerminalOutcome, WaitSource, producer_turn_key_for_serve,
+    AdmissionRequest, CandidateAdmission, CausalRoot, DurableBodyFrameReference,
+    DurablePayloadReference, DurableServeNegativeOutcome, InitialLifecycleState, LifecycleContext,
+    LifecycleDigest, LifecycleKey, LifecyclePhase, LifecycleRound, LifecycleStage,
+    LifecycleStageKind, LifecycleWorkClass, OwnerId, PhysicalGeometry, PhysicalSlot,
+    PhysicalSlotId, PredecessorScope, TerminalOutcome, WaitSource,
 };
 use crate::sumeragi::{
     v2::{AdapterEffect, SignRequest, VerifiedHeightContext},
+    v2_body_store::{
+        BodyValidationRejectionIdentity, DurableBodyReceipt, DurableBodyValidationOutcome,
+        V2BodyStore, V2BodyStoreError,
+    },
     v2_certified_serve_payload_store::{
         AuthenticatedRecoveredCertifiedServePayload,
         AuthenticatedRecoveredCertifiedServePayloadState, CertifiedServePayloadNegativeOutcome,
@@ -52,6 +60,30 @@ pub(crate) enum AdapterEffectAdmissionError {
     MissingInheritedStatement,
     /// Broadcast carried a transport-only auxiliary payload.
     UnsupportedBroadcastPayload,
+    /// No exact sealed replay wrapper exists at this raw admission boundary.
+    UnsupportedReplayAuthority,
+}
+
+/// Authority-free projection of one exact runtime-bound adapter effect.
+///
+/// This value contains only deterministic lifecycle coordinates and physical
+/// geometry. It cannot become an admission until a closed replay-evidence
+/// carrier constructs the final [`CandidateAdmission`].
+pub(super) struct AuthorityFreeAdmissionProjection {
+    /// Exact logical key derived from the verified height and adapter effect.
+    pub(super) key: LifecycleKey,
+    /// Runtime causal owner retained by the exact pending binding.
+    pub(super) causal_root: CausalRoot,
+    /// Logical work class derived from the effect shape.
+    pub(super) work_class: LifecycleWorkClass,
+    /// Fixed V1 stage and predecessor scope.
+    pub(super) stage: LifecycleStage,
+    /// Initial state for a freshly reconstructed logical candidate.
+    pub(super) initial_state: InitialLifecycleState,
+    /// Restart-stable digest of the runtime causal owner.
+    pub(super) reconstruction_source: LifecycleDigest,
+    /// Exact physical effect slot reconstructed from the pending binding.
+    pub(super) physical_geometry: PhysicalGeometry,
 }
 
 /// Fail-closed reason why durable Certified-Serve work could not be admitted.
@@ -63,6 +95,35 @@ pub(crate) enum CertifiedServeAdmissionError {
     InvalidRequest,
     /// The post-fsync receipt names another request or certificate.
     ReceiptMismatch,
+}
+
+/// Fail-closed reason why a ledger body-frame reference could not be rebound.
+#[derive(Debug, Error)]
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+pub(super) enum DurableBodyFrameRecoveryError {
+    /// Opening or enumerating the canonical body store failed.
+    #[error(transparent)]
+    BodyStore(#[from] V2BodyStoreError),
+    /// No exact body-store frame matched all retained ledger coordinates.
+    #[error("durable lifecycle body frame is absent from the opened body store")]
+    Missing,
+    /// More than one catalog row projected to the same supposedly exact frame.
+    #[error("durable lifecycle body frame is ambiguous in the opened body store")]
+    Ambiguous,
+}
+
+/// Opaque body-store recovery authority for one exact LedgerV1 frame reference.
+///
+/// The receipt and manifest have no parts API. A future registry reconstruction
+/// transaction must consume this seal together with the row's proposal/QC or
+/// validation authority; body bytes alone never authorize consensus work.
+#[derive(Debug)]
+#[must_use = "authenticated body-frame recovery must be joined to replay authority"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) struct AuthenticatedDurableBodyFrameRecovery {
+    reference: DurableBodyFrameReference,
+    manifest: wire::PayloadManifest,
+    receipt: DurableBodyReceipt,
 }
 
 /// Failure at the payload-first/ledger-second Certified-Serve admission
@@ -193,21 +254,29 @@ impl super::LifecycleCoordinator {
         receipt: DurableCertifiedServeCompletedReceipt,
     ) -> Result<(), CertifiedServeSettlementError> {
         self.require_active_serve_lease(&lease)?;
-        let current = self
-            .durable_records
+        let producer_ordinal = self
+            .producer_debts
             .get(&lease.ordinal)
-            .map(|metadata| metadata.payload)
+            .copied()
             .ok_or(CertifiedServeSettlementError::InvalidLease)?;
-        let payload = completed_serve_payload(current, receipt)?;
-        let response = match payload {
-            DurablePayloadReference::CertifiedServeCompleted { response, .. } => response,
-            _ => unreachable!("completed receipt projects a completed payload"),
-        };
-        self.settle_turn_with_durable_serve_payload(
-            lease,
-            super::TurnOutcome::Terminal(TerminalOutcome::Completed(Some(response))),
-            payload,
-        );
+        let terminal = CertifiedServeTerminalReplayAuthorityPairV1::from_completed_receipt(
+            self.active_context,
+            self.records
+                .get(&lease.ordinal)
+                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
+            self.durable_records
+                .get(&lease.ordinal)
+                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
+            self.records
+                .get(&producer_ordinal)
+                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
+            self.durable_records
+                .get(&producer_ordinal)
+                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
+            receipt,
+        )
+        .ok_or(CertifiedServeSettlementError::ReceiptMismatch)?;
+        self.settle_turn_with_durable_serve_terminal(lease, terminal);
         self.fault()
             .map(CertifiedServeSettlementError::CoordinatorFault)
             .map_or(Ok(()), Err)
@@ -221,21 +290,29 @@ impl super::LifecycleCoordinator {
         receipt: DurableCertifiedServeNegativeReceipt,
     ) -> Result<(), CertifiedServeSettlementError> {
         self.require_active_serve_lease(&lease)?;
-        let current = self
-            .durable_records
+        let producer_ordinal = self
+            .producer_debts
             .get(&lease.ordinal)
-            .map(|metadata| metadata.payload)
+            .copied()
             .ok_or(CertifiedServeSettlementError::InvalidLease)?;
-        let payload = negative_serve_payload(current, receipt)?;
-        let outcome = match payload {
-            DurablePayloadReference::CertifiedServeNegative { outcome, .. } => outcome.terminal(),
-            _ => unreachable!("negative receipt projects a negative payload"),
-        };
-        self.settle_turn_with_durable_serve_payload(
-            lease,
-            super::TurnOutcome::Terminal(outcome),
-            payload,
-        );
+        let terminal = CertifiedServeTerminalReplayAuthorityPairV1::from_negative_receipt(
+            self.active_context,
+            self.records
+                .get(&lease.ordinal)
+                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
+            self.durable_records
+                .get(&lease.ordinal)
+                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
+            self.records
+                .get(&producer_ordinal)
+                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
+            self.durable_records
+                .get(&producer_ordinal)
+                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
+            receipt,
+        )
+        .ok_or(CertifiedServeSettlementError::ReceiptMismatch)?;
+        self.settle_turn_with_durable_serve_terminal(lease, terminal);
         self.fault()
             .map(CertifiedServeSettlementError::CoordinatorFault)
             .map_or(Ok(()), Err)
@@ -262,70 +339,16 @@ impl super::LifecycleCoordinator {
     }
 }
 
-fn completed_serve_payload(
-    current: DurablePayloadReference,
-    receipt: DurableCertifiedServeCompletedReceipt,
-) -> Result<DurablePayloadReference, CertifiedServeSettlementError> {
-    let DurablePayloadReference::CertifiedServePending {
-        request,
-        certificate,
-    } = current
-    else {
-        return Err(CertifiedServeSettlementError::InvalidLease);
-    };
-    if request != digest_from_bytes(receipt.id().request_hash().as_ref())
-        || certificate != digest_from_bytes(receipt.certificate_hash().as_ref())
-    {
-        return Err(CertifiedServeSettlementError::ReceiptMismatch);
-    }
-    Ok(DurablePayloadReference::CertifiedServeCompleted {
-        request,
-        certificate,
-        response: digest_from_bytes(receipt.response_hash().as_ref()),
-    })
-}
-
-fn negative_serve_payload(
-    current: DurablePayloadReference,
-    receipt: DurableCertifiedServeNegativeReceipt,
-) -> Result<DurablePayloadReference, CertifiedServeSettlementError> {
-    let DurablePayloadReference::CertifiedServePending {
-        request,
-        certificate,
-    } = current
-    else {
-        return Err(CertifiedServeSettlementError::InvalidLease);
-    };
-    if request != digest_from_bytes(receipt.id().request_hash().as_ref())
-        || certificate != digest_from_bytes(receipt.certificate_hash().as_ref())
-    {
-        return Err(CertifiedServeSettlementError::ReceiptMismatch);
-    }
-    let outcome = match receipt.outcome() {
-        CertifiedServePayloadNegativeOutcome::Cancelled => DurableServeNegativeOutcome::Cancelled,
-        CertifiedServePayloadNegativeOutcome::Rejected(code) => {
-            DurableServeNegativeOutcome::Rejected(code)
-        }
-        CertifiedServePayloadNegativeOutcome::Failed(code) => {
-            DurableServeNegativeOutcome::Failed(code)
-        }
-    };
-    Ok(DurablePayloadReference::CertifiedServeNegative {
-        request,
-        certificate,
-        outcome,
-    })
-}
-
 /// Complete recovery projection for one authenticated Certified-Serve payload.
 ///
-/// The candidate always carries pending admission material. The resolved
-/// payload and optional terminal outcome additionally describe the exact
-/// payload-store cut which may be ahead of the lifecycle ledger.
+/// A Pending frame projects a Pending candidate; a terminal frame projects
+/// the exact terminal payload and replay authority. The optional terminal cut
+/// additionally describes a payload store which may be ahead of the ledger.
 pub(super) struct RecoveredCertifiedServeProjection {
     candidate: CandidateAdmission,
     resolved_payload: DurablePayloadReference,
     terminal_outcome: Option<TerminalOutcome>,
+    terminal_replay: Option<CertifiedServeTerminalReplayAuthorityPairV1>,
 }
 
 impl RecoveredCertifiedServeProjection {
@@ -336,8 +359,14 @@ impl RecoveredCertifiedServeProjection {
         CandidateAdmission,
         DurablePayloadReference,
         Option<TerminalOutcome>,
+        Option<CertifiedServeTerminalReplayAuthorityPairV1>,
     ) {
-        (self.candidate, self.resolved_payload, self.terminal_outcome)
+        (
+            self.candidate,
+            self.resolved_payload,
+            self.terminal_outcome,
+            self.terminal_replay,
+        )
     }
 }
 
@@ -376,7 +405,14 @@ pub(super) fn certified_serve_admission_request(
     {
         return Err(CertifiedServeAdmissionError::ReceiptMismatch);
     }
-    certified_serve_candidate(active_context, authenticated, receipt.payload_hash())
+    let payload_hash = receipt.payload_hash();
+    let replay = CertifiedServeReplayEvidencePairV1::from_post_fsync_pending(
+        active_context,
+        authenticated,
+        receipt,
+    )
+    .ok_or(CertifiedServeAdmissionError::ReceiptMismatch)?;
+    certified_serve_candidate(active_context, authenticated, payload_hash, replay)
         .map(AdmissionRequest::Candidate)
 }
 
@@ -392,8 +428,15 @@ pub(super) fn recovered_certified_serve_projection(
     recovered: &AuthenticatedRecoveredCertifiedServePayload,
 ) -> Result<RecoveredCertifiedServeProjection, CertifiedServeAdmissionError> {
     let authenticated = recovered.request();
-    let candidate =
-        certified_serve_candidate(active_context, authenticated, recovered.payload_hash())?;
+    let replay =
+        CertifiedServeReplayEvidencePairV1::from_authenticated_recovery(active_context, recovered)
+            .ok_or(CertifiedServeAdmissionError::ReceiptMismatch)?;
+    let mut candidate = certified_serve_candidate(
+        active_context,
+        authenticated,
+        recovered.payload_hash(),
+        replay,
+    )?;
     let request = digest_from_bytes(authenticated.request_hash().as_ref());
     let certificate = digest_from_bytes(recovered.certificate_hash().as_ref());
     let (resolved_payload, terminal_outcome) = match recovered.state() {
@@ -440,10 +483,29 @@ pub(super) fn recovered_certified_serve_projection(
             )
         }
     };
+    let terminal_replay = terminal_outcome
+        .map(|outcome| {
+            CertifiedServeTerminalReplayAuthorityPairV1::from_authenticated_recovery(
+                active_context,
+                recovered,
+                &candidate,
+                resolved_payload,
+                outcome,
+            )
+            .ok_or(CertifiedServeAdmissionError::ReceiptMismatch)
+        })
+        .transpose()?;
+    if terminal_replay
+        .as_ref()
+        .is_some_and(|replay| !replay.bind_recovered_candidate(active_context, &mut candidate))
+    {
+        return Err(CertifiedServeAdmissionError::ReceiptMismatch);
+    }
     Ok(RecoveredCertifiedServeProjection {
         candidate,
         resolved_payload,
         terminal_outcome,
+        terminal_replay,
     })
 }
 
@@ -451,6 +513,7 @@ fn certified_serve_candidate(
     active_context: LifecycleContext,
     authenticated: &AuthenticatedCertifiedBodyRequest,
     durable_payload_hash: Hash,
+    replay: CertifiedServeReplayEvidencePairV1,
 ) -> Result<CandidateAdmission, CertifiedServeAdmissionError> {
     let request = authenticated.request();
     let request_hash = authenticated.request_hash();
@@ -466,64 +529,28 @@ fn certified_serve_candidate(
         return Err(CertifiedServeAdmissionError::InvalidRequest);
     }
 
-    let reconstruction_source = digest_from_bytes(request_hash.as_ref());
-    let certificate_digest = digest_from_bytes(HashOf::new(certificate).as_ref());
-    let key_subject = certified_serve_key_subject(request.subject, request_hash);
-    let commitment = Some(execution_commitment(certificate.execution_commitment));
-    let context = active_context.id();
-    let round = LifecycleRound::new(certificate.round.height, certificate.round.view);
-    let proposal_round = Some(LifecycleRound::new(
-        request.round.height,
-        request.round.view,
-    ));
-    let serve_key = LifecycleKey::new(
-        context,
-        round,
-        proposal_round,
-        Some(key_subject),
-        LifecyclePhase::Serve,
-        commitment,
-    );
-    let producer_key = producer_turn_key_for_serve(serve_key)
-        .expect("Certified-Serve key deterministically yields one producer key");
-
     let serve_slot =
         PhysicalSlotId::for_capacity(LifecycleWorkClass::CertifiedServe.capacity_class(), 0);
     let producer_slot =
         PhysicalSlotId::for_capacity(LifecycleWorkClass::ProducerTurn.capacity_class(), 0);
     let producer_digest = domain_digest(PRODUCER_TURN_PHYSICAL_DOMAIN, request_hash.as_ref());
-    let producer_turn = ProducerTurnAdmission::new(
-        producer_key,
-        LifecycleStage::new(
-            LifecycleStageKind::ProducerTurn,
-            PredecessorScope::ProducerHandoffBarrier,
-        ),
-        reconstruction_source,
-        PhysicalGeometry::new(
-            [PhysicalSlot::new(producer_slot, producer_digest)],
-            [producer_slot],
-        ),
-    );
-    Ok(CandidateAdmission::new(
-        serve_key,
-        CausalRoot::new(reconstruction_source),
-        LifecycleWorkClass::CertifiedServe,
-        LifecycleStage::new(
-            LifecycleStageKind::CertifiedServe,
-            PredecessorScope::ReadyOrdinalPrefix,
-        ),
-        InitialLifecycleState::Ready,
-        reconstruction_source,
-        DurablePayloadReference::certified_serve_pending(reconstruction_source, certificate_digest),
-        PhysicalGeometry::new(
-            [PhysicalSlot::new(
-                serve_slot,
-                digest_from_hash(&durable_payload_hash),
-            )],
-            [serve_slot],
-        ),
-        Some(producer_turn),
-    ))
+    replay
+        .into_admission(
+            active_context,
+            PhysicalGeometry::new(
+                [PhysicalSlot::new(
+                    serve_slot,
+                    digest_from_hash(&durable_payload_hash),
+                )],
+                [serve_slot],
+            ),
+            PhysicalGeometry::new(
+                [PhysicalSlot::new(producer_slot, producer_digest)],
+                [producer_slot],
+            ),
+            durable_payload_hash,
+        )
+        .ok_or(CertifiedServeAdmissionError::InvalidRequest)
 }
 
 pub(super) fn admission_request(
@@ -532,6 +559,35 @@ pub(super) fn admission_request(
     effect: &AdapterEffect,
     binding: &PendingRuntimeEffectBinding,
 ) -> Result<AdmissionRequest, AdapterEffectAdmissionError> {
+    let projected = authority_free_admission_projection(active_context, verified, effect, binding)?;
+    let replay_authority = exact_direct_signed_admission_authority(effect, binding)
+        .ok_or(AdapterEffectAdmissionError::UnsupportedReplayAuthority)?;
+    let candidate = CandidateAdmission::new(
+        projected.key,
+        projected.causal_root,
+        projected.work_class,
+        projected.stage,
+        projected.initial_state,
+        projected.reconstruction_source,
+        DurablePayloadReference::None,
+        replay_authority,
+        projected.physical_geometry,
+        None,
+    );
+    Ok(AdmissionRequest::Candidate(candidate))
+}
+
+/// Project exact runtime coordinates without attaching replay authority.
+///
+/// The returned value is inert. Closed replay evidence must perform the final
+/// candidate construction; this function accepts no decoded authority and has
+/// no format-default or fallback path.
+pub(super) fn authority_free_admission_projection(
+    active_context: LifecycleContext,
+    verified: &VerifiedHeightContext,
+    effect: &AdapterEffect,
+    binding: &PendingRuntimeEffectBinding,
+) -> Result<AuthorityFreeAdmissionProjection, AdapterEffectAdmissionError> {
     if !binding.exactly_binds_adapter_effect(effect) {
         return Err(AdapterEffectAdmissionError::UnboundEffect);
     }
@@ -554,18 +610,18 @@ pub(super) fn admission_request(
     let causal_digest = causal_root.digest();
     let physical_digest = digest_from_hash(binding.exact_effect_identity());
     let slot_id = PhysicalSlotId::for_capacity(shape.work_class.capacity_class(), 0);
-    let candidate = CandidateAdmission::new(
-        shape.key,
+    Ok(AuthorityFreeAdmissionProjection {
+        key: shape.key,
         causal_root,
-        shape.work_class,
-        LifecycleStage::new(shape.stage_kind, PredecessorScope::Independent),
-        InitialLifecycleState::Ready,
-        causal_digest,
-        DurablePayloadReference::None,
-        PhysicalGeometry::new([PhysicalSlot::new(slot_id, physical_digest)], [slot_id]),
-        None,
-    );
-    Ok(AdmissionRequest::Candidate(candidate))
+        work_class: shape.work_class,
+        stage: LifecycleStage::new(shape.stage_kind, PredecessorScope::Independent),
+        initial_state: InitialLifecycleState::Ready,
+        reconstruction_source: causal_digest,
+        physical_geometry: PhysicalGeometry::new(
+            [PhysicalSlot::new(slot_id, physical_digest)],
+            [slot_id],
+        ),
+    })
 }
 
 fn project_shape(
@@ -1124,8 +1180,73 @@ fn validate_round(
     Ok(())
 }
 
-fn lifecycle_context(context: &wire::HeightContext) -> LifecycleContext {
+pub(super) fn lifecycle_context(context: &wire::HeightContext) -> LifecycleContext {
     LifecycleContext::new(digest_from_bytes(context.id().0.as_ref()), context.height)
+}
+
+/// Project one non-forgeable body-store receipt into its LedgerV1 frame reference.
+///
+/// The returned value binds only the exact fsynced body bytes. Restart must
+/// still join the proposal/QC or validation authority appropriate to the row.
+pub(super) fn durable_body_frame_reference(
+    active_context: LifecycleContext,
+    receipt: &DurableBodyReceipt,
+) -> Option<DurableBodyFrameReference> {
+    let context = digest_from_bytes(receipt.context_id().0.as_ref());
+    let round = receipt.round();
+    if context != active_context.id() || round.height != active_context.height() {
+        return None;
+    }
+    Some(DurableBodyFrameReference::new(
+        context,
+        LifecycleRound::new(round.height, round.view),
+        block_subject(receipt.subject()),
+        digest_from_bytes(receipt.manifest_hash().as_ref()),
+        digest_from_hash(&receipt.frame_hash()),
+    ))
+}
+
+/// Rebind one exact LedgerV1 body-frame reference from an opened body store.
+///
+/// This performs a complete catalog census rather than inverting the lifecycle
+/// subject digest. Exactly one manifest/receipt pair must reproduce the five
+/// retained coordinates. The returned seal remains insufficient without the
+/// row-specific signed proposal, QC, WAL, or validation authority.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn authenticate_durable_body_frame_recovery(
+    active_context: LifecycleContext,
+    store: &V2BodyStore,
+    expected: DurableBodyFrameReference,
+) -> Result<AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameRecoveryError> {
+    authenticate_durable_body_frame_catalog(
+        active_context,
+        expected,
+        store.recovery_catalog()?.into_values(),
+    )
+}
+
+fn authenticate_durable_body_frame_catalog(
+    active_context: LifecycleContext,
+    expected: DurableBodyFrameReference,
+    catalog: impl IntoIterator<Item = (wire::PayloadManifest, DurableBodyReceipt)>,
+) -> Result<AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameRecoveryError> {
+    let mut exact = catalog.into_iter().filter(|(manifest, receipt)| {
+        manifest.round == receipt.round()
+            && manifest.subject == receipt.subject()
+            && HashOf::new(manifest) == receipt.manifest_hash()
+            && durable_body_frame_reference(active_context, receipt) == Some(expected)
+    });
+    let Some((manifest, receipt)) = exact.next() else {
+        return Err(DurableBodyFrameRecoveryError::Missing);
+    };
+    if exact.next().is_some() {
+        return Err(DurableBodyFrameRecoveryError::Ambiguous);
+    }
+    Ok(AuthenticatedDurableBodyFrameRecovery {
+        reference: expected,
+        manifest,
+        receipt,
+    })
 }
 
 fn lifecycle_key(
@@ -1146,11 +1267,13 @@ fn lifecycle_key(
     )
 }
 
-fn block_subject(subject: wire::BlockSubject) -> LifecycleDigest {
+/// Derive the lifecycle-domain digest for one exact block subject.
+pub(super) fn block_subject(subject: wire::BlockSubject) -> LifecycleDigest {
     domain_digest(BLOCK_SUBJECT_DOMAIN, &subject.encode())
 }
 
-fn execution_commitment(commitment: wire::ExecutionCommitment) -> LifecycleDigest {
+/// Derive the lifecycle-domain digest for one exact execution commitment.
+pub(super) fn execution_commitment(commitment: wire::ExecutionCommitment) -> LifecycleDigest {
     domain_digest(EXECUTION_COMMITMENT_DOMAIN, &commitment.encode())
 }
 
@@ -1319,12 +1442,99 @@ pub(super) fn pending_effect_causal_root(binding: &PendingRuntimeEffectBinding) 
     CausalRoot::new(digest_from_hash(binding.causal_lifecycle_key()))
 }
 
+/// Authenticate the durable body outcome carried by one terminal Validate parent.
+///
+/// This projection deliberately proves only the exact body outcome and the
+/// immutable parent identity. `AdvancedNoSuccessor` remains the checksummed
+/// ledger's record of the historical reducer branch: replaying the same body
+/// after later WAL/reducer progress cannot reliably reproduce that old
+/// `Inactive` or `NoEffect` classification.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn recovered_validate_no_successor_ledger_identity_is_authenticated(
+    context: LifecycleContext,
+    key: LifecycleKey,
+    causal_root: CausalRoot,
+    reconstruction_source: LifecycleDigest,
+    stage: LifecycleStage,
+    payload: DurablePayloadReference,
+    outcome: &DurableBodyValidationOutcome,
+) -> bool {
+    let durable = outcome.durable_body();
+    let expected_payload =
+        durable_body_frame_reference(context, durable).map(DurablePayloadReference::BodyFrame);
+    let expected_context = digest_from_bytes(durable.context_id().0.as_ref());
+    let expected_proposal_round = LifecycleRound::new(durable.round().height, durable.round().view);
+    let expected_subject = block_subject(durable.subject());
+    let outcome_is_exact = match (
+        outcome.validated_receipt(),
+        outcome.rejection_identity(),
+        outcome.missing_merge_sidecar(),
+    ) {
+        (Some(receipt), None, None) => {
+            receipt.durable() == durable
+                && key.execution_commitment().is_none_or(|commitment| {
+                    commitment == execution_commitment(receipt.execution_commitment())
+                })
+        }
+        (None, Some(BodyValidationRejectionIdentity::Rejected), None) => true,
+        _ => false,
+    };
+
+    context.id() == expected_context
+        && context.height() == durable.round().height
+        && durable.round().context_id == durable.context_id()
+        && key.context() == expected_context
+        && key.round().height() == context.height()
+        && key.proposal_round() == Some(expected_proposal_round)
+        && key.subject() == Some(expected_subject)
+        && key.phase() == LifecyclePhase::Validate
+        && causal_root.digest() == reconstruction_source
+        && stage.kind() == LifecycleStageKind::ValidateBody
+        && stage.predecessor_scope() == PredecessorScope::Independent
+        && Some(payload) == expected_payload
+        && outcome_is_exact
+}
+
+/// Authenticate a terminal Validate candidate including its transient physical episode.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn recovered_validate_no_successor_is_authenticated(
+    context: LifecycleContext,
+    candidate: &CandidateAdmission,
+    outcome: &DurableBodyValidationOutcome,
+) -> bool {
+    let canonical_geometry = candidate.physical_geometry.canonicalized();
+    let normalized_geometry = candidate.physical_geometry.normalized();
+    let geometry_is_exact = matches!(
+        (canonical_geometry, normalized_geometry),
+        (Ok(canonical), Ok((physical, universe, consumed)))
+            if canonical == candidate.physical_geometry
+                && physical.len() == 1
+                && universe.len() == 1
+                && consumed == universe
+                && physical.keys().all(|slot| {
+                    slot.capacity_class() == Some(LifecycleWorkClass::Validate.capacity_class())
+                })
+    );
+    recovered_validate_no_successor_ledger_identity_is_authenticated(
+        context,
+        candidate.key,
+        candidate.causal_root,
+        candidate.reconstruction_source,
+        candidate.stage,
+        candidate.payload,
+        outcome,
+    ) && candidate.work_class == LifecycleWorkClass::Validate
+        && candidate.initial_state == InitialLifecycleState::Ready
+        && candidate.producer_turn.is_none()
+        && geometry_is_exact
+}
+
 /// Build the six-field Serve-key subject from the certified block and exact
 /// signed request. The request hash is deliberately part of the semantic key:
 /// the durable ledger stores one terminal response per record, and responses
 /// are valid only for their exact request hash. Two requesters for one body
 /// therefore cannot alias one singular cached response lifecycle.
-fn certified_serve_key_subject(
+pub(super) fn certified_serve_key_subject(
     subject: wire::BlockSubject,
     request_hash: HashOf<wire::CertifiedBodyRequest>,
 ) -> LifecycleDigest {
@@ -1382,6 +1592,38 @@ fn digest_from_bytes(hash: &[u8]) -> LifecycleDigest {
 mod wait_source_tests {
     use super::*;
 
+    fn validate_recovery_fixture() -> (
+        LifecycleContext,
+        CandidateAdmission,
+        crate::sumeragi::v2_body_store::DurableBodyReceipt,
+    ) {
+        let context_hash = Hash::new(b"validate recovery context");
+        let context = LifecycleContext::new(digest_from_hash(&context_hash), 7);
+        let (replay, durable) = super::super::replay_authority::exact_body_record_fixture(
+            context,
+            LifecycleStageKind::ValidateBody,
+            3,
+        );
+        let source = LifecycleDigest::new([0x73; 32]);
+        let slot = PhysicalSlotId::for_capacity(super::super::schema::CapacityClass::Effect, 0);
+        let candidate = CandidateAdmission::new(
+            replay.key,
+            CausalRoot::new(source),
+            replay.work_class,
+            replay.stage,
+            InitialLifecycleState::Ready,
+            source,
+            replay.payload,
+            replay.authority,
+            PhysicalGeometry::new(
+                [PhysicalSlot::new(slot, LifecycleDigest::new([0x74; 32]))],
+                [slot],
+            ),
+            None,
+        );
+        (context, candidate, durable)
+    }
+
     #[test]
     fn reducer_fence_source_is_context_and_height_scoped() {
         let first = LifecycleContext::new(LifecycleDigest::new([0xA1; 32]), 7);
@@ -1393,6 +1635,147 @@ mod wait_source_tests {
         assert_eq!(source, reducer_fence_wait_source(first));
         assert_ne!(source, reducer_fence_wait_source(other_context));
         assert_ne!(source, reducer_fence_wait_source(other_height));
+    }
+
+    #[test]
+    fn durable_body_frame_projection_binds_every_receipt_coordinate() {
+        let (context, candidate, durable) = validate_recovery_fixture();
+        let reference = durable_body_frame_reference(context, &durable)
+            .expect("exact body receipt projects into its active context");
+        assert!(reference.matches_key(candidate.key));
+        assert_eq!(reference.context, context.id());
+        assert_eq!(reference.round, candidate.key.proposal_round().unwrap());
+        assert_eq!(reference.subject, candidate.key.subject().unwrap());
+        assert_eq!(
+            reference.manifest,
+            digest_from_bytes(durable.manifest_hash().as_ref())
+        );
+        assert_eq!(reference.frame, digest_from_hash(&durable.frame_hash()));
+
+        let foreign_context = LifecycleContext::new(LifecycleDigest::new([0x76; 32]), 7);
+        assert_eq!(
+            durable_body_frame_reference(foreign_context, &durable),
+            None
+        );
+        let foreign_height = LifecycleContext::new(context.id(), 8);
+        assert_eq!(durable_body_frame_reference(foreign_height, &durable), None);
+    }
+
+    #[test]
+    fn durable_body_frame_recovery_requires_one_exact_catalog_row() {
+        let (context, _, template) = validate_recovery_fixture();
+        let manifest = wire::PayloadManifest {
+            round: template.round(),
+            subject: template.subject(),
+            payload_size_bytes: 1,
+            layout: wire::DataAvailabilityLayout {
+                encoding: wire::PayloadEncoding::ReedSolomon16,
+                chunk_size_bytes: 2,
+                data_shards: 1,
+                parity_shards: 1,
+                max_payload_size_bytes: 16,
+                max_chunk_count: 16,
+            },
+            chunk_hashes: vec![Hash::new(b"durable body frame chunk")],
+            chunk_root: Hash::new(b"durable body frame root"),
+        };
+        let receipt = crate::sumeragi::v2_body_store::DurableBodyReceipt::for_test(
+            template.context_id(),
+            template.round(),
+            template.subject(),
+            HashOf::new(&manifest),
+        );
+        let expected = durable_body_frame_reference(context, &receipt)
+            .expect("catalog receipt projects into its active context");
+
+        let recovered = authenticate_durable_body_frame_catalog(
+            context,
+            expected,
+            [(manifest.clone(), receipt.clone())],
+        )
+        .expect("one exact manifest and receipt recover one opaque frame seal");
+        assert_eq!(recovered.reference, expected);
+        assert_eq!(recovered.manifest, manifest);
+        assert_eq!(recovered.receipt, receipt);
+
+        assert!(matches!(
+            authenticate_durable_body_frame_catalog(context, expected, []),
+            Err(DurableBodyFrameRecoveryError::Missing)
+        ));
+        assert!(matches!(
+            authenticate_durable_body_frame_catalog(
+                context,
+                expected,
+                [
+                    (manifest.clone(), receipt.clone()),
+                    (manifest.clone(), receipt.clone()),
+                ],
+            ),
+            Err(DurableBodyFrameRecoveryError::Ambiguous)
+        ));
+
+        let mut foreign_manifest = manifest;
+        foreign_manifest.payload_size_bytes = 2;
+        assert!(matches!(
+            authenticate_durable_body_frame_catalog(
+                context,
+                expected,
+                [(foreign_manifest, receipt)],
+            ),
+            Err(DurableBodyFrameRecoveryError::Missing)
+        ));
+    }
+
+    #[test]
+    fn terminal_validate_recovery_binds_exact_body_outcome_and_parent_identity() {
+        let (context, candidate, durable) = validate_recovery_fixture();
+        let validated =
+            crate::sumeragi::v2_body_store::DurableBodyValidationOutcome::validated_for_test(
+                crate::sumeragi::v2_body_store::ValidatedBodyReceipt::for_test(durable.clone()),
+            );
+        assert!(recovered_validate_no_successor_is_authenticated(
+            context, &candidate, &validated,
+        ));
+
+        let rejected =
+            crate::sumeragi::v2_body_store::DurableBodyValidationOutcome::rejected_for_test(
+                durable,
+            );
+        assert!(recovered_validate_no_successor_is_authenticated(
+            context, &candidate, &rejected,
+        ));
+
+        let mut committed_rejection = candidate.clone();
+        committed_rejection.key.execution_commitment = Some(LifecycleDigest::new([0x74; 32]));
+        assert!(recovered_validate_no_successor_is_authenticated(
+            context,
+            &committed_rejection,
+            &rejected,
+        ));
+
+        let mut foreign = candidate.clone();
+        foreign.key.subject = Some(LifecycleDigest::new([0x75; 32]));
+        assert!(!recovered_validate_no_successor_is_authenticated(
+            context, &foreign, &validated,
+        ));
+
+        let mut substituted = candidate.clone();
+        let DurablePayloadReference::BodyFrame(mut substituted_frame) = substituted.payload else {
+            panic!("Validate recovery fixture must retain its durable body frame");
+        };
+        substituted_frame.frame = LifecycleDigest::new([0x76; 32]);
+        substituted.payload = DurablePayloadReference::BodyFrame(substituted_frame);
+        assert!(!recovered_validate_no_successor_is_authenticated(
+            context,
+            &substituted,
+            &validated,
+        ));
+
+        let mut malformed = candidate;
+        malformed.physical_geometry = PhysicalGeometry::new([], []);
+        assert!(!recovered_validate_no_successor_is_authenticated(
+            context, &malformed, &rejected,
+        ));
     }
 }
 
@@ -1869,23 +2252,22 @@ mod tests {
 
     fn lifecycle_recovery_cut(
         fixture: &Fixture,
+        ledger_root: &std::path::Path,
         payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
     ) -> AuthenticatedLifecycleRecoveryCut {
-        AuthenticatedLifecycleRecoveryCut::from_authenticated_parts(
+        let (_store, ledger) = super::super::ledger::LifecycleLedgerStoreV1::open(
+            ledger_root,
             lifecycle_context(&fixture.context),
-            [],
-            payloads,
         )
-        .expect("assemble sealed lifecycle recovery cut")
+        .expect("decode the exact lifecycle ledger authenticated by the fixture cut");
+        AuthenticatedLifecycleRecoveryCut::from_authenticated_parts(ledger, [], [], payloads)
+            .expect("assemble sealed lifecycle recovery cut")
     }
 
     fn execute_ready_turn(coordinator: &mut LifecycleCoordinator) -> super::super::TurnLease {
         let ready = coordinator.ready_index.iter().map(|ordinal| {
             let record = &coordinator.records[ordinal];
-            (
-                *ordinal,
-                SchedulerReadyInputs::new(record.owner, record.key, 0, 0, 0, 0, 0, 0),
-            )
+            (*ordinal, SchedulerReadyInputs::new(record, None, [0; 6]))
         });
         let TurnPlan::Execute(lease) = coordinator.plan_turn(
             SchedulerInputs::new([], ready).expect("Serve ready rows have unique ordinals"),
@@ -2181,6 +2563,8 @@ mod tests {
             coordinator.admit_certified_serve(&fixture.verified, &request, pending),
             Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
         ));
+        let pending_serve_replay = coordinator.durable_records[&1].replay_authority.clone();
+        let pending_producer_replay = coordinator.durable_records[&2].replay_authority.clone();
         let lease = execute_ready_turn(&mut coordinator);
 
         assert_eq!(
@@ -2210,6 +2594,29 @@ mod tests {
                 ..
             }
         ));
+        assert!(
+            !pending_serve_replay
+                .same_persisted_family(&coordinator.durable_records[&1].replay_authority)
+        );
+        assert!(
+            !pending_producer_replay
+                .same_persisted_family(&coordinator.durable_records[&2].replay_authority)
+        );
+        assert!(
+            coordinator.durable_records[&1]
+                .replay_authority
+                .same_persisted_family(&coordinator.durable_records[&2].replay_authority)
+        );
+        assert!(
+            coordinator.durable_records[&1]
+                .replay_authority
+                .certified_serve_frame_hash_is(terminal.payload_hash())
+        );
+        assert!(
+            coordinator.durable_records[&2]
+                .replay_authority
+                .certified_serve_frame_hash_is(terminal.payload_hash())
+        );
         assert!(matches!(
             coordinator.persist_and_admit_certified_serve(
                 &mut payload_store,
@@ -2219,6 +2626,60 @@ mod tests {
             ),
             Ok(AdmissionDecision::StutterTerminal { .. })
         ));
+    }
+
+    #[test]
+    fn certified_serve_terminal_family_mismatch_fails_without_state_mutation() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let fixture = Fixture::new();
+        let request = fixture.authenticated_serve_request(3);
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), &fixture.context)
+                .expect("open payload store");
+        let pending = payload_store
+            .persist_pending(&request)
+            .expect("persist admitted request");
+        let mut coordinator = fixture.coordinator();
+        assert!(matches!(
+            coordinator.admit_certified_serve(&fixture.verified, &request, pending),
+            Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+        ));
+        let lease = execute_ready_turn(&mut coordinator);
+        let terminal = payload_store
+            .persist_negative(
+                pending.id(),
+                CertifiedServePayloadNegativeOutcome::Failed(31),
+            )
+            .expect("persist exact negative result");
+        let foreign_producer_replay = coordinator.durable_records[&2]
+            .replay_authority
+            .with_certified_serve_frame_hash_for_test(Hash::new(
+                b"foreign pending ProducerTurn payload frame",
+            ))
+            .expect("ProducerTurn retains a Certified-Serve storage source");
+        coordinator
+            .durable_records
+            .get_mut(&2)
+            .expect("admission retained ProducerTurn metadata")
+            .replay_authority = foreign_producer_replay;
+        let records = coordinator.records.clone();
+        let durable_records = coordinator.durable_records.clone();
+        let ready_index = coordinator.ready_index.clone();
+        let producer_debts = coordinator.producer_debts.clone();
+        let capacity_used = coordinator.capacity_used.clone();
+        let active_lease = coordinator.active_lease.clone();
+
+        assert_eq!(
+            coordinator.settle_certified_serve_negative(lease, terminal),
+            Err(CertifiedServeSettlementError::ReceiptMismatch)
+        );
+        assert_eq!(coordinator.records, records);
+        assert_eq!(coordinator.durable_records, durable_records);
+        assert_eq!(coordinator.ready_index, ready_index);
+        assert_eq!(coordinator.producer_debts, producer_debts);
+        assert_eq!(coordinator.capacity_used, capacity_used);
+        assert_eq!(coordinator.active_lease, active_lease);
+        assert_eq!(coordinator.fault(), None);
     }
 
     #[test]
@@ -2283,6 +2744,8 @@ mod tests {
             coordinator.admit_certified_serve(&fixture.verified, &request, pending),
             Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
         ));
+        let pending_serve_replay = coordinator.durable_records[&1].replay_authority.clone();
+        let pending_producer_replay = coordinator.durable_records[&2].replay_authority.clone();
         let lease = execute_ready_turn(&mut coordinator);
         let responder = 0;
         let mut response = wire::CertifiedBodyResponse {
@@ -2318,6 +2781,29 @@ mod tests {
                 ..
             } if retained == response
         ));
+        assert!(
+            !pending_serve_replay
+                .same_persisted_family(&coordinator.durable_records[&1].replay_authority)
+        );
+        assert!(
+            !pending_producer_replay
+                .same_persisted_family(&coordinator.durable_records[&2].replay_authority)
+        );
+        assert!(
+            coordinator.durable_records[&1]
+                .replay_authority
+                .same_persisted_family(&coordinator.durable_records[&2].replay_authority)
+        );
+        assert!(
+            coordinator.durable_records[&1]
+                .replay_authority
+                .certified_serve_frame_hash_is(terminal.payload_hash())
+        );
+        assert!(
+            coordinator.durable_records[&2]
+                .replay_authority
+                .certified_serve_frame_hash_is(terminal.payload_hash())
+        );
         assert!(matches!(
             coordinator.persist_and_admit_certified_serve(
                 &mut payload_store,
@@ -2540,7 +3026,7 @@ mod tests {
         let (mut payload_store, payloads) =
             authenticated_payload_cut(&fixture, &payload_root, &body_store, &fixture.keys[0]);
         assert_eq!(payloads.len(), 2);
-        let cut = lifecycle_recovery_cut(&fixture, payloads);
+        let cut = lifecycle_recovery_cut(&fixture, &ledger_root, payloads);
         let restarted = LifecycleCoordinator::open_with_authority(
             authority,
             &ledger_root,
@@ -2599,7 +3085,7 @@ mod tests {
             V2BodyStore::open(&body_root, fixture.context.clone()).expect("open exact body store");
         let (mut payload_store, payloads) =
             authenticated_payload_cut(&fixture, &payload_root, &body_store, &fixture.keys[0]);
-        let cut = lifecycle_recovery_cut(&fixture, payloads);
+        let cut = lifecycle_recovery_cut(&fixture, &ledger_root, payloads);
         let authority = fixture.coordinator().episode_authority;
         assert!(
             LifecycleCoordinator::open_with_authority(
@@ -2645,7 +3131,7 @@ mod tests {
         let (first_store, payloads) =
             authenticated_payload_cut(&fixture, &first_root, &body_store, &fixture.keys[0]);
         drop(first_store);
-        let cut = lifecycle_recovery_cut(&fixture, payloads);
+        let cut = lifecycle_recovery_cut(&fixture, &ledger_root, payloads);
         let authority = fixture.coordinator().episode_authority;
 
         assert!(
@@ -2690,7 +3176,7 @@ mod tests {
             V2BodyStore::open(&body_root, fixture.context.clone()).expect("open exact body store");
         let (mut payload_store, payloads) =
             authenticated_payload_cut(&fixture, &empty_payload_root, &body_store, &fixture.keys[0]);
-        let cut = lifecycle_recovery_cut(&fixture, payloads);
+        let cut = lifecycle_recovery_cut(&fixture, &ledger_root, payloads);
         assert!(
             LifecycleCoordinator::open_with_authority(
                 authority,
@@ -2745,7 +3231,7 @@ mod tests {
             V2BodyStore::open(&body_root, fixture.context.clone()).expect("open exact body store");
         let (mut payload_store, payloads) =
             authenticated_payload_cut(&fixture, &payload_root, &body_store, &fixture.keys[0]);
-        let cut = lifecycle_recovery_cut(&fixture, payloads);
+        let cut = lifecycle_recovery_cut(&fixture, &ledger_root, payloads);
         let restarted = LifecycleCoordinator::open_with_authority(
             authority,
             &ledger_root,
@@ -2832,7 +3318,7 @@ mod tests {
             &body_store,
             &fixture.keys[usize::try_from(responder).expect("small responder")],
         );
-        let cut = lifecycle_recovery_cut(&fixture, payloads);
+        let cut = lifecycle_recovery_cut(&fixture, &ledger_root, payloads);
         let restarted = LifecycleCoordinator::open_with_authority(
             authority,
             &ledger_root,
@@ -2862,6 +3348,209 @@ mod tests {
         assert_eq!(
             ledger.records()[0].terminal(),
             Some(Some(TerminalOutcome::Completed(Some(response_digest))))
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn settled_negative_frame_persists_and_reopens_with_the_exact_replay_pair() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let ledger_root = temporary.path().join("ledger");
+        let payload_root = temporary.path().join("payloads");
+        let body_root = temporary.path().join("bodies");
+        let fixture = Fixture::new();
+        let request = fixture.authenticated_serve_request(3);
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(&payload_root, &fixture.context)
+                .expect("open payload store");
+        let pending = payload_store
+            .persist_pending(&request)
+            .expect("persist pending request");
+        let mut coordinator = fixture.coordinator();
+        let authority = coordinator.episode_authority.clone();
+        coordinator
+            .attach_empty_test_ledger(&ledger_root)
+            .expect("attach empty durable ledger");
+        assert!(matches!(
+            coordinator.admit_certified_serve(&fixture.verified, &request, pending),
+            Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+        ));
+        let lease = execute_ready_turn(&mut coordinator);
+        let terminal = payload_store
+            .persist_negative(
+                pending.id(),
+                CertifiedServePayloadNegativeOutcome::Rejected(41),
+            )
+            .expect("persist exact terminal frame");
+        coordinator
+            .settle_certified_serve_negative(lease, terminal)
+            .expect("settle and persist exact terminal pair");
+        assert!(
+            coordinator.durable_records[&1]
+                .replay_authority
+                .same_persisted_family(&coordinator.durable_records[&2].replay_authority)
+        );
+        assert!(
+            coordinator.durable_records[&1]
+                .replay_authority
+                .certified_serve_frame_hash_is(terminal.payload_hash())
+        );
+        drop(coordinator);
+        drop(payload_store);
+
+        let body_store =
+            V2BodyStore::open(&body_root, fixture.context.clone()).expect("open exact body store");
+        let (mut payload_store, payloads) =
+            authenticated_payload_cut(&fixture, &payload_root, &body_store, &fixture.keys[0]);
+        let recovered = payloads
+            .get(pending.id())
+            .expect("authenticated cut retains terminal request");
+        let projection =
+            recovered_certified_serve_projection(lifecycle_context(&fixture.context), recovered)
+                .expect("project exact terminal recovery frame");
+        let (candidate, payload, outcome, replay) = projection.into_parts();
+        assert_eq!(candidate.payload, payload);
+        assert_eq!(outcome, Some(TerminalOutcome::Rejected(41)));
+        assert!(replay.as_ref().is_some_and(|replay| {
+            replay.exactly_matches_recovered_candidate(
+                lifecycle_context(&fixture.context),
+                &candidate,
+            )
+        }));
+        let cut = lifecycle_recovery_cut(&fixture, &ledger_root, payloads);
+        let restarted = LifecycleCoordinator::open_with_authority(
+            authority,
+            &ledger_root,
+            &mut payload_store,
+            cut,
+        )
+        .expect("steady terminal negative frame reopens exactly");
+        assert_eq!(
+            restarted.records[&1].state,
+            LifecycleState::Terminal(TerminalOutcome::Rejected(41))
+        );
+        assert!(
+            restarted.durable_records[&1]
+                .replay_authority
+                .same_persisted_family(&restarted.durable_records[&2].replay_authority)
+        );
+        assert!(
+            restarted.durable_records[&2]
+                .replay_authority
+                .certified_serve_frame_hash_is(terminal.payload_hash())
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn settled_completed_frame_persists_and_reopens_with_the_exact_replay_pair() {
+        let temporary = TempDir::new().expect("temporary directory");
+        let ledger_root = temporary.path().join("ledger");
+        let payload_root = temporary.path().join("payloads");
+        let body_root = temporary.path().join("bodies");
+        let fixture = Fixture::new();
+        let (body, manifest) = fixture.canonical_body_and_manifest();
+        let request = fixture.authenticated_serve_request_for(manifest.round, manifest.subject, 3);
+        let mut body_store =
+            V2BodyStore::open(&body_root, fixture.context.clone()).expect("open exact body store");
+        let _body_receipt = body_store
+            .store(manifest.clone(), body.clone())
+            .expect("persist canonical response body");
+        let (mut payload_store, _) =
+            CertifiedServePayloadStoreV1::open(&payload_root, &fixture.context)
+                .expect("open payload store");
+        let pending = payload_store
+            .persist_pending(&request)
+            .expect("persist pending request");
+        let mut coordinator = fixture.coordinator();
+        let authority = coordinator.episode_authority.clone();
+        coordinator
+            .attach_empty_test_ledger(&ledger_root)
+            .expect("attach empty durable ledger");
+        assert!(matches!(
+            coordinator.admit_certified_serve(&fixture.verified, &request, pending),
+            Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
+        ));
+        let lease = execute_ready_turn(&mut coordinator);
+        let responder = 0;
+        let mut response = wire::CertifiedBodyResponse {
+            request_hash: request.request_hash(),
+            manifest,
+            body,
+            responder,
+            signature: Vec::new(),
+        };
+        response.signature = Signature::new(
+            fixture.keys[usize::try_from(responder).expect("small responder")].private_key(),
+            &response.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let terminal = payload_store
+            .persist_completed(&request, &response)
+            .expect("persist exact completed frame");
+        coordinator
+            .settle_certified_serve_completed(lease, terminal)
+            .expect("settle and persist exact terminal pair");
+        assert!(
+            coordinator.durable_records[&1]
+                .replay_authority
+                .same_persisted_family(&coordinator.durable_records[&2].replay_authority)
+        );
+        assert!(
+            coordinator.durable_records[&2]
+                .replay_authority
+                .certified_serve_frame_hash_is(terminal.payload_hash())
+        );
+        drop(coordinator);
+        drop(payload_store);
+
+        let (mut payload_store, payloads) = authenticated_payload_cut(
+            &fixture,
+            &payload_root,
+            &body_store,
+            &fixture.keys[usize::try_from(responder).expect("small responder")],
+        );
+        let recovered = payloads
+            .get(pending.id())
+            .expect("authenticated cut retains completed request");
+        let projection =
+            recovered_certified_serve_projection(lifecycle_context(&fixture.context), recovered)
+                .expect("project exact completed recovery frame");
+        let (candidate, payload, outcome, replay) = projection.into_parts();
+        let response_digest = digest_from_bytes(HashOf::new(&response).as_ref());
+        assert_eq!(candidate.payload, payload);
+        assert_eq!(
+            outcome,
+            Some(TerminalOutcome::Completed(Some(response_digest)))
+        );
+        assert!(replay.as_ref().is_some_and(|replay| {
+            replay.exactly_matches_recovered_candidate(
+                lifecycle_context(&fixture.context),
+                &candidate,
+            )
+        }));
+        let cut = lifecycle_recovery_cut(&fixture, &ledger_root, payloads);
+        let restarted = LifecycleCoordinator::open_with_authority(
+            authority,
+            &ledger_root,
+            &mut payload_store,
+            cut,
+        )
+        .expect("steady completed frame reopens exactly");
+        assert_eq!(
+            restarted.records[&1].state,
+            LifecycleState::Terminal(TerminalOutcome::Completed(Some(response_digest)))
+        );
+        assert!(
+            restarted.durable_records[&1]
+                .replay_authority
+                .same_persisted_family(&restarted.durable_records[&2].replay_authority)
+        );
+        assert!(
+            restarted.durable_records[&1]
+                .replay_authority
+                .certified_serve_frame_hash_is(terminal.payload_hash())
         );
     }
 
@@ -3096,15 +3785,31 @@ mod tests {
                 assert_eq!(projected.key.execution_commitment(), None);
             }
             let mut coordinator = fixture.coordinator();
-            assert!(matches!(
-                coordinator.admit_bound_adapter_effect(&fixture.verified, &effect, &ownership),
-                Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
-            ));
+            let decision = coordinator
+                .admit_bound_adapter_effect(&fixture.verified, &effect, &ownership)
+                .expect("authenticated effect projection succeeds");
+            if matches!(
+                work_class,
+                LifecycleWorkClass::Store
+                    | LifecycleWorkClass::Validate
+                    | LifecycleWorkClass::Apply
+            ) {
+                assert_eq!(
+                    decision,
+                    AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata),
+                    "raw body-stage projection cannot bypass receipt-bound staging"
+                );
+            } else {
+                assert!(matches!(
+                    decision,
+                    AdmissionDecision::Admitted { ordinal: 1, .. }
+                ));
+            }
         }
     }
 
     #[test]
-    fn certified_store_and_validate_inherit_exact_fetch_authority() {
+    fn certified_store_and_validate_inherit_authority_but_require_receipt_bound_staging() {
         let fixture = Fixture::new();
         let fetch = AdapterEffect::FetchBody {
             tag: fixture.tag,
@@ -3169,14 +3874,163 @@ mod tests {
         assert_eq!(store_candidate.causal_root, validate_candidate.causal_root);
 
         let mut coordinator = fixture.coordinator();
-        assert!(matches!(
-            coordinator.admit_bound_adapter_effect(&fixture.verified, &store, &store_owner),
-            Ok(AdmissionDecision::Admitted { ordinal: 1, .. })
-        ));
-        assert!(matches!(
-            coordinator.admit_bound_adapter_effect(&fixture.verified, &validate, &validate_owner,),
-            Ok(AdmissionDecision::Admitted { ordinal: 2, .. })
-        ));
+        assert_eq!(
+            coordinator
+                .admit_bound_adapter_effect(&fixture.verified, &store, &store_owner)
+                .expect("raw Store projection is structurally authenticated"),
+            AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata),
+            "Fetch-to-Store admission requires the receipt-bound body transition"
+        );
+        assert_eq!(
+            coordinator
+                .admit_bound_adapter_effect(&fixture.verified, &validate, &validate_owner)
+                .expect("raw Validate projection is structurally authenticated"),
+            AdmissionDecision::Rejected(AdmissionRejection::InvalidDurableMetadata),
+            "Store-to-Validate admission requires the receipt-bound body transition"
+        );
+    }
+
+    #[test]
+    fn recovery_cut_consumes_exact_terminal_validate_body_outcome() {
+        let temporary = TempDir::new().expect("temporary lifecycle recovery roots");
+        let fixture = Fixture::new();
+        let fetch = AdapterEffect::FetchBody {
+            tag: fixture.tag,
+            round: fixture.round,
+            subject: fixture.subject,
+            manifest: None,
+            certified_sources: fixture
+                .context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            certificate: Some(fixture.prepare_qc.clone()),
+        };
+        let fetch_owner = bound_ownership(&fetch, fixture.tag, 20);
+        let store = AdapterEffect::StoreBody {
+            tag: fixture.tag,
+            round: fixture.round,
+            subject: fixture.subject,
+        };
+        let store_owner = fetch_owner
+            .rebind_as_inherited_adapter_effect(&store)
+            .expect("Fetch authorizes exact Store successor");
+        let validate = AdapterEffect::ValidateBody {
+            tag: fixture.tag,
+            round: fixture.round,
+            subject: fixture.subject,
+        };
+        let validate_owner = store_owner
+            .rebind_as_inherited_adapter_effect(&validate)
+            .expect("Store authorizes exact Validate successor");
+        let mut validate_candidate = candidate(&fixture, &validate, &validate_owner);
+        let durable = crate::sumeragi::v2_body_store::DurableBodyReceipt::for_test(
+            fixture.context.id(),
+            fixture.round,
+            fixture.subject,
+            HashOf::new(&fixture.manifest),
+        );
+        validate_candidate.payload = DurablePayloadReference::BodyFrame(
+            durable_body_frame_reference(lifecycle_context(&fixture.context), &durable)
+                .expect("validated body belongs to the fixture lifecycle context"),
+        );
+        let outcome =
+            crate::sumeragi::v2_body_store::DurableBodyValidationOutcome::validated_for_test(
+                crate::sumeragi::v2_body_store::ValidatedBodyReceipt::for_test_with_commitment(
+                    durable,
+                    fixture.prepare_qc.execution_commitment,
+                ),
+            );
+        let body_store = V2BodyStore::open(temporary.path().join("body"), fixture.context.clone())
+            .expect("open exact-context body store");
+        let (mut payload_store, payloads) = authenticated_payload_cut(
+            &fixture,
+            &temporary.path().join("payload"),
+            &body_store,
+            &fixture.keys[0],
+        );
+        let owner = OwnerId::new(validate_candidate.causal_root, 1);
+        let record = super::super::ledger::LifecycleLedgerRecordV1::new(
+            validate_candidate.key,
+            owner,
+            1,
+            validate_candidate.work_class,
+            validate_candidate.stage,
+            Some(TerminalOutcome::Advanced),
+            validate_candidate.reconstruction_source,
+            validate_candidate.payload,
+            validate_candidate.replay_authority.clone(),
+            super::super::schema::DurableContinuation::AdvancedNoSuccessor,
+        )
+        .expect("construct terminal Validate ledger row");
+        let ledger = super::super::ledger::LifecycleLedgerV1::new(
+            lifecycle_context(&fixture.context),
+            1,
+            vec![record],
+            std::collections::BTreeMap::new(),
+        )
+        .expect("construct exact no-child terminal ledger");
+        let recovery = AuthenticatedLifecycleRecoveryCut::from_authenticated_parts(
+            ledger.clone(),
+            [],
+            [(validate_candidate.clone(), outcome)],
+            payloads,
+        )
+        .expect("exact body outcome seals the terminal Validate recovery identity");
+        let ledger_root = temporary.path().join("ledger");
+        let (ledger_store, empty) = super::super::ledger::LifecycleLedgerStoreV1::open(
+            &ledger_root,
+            lifecycle_context(&fixture.context),
+        )
+        .expect("open empty lifecycle ledger");
+        assert!(empty.records().is_empty());
+        ledger_store
+            .persist(&ledger)
+            .expect("persist exact no-child terminal ledger");
+        drop(ledger_store);
+        let authority = fixture.coordinator().episode_authority;
+        let reopened = LifecycleCoordinator::open_with_authority(
+            authority,
+            &ledger_root,
+            &mut payload_store,
+            recovery,
+        )
+        .expect("open terminal Validate with exact no-child recovery proof");
+        assert_eq!(
+            reopened.records[&1].state,
+            LifecycleState::Terminal(TerminalOutcome::Advanced)
+        );
+        assert_eq!(
+            reopened.durable_records[&1].continuation,
+            super::super::schema::DurableContinuation::AdvancedNoSuccessor
+        );
+
+        let rejected =
+            crate::sumeragi::v2_body_store::DurableBodyValidationOutcome::rejected_for_test(
+                crate::sumeragi::v2_body_store::DurableBodyReceipt::for_test(
+                    fixture.context.id(),
+                    fixture.round,
+                    fixture.subject,
+                    HashOf::new(&fixture.manifest),
+                ),
+            );
+        let (_payload_store, payloads) = authenticated_payload_cut(
+            &fixture,
+            &temporary.path().join("payload-foreign"),
+            &body_store,
+            &fixture.keys[0],
+        );
+        assert!(
+            AuthenticatedLifecycleRecoveryCut::from_authenticated_parts(
+                ledger,
+                [validate_candidate.clone()],
+                [(validate_candidate, rejected)],
+                payloads,
+            )
+            .is_none(),
+            "one semantic key cannot be both live recovery work and a no-child tombstone proof"
+        );
     }
 
     #[test]

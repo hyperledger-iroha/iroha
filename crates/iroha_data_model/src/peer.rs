@@ -268,8 +268,7 @@ mod tests {
 
     #[test]
     fn peer_id_bounded_json_delegates_to_public_key_without_scratch() {
-        let literal =
-            "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
+        let literal = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
         let peer_id = PeerId::new(literal.parse::<PublicKey>().expect("valid key"));
         let expected = format!("\"{literal}\"");
         assert_eq!(

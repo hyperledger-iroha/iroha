@@ -4,7 +4,6 @@
 //! deterministic chunk layout, verified Proof-of-Retrievability (PoR) recovery,
 //! canonical Proof-of-Data-Possession (PDP) commitments, and quota enforcement
 //! derived from Torii storage configuration.
-
 #![allow(unexpected_cfgs)]
 
 use std::{
@@ -70,37 +69,31 @@ static ATOMIC_PUBLICATION_LOCKS: LazyLock<[Mutex<()>; ATOMIC_PUBLICATION_LOCK_SH
     LazyLock::new(|| std::array::from_fn(|_| Mutex::new(())));
 static GC_TRASH_COUNTER: AtomicU64 = AtomicU64::new(0);
 static INGEST_STAGING_COUNTER: AtomicU64 = AtomicU64::new(0);
-
 /// Maximum number of independent byte-zero readers opened from one admitted-payload lease.
 ///
 /// Musubi V1 provider verification uses exactly three passes: canonical CAR reconstruction,
 /// chunk/PoR validation, and semantic bundle validation.
 pub const ADMITTED_PAYLOAD_MAX_FRESH_READERS_V1: u8 = 3;
-
 #[cfg(test)]
 struct ChunkReadTestHook {
     path: PathBuf,
     entered: std::sync::mpsc::Sender<()>,
     release: std::sync::mpsc::Receiver<()>,
 }
-
 #[cfg(test)]
 static CHUNK_READ_TEST_HOOK: Mutex<Option<ChunkReadTestHook>> = Mutex::new(None);
 #[cfg(test)]
 static CHUNK_READ_TEST_SERIAL: Mutex<()> = Mutex::new(());
-
 #[cfg(test)]
 struct ManifestIoWriteWaitTestHook {
     manifest_id: String,
     waiting: std::sync::mpsc::Sender<()>,
 }
-
 #[cfg(test)]
 static MANIFEST_IO_WRITE_WAIT_TEST_HOOK: Mutex<Option<ManifestIoWriteWaitTestHook>> =
     Mutex::new(None);
 #[cfg(test)]
 static MANIFEST_IO_WRITE_WAIT_TEST_SERIAL: Mutex<()> = Mutex::new(());
-
 fn storage_decode_limits(max_bytes: u64) -> norito::DecodeLimits {
     let byte_limit = usize::try_from(max_bytes).unwrap_or(usize::MAX);
     norito::DecodeLimits::new(
@@ -111,7 +104,6 @@ fn storage_decode_limits(max_bytes: u64) -> norito::DecodeLimits {
         64,
     )
 }
-
 fn ensure_persistent_artifact_size(
     artifact: &'static str,
     bytes: &[u8],
@@ -132,7 +124,6 @@ fn ensure_persistent_artifact_size(
     }
     Ok(())
 }
-
 /// Errors raised by the SoraFS storage backend.
 #[derive(Debug, Error)]
 pub enum StorageError {
@@ -381,7 +372,6 @@ pub enum StorageError {
     #[error("retention metadata invalid: {0}")]
     RetentionMetadata(#[from] RetentionMetadataError),
 }
-
 /// Runtime facade over the deterministic, persistent chunk store.
 #[derive(Debug)]
 pub struct StorageBackend {
@@ -397,13 +387,11 @@ pub struct StorageBackend {
     retiring_manifests: Mutex<BTreeSet<String>>,
     state: RwLock<StorageState>,
 }
-
 struct ManifestRetirementIntent<'backend> {
     backend: &'backend StorageBackend,
     manifest_id: String,
     retirement_pending: Arc<AtomicBool>,
 }
-
 impl Drop for ManifestRetirementIntent<'_> {
     fn drop(&mut self) {
         self.retirement_pending.store(false, Ordering::Release);
@@ -414,7 +402,6 @@ impl Drop for ManifestRetirementIntent<'_> {
             .remove(&self.manifest_id);
     }
 }
-
 #[derive(Debug)]
 struct StorageState {
     index: ManifestIndex,
@@ -427,7 +414,6 @@ struct StorageState {
     access_counter: u64,
     chunk_refcounts: Vec<ChunkRefcountEntry>,
 }
-
 struct IngestReservation<'a> {
     backend: &'a StorageBackend,
     manifest_id: String,
@@ -435,7 +421,6 @@ struct IngestReservation<'a> {
     reserved_pdp_tree_bytes: u64,
     active: bool,
 }
-
 impl IngestReservation<'_> {
     fn release(&mut self, state: &mut StorageState) {
         if !self.active {
@@ -472,7 +457,6 @@ impl IngestReservation<'_> {
         self.active = false;
     }
 }
-
 impl Drop for IngestReservation<'_> {
     fn drop(&mut self) {
         if !self.active {
@@ -486,22 +470,18 @@ impl Drop for IngestReservation<'_> {
         self.release(&mut state);
     }
 }
-
 struct StagingDirectory {
     path: PathBuf,
     active: bool,
 }
-
 impl StagingDirectory {
     fn new(path: PathBuf) -> Self {
         Self { path, active: true }
     }
-
     fn disarm(&mut self) {
         self.active = false;
     }
 }
-
 impl Drop for StagingDirectory {
     fn drop(&mut self) {
         if self.active {
@@ -509,21 +489,18 @@ impl Drop for StagingDirectory {
         }
     }
 }
-
 impl StorageState {
     fn available_capacity(&self, max_capacity: u64) -> u64 {
         max_capacity
             .saturating_sub(self.total_bytes)
             .saturating_sub(self.reserved_bytes)
     }
-
     fn available_pdp_tree_memory(&self, max_bytes: u64) -> u64 {
         max_bytes
             .saturating_sub(self.pdp_tree_bytes)
             .saturating_sub(self.reserved_pdp_tree_bytes)
     }
 }
-
 /// Summary of a manifest stored on disk.
 #[derive(Debug, Clone)]
 pub struct StoredManifest {
@@ -551,7 +528,6 @@ pub struct StoredManifest {
     io_lock: Arc<RwLock<()>>,
     retirement_pending: Arc<AtomicBool>,
 }
-
 /// Callback-scoped lifecycle lease for one storage-admitted payload.
 ///
 /// The lease is created only after selecting a manifest from the authoritative in-memory storage
@@ -567,26 +543,22 @@ pub struct AdmittedPayloadReadLeaseV1<'manifest> {
     schedulers: StorageSchedulersRuntime,
     opened_readers: Cell<u8>,
 }
-
 impl AdmittedPayloadReadLeaseV1<'_> {
     /// Return the canonical digest that selected this admitted manifest.
     #[must_use]
     pub const fn manifest_digest(&self) -> &[u8; 32] {
         &self.manifest.manifest_digest
     }
-
     /// Return the exact admitted payload length.
     #[must_use]
     pub const fn content_length(&self) -> u64 {
         self.manifest.content_length
     }
-
     /// Return the digest of the exact admitted payload bytes.
     #[must_use]
     pub const fn payload_digest(&self) -> &[u8; 32] {
         &self.manifest.payload_digest
     }
-
     /// Open a new forward-only reader positioned at payload byte zero.
     ///
     /// Every read uses the storage backend's no-follow, stable-identity, exact-length, and chunk
@@ -615,7 +587,6 @@ impl AdmittedPayloadReadLeaseV1<'_> {
         })
     }
 }
-
 /// Forward-only verified reader for one lifecycle-leased admitted payload.
 ///
 /// Instances can only be constructed from [`AdmittedPayloadReadLeaseV1`] and cannot outlive the
@@ -628,13 +599,11 @@ pub struct AdmittedPayloadReaderV1<'manifest> {
     chunk_index: usize,
     cached_chunk: Vec<u8>,
 }
-
 impl Read for AdmittedPayloadReaderV1<'_> {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
         if output.is_empty() || self.offset >= self.manifest.content_length() {
             return Ok(0);
         }
-
         let mut written = 0_usize;
         while written < output.len() && self.offset < self.manifest.content_length() {
             let record = self
@@ -649,7 +618,6 @@ impl Read for AdmittedPayloadReaderV1<'_> {
             if self.offset < record.offset || self.offset >= chunk_end {
                 return Err(admitted_payload_read_error());
             }
-
             if self.cached_chunk.is_empty() {
                 self.cached_chunk = self
                     .schedulers
@@ -659,7 +627,6 @@ impl Read for AdmittedPayloadReaderV1<'_> {
                     .map_err(|_| admitted_payload_scheduler_error())?
                     .map_err(admitted_payload_chunk_error)?;
             }
-
             let chunk_offset = usize::try_from(self.offset - record.offset)
                 .map_err(|_| admitted_payload_read_error())?;
             let chunk_available = self
@@ -698,7 +665,6 @@ impl Read for AdmittedPayloadReaderV1<'_> {
                 .copy_from_slice(&self.cached_chunk[chunk_offset..chunk_output_end]);
             written = output_end;
             self.offset = next_offset;
-
             if completed_chunk {
                 self.cached_chunk.clear();
                 self.chunk_index = next_chunk_index;
@@ -711,14 +677,12 @@ impl Read for AdmittedPayloadReaderV1<'_> {
         Ok(written)
     }
 }
-
 fn admitted_payload_read_error() -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
         "storage-admitted SoraFS payload failed verified readback",
     )
 }
-
 fn admitted_payload_chunk_error(error: ChunkStoreError) -> io::Error {
     let kind = match error {
         ChunkStoreError::Io(error) => match error.kind() {
@@ -732,20 +696,17 @@ fn admitted_payload_chunk_error(error: ChunkStoreError) -> io::Error {
         "storage-admitted SoraFS payload failed verified readback",
     )
 }
-
 fn admitted_payload_scheduler_error() -> io::Error {
     io::Error::new(
         io::ErrorKind::WouldBlock,
         "storage-admitted SoraFS payload readback was not admitted by the local fetch scheduler",
     )
 }
-
 struct IngestedPayload {
     chunk_records: Vec<StoredChunkRecord>,
     por_tree: Arc<PorMerkleTree>,
     pdp_tree: Option<Arc<PdpMerkleTreeV1>>,
 }
-
 struct ManifestRuntimeProofs {
     por_commitment_digest: Option<[u8; 32]>,
     por_tree: Arc<PorMerkleTree>,
@@ -753,7 +714,6 @@ struct ManifestRuntimeProofs {
     pdp_tree: Option<Arc<PdpMerkleTreeV1>>,
     pdp_tree_memory_bytes: u64,
 }
-
 impl StoredManifest {
     fn try_clone_runtime(&self) -> Result<Self, StorageError> {
         let mut files = Vec::new();
@@ -817,97 +777,81 @@ impl StoredManifest {
             retirement_pending: Arc::clone(&self.retirement_pending),
         })
     }
-
     /// Canonical identifier derived from the manifest digest (hex string).
     #[must_use]
     pub fn manifest_id(&self) -> &str {
         &self.manifest_id
     }
-
     /// Returns the raw manifest CID bytes.
     #[must_use]
     pub fn manifest_cid(&self) -> &[u8] {
         &self.manifest_cid
     }
-
     /// Returns the manifest digest (BLAKE3-256 over canonical Norito encoding).
     #[must_use]
     pub fn manifest_digest(&self) -> &[u8; 32] {
         &self.manifest_digest
     }
-
     /// Returns the payload digest (BLAKE3-256 over raw payload bytes).
     #[must_use]
     pub fn payload_digest(&self) -> &[u8; 32] {
         &self.payload_digest
     }
-
     /// Total number of bytes stored for this manifest.
     #[must_use]
     pub fn content_length(&self) -> u64 {
         self.content_length
     }
-
     /// Returns the negotiated chunk profile handle (namespace.name@semver).
     #[must_use]
     pub fn chunk_profile_handle(&self) -> &str {
         &self.chunk_profile_handle
     }
-
     /// Optional stripe layout (row/column parity summary) recorded for the manifest.
     #[must_use]
     pub fn stripe_layout(&self) -> Option<&DaStripeLayout> {
         self.stripe_layout.as_ref()
     }
-
     /// Timestamp (seconds since UNIX epoch) when the manifest was persisted.
     #[must_use]
     pub fn stored_at_unix_secs(&self) -> u64 {
         self.stored_at_unix_secs
     }
-
     /// Retention epoch applied to the manifest (0 when unbounded).
     #[must_use]
     pub fn retention_epoch(&self) -> u64 {
         self.retention_epoch
     }
-
     /// Retention source metadata when available.
     #[must_use]
     pub fn retention_source(&self) -> Option<&RetentionSourceV1> {
         self.retention_source.as_ref()
     }
-
     /// Monotonic access counter recorded for LRU eviction ordering.
     #[must_use]
     pub fn last_access(&self) -> u64 {
         self.last_access
     }
-
     /// Number of chunks stored for the manifest.
     #[must_use]
     pub fn chunk_count(&self) -> usize {
         self.chunk_files.len()
     }
-
     /// Returns the stored file descriptors in deterministic payload order.
     #[must_use]
     pub fn files(&self) -> &[StoredFileRecord] {
         &self.files
     }
-
     /// Returns metadata for the file identified by the supplied relative path.
     #[must_use]
     pub fn file_by_path(&self, path: &[String]) -> Option<&StoredFileRecord> {
         self.files.iter().find(|file| file.path == path)
     }
-
     /// Returns metadata for the requested chunk.
     #[must_use]
     pub fn chunk(&self, index: usize) -> Option<&ChunkFileRecord> {
         self.chunk_files.get(index)
     }
-
     /// Returns a contiguous slice of chunks covering the payload range starting at `offset`.
     pub fn chunk_slice(&self, offset: u64, len: usize) -> Result<ChunkSlice, StorageError> {
         if len == 0 {
@@ -943,11 +887,9 @@ impl StoredManifest {
                 content_length: self.content_length,
             });
         }
-
         let mut chunks = Vec::new();
         let mut cursor = offset;
         let mut start_index = None;
-
         for (idx, chunk) in self.chunk_files.iter().enumerate() {
             let chunk_start = chunk.offset;
             let chunk_end = chunk_start.checked_add(u64::from(chunk.length)).ok_or(
@@ -957,11 +899,9 @@ impl StoredManifest {
                     content_length: self.content_length,
                 },
             )?;
-
             if chunk_end <= offset {
                 continue;
             }
-
             if let Some(start) = start_index {
                 if chunk_start != cursor {
                     return Err(StorageError::RangeOutOfBounds {
@@ -1014,20 +954,17 @@ impl StoredManifest {
                 }
             }
         }
-
         Err(StorageError::RangeOutOfBounds {
             offset,
             len,
             content_length: self.content_length,
         })
     }
-
     /// Load and decode the persisted manifest payload from disk.
     pub fn load_manifest(&self) -> Result<ManifestV1, StorageError> {
         self.load_manifest_with_bytes()
             .map(|(manifest, _)| manifest)
     }
-
     /// Load the exact canonical manifest bytes after revalidating their retained identity.
     ///
     /// The read is byte-bounded, refuses links, verifies that the opened file did not change,
@@ -1037,7 +974,6 @@ impl StoredManifest {
     pub fn load_manifest_bytes(&self) -> Result<Vec<u8>, StorageError> {
         self.load_manifest_with_bytes().map(|(_, bytes)| bytes)
     }
-
     fn load_manifest_with_bytes(&self) -> Result<(ManifestV1, Vec<u8>), StorageError> {
         if self.retirement_pending.load(Ordering::Acquire) {
             return Err(StorageError::ManifestRetirementInProgress {
@@ -1085,13 +1021,11 @@ impl StoredManifest {
         }
         Ok((manifest, bytes))
     }
-
     /// Reconstruct a [`CarBuildPlan`] matching the stored manifest chunk metadata.
     #[must_use]
     pub fn to_car_plan(&self, profile: ChunkProfile) -> CarBuildPlan {
         self.to_car_plan_with_hint(profile, None)
     }
-
     /// Reconstruct a [`CarBuildPlan`] matching the stored manifest chunk metadata and
     /// attach an optional Taikai hint to each chunk.
     #[must_use]
@@ -1110,7 +1044,6 @@ impl StoredManifest {
                 taikai_segment_hint: taikai_hint.clone(),
             })
             .collect::<Vec<_>>();
-
         let files = self
             .files
             .iter()
@@ -1121,7 +1054,6 @@ impl StoredManifest {
                 size: file.size,
             })
             .collect::<Vec<_>>();
-
         CarBuildPlan {
             chunk_profile: profile,
             payload_digest: Hash::from_bytes(*self.payload_digest()),
@@ -1130,7 +1062,6 @@ impl StoredManifest {
             files,
         }
     }
-
     /// Fallibly reconstruct a [`CarBuildPlan`] with an optional Taikai hint per chunk.
     ///
     /// # Errors
@@ -1158,7 +1089,6 @@ impl StoredManifest {
                 taikai_segment_hint: taikai_hint.map(try_clone_taikai_segment_hint).transpose()?,
             });
         }
-
         let mut files = Vec::new();
         files.try_reserve_exact(self.files.len()).map_err(|_| {
             StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
@@ -1182,60 +1112,50 @@ impl StoredManifest {
             files,
         })
     }
-
     fn try_to_car_plan(&self, profile: ChunkProfile) -> Result<CarBuildPlan, StorageError> {
         self.try_to_car_plan_with_hint(profile, None)
     }
-
     /// Build an in-memory PoR tree for the stored manifest.
     #[must_use]
     pub fn por_tree(&self) -> PorMerkleTree {
         (*self.por_tree).clone()
     }
-
     /// Borrow the runtime PoR tree rebuilt from verified payload bytes.
     #[must_use]
     pub fn por_tree_ref(&self) -> &PorMerkleTree {
         self.por_tree.as_ref()
     }
-
     /// Domain-separated digest binding the bounded PoR commitment into the index.
     #[must_use]
     pub fn por_commitment_digest(&self) -> Option<&[u8; 32]> {
         self.por_commitment_digest.as_ref()
     }
-
     /// Canonical PDP commitment persisted for this non-empty payload.
     #[must_use]
     pub fn pdp_commitment(&self) -> Option<&PdpCommitmentV1> {
         self.pdp_commitment.as_ref()
     }
-
     /// Domain-separated digest binding the PDP commitment into the storage index.
     #[must_use]
     pub fn pdp_commitment_digest(&self) -> Option<&[u8; 32]> {
         self.pdp_commitment_digest.as_ref()
     }
-
     /// Canonical runtime PDP tree rebuilt or constructed from verified payload bytes.
     #[must_use]
     pub fn pdp_tree(&self) -> Option<&PdpMerkleTreeV1> {
         self.pdp_tree.as_deref()
     }
-
     /// Exact retained-node-slab bytes charged to the aggregate PDP tree budget.
     #[must_use]
     pub fn pdp_tree_memory_bytes(&self) -> u64 {
         self.pdp_tree_memory_bytes
     }
-
     /// Path to the Norito-encoded manifest bytes stored on disk.
     #[must_use]
     pub fn manifest_path(&self) -> &Path {
         self.manifest_path.as_path()
     }
 }
-
 /// Metadata describing an individual stored chunk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChunkFileRecord {
@@ -1252,7 +1172,6 @@ pub struct ChunkFileRecord {
     /// Optional stripe/group identifier for the chunk.
     pub group_id: Option<u32>,
 }
-
 /// Metadata describing how a logical file maps into the stored payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoredFileRecord {
@@ -1267,7 +1186,6 @@ pub struct StoredFileRecord {
     /// Number of chunks covering the file.
     pub chunk_count: usize,
 }
-
 /// Role metadata attached to a stored chunk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChunkRoleMetadata {
@@ -1276,7 +1194,6 @@ pub struct ChunkRoleMetadata {
     /// Stripe/group identifier associated with the chunk.
     pub group_id: u32,
 }
-
 /// Describes the subset of chunks that cover a contiguous payload range.
 #[derive(Debug, Clone)]
 pub struct ChunkSlice {
@@ -1287,7 +1204,6 @@ pub struct ChunkSlice {
     /// Cloned chunk metadata entries covering the requested range.
     pub chunks: Vec<ChunkFileRecord>,
 }
-
 impl ChunkSlice {
     /// Number of chunks included in the slice.
     #[must_use]
@@ -1295,10 +1211,8 @@ impl ChunkSlice {
         self.chunks.len()
     }
 }
-
 const POR_COMMITMENT_VERSION_V1: u8 = 1;
 const POR_COMMITMENT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.node.por.commitment.digest.v1\0";
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct StoredPorCommitmentV1 {
     version: u8,
@@ -1309,7 +1223,6 @@ struct StoredPorCommitmentV1 {
     leaf_count: u64,
     chunks: Vec<StoredPorChunkCommitmentV1>,
 }
-
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct StoredPorChunkCommitmentV1 {
     chunk_index: u32,
@@ -1320,7 +1233,6 @@ struct StoredPorChunkCommitmentV1 {
     segment_count: u32,
     leaf_count: u32,
 }
-
 impl StoredPorCommitmentV1 {
     fn from_tree(tree: &PorMerkleTree) -> Result<Self, StorageError> {
         let mut chunks = Vec::new();
@@ -1372,7 +1284,6 @@ impl StoredPorCommitmentV1 {
             chunks,
         })
     }
-
     fn digest(&self) -> Result<[u8; 32], StorageError> {
         let bytes = norito::to_bytes(self)?;
         let mut hasher = blake3::Hasher::new();
@@ -1390,7 +1301,6 @@ impl StoredPorCommitmentV1 {
         Ok(hasher.finalize().into())
     }
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct ManifestIndex {
     version: u8,
@@ -1403,7 +1313,6 @@ struct ManifestIndex {
     chunk_refcounts: Vec<ChunkRefcountEntry>,
     entries: Vec<ManifestIndexEntry>,
 }
-
 impl Default for ManifestIndex {
     fn default() -> Self {
         Self {
@@ -1416,13 +1325,11 @@ impl Default for ManifestIndex {
         }
     }
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub(crate) struct ChunkRefcountEntry {
     pub(crate) digest: [u8; 32],
     pub(crate) count: u32,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct ManifestIndexEntry {
     manifest_id: String,
@@ -1442,7 +1349,6 @@ struct ManifestIndexEntry {
     #[norito(default)]
     last_access: u64,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct StoredManifestRecord {
     manifest_id: String,
@@ -1466,7 +1372,6 @@ struct StoredManifestRecord {
     por_commitment: StoredPorCommitmentV1,
     pdp_commitment: Option<PdpCommitmentV1>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct StoredChunkRecord {
     file_name: String,
@@ -1476,7 +1381,6 @@ struct StoredChunkRecord {
     #[norito(default)]
     role: Option<StoredChunkRole>,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct StoredFileRecordNorito {
     path: Vec<String>,
@@ -1485,14 +1389,12 @@ struct StoredFileRecordNorito {
     first_chunk: u32,
     chunk_count: u32,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct StoredChunkRole {
     role: ChunkRole,
     #[norito(default)]
     group_id: u32,
 }
-
 fn reserve_refcount_entries(
     entries: &mut Vec<ChunkRefcountEntry>,
     additional: usize,
@@ -1504,7 +1406,6 @@ fn reserve_refcount_entries(
         })
     })
 }
-
 fn try_clone_refcount_entries(
     entries: &[ChunkRefcountEntry],
 ) -> Result<Vec<ChunkRefcountEntry>, StorageError> {
@@ -1518,7 +1419,6 @@ fn try_clone_refcount_entries(
     cloned.extend_from_slice(entries);
     Ok(cloned)
 }
-
 fn try_clone_manifest_index(index: &ManifestIndex) -> Result<ManifestIndex, StorageError> {
     let mut entries = Vec::new();
     entries
@@ -1558,7 +1458,6 @@ fn try_clone_manifest_index(index: &ManifestIndex) -> Result<ManifestIndex, Stor
         entries,
     })
 }
-
 fn try_clone_bytes(value: &[u8], context: &'static str) -> Result<Vec<u8>, StorageError> {
     let mut cloned = Vec::new();
     cloned.try_reserve_exact(value.len()).map_err(|_| {
@@ -1570,7 +1469,6 @@ fn try_clone_bytes(value: &[u8], context: &'static str) -> Result<Vec<u8>, Stora
     cloned.extend_from_slice(value);
     Ok(cloned)
 }
-
 fn try_clone_path_buf(path: &Path, context: &'static str) -> Result<PathBuf, StorageError> {
     let mut cloned = PathBuf::new();
     cloned
@@ -1584,7 +1482,6 @@ fn try_clone_path_buf(path: &Path, context: &'static str) -> Result<PathBuf, Sto
     cloned.push(path);
     Ok(cloned)
 }
-
 fn try_clone_chunk_file_record(chunk: &ChunkFileRecord) -> Result<ChunkFileRecord, StorageError> {
     Ok(ChunkFileRecord {
         path: try_clone_path_buf(&chunk.path, "runtime chunk path")?,
@@ -1595,7 +1492,6 @@ fn try_clone_chunk_file_record(chunk: &ChunkFileRecord) -> Result<ChunkFileRecor
         group_id: chunk.group_id,
     })
 }
-
 fn try_clone_taikai_segment_hint(
     hint: &TaikaiSegmentHint,
 ) -> Result<TaikaiSegmentHint, StorageError> {
@@ -1608,7 +1504,6 @@ fn try_clone_taikai_segment_hint(
         payload_digest: hint.payload_digest,
     })
 }
-
 fn try_clone_retention_source(
     source: Option<&RetentionSourceV1>,
 ) -> Result<Option<RetentionSourceV1>, StorageError> {
@@ -1634,7 +1529,6 @@ fn try_clone_retention_source(
         sources,
     }))
 }
-
 fn increment_refcount(
     entries: &mut Vec<ChunkRefcountEntry>,
     digest: [u8; 32],
@@ -1651,21 +1545,18 @@ fn increment_refcount(
     }
     Ok(())
 }
-
 fn refcount(entries: &[ChunkRefcountEntry], digest: &[u8; 32]) -> Option<u32> {
     entries
         .binary_search_by_key(digest, |entry| entry.digest)
         .ok()
         .map(|index| entries[index].count)
 }
-
 fn corrupt_storage_state(path: &Path, reason: impl Into<String>) -> StorageError {
     StorageError::CorruptStorageState {
         path: path.display().to_string(),
         reason: reason.into(),
     }
 }
-
 fn acquire_storage_lock(root_dir: &Path) -> Result<File, StorageError> {
     let lock_path = root_dir.join(STORAGE_LOCK_FILE_NAME);
     validate_atomic_output_path(&lock_path)?;
@@ -1736,12 +1627,10 @@ fn acquire_storage_lock(root_dir: &Path) -> Result<File, StorageError> {
         ))),
     }
 }
-
 #[cfg(unix)]
 fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.dev() == right.dev() && left.ino() == right.ino()
 }
-
 #[cfg(unix)]
 fn metadata_stable_during_read(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     metadata_identifies_same_file(left, right)
@@ -1752,17 +1641,14 @@ fn metadata_stable_during_read(left: &fs::Metadata, right: &fs::Metadata) -> boo
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(not(unix))]
 fn metadata_identifies_same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     left.len() == right.len()
 }
-
 #[cfg(not(unix))]
 fn metadata_stable_during_read(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     metadata_identifies_same_file(left, right) && left.modified().ok() == right.modified().ok()
 }
-
 fn persistent_u32(field: &'static str, value: usize) -> Result<u32, StorageError> {
     u32::try_from(value).map_err(|_| StorageError::LayoutValueTooLarge {
         field,
@@ -1770,14 +1656,12 @@ fn persistent_u32(field: &'static str, value: usize) -> Result<u32, StorageError
         max: u64::from(u32::MAX),
     })
 }
-
 fn is_canonical_manifest_id(value: &str) -> bool {
     value.len() == 64
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
-
 fn transaction_manifest_id(name: &str) -> Option<&str> {
     let manifest_id = name.get(..64)?;
     if !is_canonical_manifest_id(manifest_id) || name.as_bytes().get(64).copied() != Some(b'-') {
@@ -1793,7 +1677,6 @@ fn transaction_manifest_id(name: &str) -> Option<&str> {
     }
     Some(manifest_id)
 }
-
 fn validate_real_directory(path: &Path) -> Result<(), StorageError> {
     let metadata = fs::symlink_metadata(path)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
@@ -1804,7 +1687,6 @@ fn validate_real_directory(path: &Path) -> Result<(), StorageError> {
     }
     Ok(())
 }
-
 fn sync_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -1816,7 +1698,6 @@ fn sync_directory(path: &Path) -> io::Result<()> {
         Ok(())
     }
 }
-
 fn rename_and_sync_directories(from: &Path, to: &Path) -> io::Result<()> {
     let from_parent = from
         .parent()
@@ -1831,7 +1712,6 @@ fn rename_and_sync_directories(from: &Path, to: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-
 fn remove_transaction_directory(path: &Path) -> Result<(), StorageError> {
     validate_real_directory(path)?;
     fs::remove_dir_all(path)?;
@@ -1840,7 +1720,6 @@ fn remove_transaction_directory(path: &Path) -> Result<(), StorageError> {
     }
     Ok(())
 }
-
 fn clean_stale_ingest_transactions(root_dir: &Path) -> Result<(), StorageError> {
     let staging_root = root_dir.join(INGEST_STAGING_DIR_NAME);
     match fs::symlink_metadata(&staging_root) {
@@ -1870,7 +1749,6 @@ fn clean_stale_ingest_transactions(root_dir: &Path) -> Result<(), StorageError> 
     }
     Ok(())
 }
-
 fn recover_gc_transactions(
     root_dir: &Path,
     manifests_dir: &Path,
@@ -1923,7 +1801,6 @@ fn recover_gc_transactions(
     }
     Ok(())
 }
-
 fn clean_unindexed_manifests(
     manifests_dir: &Path,
     live_manifest_ids: &BTreeSet<String>,
@@ -1947,7 +1824,6 @@ fn clean_unindexed_manifests(
     }
     Ok(())
 }
-
 fn read_bounded_regular_file(path: &Path, max_len: u64) -> Result<Vec<u8>, StorageError> {
     let before_open = fs::symlink_metadata(path)?;
     validate_bounded_file_metadata(path, &before_open, max_len)?;
@@ -1995,7 +1871,6 @@ fn read_bounded_regular_file(path: &Path, max_len: u64) -> Result<Vec<u8>, Stora
     }
     Ok(bytes)
 }
-
 fn validate_bounded_file_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -2029,7 +1904,6 @@ fn validate_bounded_file_metadata(
     }
     Ok(())
 }
-
 fn validate_manifest_id(
     manifest_id: &str,
     manifest_digest: &[u8; 32],
@@ -2043,7 +1917,6 @@ fn validate_manifest_id(
     }
     Ok(())
 }
-
 fn validate_logical_file_path(path: &[String], metadata_path: &Path) -> Result<(), StorageError> {
     for component in path {
         if component.is_empty()
@@ -2061,7 +1934,6 @@ fn validate_logical_file_path(path: &[String], metadata_path: &Path) -> Result<(
     }
     Ok(())
 }
-
 fn validate_persisted_manifest(
     entry: &ManifestIndexEntry,
     record: &StoredManifestRecord,
@@ -2205,7 +2077,6 @@ fn validate_persisted_manifest(
             "manifest file layout length does not match content_length",
         ));
     }
-
     let mut chunk_offset = 0_u64;
     for (index, chunk) in record.chunk_files.iter().enumerate() {
         let expected_name = format!("chunk_{index:05}.bin");
@@ -2231,7 +2102,6 @@ fn validate_persisted_manifest(
             "chunk lengths do not match content_length",
         ));
     }
-
     validate_persisted_por(entry, record, manifest, metadata_path)?;
     validate_persisted_pdp(
         entry,
@@ -2242,7 +2112,6 @@ fn validate_persisted_manifest(
     )?;
     Ok(())
 }
-
 fn validate_persisted_retention(
     entry: &ManifestIndexEntry,
     record: &StoredManifestRecord,
@@ -2299,7 +2168,6 @@ fn validate_persisted_retention(
     }
     Ok(())
 }
-
 fn validate_persisted_por(
     entry: &ManifestIndexEntry,
     record: &StoredManifestRecord,
@@ -2384,7 +2252,6 @@ fn validate_persisted_por(
     }
     Ok(())
 }
-
 fn validate_persisted_pdp(
     entry: &ManifestIndexEntry,
     record: &StoredManifestRecord,
@@ -2446,7 +2313,6 @@ fn validate_persisted_pdp(
         }
     }
 }
-
 fn pdp_tree_memory_for_payload(payload_len: u64) -> Result<u64, StorageError> {
     if payload_len == 0 {
         return Ok(0);
@@ -2454,7 +2320,6 @@ fn pdp_tree_memory_for_payload(payload_len: u64) -> Result<u64, StorageError> {
     let bytes = estimated_pdp_heap_bytes(payload_len)?;
     u64::try_from(bytes).map_err(|_| StorageError::PdpTree(PdpMerkleTreeError::GeometryOverflow))
 }
-
 fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, StorageError> {
     let profile = &manifest.chunking;
     Ok(ChunkProfile {
@@ -2467,7 +2332,6 @@ fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, St
         break_mask: u64::from(profile.break_mask),
     })
 }
-
 fn rebuild_runtime_trees(
     manifest: &StoredManifest,
     profile: ChunkProfile,
@@ -2485,7 +2349,6 @@ fn rebuild_runtime_trees(
     let pdp_tree = chunk_store.take_pdp_tree().map(Arc::new);
     Ok((por_tree, pdp_tree))
 }
-
 fn validate_rebuilt_por(
     commitment: &StoredPorCommitmentV1,
     tree: &PorMerkleTree,
@@ -2505,7 +2368,6 @@ fn validate_rebuilt_por(
     }
     Ok(())
 }
-
 fn validate_rebuilt_pdp(
     commitment: Option<&PdpCommitmentV1>,
     tree: Option<&PdpMerkleTreeV1>,
@@ -2545,7 +2407,6 @@ fn validate_rebuilt_pdp(
         }
     }
 }
-
 impl StorageBackend {
     /// Create a new storage backend rooted at the directory described by `config`.
     pub fn new(config: StorageConfig) -> Result<Self, StorageError> {
@@ -2566,14 +2427,12 @@ impl StorageBackend {
         let root_dir = try_clone_path_buf(config.data_dir(), "storage root directory")?;
         let manifests_dir = root_dir.join(MANIFEST_DIR_NAME);
         let index_path = root_dir.join("index.norito");
-
         validate_atomic_output_path(&root_dir.join(".sorafs-root-probe"))?;
         fs::create_dir_all(&root_dir)?;
         validate_atomic_output_path(&root_dir.join(".sorafs-root-probe"))?;
         let lock_file = acquire_storage_lock(&root_dir)?;
         fs::create_dir_all(&manifests_dir)?;
         validate_real_directory(&manifests_dir)?;
-
         let mut index = if index_path.exists() {
             let bytes = read_bounded_regular_file(&index_path, MAX_STORAGE_INDEX_BYTES)?;
             let decoded: ManifestIndex = norito::decode_from_bytes_with_limits(
@@ -2615,18 +2474,15 @@ impl StorageBackend {
         recover_gc_transactions(&root_dir, &manifests_dir, &indexed_manifest_ids)?;
         clean_unindexed_manifests(&manifests_dir, &indexed_manifest_ids)?;
         clean_stale_ingest_transactions(&root_dir)?;
-
         let mut total_bytes = 0_u64;
         let mut pdp_tree_bytes = 0_u64;
         let mut manifests = BTreeMap::new();
         let mut chunk_refcounts = Vec::new();
         let mut access_counter = 0u64;
-
         for entry in &mut index.entries {
             let manifest_dir = manifests_dir.join(&entry.manifest_id);
             let metadata_path = manifest_dir.join(METADATA_FILE_NAME);
             let manifest_path = manifest_dir.join(MANIFEST_FILE_NAME);
-
             let metadata_bytes =
                 read_bounded_regular_file(&metadata_path, MAX_MANIFEST_METADATA_BYTES)?;
             let mut record: StoredManifestRecord = norito::decode_from_bytes_with_limits(
@@ -2657,7 +2513,6 @@ impl StorageBackend {
             record.last_access = last_access;
             entry.last_access = last_access;
             access_counter = access_counter.max(last_access);
-
             let candidate_pdp_bytes = pdp_tree_memory_for_payload(record.content_length)?;
             let available_pdp_bytes = config
                 .pdp_tree_memory_limit_bytes()
@@ -2669,7 +2524,6 @@ impl StorageBackend {
                     available: available_pdp_bytes,
                 });
             }
-
             let io_lock = Arc::new(RwLock::new(()));
             let mut stored_manifest = StoredManifest::from_record(
                 record,
@@ -2710,7 +2564,6 @@ impl StorageBackend {
             for chunk in &stored_manifest.chunk_files {
                 increment_refcount(&mut chunk_refcounts, chunk.digest, &index_path)?;
             }
-
             total_bytes = total_bytes
                 .checked_add(stored_manifest.content_length)
                 .ok_or_else(|| corrupt_storage_state(&index_path, "total byte count overflow"))?;
@@ -2724,7 +2577,6 @@ impl StorageBackend {
                 stored_manifest,
             );
         }
-
         let max_capacity = config.max_capacity_bytes().0;
         if total_bytes > max_capacity {
             return Err(StorageError::CapacityExceeded {
@@ -2732,7 +2584,6 @@ impl StorageBackend {
                 available: max_capacity,
             });
         }
-
         let mut index_dirty = false;
         if index.chunk_refcounts != chunk_refcounts {
             iroha_logger::warn!(
@@ -2743,7 +2594,6 @@ impl StorageBackend {
             index.chunk_refcounts = try_clone_refcount_entries(&chunk_refcounts)?;
             index_dirty = true;
         }
-
         if index.total_bytes != total_bytes {
             iroha_logger::warn!(
                 stored = index.total_bytes,
@@ -2753,14 +2603,12 @@ impl StorageBackend {
             index.total_bytes = total_bytes;
             index_dirty = true;
         }
-
         if index_dirty {
             let bytes = norito::to_bytes(&index)?;
             ensure_persistent_artifact_size("storage index", &bytes, MAX_STORAGE_INDEX_BYTES)?;
             write_atomic_classified(&index_path, &bytes)
                 .map_err(AtomicWriteError::into_storage_error)?;
         }
-
         let state = StorageState {
             index,
             manifests,
@@ -2772,7 +2620,6 @@ impl StorageBackend {
             access_counter,
             chunk_refcounts,
         };
-
         Ok(Self {
             config,
             root_dir,
@@ -2787,7 +2634,6 @@ impl StorageBackend {
             state: RwLock::new(state),
         })
     }
-
     /// Returns the number of stored manifests.
     #[must_use]
     pub fn manifest_count(&self) -> usize {
@@ -2797,7 +2643,6 @@ impl StorageBackend {
             .manifests
             .len()
     }
-
     /// Returns the total number of bytes currently stored.
     #[must_use]
     pub fn total_bytes(&self) -> u64 {
@@ -2806,7 +2651,6 @@ impl StorageBackend {
             .expect("storage state poisoned")
             .total_bytes
     }
-
     /// Aggregate bytes retained by canonical runtime PDP node slabs.
     #[must_use]
     pub fn pdp_tree_memory_bytes(&self) -> u64 {
@@ -2815,7 +2659,6 @@ impl StorageBackend {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pdp_tree_bytes
     }
-
     /// Bytes currently reserved by in-flight PDP tree builds.
     #[must_use]
     pub fn reserved_pdp_tree_memory_bytes(&self) -> u64 {
@@ -2824,7 +2667,6 @@ impl StorageBackend {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .reserved_pdp_tree_bytes
     }
-
     /// Returns the remaining capacity (in bytes) under the configured quota.
     #[must_use]
     pub fn available_capacity(&self) -> u64 {
@@ -2834,7 +2676,6 @@ impl StorageBackend {
             .expect("storage state poisoned")
             .available_capacity(max_capacity)
     }
-
     pub(crate) fn ensure_durability_healthy(&self) -> Result<(), StorageError> {
         if self.durability_healthy.load(Ordering::Acquire) {
             return Ok(());
@@ -2847,7 +2688,6 @@ impl StorageBackend {
             .unwrap_or_else(|| "unknown durability failure".to_owned());
         Err(StorageError::DurabilityPoisoned { reason })
     }
-
     fn fail_stop_durability(&self, error: &AtomicWriteError) {
         let reason = error.to_string();
         let mut failure = self
@@ -2859,7 +2699,6 @@ impl StorageBackend {
         }
         self.durability_healthy.store(false, Ordering::Release);
     }
-
     fn begin_manifest_retirement(
         &self,
         manifest_id: &str,
@@ -2890,20 +2729,17 @@ impl StorageBackend {
             retirement_pending,
         })
     }
-
     fn manifest_retirement_pending(&self, manifest_id: &str) -> bool {
         self.retiring_manifests
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains(manifest_id)
     }
-
     /// Returns the root directory where manifests are stored.
     #[must_use]
     pub fn root_dir(&self) -> &Path {
         self.root_dir.as_path()
     }
-
     /// Returns a clone of all stored manifest descriptors.
     #[must_use]
     pub fn manifests(&self) -> Vec<StoredManifest> {
@@ -2915,7 +2751,6 @@ impl StorageBackend {
             .cloned()
             .collect()
     }
-
     /// Returns the count of manifests recorded in the on-disk index.
     #[must_use]
     pub(crate) fn index_manifest_count(&self) -> usize {
@@ -2926,14 +2761,12 @@ impl StorageBackend {
             .entries
             .len()
     }
-
     /// Snapshot of chunk refcounts keyed by digest (sorted by digest).
     #[must_use]
     pub(crate) fn chunk_refcount_snapshot(&self) -> Vec<ChunkRefcountEntry> {
         let state = self.state.read().expect("storage state poisoned");
         state.chunk_refcounts.clone()
     }
-
     /// Returns the total GC counters tracked in the index.
     #[must_use]
     pub(crate) fn gc_counters(&self) -> (u64, u64) {
@@ -2943,7 +2776,6 @@ impl StorageBackend {
             state.index.gc_evictions_total,
         )
     }
-
     /// Returns true if any chunks in the manifest are referenced by more than one manifest.
     pub(crate) fn manifest_has_shared_chunks(
         &self,
@@ -2965,7 +2797,6 @@ impl StorageBackend {
         }
         Ok(false)
     }
-
     /// Evict a stored manifest and reclaim its payload bytes.
     pub fn evict_manifest(&self, manifest_id: &str) -> Result<u64, StorageError> {
         self.ensure_durability_healthy()?;
@@ -3064,7 +2895,6 @@ impl StorageBackend {
                         "evicted manifest exceeds accounted PDP tree bytes",
                     )
                 })?;
-
             let index_bytes = norito::to_bytes(&new_index).map_err(StorageError::Norito)?;
             ensure_persistent_artifact_size(
                 "storage index",
@@ -3127,19 +2957,16 @@ impl StorageBackend {
                     };
                 }
             };
-
             state.index = new_index;
             state.total_bytes = state.index.total_bytes;
             state.pdp_tree_bytes = new_pdp_tree_bytes;
             state.manifests.remove(manifest_id);
             state.chunk_refcounts = refcounts;
             drop(state);
-
             if let Some(error) = durability_error {
                 self.fail_stop_durability(&error);
                 return Err(error.into_storage_error());
             }
-
             if let Err(err) = remove_transaction_directory(&trash_path) {
                 iroha_logger::warn!(
                     %err,
@@ -3148,11 +2975,9 @@ impl StorageBackend {
                     "failed to purge GC trash directory"
                 );
             }
-
             return Ok(stored.content_length());
         }
     }
-
     /// Persist stripe layout and chunk roles for an existing manifest.
     pub fn attach_stripe_layout(
         &self,
@@ -3185,7 +3010,6 @@ impl StorageBackend {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.ensure_durability_healthy()?;
-
         let expected = manifest.chunk_files.len();
         if chunk_roles.len() != expected {
             return Err(StorageError::ChunkRoleLengthMismatch {
@@ -3193,14 +3017,12 @@ impl StorageBackend {
                 actual: chunk_roles.len(),
             });
         }
-
         let mut updated = manifest.try_clone_runtime()?;
         updated.stripe_layout = Some(stripe_layout);
         for (chunk, role) in updated.chunk_files.iter_mut().zip(chunk_roles.iter()) {
             chunk.role = Some(role.role);
             chunk.group_id = Some(role.group_id);
         }
-
         let record = updated.to_record()?;
         let metadata_path = updated
             .manifest_path
@@ -3227,7 +3049,6 @@ impl StorageBackend {
         }
         Ok(())
     }
-
     /// Persist updated file-layout and optional stripe metadata for an existing manifest.
     ///
     /// This supports idempotent re-pinning of the same manifest payload with richer logical-file
@@ -3266,7 +3087,6 @@ impl StorageBackend {
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.ensure_durability_healthy()?;
-
         if manifest.content_length != plan.content_length
             || manifest.payload_digest != *plan.payload_digest.as_bytes()
         {
@@ -3274,7 +3094,6 @@ impl StorageBackend {
                 manifest_id: manifest_id.to_owned(),
             });
         }
-
         let chunks_match = manifest.chunk_files.len() == plan.chunks.len()
             && manifest
                 .chunk_files
@@ -3290,7 +3109,6 @@ impl StorageBackend {
                 manifest_id: manifest_id.to_owned(),
             });
         }
-
         let mut updated = manifest.try_clone_runtime()?;
         if let Some(roles) = chunk_roles {
             let expected = manifest.chunk_files.len();
@@ -3309,7 +3127,6 @@ impl StorageBackend {
             updated.stripe_layout = Some(layout);
         }
         updated.files = files;
-
         let record = updated.to_record()?;
         let metadata_path = updated
             .manifest_path
@@ -3336,7 +3153,6 @@ impl StorageBackend {
         }
         Ok(())
     }
-
     /// Ingest a manifest payload using the provided build plan and payload stream.
     ///
     /// The manifest bytes are encoded using Norito to ensure canonical hashing.
@@ -3355,7 +3171,6 @@ impl StorageBackend {
     ) -> Result<String, StorageError> {
         self.ingest_manifest_with_layout(manifest, plan, reader, None, None)
     }
-
     /// Ingest a manifest while persisting optional stripe layout and chunk-role annotations.
     ///
     /// The `chunk_roles` vector, when provided, must align with `plan.chunks` in length so each
@@ -3375,7 +3190,6 @@ impl StorageBackend {
             });
         }
         plan.validate().map_err(ChunkStoreError::from)?;
-
         let manifest_bytes = manifest.encode()?;
         ensure_persistent_artifact_size("manifest", &manifest_bytes, MAX_MANIFEST_BYTES)?;
         let manifest_digest: [u8; 32] = blake3::hash(&manifest_bytes).into();
@@ -3386,19 +3200,16 @@ impl StorageBackend {
         let runtime_manifest_id = try_clone_text(&manifest_id, "runtime manifest map key")?;
         let payload_digest = *plan.payload_digest.as_bytes();
         let required_bytes = plan.content_length;
-
         ensure_chunk_profile_match(manifest, plan)?;
         if manifest.content_length != plan.content_length {
             return Err(StorageError::ManifestContentLengthMismatch);
         }
         let required_pdp_tree_bytes = pdp_tree_memory_for_payload(plan.content_length)?;
-
         let mut state = self
             .state
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.ensure_durability_healthy()?;
-
         if state.manifests.contains_key(&manifest_id)
             || state.inflight_manifests.contains(&manifest_id)
         {
@@ -3406,7 +3217,6 @@ impl StorageBackend {
                 manifest_id: manifest_id.clone(),
             });
         }
-
         let reserved_manifest_count = state
             .manifests
             .len()
@@ -3419,7 +3229,6 @@ impl StorageBackend {
                 limit: self.config.max_pins(),
             });
         }
-
         let max_capacity = self.config.max_capacity_bytes().0;
         if required_bytes > state.available_capacity(max_capacity) {
             return Err(StorageError::CapacityExceeded {
@@ -3427,7 +3236,6 @@ impl StorageBackend {
                 available: state.available_capacity(max_capacity),
             });
         }
-
         let new_reserved_bytes = state.reserved_bytes.checked_add(required_bytes).ok_or(
             StorageError::CapacityExceeded {
                 required: required_bytes,
@@ -3453,7 +3261,6 @@ impl StorageBackend {
         state.reserved_pdp_tree_bytes = new_reserved_pdp_tree_bytes;
         state.inflight_manifests.insert(inflight_manifest_id);
         drop(state);
-
         let mut reservation = IngestReservation {
             backend: self,
             manifest_id: reservation_manifest_id,
@@ -3461,7 +3268,6 @@ impl StorageBackend {
             reserved_pdp_tree_bytes: required_pdp_tree_bytes,
             active: true,
         };
-
         let manifest_dir = self.manifests_dir.join(&manifest_id);
         let staging_dir = self.ingest_staging_path(&manifest_id);
         let mut staging_guard = StagingDirectory::new(try_clone_path_buf(
@@ -3472,7 +3278,6 @@ impl StorageBackend {
         let chunks_dir = staging_dir.join(CHUNKS_DIR_NAME);
         let staged_manifest_path = staging_dir.join(MANIFEST_FILE_NAME);
         let metadata_path = staging_dir.join(METADATA_FILE_NAME);
-
         let IngestedPayload {
             mut chunk_records,
             por_tree,
@@ -3481,7 +3286,6 @@ impl StorageBackend {
         ensure_manifest_por_root(manifest, &por_tree)?;
         ensure_manifest_chunk_plan_digest(manifest, plan)?;
         verify_staged_manifest_car_archive(manifest, plan, &chunk_records, &chunks_dir)?;
-
         if let Some(roles) = chunk_roles {
             let expected = chunk_records.len();
             if roles.len() != expected {
@@ -3497,9 +3301,7 @@ impl StorageBackend {
                 });
             }
         }
-
         write_atomic(&staged_manifest_path, &manifest_bytes)?;
-
         let stored_at_unix_secs = unix_timestamp()?;
         let pdp_commitment = match pdp_tree.as_deref() {
             Some(tree) => Some(PdpCommitmentV1::from_tree(
@@ -3535,7 +3337,6 @@ impl StorageBackend {
             next_access
         };
         let chunk_count = persistent_u32("chunk_count", plan.chunks.len())?;
-
         let metadata_record = StoredManifestRecord {
             manifest_id: try_clone_text(&manifest_id, "stored manifest id")?,
             manifest_cid: try_clone_bytes(&manifest.root_cid, "stored manifest CID")?,
@@ -3553,7 +3354,6 @@ impl StorageBackend {
             por_commitment,
             pdp_commitment,
         };
-
         write_manifest_metadata(&metadata_record, &metadata_path)?;
         let stored_manifest = StoredManifest::from_record(
             metadata_record,
@@ -3567,7 +3367,6 @@ impl StorageBackend {
                 pdp_tree_memory_bytes: required_pdp_tree_bytes,
             },
         )?;
-
         let mut state = self
             .state
             .write()
@@ -3578,7 +3377,6 @@ impl StorageBackend {
                 manifest_id: manifest_id.clone(),
             });
         }
-
         let mut new_index = try_clone_manifest_index(&state.index)?;
         new_index.total_bytes = state.total_bytes.checked_add(required_bytes).ok_or(
             StorageError::CapacityExceeded {
@@ -3634,7 +3432,6 @@ impl StorageBackend {
             )?,
             last_access,
         });
-
         let index_bytes = match norito::to_bytes(&new_index) {
             Ok(bytes) => bytes,
             Err(err) => {
@@ -3643,7 +3440,6 @@ impl StorageBackend {
             }
         };
         ensure_persistent_artifact_size("storage index", &index_bytes, MAX_STORAGE_INDEX_BYTES)?;
-
         match fs::symlink_metadata(&manifest_dir) {
             Ok(_) => {
                 drop(state);
@@ -3680,7 +3476,6 @@ impl StorageBackend {
             };
         }
         staging_guard.disarm();
-
         let durability_error = match write_atomic_classified(&self.index_path, &index_bytes) {
             Ok(()) => None,
             Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => Some(error),
@@ -3699,7 +3494,6 @@ impl StorageBackend {
                 return Err(StorageError::Io(primary));
             }
         };
-
         let new_total_bytes = new_index.total_bytes;
         state.index = new_index;
         state.total_bytes = new_total_bytes;
@@ -3707,19 +3501,15 @@ impl StorageBackend {
         state.manifests.insert(runtime_manifest_id, stored_manifest);
         state.chunk_refcounts = refcounts;
         reservation.release(&mut state);
-
         if let Some(error) = durability_error {
             drop(state);
             self.fail_stop_durability(&error);
             return Err(error.into_storage_error());
         }
-
         Ok(manifest_id)
     }
 }
-
 include!("store_manifest_lookup.rs");
-
 impl StorageBackend {
     /// Run work while holding the manifest lifecycle read lease.
     ///
@@ -3763,7 +3553,6 @@ impl StorageBackend {
         drop(io_guard);
         Ok(result)
     }
-
     /// Run work for the digest-selected manifest under its lifecycle read lease.
     ///
     /// `Ok(None)` means that the digest was absent or had already entered the
@@ -3803,7 +3592,6 @@ impl StorageBackend {
         drop(io_guard);
         Ok(Some(result))
     }
-
     /// Run trusted local readback work with opaque fresh readers while retaining the manifest
     /// lifecycle lease.
     ///
@@ -3825,7 +3613,6 @@ impl StorageBackend {
             })
         })
     }
-
     /// Atomically replace one chunk during lifecycle-leased repair.
     ///
     /// Callers must hold the owning manifest's lifecycle lease for the complete
@@ -3845,7 +3632,6 @@ impl StorageBackend {
             AtomicParentDirectory::sync,
         )
     }
-
     fn replace_chunk_for_repair_with_directory_sync<F>(
         &self,
         manifest: &StoredManifest,
@@ -3880,7 +3666,6 @@ impl StorageBackend {
         }
         self.ensure_durability_healthy()
     }
-
     fn with_manifest_for_access<T, F>(&self, manifest_id: &str, work: F) -> Result<T, StorageError>
     where
         F: FnOnce(&StoredManifest) -> Result<T, StorageError>,
@@ -3964,7 +3749,6 @@ impl StorageBackend {
         state.access_counter = next_access;
         state.index = new_index;
         drop(state);
-
         let mut durability_error = None;
         {
             let _metadata_guard = self
@@ -4016,15 +3800,12 @@ impl StorageBackend {
                 }
             }
         }
-
         if let Some(error) = durability_error {
             return Err(error.into_storage_error());
         }
         self.ensure_durability_healthy()?;
-
         work(&manifest)
     }
-
     /// Read an exact range from the stored payload.
     pub fn read_payload_range(
         &self,
@@ -4048,7 +3829,6 @@ impl StorageBackend {
             }
             return Ok(Vec::new());
         }
-
         self.with_manifest_for_access(manifest_id, |manifest| {
             let len_u64 = u64::try_from(len).map_err(|_| StorageError::RangeOutOfBounds {
                 offset,
@@ -4066,7 +3846,6 @@ impl StorageBackend {
                     content_length: manifest.content_length,
                 });
             }
-
             let mut buffer = Vec::new();
             buffer.try_reserve_exact(len).map_err(|_| {
                 StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
@@ -4079,7 +3858,6 @@ impl StorageBackend {
             Ok(buffer)
         })
     }
-
     /// Locate chunk metadata by digest for the provided manifest.
     pub fn chunk_by_digest(
         &self,
@@ -4092,7 +3870,6 @@ impl StorageBackend {
                 .ok_or_else(|| StorageError::ManifestNotFound {
                     manifest_id: manifest_id.to_owned(),
                 })?;
-
         manifest
             .chunk_files
             .iter()
@@ -4103,7 +3880,6 @@ impl StorageBackend {
                 digest_hex: digest.encode_hex::<String>(),
             })
     }
-
     /// Read the full chunk payload identified by `digest`.
     pub fn read_chunk(
         &self,
@@ -4123,7 +3899,6 @@ impl StorageBackend {
             read_verified_chunk(record, chunk_index).map_err(StorageError::ChunkStore)
         })
     }
-
     /// Sample PoR leaves for the specified manifest.
     pub fn sample_por(
         &self,
@@ -4149,14 +3924,12 @@ impl StorageBackend {
             }
             return Ok(Vec::new());
         }
-
         self.with_manifest_for_access(manifest_id, |manifest| {
             let por_tree = manifest.por_tree_ref();
             let total = por_tree.leaf_count();
             if total == 0 {
                 return Ok(Vec::new());
             }
-
             let target = count.min(total);
             let mut samples = Vec::new();
             samples.try_reserve_exact(target).map_err(|_| {
@@ -4165,7 +3938,6 @@ impl StorageBackend {
                     requested: target,
                 })
             })?;
-
             for flat_index in PorSampleIndices::new(por_tree.leaf_count_u64(), target, seed)
                 .map_err(StorageError::ChunkStore)?
             {
@@ -4190,11 +3962,9 @@ impl StorageBackend {
                 })?;
                 samples.push((leaf_index, proof));
             }
-
             Ok(samples)
         })
     }
-
     /// Build canonical PDP witnesses from verified random-access chunk reads.
     ///
     /// The manifest lifecycle read lease remains held for sample validation, every exact
@@ -4226,7 +3996,6 @@ impl StorageBackend {
             .map_err(pdp_witness_error)
         })
     }
-
     fn ingest_payload<R: Read>(
         &self,
         plan: &CarBuildPlan,
@@ -4243,16 +4012,13 @@ impl StorageBackend {
         let output = chunk_store
             .ingest_plan_stream_to_directory(plan, reader, chunks_dir)
             .map_err(StorageError::ChunkStore)?;
-
         self.ensure_chunk_publication_durable(output.publication, chunks_dir)?;
-
         if output.total_bytes != plan.content_length {
             return Err(StorageError::PayloadLengthMismatch {
                 expected: plan.content_length,
                 actual: output.total_bytes,
             });
         }
-
         let mut records = Vec::new();
         records
             .try_reserve_exact(output.records.len())
@@ -4279,7 +4045,6 @@ impl StorageBackend {
             pdp_tree,
         })
     }
-
     fn ensure_chunk_publication_durable(
         &self,
         publication: DirectoryPublicationStatus,
@@ -4298,13 +4063,11 @@ impl StorageBackend {
         Ok(())
     }
 }
-
 fn pdp_witness_error(error: PdpMerkleReadError<ChunkStoreError>) -> StorageError {
     StorageError::PdpWitness {
         reason: error.to_string(),
     }
 }
-
 impl StoredManifest {
     fn from_record(
         record: StoredManifestRecord,
@@ -4379,7 +4142,6 @@ impl StoredManifest {
                 group_id: chunk.role.as_ref().map(|role| role.group_id),
             });
         }
-
         Ok(Self {
             manifest_id,
             manifest_cid,
@@ -4406,7 +4168,6 @@ impl StoredManifest {
             retirement_pending: Arc::new(AtomicBool::new(false)),
         })
     }
-
     fn to_record(&self) -> Result<StoredManifestRecord, StorageError> {
         let files = persistent_file_records(&self.files)?;
         let mut chunk_files = Vec::new();
@@ -4441,7 +4202,6 @@ impl StoredManifest {
                 }),
             });
         }
-
         Ok(StoredManifestRecord {
             manifest_id: try_clone_text(&self.manifest_id, "manifest id")?,
             manifest_cid: try_clone_bytes(&self.manifest_cid, "manifest CID")?,
@@ -4467,7 +4227,6 @@ impl StoredManifest {
         })
     }
 }
-
 fn persistent_file_records(
     files: &[StoredFileRecord],
 ) -> Result<Vec<StoredFileRecordNorito>, StorageError> {
@@ -4489,7 +4248,6 @@ fn persistent_file_records(
     }
     Ok(records)
 }
-
 fn try_clone_text(value: &str, context: &'static str) -> Result<String, StorageError> {
     let mut cloned = String::new();
     cloned.try_reserve_exact(value.len()).map_err(|_| {
@@ -4501,7 +4259,6 @@ fn try_clone_text(value: &str, context: &'static str) -> Result<String, StorageE
     cloned.push_str(value);
     Ok(cloned)
 }
-
 fn try_clone_logical_path(
     path: &[String],
     context: &'static str,
@@ -4518,7 +4275,6 @@ fn try_clone_logical_path(
     }
     Ok(cloned)
 }
-
 fn try_clone_chunking_profile(
     profile: &sorafs_manifest::ChunkingProfileV1,
 ) -> Result<sorafs_manifest::ChunkingProfileV1, StorageError> {
@@ -4547,7 +4303,6 @@ fn try_clone_chunking_profile(
         aliases,
     })
 }
-
 fn try_clone_pdp_commitment(
     commitment: Option<&PdpCommitmentV1>,
 ) -> Result<Option<PdpCommitmentV1>, StorageError> {
@@ -4572,7 +4327,6 @@ fn try_clone_pdp_commitment(
         sealed_at: commitment.sealed_at,
     }))
 }
-
 fn try_clone_por_commitment(
     commitment: &StoredPorCommitmentV1,
 ) -> Result<StoredPorCommitmentV1, StorageError> {
@@ -4596,7 +4350,6 @@ fn try_clone_por_commitment(
         chunks,
     })
 }
-
 fn validate_persistent_file_layout(files: &[StoredFileRecord]) -> Result<(), StorageError> {
     for file in files {
         persistent_u32("file.first_chunk", file.first_chunk)?;
@@ -4604,7 +4357,6 @@ fn validate_persistent_file_layout(files: &[StoredFileRecord]) -> Result<(), Sto
     }
     Ok(())
 }
-
 fn stored_files_from_plan(plan: &CarBuildPlan) -> Result<Vec<StoredFileRecord>, StorageError> {
     if plan.files.is_empty() {
         return Err(StorageError::InvalidFileLayout {
@@ -4651,7 +4403,6 @@ fn stored_files_from_plan(plan: &CarBuildPlan) -> Result<Vec<StoredFileRecord>, 
             }
         }
         previous_path = Some(&file.path);
-
         let file_end =
             offset
                 .checked_add(file.size)
@@ -4695,7 +4446,6 @@ fn stored_files_from_plan(plan: &CarBuildPlan) -> Result<Vec<StoredFileRecord>, 
                 });
             }
         }
-
         records.push(StoredFileRecord {
             path: try_clone_logical_path(&file.path, "stored logical file path")?,
             offset,
@@ -4712,14 +4462,12 @@ fn stored_files_from_plan(plan: &CarBuildPlan) -> Result<Vec<StoredFileRecord>, 
     }
     Ok(records)
 }
-
 fn canonical_profile_handle(manifest: &ManifestV1) -> String {
     format!(
         "{}.{}@{}",
         manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
     )
 }
-
 fn try_canonical_profile_handle(manifest: &ManifestV1) -> Result<String, StorageError> {
     let required = manifest
         .chunking
@@ -4745,7 +4493,6 @@ fn try_canonical_profile_handle(manifest: &ManifestV1) -> Result<String, Storage
     handle.push_str(&manifest.chunking.semver);
     Ok(handle)
 }
-
 fn ensure_chunk_profile_match(
     manifest: &ManifestV1,
     plan: &CarBuildPlan,
@@ -4760,7 +4507,6 @@ fn ensure_chunk_profile_match(
     }
     Ok(())
 }
-
 fn ensure_manifest_por_root(
     manifest: &ManifestV1,
     por_tree: &PorMerkleTree,
@@ -4770,7 +4516,6 @@ fn ensure_manifest_por_root(
     }
     Ok(())
 }
-
 fn ensure_manifest_chunk_plan_digest(
     manifest: &ManifestV1,
     plan: &CarBuildPlan,
@@ -4780,7 +4525,6 @@ fn ensure_manifest_chunk_plan_digest(
     }
     Ok(())
 }
-
 fn verify_staged_manifest_car_archive(
     manifest: &ManifestV1,
     plan: &CarBuildPlan,
@@ -4803,7 +4547,6 @@ fn verify_staged_manifest_car_archive(
             reason: "staged chunk inventory does not match the exact CAR build plan".to_owned(),
         });
     }
-
     validate_real_directory(chunks_dir)?;
     let directory_before = fs::symlink_metadata(chunks_dir)?;
     let entries_before = staged_directory_entry_count(chunks_dir)?;
@@ -4815,7 +4558,6 @@ fn verify_staged_manifest_car_archive(
             ),
         });
     }
-
     let expected_root = try_clone_bytes(&manifest.root_cid, "manifest CAR expected root")?;
     let mut reader = StagedChunkPayloadReader::new(chunks_dir, chunk_records);
     let stats = CarStreamingWriter::with_expected_roots(plan, vec![expected_root])
@@ -4824,7 +4566,6 @@ fn verify_staged_manifest_car_archive(
             reason: error.to_string(),
         })?;
     reader.ensure_exhausted()?;
-
     validate_real_directory(chunks_dir)?;
     let directory_after = fs::symlink_metadata(chunks_dir)?;
     if !metadata_stable_during_read(&directory_before, &directory_after) {
@@ -4840,7 +4581,6 @@ fn verify_staged_manifest_car_archive(
             ),
         });
     }
-
     if stats.payload_bytes != manifest.content_length
         || stats.payload_bytes != plan.content_length
         || stats.chunk_count != plan.chunks.len()
@@ -4868,7 +4608,6 @@ fn verify_staged_manifest_car_archive(
     }
     Ok(())
 }
-
 fn staged_directory_entry_count(path: &Path) -> Result<usize, StorageError> {
     let mut count = 0usize;
     for entry in fs::read_dir(path)? {
@@ -4881,21 +4620,18 @@ fn staged_directory_entry_count(path: &Path) -> Result<usize, StorageError> {
     }
     Ok(count)
 }
-
 struct StagedChunkPayloadReader<'a> {
     chunks_dir: &'a Path,
     chunk_records: &'a [StoredChunkRecord],
     next_chunk_index: usize,
     current_chunk: Option<OpenedStagedChunk>,
 }
-
 struct OpenedStagedChunk {
     record: ChunkFileRecord,
     file: File,
     opened_metadata: fs::Metadata,
     remaining: u64,
 }
-
 impl<'a> StagedChunkPayloadReader<'a> {
     fn new(chunks_dir: &'a Path, chunk_records: &'a [StoredChunkRecord]) -> Self {
         Self {
@@ -4905,7 +4641,6 @@ impl<'a> StagedChunkPayloadReader<'a> {
             current_chunk: None,
         }
     }
-
     fn open_next_chunk(&mut self) -> io::Result<bool> {
         let Some(record) = self.chunk_records.get(self.next_chunk_index) else {
             return Ok(false);
@@ -4946,7 +4681,6 @@ impl<'a> StagedChunkPayloadReader<'a> {
         });
         Ok(true)
     }
-
     fn finish_current_chunk(&mut self) -> io::Result<()> {
         let Some(mut current) = self.current_chunk.take() else {
             return Ok(());
@@ -4990,7 +4724,6 @@ impl<'a> StagedChunkPayloadReader<'a> {
         }
         Ok(())
     }
-
     fn ensure_exhausted(&mut self) -> Result<(), StorageError> {
         let mut trailing = [0u8; 1];
         if self
@@ -5008,7 +4741,6 @@ impl<'a> StagedChunkPayloadReader<'a> {
         Ok(())
     }
 }
-
 impl Read for StagedChunkPayloadReader<'_> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         if buffer.is_empty() {
@@ -5054,11 +4786,9 @@ impl Read for StagedChunkPayloadReader<'_> {
         Ok(read)
     }
 }
-
 fn staged_chunk_io_error(error: ChunkStoreError) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, error.to_string())
 }
-
 fn unix_timestamp() -> Result<u64, StorageError> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -5069,7 +4799,6 @@ fn unix_timestamp() -> Result<u64, StorageError> {
     }
     Ok(timestamp)
 }
-
 fn prepare_ingest_staging_directory(path: &Path) -> io::Result<()> {
     let parent = path
         .parent()
@@ -5095,7 +4824,6 @@ fn prepare_ingest_staging_directory(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-
 #[derive(Debug, Error)]
 enum AtomicWriteError {
     #[error("atomic replacement failed before commit: {0}")]
@@ -5109,7 +4837,6 @@ enum AtomicWriteError {
         source: io::Error,
     },
 }
-
 impl AtomicWriteError {
     fn into_io_error(self) -> io::Error {
         match self {
@@ -5123,7 +4850,6 @@ impl AtomicWriteError {
             ),
         }
     }
-
     fn into_storage_error(self) -> StorageError {
         match self {
             Self::BeforeCommit(source) => StorageError::Io(source),
@@ -5134,15 +4860,12 @@ impl AtomicWriteError {
         }
     }
 }
-
 pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     write_atomic_classified(path, data).map_err(AtomicWriteError::into_io_error)
 }
-
 fn write_atomic_classified(path: &Path, data: &[u8]) -> Result<(), AtomicWriteError> {
     write_atomic_with_directory_sync(path, data, AtomicParentDirectory::sync)
 }
-
 fn write_atomic_with_directory_sync<F>(
     path: &Path,
     data: &[u8],
@@ -5169,7 +4892,6 @@ where
         AtomicParentDirectory::open(parent).map_err(AtomicWriteError::BeforeCommit)?;
     let tmp = atomic_temp_path(path);
     let mut cleanup_identity = None;
-
     let write_result = (|| -> Result<(), AtomicWriteError> {
         let mut file = open_atomic_temp_file(&tmp).map_err(AtomicWriteError::BeforeCommit)?;
         cleanup_identity = Some(file.metadata().map_err(AtomicWriteError::BeforeCommit)?);
@@ -5203,7 +4925,6 @@ where
         parent_directory
             .rename_entry(&tmp, path)
             .map_err(AtomicWriteError::BeforeCommit)?;
-
         let mut post_commit_error = None;
         retain_first_io_error(
             &mut post_commit_error,
@@ -5243,7 +4964,6 @@ where
         }
         Ok(())
     })();
-
     if write_result.is_err() {
         if let Some(identity) = cleanup_identity.as_ref() {
             remove_atomic_temp_if_owned(&tmp, identity);
@@ -5251,7 +4971,6 @@ where
     }
     write_result
 }
-
 fn retain_first_io_error(first: &mut Option<io::Error>, result: io::Result<()>) {
     if let Err(error) = result
         && first.is_none()
@@ -5259,7 +4978,6 @@ fn retain_first_io_error(first: &mut Option<io::Error>, result: io::Result<()>) 
         *first = Some(error);
     }
 }
-
 struct AtomicParentDirectory {
     path: PathBuf,
     identity: fs::Metadata,
@@ -5268,7 +4986,6 @@ struct AtomicParentDirectory {
     #[cfg(unix)]
     anchor: PathBuf,
 }
-
 impl AtomicParentDirectory {
     fn open(path: &Path) -> io::Result<Self> {
         validate_atomic_parent_ancestry(path)?;
@@ -5319,7 +5036,6 @@ impl AtomicParentDirectory {
             })
         }
     }
-
     fn verify_path_identity(&self) -> io::Result<()> {
         validate_atomic_parent_ancestry(&self.path)?;
         let linked = fs::symlink_metadata(&self.path)?;
@@ -5344,7 +5060,6 @@ impl AtomicParentDirectory {
         }
         Ok(())
     }
-
     fn sync(&self) -> io::Result<()> {
         #[cfg(unix)]
         {
@@ -5355,7 +5070,6 @@ impl AtomicParentDirectory {
             sync_directory(&self.path)
         }
     }
-
     fn lock_publication(&self, output: &Path) -> io::Result<MutexGuard<'static, ()>> {
         if output.parent() != Some(self.path.as_path()) {
             return Err(io::Error::other(
@@ -5381,7 +5095,6 @@ impl AtomicParentDirectory {
             .lock()
             .map_err(|_| io::Error::other("atomic publication lock is poisoned"))
     }
-
     fn rename_entry(&self, from: &Path, to: &Path) -> io::Result<()> {
         if from.parent() != Some(self.path.as_path()) || to.parent() != Some(self.path.as_path()) {
             return Err(io::Error::other(
@@ -5401,7 +5114,6 @@ impl AtomicParentDirectory {
         }
     }
 }
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn atomic_parent_anchor(handle: &File, _identity: &fs::Metadata) -> io::Result<PathBuf> {
     // `/proc/self/fd` follows the live descriptor rather than the mutable path
@@ -5410,7 +5122,6 @@ fn atomic_parent_anchor(handle: &File, _identity: &fs::Metadata) -> io::Result<P
     // path-based replacement.
     Ok(Path::new("/proc/self/fd").join(handle.as_raw_fd().to_string()))
 }
-
 #[cfg(target_os = "macos")]
 fn atomic_parent_anchor(_handle: &File, identity: &fs::Metadata) -> io::Result<PathBuf> {
     // macOS exposes a volume/file-id namespace whose directory identity
@@ -5419,7 +5130,6 @@ fn atomic_parent_anchor(_handle: &File, identity: &fs::Metadata) -> io::Result<P
         .join(identity.dev().to_string())
         .join(identity.ino().to_string()))
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android", target_os = "macos"))
@@ -5430,7 +5140,6 @@ fn atomic_parent_anchor(_handle: &File, _identity: &fs::Metadata) -> io::Result<
         "atomic storage replacement requires a stable directory anchor on this platform",
     ))
 }
-
 #[cfg(unix)]
 fn validate_atomic_parent_anchor(anchor: &Path, identity: &fs::Metadata) -> io::Result<()> {
     let anchored = fs::metadata(anchor).map_err(|error| {
@@ -5451,7 +5160,6 @@ fn validate_atomic_parent_anchor(anchor: &Path, identity: &fs::Metadata) -> io::
     }
     Ok(())
 }
-
 fn validate_atomic_parent_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(io::Error::other(format!(
@@ -5461,13 +5169,11 @@ fn validate_atomic_parent_metadata(path: &Path, metadata: &fs::Metadata) -> io::
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn atomic_entry_name(path: &Path) -> io::Result<&std::ffi::OsStr> {
     path.file_name()
         .ok_or_else(|| io::Error::other("atomic rename entry has no file name"))
 }
-
 fn validate_atomic_open_file_identity(
     path: &Path,
     file: &File,
@@ -5508,7 +5214,6 @@ fn validate_atomic_open_file_identity(
     }
     Ok(())
 }
-
 fn validate_atomic_published_file_identity(
     path: &Path,
     file: &File,
@@ -5545,7 +5250,6 @@ fn validate_atomic_published_file_identity(
     }
     Ok(opened)
 }
-
 fn remove_atomic_temp_if_owned(path: &Path, identity: &fs::Metadata) {
     let Ok(linked) = fs::symlink_metadata(path) else {
         return;
@@ -5562,13 +5266,11 @@ fn remove_atomic_temp_if_owned(path: &Path, identity: &fs::Metadata) {
     }
     let _ = fs::remove_file(path);
 }
-
 fn atomic_temp_path(path: &Path) -> PathBuf {
     let pid = std::process::id();
     let counter = ATOMIC_WRITE_COUNTER.fetch_add(1, Ordering::Relaxed);
     path.with_added_extension(format!("{ATOMIC_EXT}.{pid}.{counter}"))
 }
-
 fn open_atomic_temp_file(path: &Path) -> io::Result<File> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -5596,7 +5298,6 @@ fn open_atomic_temp_file(path: &Path) -> io::Result<File> {
     }
     Ok(file)
 }
-
 fn validate_atomic_output_path(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -5621,13 +5322,11 @@ fn validate_atomic_output_path(path: &Path) -> io::Result<()> {
             ));
         }
     }
-
     if let Some(parent) = path.parent() {
         validate_atomic_parent_ancestry(parent)?;
     }
     Ok(())
 }
-
 fn validate_atomic_parent_ancestry(parent: &Path) -> io::Result<()> {
     for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
         if ancestor.as_os_str().is_empty() {
@@ -5662,20 +5361,16 @@ fn validate_atomic_parent_ancestry(parent: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut fs::OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(unix)]
 fn set_atomic_parent_open_flags(options: &mut fs::OpenOptions) {
     options.custom_flags(platform_no_follow_flag() | platform_directory_only_flag());
 }
-
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-
 #[cfg(all(
     target_os = "android",
     not(any(
@@ -5687,7 +5382,6 @@ fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
     ))
 ))]
 compile_error!("SoraFS filesystem flags are not qualified for this Android architecture");
-
 #[cfg(all(
     unix,
     not(any(
@@ -5702,12 +5396,10 @@ compile_error!("SoraFS filesystem flags are not qualified for this Android archi
     ))
 ))]
 compile_error!("SoraFS filesystem flags are not qualified for this Unix target");
-
 #[cfg(all(target_os = "android", target_arch = "riscv64"))]
 fn platform_no_follow_flag() -> i32 {
     0x400000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "aarch64", target_arch = "arm")
@@ -5715,7 +5407,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x8000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "x86", target_arch = "x86_64")
@@ -5723,7 +5414,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x20000
 }
-
 #[cfg(all(
     target_os = "linux",
     any(
@@ -5737,7 +5427,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x8000
 }
-
 #[cfg(all(
     target_os = "linux",
     not(any(
@@ -5751,7 +5440,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x20000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -5766,19 +5454,16 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(target_os = "macos")]
 fn platform_no_follow_flag() -> i32 {
     // Unlike O_NOFOLLOW, O_NOFOLLOW_ANY rejects a symlink in every path
     // component during the open syscall and closes the validation/open race.
     0x2000_0000
 }
-
 #[cfg(all(target_os = "android", target_arch = "riscv64"))]
 fn platform_directory_only_flag() -> i32 {
     0x200000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "aarch64", target_arch = "arm")
@@ -5786,7 +5471,6 @@ fn platform_directory_only_flag() -> i32 {
 fn platform_directory_only_flag() -> i32 {
     0x4000
 }
-
 #[cfg(all(
     target_os = "android",
     any(target_arch = "x86", target_arch = "x86_64")
@@ -5794,7 +5478,6 @@ fn platform_directory_only_flag() -> i32 {
 fn platform_directory_only_flag() -> i32 {
     0x10000
 }
-
 #[cfg(all(
     target_os = "linux",
     any(
@@ -5808,7 +5491,6 @@ fn platform_directory_only_flag() -> i32 {
 fn platform_directory_only_flag() -> i32 {
     0x4000
 }
-
 #[cfg(all(
     target_os = "linux",
     not(any(
@@ -5822,32 +5504,26 @@ fn platform_directory_only_flag() -> i32 {
 fn platform_directory_only_flag() -> i32 {
     0x10000
 }
-
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 fn platform_directory_only_flag() -> i32 {
     0x0010_0000
 }
-
 #[cfg(target_os = "freebsd")]
 fn platform_directory_only_flag() -> i32 {
     0x0002_0000
 }
-
 #[cfg(target_os = "dragonfly")]
 fn platform_directory_only_flag() -> i32 {
     0x0800_0000
 }
-
 #[cfg(target_os = "openbsd")]
 fn platform_directory_only_flag() -> i32 {
     0x0002_0000
 }
-
 #[cfg(target_os = "netbsd")]
 fn platform_directory_only_flag() -> i32 {
     0x0020_0000
 }
-
 fn write_manifest_metadata(
     record: &StoredManifestRecord,
     metadata_path: &Path,
@@ -5861,7 +5537,6 @@ fn write_manifest_metadata(
     write_atomic(metadata_path, &metadata_bytes)?;
     Ok(())
 }
-
 impl StorageBackend {
     fn ingest_staging_path(&self, manifest_id: &str) -> PathBuf {
         let counter = INGEST_STAGING_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -5869,7 +5544,6 @@ impl StorageBackend {
         let name = format!("{manifest_id}-{pid}-{counter}");
         self.root_dir.join(INGEST_STAGING_DIR_NAME).join(name)
     }
-
     fn gc_trash_path(&self, manifest_id: &str) -> PathBuf {
         let counter = GC_TRASH_COUNTER.fetch_add(1, Ordering::Relaxed);
         let pid = std::process::id();
@@ -5877,22 +5551,18 @@ impl StorageBackend {
         self.root_dir.join(GC_TRASH_DIR_NAME).join(name)
     }
 }
-
 struct ManifestPayload<'a> {
     manifest: &'a StoredManifest,
 }
-
 impl<'a> ManifestPayload<'a> {
     fn new(manifest: &'a StoredManifest) -> Self {
         Self { manifest }
     }
 }
-
 impl PayloadSource for ManifestPayload<'_> {
     fn read_exact(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), ChunkStoreError> {
         read_into_manifest(self.manifest, offset, buf)
     }
-
     fn ensure_exhausted(&mut self, expected_len: u64) -> Result<(), ChunkStoreError> {
         let actual = self.manifest.content_length;
         if actual != expected_len {
@@ -5904,7 +5574,6 @@ impl PayloadSource for ManifestPayload<'_> {
         Ok(())
     }
 }
-
 fn read_into_manifest(
     manifest: &StoredManifest,
     offset: u64,
@@ -5913,7 +5582,6 @@ fn read_into_manifest(
     if buf.is_empty() {
         return Ok(());
     }
-
     let mut remaining = buf.len();
     let mut cursor = 0usize;
     let requested_len =
@@ -5927,7 +5595,6 @@ fn read_into_manifest(
             offset,
             len: requested_len,
         })?;
-
     let first_chunk = manifest
         .chunk_files
         .partition_point(|chunk| chunk.offset.saturating_add(u64::from(chunk.length)) <= offset);
@@ -5940,21 +5607,18 @@ fn read_into_manifest(
                 len: u64::from(chunk.length),
             },
         )?;
-
         if end <= chunk_start {
             break;
         }
         if offset >= chunk_end {
             continue;
         }
-
         let read_start = offset.max(chunk_start);
         let read_end = chunk_end.min(end);
         let bytes_to_read = (read_end - read_start) as usize;
         if bytes_to_read == 0 {
             continue;
         }
-
         let verified = read_verified_chunk(chunk, chunk_index)?;
         let rel_offset = usize::try_from(read_start - chunk_start).map_err(|_| {
             ChunkStoreError::OffsetOutOfRange {
@@ -5977,25 +5641,20 @@ fn read_into_manifest(
                     len: u64::try_from(bytes_to_read).unwrap_or(u64::MAX),
                 })?;
         buf[cursor..output_end].copy_from_slice(&verified[rel_offset..rel_end]);
-
         cursor += bytes_to_read;
         remaining = remaining.saturating_sub(bytes_to_read);
-
         if remaining == 0 {
             break;
         }
     }
-
     if remaining != 0 {
         return Err(ChunkStoreError::UnexpectedEof {
             chunk_index: manifest.chunk_files.len().saturating_sub(1),
             expected: buf.len() as u32,
         });
     }
-
     Ok(())
 }
-
 fn read_verified_chunk(
     record: &ChunkFileRecord,
     chunk_index: usize,
@@ -6019,10 +5678,8 @@ fn read_verified_chunk(
             "changed between inspection and open",
         ));
     }
-
     #[cfg(test)]
     pause_chunk_read_for_test(&record.path)?;
-
     let mut bytes = Vec::new();
     bytes
         .try_reserve_exact(expected_len)
@@ -6055,7 +5712,6 @@ fn read_verified_chunk(
     }
     Ok(bytes)
 }
-
 /// Read one complete chunk through the same no-follow, single-link, stable
 /// inode/metadata, exact-length, and digest checks used by normal payload and
 /// PDP witness reads.
@@ -6064,7 +5720,6 @@ pub(crate) fn read_verified_chunk_file(
 ) -> Result<Vec<u8>, ChunkStoreError> {
     read_verified_chunk(record, 0)
 }
-
 #[cfg(test)]
 fn pause_chunk_read_for_test(path: &Path) -> Result<(), ChunkStoreError> {
     let hook = {
@@ -6087,7 +5742,6 @@ fn pause_chunk_read_for_test(path: &Path) -> Result<(), ChunkStoreError> {
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn notify_manifest_io_write_wait_for_test(manifest_id: &str) {
     let hook = {
@@ -6107,7 +5761,6 @@ fn notify_manifest_io_write_wait_for_test(manifest_id: &str) {
         let _ = hook.waiting.send(());
     }
 }
-
 fn validate_chunk_file_metadata(
     record: &ChunkFileRecord,
     metadata: &fs::Metadata,
@@ -6136,7 +5789,6 @@ fn validate_chunk_file_metadata(
     }
     Ok(())
 }
-
 fn invalid_chunk_file(record: &ChunkFileRecord, reason: &str) -> ChunkStoreError {
     ChunkStoreError::Io(io::Error::new(
         io::ErrorKind::InvalidData,
@@ -6178,7 +5830,6 @@ mod tests {
         assert_eq!(platform_no_follow_flag(), 0x8000);
         assert_eq!(platform_directory_only_flag(), 0x4000);
     }
-
     #[cfg(all(
         target_os = "linux",
         not(any(
@@ -6194,7 +5845,6 @@ mod tests {
         assert_eq!(platform_no_follow_flag(), 0x20000);
         assert_eq!(platform_directory_only_flag(), 0x10000);
     }
-
     #[cfg(all(
         target_os = "android",
         any(target_arch = "aarch64", target_arch = "arm")
@@ -6204,7 +5854,6 @@ mod tests {
         assert_eq!(platform_no_follow_flag(), 0x8000);
         assert_eq!(platform_directory_only_flag(), 0x4000);
     }
-
     #[cfg(all(
         target_os = "android",
         any(target_arch = "x86", target_arch = "x86_64")
@@ -6214,14 +5863,12 @@ mod tests {
         assert_eq!(platform_no_follow_flag(), 0x20000);
         assert_eq!(platform_directory_only_flag(), 0x10000);
     }
-
     #[cfg(all(target_os = "android", target_arch = "riscv64"))]
     #[test]
     fn android_riscv64_directory_open_flags_match_target_abi() {
         assert_eq!(platform_no_follow_flag(), 0x400000);
         assert_eq!(platform_directory_only_flag(), 0x200000);
     }
-
     #[cfg(all(
         target_os = "linux",
         any(target_arch = "riscv32", target_arch = "riscv64")
@@ -6231,49 +5878,42 @@ mod tests {
         assert_eq!(platform_no_follow_flag(), 0x20000);
         assert_eq!(platform_directory_only_flag(), 0x10000);
     }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_directory_open_flags_match_target_abi() {
         assert_eq!(platform_no_follow_flag(), 0x2000_0000);
         assert_eq!(platform_directory_only_flag(), 0x0010_0000);
     }
-
     #[cfg(target_os = "ios")]
     #[test]
     fn ios_directory_open_flags_match_target_abi() {
         assert_eq!(platform_no_follow_flag(), 0x100);
         assert_eq!(platform_directory_only_flag(), 0x0010_0000);
     }
-
     #[cfg(target_os = "freebsd")]
     #[test]
     fn freebsd_directory_open_flags_match_target_abi() {
         assert_eq!(platform_no_follow_flag(), 0x100);
         assert_eq!(platform_directory_only_flag(), 0x0002_0000);
     }
-
     #[cfg(target_os = "dragonfly")]
     #[test]
     fn dragonfly_directory_open_flags_match_target_abi() {
         assert_eq!(platform_no_follow_flag(), 0x100);
         assert_eq!(platform_directory_only_flag(), 0x0800_0000);
     }
-
     #[cfg(target_os = "openbsd")]
     #[test]
     fn openbsd_directory_open_flags_match_target_abi() {
         assert_eq!(platform_no_follow_flag(), 0x100);
         assert_eq!(platform_directory_only_flag(), 0x0002_0000);
     }
-
     #[cfg(target_os = "netbsd")]
     #[test]
     fn netbsd_directory_open_flags_match_target_abi() {
         assert_eq!(platform_no_follow_flag(), 0x100);
         assert_eq!(platform_directory_only_flag(), 0x0020_0000);
     }
-
     fn temp_config(temp_dir: &TempDir) -> StorageConfig {
         let temp_path = temp_dir.path().canonicalize().expect("canonical tempdir");
         StorageConfig::builder()
@@ -6281,7 +5921,6 @@ mod tests {
             .data_dir(temp_path.join("storage"))
             .build()
     }
-
     fn temp_config_with_pdp_limit(temp_dir: &TempDir, limit: u64) -> StorageConfig {
         let temp_path = temp_dir.path().canonicalize().expect("canonical tempdir");
         StorageConfig::builder()
@@ -6290,15 +5929,12 @@ mod tests {
             .pdp_tree_memory_limit_bytes(iroha_config::base::util::Bytes(limit))
             .build()
     }
-
     fn canonical_temp_path(temp_dir: &TempDir) -> PathBuf {
         temp_dir.path().canonicalize().expect("canonical tempdir")
     }
-
     fn single_file_plan(bytes: &[u8]) -> Result<CarBuildPlan, CarPlanError> {
         CarBuildPlan::single_file(bytes)
     }
-
     fn manifest_builder_for_plan(payload: &[u8], plan: &CarBuildPlan) -> ManifestBuilder {
         let heap_limit = plan
             .validate()
@@ -6334,7 +5970,6 @@ mod tests {
             .car_digest(*car_stats.car_archive_digest.as_bytes())
             .car_size(car_stats.car_size)
     }
-
     fn empty_file_plan() -> CarBuildPlan {
         let plan = CarBuildPlan {
             chunk_profile: ChunkProfile::DEFAULT,
@@ -6351,7 +5986,6 @@ mod tests {
         plan.validate().expect("canonical empty plan");
         plan
     }
-
     fn test_manifest(payload: &[u8], plan: &CarBuildPlan, fixture_id_byte: u8) -> ManifestV1 {
         manifest_builder_for_plan(payload, plan)
             .add_metadata("test.fixture_id", fixture_id_byte.to_string())
@@ -6359,7 +5993,6 @@ mod tests {
             .build()
             .expect("manifest")
     }
-
     fn ingest_test_payload(
         temp_dir: &TempDir,
         payload: &[u8],
@@ -6375,7 +6008,6 @@ mod tests {
             .expect("ingest");
         (config, backend, manifest_id)
     }
-
     fn rewrite_manifest_record(
         backend: &StorageBackend,
         manifest_id: &str,
@@ -6395,7 +6027,6 @@ mod tests {
         )
         .expect("rewrite manifest metadata");
     }
-
     fn rewrite_manifest_index(backend: &StorageBackend, mutate: impl FnOnce(&mut ManifestIndex)) {
         let bytes = fs::read(&backend.index_path).expect("read manifest index");
         let mut index: ManifestIndex =
@@ -6407,27 +6038,23 @@ mod tests {
         )
         .expect("rewrite manifest index");
     }
-
     fn first_pdp_sample() -> Vec<PdpSampleV1> {
         vec![PdpSampleV1 {
             segment_index: 0,
             hot_leaf_indices: vec![0],
         }]
     }
-
     fn replace_with_empty_index(config: &StorageConfig) {
         let index_path = config.data_dir().join("index.norito");
         let bytes = norito::to_bytes(&ManifestIndex::default()).expect("encode empty index");
         write_atomic(&index_path, &bytes).expect("replace storage index");
     }
-
     struct GatedReader {
         bytes: Cursor<Vec<u8>>,
         entered: Option<mpsc::Sender<()>>,
         release: mpsc::Receiver<()>,
         fail_after_release: bool,
     }
-
     impl Read for GatedReader {
         fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
             if let Some(entered) = self.entered.take() {
@@ -6444,7 +6071,6 @@ mod tests {
             self.bytes.read(buffer)
         }
     }
-
     fn assert_staging_empty(backend: &StorageBackend) {
         let staging_root = backend.root_dir().join(INGEST_STAGING_DIR_NAME);
         if staging_root.exists() {
@@ -6457,22 +6083,18 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn storage_directory_has_single_process_owner() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let config = temp_config(&temp_dir);
         let owner = StorageBackend::new(config.clone()).expect("acquire storage ownership");
-
         assert!(matches!(
             StorageBackend::new(config.clone()),
             Err(StorageError::StorageDirectoryInUse { .. })
         ));
-
         drop(owner);
         StorageBackend::new(config).expect("storage ownership releases on drop");
     }
-
     #[cfg(unix)]
     #[test]
     fn storage_lock_rejects_symlink() {
@@ -6483,7 +6105,6 @@ mod tests {
         fs::write(&target, b"must remain untouched").expect("write lock target");
         std::os::unix::fs::symlink(&target, config.data_dir().join(STORAGE_LOCK_FILE_NAME))
             .expect("create storage lock symlink");
-
         assert!(matches!(
             StorageBackend::new(config),
             Err(StorageError::Io(_))
@@ -6493,7 +6114,6 @@ mod tests {
             b"must remain untouched"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn storage_lock_rejects_hard_link() {
@@ -6504,7 +6124,6 @@ mod tests {
         fs::write(&target, b"must remain untouched").expect("write lock target");
         fs::hard_link(&target, config.data_dir().join(STORAGE_LOCK_FILE_NAME))
             .expect("create storage lock hard link");
-
         assert!(matches!(
             StorageBackend::new(config),
             Err(StorageError::CorruptStorageState { .. })
@@ -6514,9 +6133,7 @@ mod tests {
             b"must remain untouched"
         );
     }
-
     include!("store_manifest_payload_integrity_tests.rs");
-
     #[test]
     fn startup_rolls_back_uncommitted_gc_move() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -6526,16 +6143,13 @@ mod tests {
         let trash_root = backend.root_dir.join(GC_TRASH_DIR_NAME);
         let trash_path = trash_root.join(format!("{manifest_id}-999-1"));
         drop(backend);
-
         fs::create_dir_all(&trash_root).expect("create GC transaction root");
         fs::rename(&manifest_dir, &trash_path).expect("simulate pre-index GC move");
-
         let recovered = StorageBackend::new(config).expect("recover pre-index GC transaction");
         assert!(recovered.manifest(&manifest_id).is_some());
         assert!(manifest_dir.is_dir());
         assert!(!trash_path.exists());
     }
-
     #[test]
     fn startup_finishes_committed_gc_move() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -6545,17 +6159,14 @@ mod tests {
         let trash_root = backend.root_dir.join(GC_TRASH_DIR_NAME);
         let trash_path = trash_root.join(format!("{manifest_id}-999-2"));
         drop(backend);
-
         fs::create_dir_all(&trash_root).expect("create GC transaction root");
         fs::rename(&manifest_dir, &trash_path).expect("simulate committed GC move");
         replace_with_empty_index(&config);
-
         let recovered = StorageBackend::new(config).expect("finish committed GC transaction");
         assert_eq!(recovered.manifest_count(), 0);
         assert!(!manifest_dir.exists());
         assert!(!trash_path.exists());
     }
-
     #[test]
     fn startup_rejects_duplicate_live_and_gc_transaction_data() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -6568,7 +6179,6 @@ mod tests {
             .join(format!("{manifest_id}-999-4"));
         drop(backend);
         fs::create_dir_all(&trash_path).expect("create duplicate GC transaction directory");
-
         assert!(matches!(
             StorageBackend::new(config),
             Err(StorageError::CorruptStorageState { .. })
@@ -6576,7 +6186,6 @@ mod tests {
         assert!(manifest_dir.is_dir());
         assert!(trash_path.is_dir());
     }
-
     #[test]
     fn startup_removes_unindexed_ingest_commit() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -6585,12 +6194,10 @@ mod tests {
         let manifest_dir = backend.manifests_dir.join(&manifest_id);
         drop(backend);
         replace_with_empty_index(&config);
-
         let recovered = StorageBackend::new(config).expect("remove unindexed manifest");
         assert_eq!(recovered.manifest_count(), 0);
         assert!(!manifest_dir.exists());
     }
-
     #[test]
     fn startup_cleans_stale_ingest_staging_directory() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -6603,11 +6210,9 @@ mod tests {
         drop(backend);
         fs::create_dir_all(&staging_path).expect("create stale staging directory");
         fs::write(staging_path.join("partial"), b"partial").expect("write staged fragment");
-
         StorageBackend::new(config).expect("clean stale staging transaction");
         assert!(!staging_path.exists());
     }
-
     #[test]
     fn startup_rejects_unknown_transaction_entries() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -6619,13 +6224,11 @@ mod tests {
             .join("unknown");
         drop(backend);
         fs::create_dir_all(&invalid_path).expect("create invalid transaction entry");
-
         assert!(matches!(
             StorageBackend::new(config),
             Err(StorageError::CorruptStorageState { .. })
         ));
     }
-
     #[cfg(target_pointer_width = "64")]
     #[test]
     fn persistent_layout_conversion_rejects_truncation() {
@@ -6639,7 +6242,6 @@ mod tests {
             }) if value == oversized && max == u64::from(u32::MAX)
         ));
     }
-
     #[test]
     fn concurrent_same_manifest_ingest_has_single_owner() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -6650,7 +6252,6 @@ mod tests {
         let manifest = test_manifest(&payload, &plan, 0xA1);
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-
         let worker_backend = Arc::clone(&backend);
         let worker_manifest = manifest.clone();
         let worker_plan = plan.clone();
@@ -6664,7 +6265,6 @@ mod tests {
             };
             worker_backend.ingest_manifest(&worker_manifest, &worker_plan, &mut reader)
         });
-
         entered_rx.recv().expect("worker reached read gate");
         let mut competing_reader = payload.as_slice();
         assert!(matches!(
@@ -6673,18 +6273,15 @@ mod tests {
         ));
         release_tx.send(()).expect("release worker");
         let manifest_id = worker.join().expect("worker join").expect("worker ingest");
-
         assert_eq!(backend.manifest_count(), 1);
         assert_eq!(backend.total_bytes(), plan.content_length);
         assert!(backend.manifest(&manifest_id).is_some());
         assert_staging_empty(&backend);
-
         drop(backend);
         let reloaded = StorageBackend::new(config).expect("reload backend");
         assert_eq!(reloaded.manifest_count(), 1);
         assert_eq!(reloaded.total_bytes(), plan.content_length);
     }
-
     #[test]
     fn failed_ingest_releases_reservation_without_deleting_retry() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -6694,7 +6291,6 @@ mod tests {
         let manifest = test_manifest(&payload, &plan, 0xA2);
         let (entered_tx, entered_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-
         let worker_backend = Arc::clone(&backend);
         let worker_manifest = manifest.clone();
         let worker_plan = plan.clone();
@@ -6708,7 +6304,6 @@ mod tests {
             };
             worker_backend.ingest_manifest(&worker_manifest, &worker_plan, &mut reader)
         });
-
         entered_rx.recv().expect("worker reached read gate");
         let mut competing_reader = payload.as_slice();
         assert!(matches!(
@@ -6720,7 +6315,6 @@ mod tests {
         assert_eq!(backend.manifest_count(), 0);
         assert_eq!(backend.total_bytes(), 0);
         assert_staging_empty(&backend);
-
         let mut retry_reader = payload.as_slice();
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut retry_reader)
@@ -6729,29 +6323,22 @@ mod tests {
         assert_eq!(backend.total_bytes(), plan.content_length);
         assert_staging_empty(&backend);
     }
-
     #[test]
     fn ingest_manifest_persists_metadata_and_chunks() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let payload = b"Hello deterministic SoraFS!";
         let plan = single_file_plan(payload).expect("plan");
-
         let manifest = manifest_builder_for_plan(payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
-
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
-
         assert_eq!(backend.manifest_count(), 1);
         assert_eq!(backend.total_bytes(), plan.content_length);
-
         let manifest_digest = manifest.digest().expect("manifest digest");
         let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
         assert_eq!(manifest_id, manifest_digest_hex);
@@ -6762,7 +6349,6 @@ mod tests {
         let expected_digest: [u8; 32] = *manifest_digest.as_bytes();
         assert_eq!(stored.manifest_digest(), &expected_digest);
         assert_eq!(stored.manifest_id(), manifest_digest_hex);
-
         for (index, chunk) in plan.chunks.iter().enumerate() {
             let record = stored.chunk(index).expect("chunk metadata");
             assert_eq!(record.offset, chunk.offset);
@@ -6770,12 +6356,10 @@ mod tests {
             assert_eq!(record.digest, chunk.digest);
             assert!(record.path.exists(), "chunk file must exist on disk");
         }
-
         let por_tree = stored.por_tree();
         assert_eq!(por_tree.payload_len(), plan.content_length);
         assert_eq!(por_tree.chunks().len(), plan.chunks.len());
     }
-
     #[test]
     fn ingest_rejects_manifest_por_root_mismatch_without_publication() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -6790,12 +6374,10 @@ mod tests {
                 .expect("mismatched manifest digest")
                 .as_bytes(),
         );
-
         let mut reader = payload.as_slice();
         let error = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect_err("mismatched PoR commitment must fail closed");
-
         assert!(matches!(&error, StorageError::PorRootMismatch));
         assert_eq!(
             error.to_string(),
@@ -6821,7 +6403,6 @@ mod tests {
         drop(state);
         assert_staging_empty(&backend);
     }
-
     #[test]
     fn ingest_rejects_raw_and_carv1_payload_digests_without_publication() {
         let payload = b"manifest archive digest domains must remain nontrivially distinct";
@@ -6833,7 +6414,6 @@ mod tests {
             .expect("compute canonical CAR");
         let raw_payload_digest = *plan.payload_digest.as_bytes();
         let car_payload_digest = *car_stats.car_payload_digest.as_bytes();
-
         assert_eq!(
             canonical_manifest.car_digest,
             *car_stats.car_archive_digest.as_bytes()
@@ -6841,7 +6421,6 @@ mod tests {
         assert_ne!(raw_payload_digest, car_payload_digest);
         assert_ne!(raw_payload_digest, canonical_manifest.car_digest);
         assert_ne!(car_payload_digest, canonical_manifest.car_digest);
-
         for (label, rejected_digest) in [
             ("raw-payload", raw_payload_digest),
             ("carv1-payload-section", car_payload_digest),
@@ -6857,11 +6436,9 @@ mod tests {
                     .as_bytes(),
             );
             let mut reader = payload.as_slice();
-
             let error = backend
                 .ingest_manifest(&manifest, &plan, &mut reader)
                 .expect_err("non-archive manifest digest must fail closed");
-
             assert!(
                 matches!(&error, StorageError::ManifestCarArchiveDigestMismatch),
                 "{label} digest produced unexpected error: {error}"
@@ -6873,7 +6450,6 @@ mod tests {
             assert_staging_empty(&backend);
         }
     }
-
     #[test]
     fn ingest_rejects_every_archive_binding_mismatch_without_publication() {
         #[derive(Clone, Copy, Debug)]
@@ -6883,11 +6459,9 @@ mod tests {
             DagCodec,
             ArchiveSize,
         }
-
         let payload = b"every manifest archive binding is independently authoritative";
         let plan = single_file_plan(payload).expect("plan");
         let canonical_manifest = test_manifest(payload, &plan, 0x94);
-
         for mutation in [
             BindingMutation::ChunkPlan,
             BindingMutation::Root,
@@ -6912,7 +6486,6 @@ mod tests {
                     .as_bytes(),
             );
             let mut reader = payload.as_slice();
-
             let error = backend
                 .ingest_manifest(&manifest, &plan, &mut reader)
                 .expect_err("archive binding mismatch must fail closed");
@@ -6930,7 +6503,6 @@ mod tests {
                     matches!(&error, StorageError::ManifestCarSizeMismatch { .. })
                 }
             };
-
             assert!(
                 expected_error,
                 "{mutation:?} produced unexpected error: {error}"
@@ -6942,7 +6514,6 @@ mod tests {
             assert_staging_empty(&backend);
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn staged_car_reconstruction_rejects_symlink_chunks() {
@@ -6966,21 +6537,17 @@ mod tests {
         let target = temp_dir.path().join("symlink-target.bin");
         fs::write(&target, payload).expect("write symlink target");
         symlink(&target, chunks_dir.join("chunk_00000.bin")).expect("install staged symlink");
-
         let error = verify_staged_manifest_car_archive(&manifest, &plan, &records, &chunks_dir)
             .expect_err("staged symlink must fail closed");
-
         assert!(matches!(
             &error,
             StorageError::CarArchiveReconstruction { .. }
         ));
     }
-
     #[test]
     fn ingest_manifest_preserves_directory_file_layout() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let files = vec![
             FileEntry {
                 path: vec!["assets".to_owned(), "app.js".to_owned()],
@@ -6994,17 +6561,14 @@ mod tests {
         let (plan, payload) =
             CarBuildPlan::from_files_with_profile(files, sorafs_chunker::ChunkProfile::DEFAULT)
                 .expect("directory plan");
-
         let manifest = manifest_builder_for_plan(&payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = payload.as_slice();
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest directory payload");
-
         let stored = backend.manifest(&manifest_id).expect("stored manifest");
         assert_eq!(stored.files().len(), plan.files.len());
         for (stored_file, planned_file) in stored.files().iter().zip(&plan.files) {
@@ -7013,10 +6577,8 @@ mod tests {
             assert_eq!(stored_file.first_chunk, planned_file.first_chunk);
             assert_eq!(stored_file.chunk_count, planned_file.chunk_count);
         }
-
         let rebuilt_plan = stored.to_car_plan(sorafs_chunker::ChunkProfile::DEFAULT);
         assert_eq!(rebuilt_plan.files, plan.files);
-
         drop(backend);
         let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload backend");
         let stored_reloaded = reloaded.manifest(&manifest_id).expect("reloaded manifest");
@@ -7026,7 +6588,6 @@ mod tests {
             stored.file_by_path(&["assets".to_owned(), "app.js".to_owned()])
         );
     }
-
     #[test]
     fn capacity_enforced() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -7036,53 +6597,41 @@ mod tests {
             .data_dir(config.data_dir().clone())
             .max_capacity_bytes(iroha_config::base::util::Bytes(16))
             .build();
-
         let backend = StorageBackend::new(config).expect("backend init");
-
         let payload = b"this payload is definitely longer than sixteen bytes";
         let plan = single_file_plan(payload).expect("plan");
-
         let manifest = manifest_builder_for_plan(payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
-
         let err = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect_err("should exceed capacity");
-
         match err {
             StorageError::CapacityExceeded { .. } => {}
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn read_payload_range_returns_expected_bytes() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let payload = b"The five boxing wizards jump quickly";
         let plan = single_file_plan(payload).expect("plan");
-
         let manifest = manifest_builder_for_plan(payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
-
         let slice = backend
             .read_payload_range(&manifest_id, 4, 5)
             .expect("read range");
         assert_eq!(slice, b"five "[..]);
     }
-
     #[test]
     fn read_payload_range_uses_global_indices_beyond_the_first_chunk() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -7101,7 +6650,6 @@ mod tests {
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
         let second_offset = plan.chunks[1].offset;
-
         let later_offset = second_offset + 7;
         let later = backend
             .read_payload_range(&manifest_id, later_offset, 32)
@@ -7110,7 +6658,6 @@ mod tests {
             later,
             payload[later_offset as usize..later_offset as usize + 32]
         );
-
         let cross_offset = second_offset - 16;
         let cross = backend
             .read_payload_range(&manifest_id, cross_offset, 32)
@@ -7120,26 +6667,21 @@ mod tests {
             payload[cross_offset as usize..cross_offset as usize + 32]
         );
     }
-
     #[test]
     fn chunk_slice_returns_expected_metadata() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let payload = vec![0xAA; 64 * 3];
         let plan = single_file_plan(&payload).expect("plan");
-
         let manifest = manifest_builder_for_plan(&payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
         let stored = backend.manifest(&manifest_id).expect("stored manifest");
-
         let slice = stored.chunk_slice(0, payload.len()).expect("chunk slice");
         assert_eq!(slice.chunk_count(), plan.chunks.len());
         assert_eq!(slice.start_index, 0);
@@ -7150,24 +6692,20 @@ mod tests {
             assert_eq!(record.digest, expected.digest);
         }
     }
-
     #[test]
     fn attach_stripe_layout_persists_roles() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let payload = b"stripe layout payload";
         let plan = single_file_plan(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
-
         let layout = DaStripeLayout {
             total_stripes: 1,
             shards_per_stripe: plan.chunks.len() as u32,
@@ -7185,14 +6723,12 @@ mod tests {
         backend
             .attach_stripe_layout(&manifest_id, layout, chunk_roles.clone())
             .expect("attach layout");
-
         let stored = backend.manifest(&manifest_id).expect("stored manifest");
         assert_eq!(stored.stripe_layout(), Some(&layout));
         for (chunk, role) in stored.chunk_files.iter().zip(&chunk_roles) {
             assert_eq!(chunk.role, Some(role.role));
             assert_eq!(chunk.group_id, Some(role.group_id));
         }
-
         // Reload to ensure metadata persisted on disk.
         drop(backend);
         let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload");
@@ -7203,24 +6739,20 @@ mod tests {
             assert_eq!(chunk.group_id, Some(role.group_id));
         }
     }
-
     #[test]
     fn attach_stripe_layout_rejects_mismatched_lengths() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let payload = b"role length check";
         let plan = single_file_plan(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
-
         let layout = DaStripeLayout {
             total_stripes: 1,
             shards_per_stripe: plan.chunks.len() as u32,
@@ -7237,7 +6769,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn attach_stripe_layout_does_not_mutate_memory_when_persistence_fails() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -7250,7 +6781,6 @@ mod tests {
             .join(METADATA_FILE_NAME);
         fs::remove_file(&metadata_path).expect("remove metadata file");
         fs::create_dir(&metadata_path).expect("block metadata replacement");
-
         let layout = DaStripeLayout {
             total_stripes: 1,
             shards_per_stripe: before.chunk_count() as u32,
@@ -7266,33 +6796,28 @@ mod tests {
             backend.attach_stripe_layout(&manifest_id, layout, roles),
             Err(StorageError::Io(_))
         ));
-
         let after = backend.manifest(&manifest_id).expect("stored manifest");
         assert_eq!(after.stripe_layout(), before.stripe_layout());
         assert_eq!(after.chunk_files, before.chunk_files);
     }
-
     #[test]
     fn attach_plan_metadata_validates_plan_and_commits_only_after_persistence() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let payload = b"logical file metadata payload";
         let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xD2);
         let before = backend.manifest(&manifest_id).expect("stored manifest");
-
         let mut mismatched_chunks = single_file_plan(payload).expect("plan");
         mismatched_chunks.chunks[0].digest[0] ^= 1;
         assert!(matches!(
             backend.attach_plan_metadata(&manifest_id, &mismatched_chunks, None, None),
             Err(StorageError::ManifestExists { .. })
         ));
-
         let mut invalid_path = single_file_plan(payload).expect("plan");
         invalid_path.files[0].path = vec!["..".to_owned()];
         assert!(matches!(
             backend.attach_plan_metadata(&manifest_id, &invalid_path, None, None),
             Err(StorageError::InvalidFileLayout { .. })
         ));
-
         let mut updated_plan = single_file_plan(payload).expect("plan");
         updated_plan.files[0].path = vec!["index.html".to_owned()];
         let metadata_path = backend
@@ -7305,56 +6830,45 @@ mod tests {
             backend.attach_plan_metadata(&manifest_id, &updated_plan, None, None),
             Err(StorageError::Io(_))
         ));
-
         let after = backend.manifest(&manifest_id).expect("stored manifest");
         assert_eq!(after.files(), before.files());
         assert_eq!(after.chunk_files, before.chunk_files);
     }
-
     #[test]
     fn chunk_slice_rejects_misaligned_range() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let payload = vec![0xBB; 128];
         let plan = single_file_plan(&payload).expect("plan");
-
         let manifest = manifest_builder_for_plan(&payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
         let stored = backend.manifest(&manifest_id).expect("stored manifest");
-
         let err = stored
             .chunk_slice(1, 4)
             .expect_err("misaligned slice must fail");
         assert!(matches!(err, StorageError::RangeOutOfBounds { .. }));
     }
-
     #[test]
     fn load_manifest_round_trips_original_manifest() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let payload = b"manifest payload round trip bytes";
         let plan = single_file_plan(payload).expect("plan");
-
         let manifest = manifest_builder_for_plan(payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
         let stored = backend.manifest(&manifest_id).expect("stored manifest");
-
         let decoded = stored.load_manifest().expect("load manifest");
         assert_eq!(decoded, manifest);
         assert_eq!(
@@ -7364,17 +6878,14 @@ mod tests {
             norito::to_bytes(&manifest).expect("encode canonical manifest")
         );
     }
-
     #[test]
     fn retention_epoch_persists_in_metadata() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let payload = b"retention epoch persistence";
         let plan = single_file_plan(payload).expect("plan");
         let mut policy = PinPolicy::default();
         policy.retention_epoch = 200;
-
         let manifest = manifest_builder_for_plan(payload, &plan)
             .pin_policy(policy)
             .add_metadata(
@@ -7387,12 +6898,10 @@ mod tests {
             )
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
-
         let stored = backend.manifest(&manifest_id).expect("stored");
         assert_eq!(stored.retention_epoch(), 150);
         let source = stored.retention_source().expect("retention source");
@@ -7400,7 +6909,6 @@ mod tests {
             source.sources,
             vec![sorafs_manifest::retention::RetentionSourceKindV1::DealEnd]
         );
-
         drop(backend);
         let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload");
         let stored_reloaded = reloaded.manifest(&manifest_id).expect("stored manifest");
@@ -7413,14 +6921,12 @@ mod tests {
             vec![sorafs_manifest::retention::RetentionSourceKindV1::DealEnd]
         );
     }
-
     #[test]
     fn restart_rejects_noncanonical_or_unbound_retention_sources() {
         for case in 0..4_u8 {
             let temp_dir = tempfile::tempdir().expect("create temp dir");
             let (config, backend, manifest_id) =
                 ingest_test_payload(&temp_dir, b"retention source tamper", 0xB0 + case);
-
             match case {
                 0 => {
                     rewrite_manifest_record(&backend, &manifest_id, |record| {
@@ -7468,7 +6974,6 @@ mod tests {
                 }
                 _ => unreachable!("bounded test case"),
             }
-
             drop(backend);
             assert!(matches!(
                 StorageBackend::new(config),
@@ -7476,62 +6981,50 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn last_access_persists_after_reads() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let payload = b"last access persistence";
         let plan = single_file_plan(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
-
         let stored = backend.manifest(&manifest_id).expect("stored");
         let initial_access = stored.last_access();
         assert!(initial_access > 0);
-
         let _slice = backend
             .read_payload_range(&manifest_id, 0, 4)
             .expect("read");
-
         let updated = backend.manifest(&manifest_id).expect("stored");
         assert!(updated.last_access() > initial_access);
-
         drop(backend);
         let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload");
         let stored_reloaded = reloaded.manifest(&manifest_id).expect("stored");
         assert_eq!(stored_reloaded.last_access(), updated.last_access());
     }
-
     #[test]
     fn evict_manifest_removes_files_and_updates_index() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let payload = b"payload for eviction";
         let plan = single_file_plan(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
-
         let stored = backend.manifest(&manifest_id).expect("stored");
         let manifest_dir = stored.manifest_path().parent().expect("manifest dir");
         assert!(manifest_dir.exists());
-
         let freed = backend
             .evict_manifest(&manifest_id)
             .expect("evict manifest");
@@ -7540,12 +7033,10 @@ mod tests {
         assert_eq!(backend.manifest_count(), 0);
         assert_eq!(backend.total_bytes(), 0);
         assert!(!manifest_dir.exists());
-
         drop(backend);
         let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload");
         assert_eq!(reloaded.manifest_count(), 0);
     }
-
     #[test]
     fn admitted_payload_lease_defers_and_redacts_later_chunk_io_failure_after_progress() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -7561,19 +7052,16 @@ mod tests {
         let manifest_digest = *stored.manifest_digest();
         let schedulers =
             StorageSchedulersRuntime::new(crate::scheduler::StorageSchedulerConfig::default());
-
         backend
             .with_admitted_payload_read_lease_by_digest(&manifest_digest, &schedulers, |lease| {
                 let mut reader = lease.open_reader().expect("open admitted payload reader");
                 let mut output = vec![0_u8; first_chunk_len + 1];
-
                 let read = reader
                     .read(&mut output)
                     .expect("first chunk is returned as a successful short read");
                 assert_eq!(read, first_chunk_len);
                 assert_eq!(&output[..read], &payload[..read]);
                 assert_eq!(reader.offset, first_chunk_len as u64);
-
                 let error = reader
                     .read(&mut output[first_chunk_len..])
                     .expect_err("later unavailable chunk fails before making progress");
@@ -7588,7 +7076,6 @@ mod tests {
             .expect("acquire admitted payload lease")
             .expect("admitted manifest remains present");
     }
-
     #[test]
     fn admitted_payload_read_errors_preserve_transient_class_without_details() {
         let transient = admitted_payload_chunk_error(ChunkStoreError::Io(io::Error::new(
@@ -7597,14 +7084,12 @@ mod tests {
         )));
         assert_eq!(transient.kind(), io::ErrorKind::TimedOut);
         assert!(!transient.to_string().contains("secret storage path"));
-
         let truncated = admitted_payload_chunk_error(ChunkStoreError::Io(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             "secret truncated-file detail",
         )));
         assert_eq!(truncated.kind(), io::ErrorKind::InvalidData);
         assert!(!truncated.to_string().contains("secret truncated-file"));
-
         let integrity =
             admitted_payload_chunk_error(ChunkStoreError::DigestMismatch { chunk_index: 7 });
         assert_eq!(integrity.kind(), io::ErrorKind::InvalidData);
@@ -7613,13 +7098,11 @@ mod tests {
             io::ErrorKind::WouldBlock
         );
     }
-
     #[test]
     fn manifest_retirement_intent_is_exclusive_and_released() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let payload = b"retirement intent excludes concurrent eviction";
         let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xCF);
-
         let intent = backend
             .begin_manifest_retirement(&manifest_id)
             .expect("install retirement intent");
@@ -7629,7 +7112,6 @@ mod tests {
                 if rejected == manifest_id
         ));
         drop(intent);
-
         assert_eq!(
             backend
                 .evict_manifest(&manifest_id)
@@ -7637,7 +7119,6 @@ mod tests {
             payload.len() as u64
         );
     }
-
     #[test]
     fn eviction_waits_for_active_manifest_io_lease() {
         let _serial = MANIFEST_IO_WRITE_WAIT_TEST_SERIAL
@@ -7695,7 +7176,6 @@ mod tests {
             let result = worker_backend.evict_manifest(&worker_manifest_id);
             done_tx.send(result).expect("send eviction result");
         });
-
         write_waiting_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("eviction worker waits for the manifest I/O lease");
@@ -7725,7 +7205,6 @@ mod tests {
             matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
             "eviction must remain blocked while a reader holds the manifest lease"
         );
-
         lease_release_tx
             .send(())
             .expect("release admitted payload lease");
@@ -7744,7 +7223,6 @@ mod tests {
         worker.join().expect("eviction worker joins");
         assert!(backend.manifest(&manifest_id).is_none());
     }
-
     #[test]
     fn access_metadata_update_cannot_resurrect_evicted_manifest() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -7766,7 +7244,6 @@ mod tests {
         entered_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("access operation enters protected section");
-
         let (evicted_tx, evicted_rx) = mpsc::channel();
         let evict_backend = Arc::clone(&backend);
         let evict_manifest_id = manifest_id.clone();
@@ -7782,7 +7259,6 @@ mod tests {
             ),
             "eviction must wait for access metadata and payload work"
         );
-
         release_tx.send(()).expect("release access operation");
         access
             .join()
@@ -7793,37 +7269,30 @@ mod tests {
             .expect("eviction completes")
             .expect("eviction succeeds");
         eviction.join().expect("eviction worker joins");
-
         assert!(!manifest_dir.exists());
         assert!(backend.manifest(&manifest_id).is_none());
     }
-
     #[test]
     fn to_car_plan_matches_stored_chunks() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let payload = vec![0xCC; 96];
         let plan = single_file_plan(&payload).expect("plan");
-
         let manifest = manifest_builder_for_plan(&payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
         let stored = backend.manifest(&manifest_id).expect("stored manifest");
-
         let rebuilt = stored.to_car_plan(sorafs_chunker::ChunkProfile::DEFAULT);
         assert_eq!(rebuilt.chunk_profile, plan.chunk_profile);
         assert_eq!(rebuilt.content_length, plan.content_length);
         assert_eq!(rebuilt.chunks, plan.chunks);
         assert_eq!(rebuilt.payload_digest, plan.payload_digest);
         assert_eq!(rebuilt.files, plan.files);
-
         let hint = TaikaiSegmentHint {
             event: "event-a".to_owned(),
             stream: "stream-a".to_owned(),
@@ -7844,27 +7313,22 @@ mod tests {
                 .all(|chunk| chunk.taikai_segment_hint.as_ref() == Some(&hint))
         );
     }
-
     #[test]
     fn sample_por_returns_proofs() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let payload = (0..(sorafs_car::POR_LEAF_SIZE * 4 + 17))
             .map(|index| u8::try_from(index % 251).expect("fixture byte"))
             .collect::<Vec<_>>();
         let plan = single_file_plan(&payload).expect("plan");
-
         let manifest = manifest_builder_for_plan(&payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = payload.as_slice();
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
-
         let stored = backend.manifest(&manifest_id).expect("stored manifest");
         let leaf_count = stored.por_tree().leaf_count_u64();
         let collision_seed = (0u64..)
@@ -7889,12 +7353,10 @@ mod tests {
             "provider storage sampling must use the shared collision schedule"
         );
         let root = *stored.por_tree().root();
-
         for (_idx, proof) in samples {
             assert!(proof.verify(&root));
         }
     }
-
     #[test]
     fn sample_por_rejects_unbounded_sample_count() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -7902,7 +7364,6 @@ mod tests {
         let requested = usize::try_from(MAX_PROOF_STREAM_SAMPLE_COUNT)
             .expect("u32 PoR sample ceiling must fit usize")
             + 1;
-
         assert!(matches!(
             backend.sample_por("missing-manifest", requested, 7),
             Err(StorageError::PorSampleCountTooLarge {
@@ -7911,25 +7372,20 @@ mod tests {
             }) if found == requested
         ));
     }
-
     #[test]
     fn chunk_by_digest_returns_record() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let payload = b"deterministic chunk access";
         let plan = single_file_plan(payload).expect("plan");
-
         let manifest = manifest_builder_for_plan(payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
-
         let first_chunk = plan.chunks.first().expect("at least one chunk");
         let record = backend
             .chunk_by_digest(&manifest_id, &first_chunk.digest)
@@ -7939,25 +7395,20 @@ mod tests {
         assert_eq!(record.digest, first_chunk.digest);
         assert!(record.path.exists(), "chunk file must exist on disk");
     }
-
     #[test]
     fn chunk_by_digest_missing_returns_error() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let payload = b"missing chunk digests";
         let plan = single_file_plan(payload).expect("plan");
-
         let manifest = manifest_builder_for_plan(payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
-
         let missing = [0xFFu8; 32];
         let err = backend
             .chunk_by_digest(&manifest_id, &missing)
@@ -7971,32 +7422,26 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn read_chunk_returns_bytes() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
-
         let payload = b"stream chunk payload";
         let plan = single_file_plan(payload).expect("plan");
-
         let manifest = manifest_builder_for_plan(payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
-
         let chunk = plan.chunks.first().expect("chunk");
         let bytes = backend
             .read_chunk(&manifest_id, &chunk.digest)
             .expect("chunk bytes");
         assert_eq!(bytes, payload);
     }
-
     #[test]
     fn same_length_chunk_corruption_fails_all_read_paths() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -8011,11 +7456,9 @@ mod tests {
         let stored = backend.manifest(&manifest_id).expect("stored manifest");
         let manifest_digest = *stored.manifest_digest();
         let chunk = stored.chunk(0).cloned().expect("stored chunk");
-
         let mut corrupted = payload.to_vec();
         corrupted[0] ^= 0x80;
         fs::write(&chunk.path, &corrupted).expect("replace chunk with same-length corruption");
-
         assert!(matches!(
             backend.read_chunk(&manifest_id, &chunk.digest),
             Err(StorageError::ChunkStore(ChunkStoreError::DigestMismatch {
@@ -8048,7 +7491,6 @@ mod tests {
             .expect("acquire admitted payload lease")
             .expect("admitted manifest remains present");
     }
-
     #[cfg(unix)]
     #[test]
     fn chunk_reads_reject_symlink_replacement() {
@@ -8071,7 +7513,6 @@ mod tests {
         fs::write(&replacement, payload).expect("write replacement");
         fs::remove_file(&chunk.path).expect("remove stored chunk");
         symlink(&replacement, &chunk.path).expect("install symlink");
-
         assert!(matches!(
             backend.read_chunk(&manifest_id, &chunk.digest),
             Err(StorageError::ChunkStore(ChunkStoreError::Io(_)))
@@ -8081,7 +7522,6 @@ mod tests {
             Err(StorageError::ChunkStore(ChunkStoreError::Io(_)))
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn chunk_reads_reject_hard_link_aliases() {
@@ -8100,7 +7540,6 @@ mod tests {
             .expect("stored chunk");
         let alias = canonical_temp_path(&temp_dir).join("chunk-alias.bin");
         fs::hard_link(&chunk.path, &alias).expect("create chunk hard link");
-
         assert!(matches!(
             backend.read_chunk(&manifest_id, &chunk.digest),
             Err(StorageError::ChunkStore(ChunkStoreError::Io(_)))
@@ -8110,7 +7549,6 @@ mod tests {
             Err(StorageError::ChunkStore(ChunkStoreError::Io(_)))
         ));
     }
-
     #[test]
     fn pdp_commitment_tree_and_witnesses_survive_restart() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -8151,7 +7589,6 @@ mod tests {
         let retained = backend.pdp_tree_memory_bytes();
         drop(stored);
         drop(backend);
-
         let reloaded = StorageBackend::new(config).expect("restart backend");
         assert_eq!(reloaded.pdp_tree_memory_bytes(), retained);
         let restored = reloaded.manifest(&manifest_id).expect("restored manifest");
@@ -8164,7 +7601,6 @@ mod tests {
             before
         );
     }
-
     #[test]
     fn persisted_por_commitment_is_bounded_by_chunk_count_not_leaf_count() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -8200,7 +7636,6 @@ mod tests {
             tree.leaf_count()
         );
     }
-
     #[test]
     fn restart_rejects_tampered_pdp_por_and_payload_bindings() {
         for case in 0_u8..10 {
@@ -8315,7 +7750,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn restart_rejects_persisted_por_root_not_bound_to_manifest() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -8336,7 +7770,6 @@ mod tests {
                 tampered_commitment_digest.expect("tampered commitment digest recorded");
         });
         drop(backend);
-
         let error = StorageBackend::new(config)
             .expect_err("restart must reject a persisted PoR root detached from its manifest");
         match error {
@@ -8347,7 +7780,6 @@ mod tests {
             other => panic!("unexpected restart error: {other:?}"),
         }
     }
-
     #[test]
     fn empty_payload_has_no_pdp_commitment_or_tree() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -8378,7 +7810,6 @@ mod tests {
         ));
         drop(stored);
         drop(backend);
-
         let restarted = StorageBackend::new(config).expect("restart empty payload");
         let restored = restarted
             .manifest(&manifest_id)
@@ -8388,7 +7819,6 @@ mod tests {
         assert!(restored.por_tree_ref().is_empty());
         assert_eq!(restarted.pdp_tree_memory_bytes(), 0);
     }
-
     #[test]
     fn empty_payload_rejects_noncanonical_por_summary_geometry_and_root() {
         for case in 0_u8..4 {
@@ -8438,14 +7868,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn pdp_tree_budget_rejects_ingest_and_restart_overcommit() {
         let payload = vec![0xA5; 300_000];
         let required =
             pdp_tree_memory_for_payload(payload.len() as u64).expect("PDP tree estimate");
         assert!(required > 0);
-
         let ingest_dir = tempfile::tempdir().expect("create ingest temp dir");
         let ingest_config = temp_config_with_pdp_limit(&ingest_dir, required - 1);
         let ingest_backend = StorageBackend::new(ingest_config).expect("backend init");
@@ -8462,7 +7890,6 @@ mod tests {
         assert_eq!(ingest_backend.manifest_count(), 0);
         assert_eq!(ingest_backend.pdp_tree_memory_bytes(), 0);
         assert_eq!(ingest_backend.reserved_pdp_tree_memory_bytes(), 0);
-
         let restart_dir = tempfile::tempdir().expect("create restart temp dir");
         let generous = temp_config_with_pdp_limit(&restart_dir, required);
         let backend = StorageBackend::new(generous).expect("backend init");
@@ -8481,7 +7908,6 @@ mod tests {
             }) if found == required && available == required - 1
         ));
     }
-
     #[test]
     fn backend_rejects_invalid_direct_pdp_configuration_before_filesystem_mutation() {
         for (sample_window, memory_limit) in [(0, 1), (501, 1), (1, 0)] {
@@ -8500,7 +7926,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn uncertain_chunk_directory_publication_fail_stops_backend() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -8522,7 +7947,6 @@ mod tests {
             Err(StorageError::DurabilityPoisoned { .. })
         ));
     }
-
     #[test]
     fn restart_sums_all_retained_pdp_trees_against_budget() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -8543,7 +7967,6 @@ mod tests {
         }
         assert_eq!(backend.pdp_tree_memory_bytes(), total_limit);
         drop(backend);
-
         let constrained = temp_config_with_pdp_limit(&temp_dir, total_limit - 1);
         assert!(matches!(
             StorageBackend::new(constrained),
@@ -8553,7 +7976,6 @@ mod tests {
             }) if required == per_tree && available == per_tree - 1
         ));
     }
-
     #[test]
     fn pdp_tree_reservation_blocks_concurrent_ingest_and_releases_on_failure() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -8582,7 +8004,6 @@ mod tests {
             .recv_timeout(Duration::from_secs(2))
             .expect("first ingest reaches payload read");
         assert_eq!(backend.reserved_pdp_tree_memory_bytes(), required);
-
         let mut competing_reader = payload.as_slice();
         assert!(matches!(
             backend.ingest_manifest(&second_manifest, &plan, &mut competing_reader),
@@ -8595,7 +8016,6 @@ mod tests {
         assert!(worker.join().expect("worker joins").is_err());
         assert_eq!(backend.reserved_pdp_tree_memory_bytes(), 0);
         assert_eq!(backend.pdp_tree_memory_bytes(), 0);
-
         let mut retry_reader = payload.as_slice();
         backend
             .ingest_manifest(&second_manifest, &plan, &mut retry_reader)
@@ -8603,7 +8023,6 @@ mod tests {
         assert_eq!(backend.pdp_tree_memory_bytes(), required);
         assert_eq!(backend.reserved_pdp_tree_memory_bytes(), 0);
     }
-
     #[test]
     fn pdp_tree_budget_is_released_after_eviction() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -8620,7 +8039,6 @@ mod tests {
             .ingest_manifest(&first_manifest, &first_plan, &mut first_reader)
             .expect("first ingest");
         assert_eq!(backend.pdp_tree_memory_bytes(), required);
-
         let second_plan = single_file_plan(&second_payload).expect("second plan");
         let second_manifest = test_manifest(&second_payload, &second_plan, 0xF0);
         let mut blocked_reader = second_payload.as_slice();
@@ -8632,14 +8050,12 @@ mod tests {
             .evict_manifest(&first_id)
             .expect("evict first manifest");
         assert_eq!(backend.pdp_tree_memory_bytes(), 0);
-
         let mut admitted_reader = second_payload.as_slice();
         backend
             .ingest_manifest(&second_manifest, &second_plan, &mut admitted_reader)
             .expect("second ingest after eviction");
         assert_eq!(backend.pdp_tree_memory_bytes(), required);
     }
-
     #[test]
     fn pdp_witnesses_reject_noncanonical_duplicate_and_out_of_range_samples() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -8702,7 +8118,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn pdp_witness_reads_reject_symlink_and_hardlink_chunks() {
@@ -8731,7 +8146,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn pdp_witness_rejects_chunk_mutation_during_exact_read() {
         let _serial = CHUNK_READ_TEST_SERIAL
@@ -8771,7 +8185,6 @@ mod tests {
             Err(StorageError::PdpWitness { .. })
         ));
     }
-
     #[test]
     fn pdp_proof_io_lease_blocks_concurrent_eviction() {
         let _serial = CHUNK_READ_TEST_SERIAL
@@ -8802,7 +8215,6 @@ mod tests {
         entered_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("proof holds manifest I/O lease");
-
         let (evicted_tx, evicted_rx) = mpsc::channel();
         let evict_backend = Arc::clone(&backend);
         let evict_manifest_id = manifest_id.clone();
@@ -8835,38 +8247,32 @@ mod tests {
         assert!(backend.manifest(&manifest_id).is_none());
         assert_eq!(backend.pdp_tree_memory_bytes(), 0);
     }
-
     #[test]
     fn restart_rehydrates_manifest_index() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let cfg = temp_config(&temp_dir);
         let backend = StorageBackend::new(cfg.clone()).expect("backend init");
-
         let payload = b"Persistent storage test payload";
         let plan = single_file_plan(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = &payload[..];
         let manifest_id = backend
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
         drop(backend);
-
         let backend_reloaded = StorageBackend::new(cfg).expect("reloaded backend");
         let stored = backend_reloaded
             .manifest(&manifest_id)
             .expect("manifest restored");
         assert_eq!(stored.content_length(), plan.content_length);
-
         let bytes = backend_reloaded
             .read_payload_range(&manifest_id, 0, payload.len())
             .expect("read after restart");
         assert_eq!(bytes, payload);
     }
-
     #[test]
     fn restart_rejects_same_length_chunk_corruption() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -8880,13 +8286,11 @@ mod tests {
         let mut corrupted = payload.to_vec();
         corrupted[0] ^= 0x01;
         fs::write(&chunk_path, corrupted).expect("corrupt chunk");
-
         assert!(matches!(
             StorageBackend::new(config),
             Err(StorageError::CorruptStorageState { .. })
         ));
     }
-
     #[test]
     fn restart_rejects_unsupported_index_version_and_duplicate_ids() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -8903,7 +8307,6 @@ mod tests {
             StorageBackend::new(config.clone()),
             Err(StorageError::UnsupportedIndexVersion { .. })
         ));
-
         index.version = INDEX_VERSION_V1;
         index.entries.push(index.entries[0].clone());
         fs::write(
@@ -8916,7 +8319,6 @@ mod tests {
             Err(StorageError::CorruptStorageState { .. })
         ));
     }
-
     #[test]
     fn restart_rejects_noncanonical_compressed_index() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -8931,13 +8333,11 @@ mod tests {
         assert_ne!(compressed, bytes, "compressed form must be noncanonical");
         drop(backend);
         fs::write(&index_path, compressed).expect("write compressed index");
-
         assert!(matches!(
             StorageBackend::new(config),
             Err(StorageError::CorruptStorageState { .. })
         ));
     }
-
     #[test]
     fn storage_decode_limits_bound_all_resource_dimensions() {
         let limits = storage_decode_limits(1_024);
@@ -8947,7 +8347,6 @@ mod tests {
         assert_eq!(limits.max_total_allocated_bytes(), 4_096);
         assert_eq!(limits.max_nesting_depth(), 64);
     }
-
     #[test]
     fn restart_rejects_manifest_id_path_traversal() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -8960,13 +8359,11 @@ mod tests {
         index.entries[0].manifest_id = "../outside".to_string();
         fs::write(&index_path, norito::to_bytes(&index).expect("encode index"))
             .expect("write traversing index");
-
         assert!(matches!(
             StorageBackend::new(config),
             Err(StorageError::CorruptStorageState { .. })
         ));
     }
-
     #[test]
     fn restart_rejects_chunk_filename_traversal() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -8986,13 +8383,11 @@ mod tests {
             norito::to_bytes(&record).expect("encode metadata"),
         )
         .expect("write traversing metadata");
-
         assert!(matches!(
             StorageBackend::new(config),
             Err(StorageError::CorruptStorageState { .. })
         ));
     }
-
     #[test]
     fn restart_rejects_nonportable_logical_file_paths() {
         for component in [".", "..", "nested/name", "windows\\name", "line\nbreak"] {
@@ -9013,7 +8408,6 @@ mod tests {
                 norito::to_bytes(&record).expect("encode metadata"),
             )
             .expect("write invalid metadata");
-
             assert!(
                 matches!(
                     StorageBackend::new(config),
@@ -9023,7 +8417,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn restart_rejects_symlinked_manifest_artifacts() {
@@ -9039,14 +8432,12 @@ mod tests {
             drop(backend);
             fs::remove_file(&artifact_path).expect("remove artifact");
             symlink(&replacement_path, &artifact_path).expect("install symlink");
-
             assert!(
                 StorageBackend::new(config).is_err(),
                 "symlinked {artifact_name} must be rejected"
             );
         }
     }
-
     #[cfg(unix)]
     #[test]
     fn restart_rejects_hardlinked_persistent_artifacts() {
@@ -9062,7 +8453,6 @@ mod tests {
             let alias_path = canonical_temp_path(&temp_dir).join(format!("{artifact_name}.alias"));
             fs::hard_link(&artifact_path, &alias_path).expect("create artifact hard link");
             drop(backend);
-
             assert!(
                 matches!(
                     StorageBackend::new(config),
@@ -9072,7 +8462,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn restart_rejects_oversized_metadata_before_allocation() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -9089,26 +8478,22 @@ mod tests {
             .expect("open metadata")
             .set_len(MAX_MANIFEST_METADATA_BYTES + 1)
             .expect("extend metadata sparsely");
-
         assert!(matches!(
             StorageBackend::new(config),
             Err(StorageError::CorruptStorageState { .. })
         ));
     }
-
     #[test]
     fn write_atomic_uses_added_extension_and_cleans_up_temp_file() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let temp_path = canonical_temp_path(&temp_dir);
         let target_with_ext = temp_path.join("bundle.car");
-
         write_atomic(&target_with_ext, b"hello").expect("write with extension");
         assert_eq!(fs::read(&target_with_ext).expect("read bundle"), b"hello");
         assert!(
             !target_with_ext.with_added_extension(ATOMIC_EXT).exists(),
             "temporary file should not remain on disk"
         );
-
         let target_no_ext = temp_path.join("manifest");
         write_atomic(&target_no_ext, b"x").expect("write without extension");
         assert_eq!(fs::read(&target_no_ext).expect("read manifest"), b"x");
@@ -9117,18 +8502,15 @@ mod tests {
             "temporary file should be removed even when original path has no extension"
         );
     }
-
     #[test]
     fn write_atomic_reports_post_rename_directory_sync_failure() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let target = canonical_temp_path(&temp_dir).join("index.norito");
         fs::write(&target, b"old").expect("seed target");
-
         let error = write_atomic_with_directory_sync(&target, b"new", |_| {
             Err(io::Error::other("injected directory sync failure"))
         })
         .expect_err("post-rename sync failure must be classified");
-
         assert!(matches!(
             error,
             AtomicWriteError::DurabilityUncertain { .. }
@@ -9150,7 +8532,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(leftovers.is_empty(), "temporary file must not remain");
     }
-
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     #[test]
     fn pinned_atomic_parent_rename_cannot_be_redirected_by_path_swap() {
@@ -9165,7 +8546,6 @@ mod tests {
         let destination = parent.join("index");
         fs::write(&temporary, b"pinned").expect("write pinned temporary");
         let pinned = AtomicParentDirectory::open(&parent).expect("pin live parent");
-
         fs::rename(&parent, &moved_parent).expect("move pinned parent");
         std::os::unix::fs::symlink(&redirect, &parent).expect("redirect live parent path");
         assert!(
@@ -9175,7 +8555,6 @@ mod tests {
         pinned
             .rename_entry(&temporary, &destination)
             .expect("descriptor-relative rename remains inside pinned directory");
-
         assert_eq!(
             fs::read(moved_parent.join("index")).expect("read pinned destination"),
             b"pinned"
@@ -9185,7 +8564,6 @@ mod tests {
             "swapped path must not receive the committed entry"
         );
     }
-
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     #[test]
     fn post_rename_parent_path_swap_is_durability_uncertain_not_precommit() {
@@ -9198,14 +8576,12 @@ mod tests {
         fs::create_dir(&redirect).expect("create redirect parent");
         let target = parent.join("index");
         fs::write(&target, b"old").expect("seed target");
-
         let error = write_atomic_with_directory_sync(&target, b"new", |pinned| {
             fs::rename(&parent, &moved_parent)?;
             std::os::unix::fs::symlink(&redirect, &parent)?;
             pinned.sync()
         })
         .expect_err("post-rename parent identity loss must be uncertain");
-
         assert!(matches!(
             error,
             AtomicWriteError::DurabilityUncertain { .. }
@@ -9219,7 +8595,6 @@ mod tests {
             "swapped parent must not receive the replacement"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn atomic_temp_commit_validation_rejects_path_replacement_and_hardlinks() {
@@ -9239,7 +8614,6 @@ mod tests {
             "atomic temporary",
         )
         .expect("stable temporary is accepted");
-
         fs::hard_link(&temporary, root.join("index.alias")).expect("hard-link temporary");
         assert!(
             validate_atomic_open_file_identity(
@@ -9253,7 +8627,6 @@ mod tests {
             "a second hard link must invalidate the temporary"
         );
         fs::remove_file(root.join("index.alias")).expect("remove hard-link alias");
-
         fs::rename(&temporary, &displaced).expect("displace opened temporary");
         fs::write(&temporary, b"stable").expect("replace temporary path with same-size inode");
         assert!(
@@ -9268,7 +8641,6 @@ mod tests {
             "same-size path replacement must not retain trusted identity"
         );
     }
-
     #[test]
     fn uncertain_commit_fail_stops_subsequent_storage_operations() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -9279,12 +8651,10 @@ mod tests {
             source: io::Error::other("injected directory sync failure"),
         };
         backend.fail_stop_durability(&uncertainty);
-
         assert!(matches!(
             backend.read_payload_range(&manifest_id, 0, 1),
             Err(StorageError::DurabilityPoisoned { .. })
         ));
-
         let plan = single_file_plan(payload).expect("plan");
         let manifest = test_manifest(payload, &plan, 0xD4);
         let mut reader = &payload[..];
@@ -9293,13 +8663,11 @@ mod tests {
             Err(StorageError::DurabilityPoisoned { .. })
         ));
     }
-
     #[test]
     fn repair_replacement_fail_stops_after_post_rename_sync_failure() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let payload = b"repair replacement durability payload";
         let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xD5);
-
         let replacement = backend
             .with_manifest_io(&manifest_id, |manifest| {
                 let chunk = manifest.chunk(0).expect("repair chunk").clone();
@@ -9311,7 +8679,6 @@ mod tests {
                 )
             })
             .expect("acquire repair lifecycle lease");
-
         assert!(matches!(
             replacement,
             Err(StorageError::DurabilityUncertain { .. })
@@ -9321,7 +8688,6 @@ mod tests {
             Err(StorageError::DurabilityPoisoned { .. })
         ));
     }
-
     #[test]
     fn write_atomic_allows_concurrent_writes_to_same_target() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -9330,17 +8696,14 @@ mod tests {
         let payloads = (0..16)
             .map(|idx| format!("payload-{idx}").into_bytes())
             .collect::<Vec<_>>();
-
         std::thread::scope(|scope| {
             for payload in &payloads {
                 let target = &target;
                 scope.spawn(move || write_atomic(target, payload).expect("concurrent write"));
             }
         });
-
         let final_payload = fs::read(&target).expect("read final payload");
         assert!(payloads.iter().any(|payload| payload == &final_payload));
-
         let leftovers = fs::read_dir(temp_path)
             .expect("read temp dir")
             .filter_map(Result::ok)
@@ -9356,7 +8719,6 @@ mod tests {
             "temporary files should not remain after concurrent writes"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn write_atomic_rejects_symlink_output() {
@@ -9366,17 +8728,14 @@ mod tests {
         fs::write(&target_path, b"unchanged\n").expect("write target");
         let output_path = temp_path.join("index.norito");
         std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
-
         let err = write_atomic(&output_path, b"replace").expect_err("reject symlink output");
         let message = err.to_string();
-
         assert!(
             message.contains("must not be a symlink"),
             "unexpected error: {message}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
     }
-
     #[cfg(unix)]
     include!("store_atomic_path_tests.rs");
 }

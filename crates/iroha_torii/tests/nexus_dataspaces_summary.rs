@@ -38,10 +38,9 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::ALICE_ID;
-use iroha_torii::Torii;
 use mv::storage::StorageReadOnly;
 use norito::json::{self, Value};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::broadcast;
 use tower::ServiceExt as _;
 
 #[path = "fixtures.rs"]
@@ -1050,72 +1049,22 @@ fn valid_missing_account_literal() -> String {
 
 fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId) -> axum::Router {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = iroha_core::kiso::KisoHandle::start(cfg.clone());
     let queue_cfg = Queue::default();
     let (events_tx, _events_rx) = broadcast::channel(1);
     let queue = Arc::new(iroha_core::queue::Queue::from_config(queue_cfg, events_tx));
-    let (_peers_tx, peers_rx) = watch::channel(HashSet::default());
-    #[cfg(not(feature = "telemetry"))]
-    let _ = local_peer_id;
-
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry;
-        use iroha_primitives::time::TimeSource;
-
-        let metrics = fixtures::shared_metrics();
-        let (_guard, mock_time) = TimeSource::new_mock(core::time::Duration::default());
-        telemetry::start(
-            metrics,
-            Arc::clone(&state),
-            Arc::clone(kura),
-            Arc::clone(&queue),
-            peers_rx.clone(),
-            local_peer_id,
-            mock_time,
-            false,
-        )
-        .0
-    };
-
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                Arc::clone(kura),
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                Arc::clone(kura),
-                state,
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
-    torii.api_router_for_tests()
+    let torii = fixtures::ToriiHarness::new(
+        &cfg,
+        iroha_data_model::ChainId::from("test-chain"),
+        iroha_torii::test_utils::signed_query_network_id(),
+        kura,
+        &state,
+        &queue,
+        &local_peer_id,
+        broadcast::channel(1).0,
+        true,
+        false,
+    );
+    torii.router()
 }
 
 fn block_header(height: u64) -> BlockHeader {

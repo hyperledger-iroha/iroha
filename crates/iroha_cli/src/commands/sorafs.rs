@@ -160,7 +160,6 @@ use norito::{NoritoSerialize, decode_from_bytes};
 
 #[allow(dead_code)]
 const ML_KEM_768_PUBLIC_LEN: usize = 1184;
-
 #[derive(clap::ValueEnum, Clone, Copy, Debug, Default)]
 enum MlDsaSuiteArg {
     #[default]
@@ -171,7 +170,6 @@ enum MlDsaSuiteArg {
     #[value(name = "mldsa87")]
     MlDsa87,
 }
-
 impl MlDsaSuiteArg {
     fn as_suite(self) -> MlDsaSuite {
         match self {
@@ -180,7 +178,6 @@ impl MlDsaSuiteArg {
             Self::MlDsa87 => MlDsaSuite::MlDsa87,
         }
     }
-
     fn label(self) -> &'static str {
         match self {
             Self::MlDsa44 => "ML-DSA-44",
@@ -189,7 +186,6 @@ impl MlDsaSuiteArg {
         }
     }
 }
-
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
 enum StorageClassArg {
     #[value(name = "hot")]
@@ -199,7 +195,6 @@ enum StorageClassArg {
     #[value(name = "cold")]
     Cold,
 }
-
 impl StorageClassArg {
     fn to_storage_class(self) -> StorageClass {
         match self {
@@ -209,7 +204,6 @@ impl StorageClassArg {
         }
     }
 }
-
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
 enum ReserveTierArg {
     #[value(name = "tier-a")]
@@ -219,7 +213,6 @@ enum ReserveTierArg {
     #[value(name = "tier-c")]
     TierC,
 }
-
 impl ReserveTierArg {
     fn to_policy_tier(self) -> ReserveTier {
         match self {
@@ -229,7 +222,6 @@ impl ReserveTierArg {
         }
     }
 }
-
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
 enum ReserveDurationArg {
     #[value(name = "monthly")]
@@ -239,7 +231,6 @@ enum ReserveDurationArg {
     #[value(name = "annual")]
     Annual,
 }
-
 impl ReserveDurationArg {
     fn to_policy_duration(self) -> ReserveDuration {
         match self {
@@ -249,7 +240,6 @@ impl ReserveDurationArg {
         }
     }
 }
-
 #[cfg(test)]
 mod capture_path_tests {
     use super::{default_orchestrator_capture_dir, scoreboard_capture_paths};
@@ -265,7 +255,6 @@ mod capture_path_tests {
             Some(&expected_dir.join("summary.json"))
         );
     }
-
     #[test]
     fn scoreboard_override_preserves_parent_for_summary() {
         let base = PathBuf::from("/tmp/custom");
@@ -273,7 +262,6 @@ mod capture_path_tests {
         assert_eq!(capture.scoreboard, base.join("sb.json"));
         assert_eq!(capture.summary.as_ref(), Some(&base.join("summary.json")));
     }
-
     #[test]
     fn summary_override_wins() {
         let summary = PathBuf::from("/tmp/out.json");
@@ -281,7 +269,6 @@ mod capture_path_tests {
         assert_eq!(capture.summary.as_ref(), Some(&summary));
     }
 }
-
 #[cfg(test)]
 mod provider_count_tests {
     use super::{ProviderCounts, insert_provider_counts};
@@ -306,7 +293,6 @@ mod provider_count_tests {
             Some("gateway-only")
         );
     }
-
     #[test]
     fn provider_counts_report_mixed_classifications() {
         let mut summary = norito::json::Map::new();
@@ -317,7 +303,6 @@ mod provider_count_tests {
         );
     }
 }
-
 #[cfg(test)]
 mod transport_policy_summary_tests {
     use super::{TransportPolicy, insert_transport_policy};
@@ -348,7 +333,6 @@ mod transport_policy_summary_tests {
             Some("direct-only")
         );
     }
-
     #[test]
     fn summary_defaults_transport_policy_without_override() {
         let mut summary = norito::json::Map::new();
@@ -370,7 +354,6 @@ mod transport_policy_summary_tests {
         );
     }
 }
-
 #[cfg(test)]
 mod telemetry_summary_tests {
     use super::{insert_summary_telemetry_region, insert_summary_telemetry_source};
@@ -385,14 +368,12 @@ mod telemetry_summary_tests {
             Some("otel::prod")
         );
     }
-
     #[test]
     fn summary_omits_telemetry_label_when_missing() {
         let mut summary = norito::json::Map::new();
         insert_summary_telemetry_source(&mut summary, None);
         assert!(!summary.contains_key("telemetry_source"));
     }
-
     #[test]
     fn summary_records_telemetry_region() {
         let mut summary = norito::json::Map::new();
@@ -402,7 +383,6 @@ mod telemetry_summary_tests {
             Some("iad-prod")
         );
     }
-
     #[test]
     fn summary_omits_telemetry_region_when_missing() {
         let mut summary = norito::json::Map::new();
@@ -410,13 +390,11 @@ mod telemetry_summary_tests {
         assert!(!summary.contains_key("telemetry_region"));
     }
 }
-
 impl fmt::Display for MlDsaSuiteArg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.label())
     }
 }
-
 #[derive(clap::ValueEnum, Clone, Copy, Debug, Default)]
 enum TokenOutputFormat {
     #[default]
@@ -427,7 +405,6 @@ enum TokenOutputFormat {
     #[value(name = "binary")]
     Binary,
 }
-
 impl TokenOutputFormat {
     fn describe(self) -> &'static str {
         match self {
@@ -437,7 +414,6 @@ impl TokenOutputFormat {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub enum Command {
@@ -498,7 +474,6 @@ pub enum Command {
     /// Orchestrate multi-provider chunk fetches via gateways.
     Fetch(FetchArgs),
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ReserveCommand {
     /// Quote reserve requirements and effective rent for a given tier/capacity.
@@ -508,7 +483,6 @@ pub enum ReserveCommand {
     /// Project reserve lifecycle stage and automatic credit draw state.
     Lifecycle(ReserveLifecycleArgs),
 }
-
 impl Run for ReserveCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -518,9 +492,7 @@ impl Run for ReserveCommand {
         }
     }
 }
-
 const SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1: u16 = 100;
-
 fn required_nonzero_lower_hex32(value: &str, flag: &str) -> Result<String> {
     if value.len() != 64
         || !value
@@ -536,7 +508,6 @@ fn required_nonzero_lower_hex32(value: &str, flag: &str) -> Result<String> {
     }
     Ok(value.to_owned())
 }
-
 fn required_hedging_billing_page_limit(limit: u16) -> Result<u16> {
     if !(1..=SORAFS_HEDGING_BILLING_MAX_PAGE_ITEMS_V1).contains(&limit) {
         return Err(eyre!(
@@ -545,7 +516,6 @@ fn required_hedging_billing_page_limit(limit: u16) -> Result<u16> {
     }
     Ok(limit)
 }
-
 /// Authenticated SoraFS billing statement and reconciliation commands.
 #[derive(clap::Subcommand, Debug)]
 pub enum BillingCommand {
@@ -560,7 +530,6 @@ pub enum BillingCommand {
     /// Fetch payload-free delivery reconciliation status.
     Reconciliation(BillingReconciliationArgs),
 }
-
 impl Run for BillingCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -572,17 +541,14 @@ impl Run for BillingCommand {
         }
     }
 }
-
 /// Fetch supervised billing projector status.
 #[derive(clap::Args, Debug, Default)]
 pub struct BillingStatusArgs {}
-
 impl Run for BillingStatusArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_billing_status)
     }
 }
-
 impl BillingStatusArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -593,7 +559,6 @@ impl BillingStatusArgs {
         render_json_response(context, get(&client)?)
     }
 }
-
 /// List owner-isolated published billing statements.
 #[derive(clap::Args, Debug)]
 pub struct BillingStatementsArgs {
@@ -607,13 +572,11 @@ pub struct BillingStatementsArgs {
     #[arg(long, value_name = "COUNT")]
     limit: u16,
 }
-
 impl Run for BillingStatementsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_billing_statements)
     }
 }
-
 impl BillingStatementsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -639,7 +602,6 @@ impl BillingStatementsArgs {
         render_json_response(context, list(&client, filter)?)
     }
 }
-
 /// Fetch one published billing statement.
 #[derive(clap::Args, Debug)]
 pub struct BillingStatementArgs {
@@ -653,13 +615,11 @@ pub struct BillingStatementArgs {
     #[arg(long, value_name = "PATH")]
     output: PathBuf,
 }
-
 impl Run for BillingStatementArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_billing_statement)
     }
 }
-
 impl BillingStatementArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -682,7 +642,6 @@ impl BillingStatementArgs {
         )
     }
 }
-
 fn write_billing_statement_response<C: RunContext>(
     context: &mut C,
     response: Response<Vec<u8>>,
@@ -753,7 +712,6 @@ fn write_billing_statement_response<C: RunContext>(
         "content_type": "application/x-norito"
     }))
 }
-
 /// Submit one owner acknowledgement for a published billing statement.
 #[derive(clap::Args, Debug)]
 pub struct BillingAcknowledgeArgs {
@@ -770,7 +728,6 @@ pub struct BillingAcknowledgeArgs {
     #[arg(long = "authentication-proof", value_name = "PATH")]
     authentication_proof: PathBuf,
 }
-
 impl Run for BillingAcknowledgeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -779,7 +736,6 @@ impl Run for BillingAcknowledgeArgs {
         )
     }
 }
-
 impl BillingAcknowledgeArgs {
     fn run_with<C, F>(&self, context: &mut C, acknowledge: F) -> Result<()>
     where
@@ -808,46 +764,38 @@ impl BillingAcknowledgeArgs {
         )
     }
 }
-
 #[cfg(unix)]
 type BillingProofFileIdentity = (u64, u64);
 #[cfg(windows)]
 type BillingProofFileIdentity = (Option<u32>, Option<u64>);
 #[cfg(not(any(unix, windows)))]
 type BillingProofFileIdentity = ();
-
 #[cfg(unix)]
 fn billing_proof_file_identity(metadata: &fs::Metadata) -> BillingProofFileIdentity {
     use std::os::unix::fs::MetadataExt as _;
 
     (metadata.dev(), metadata.ino())
 }
-
 #[cfg(windows)]
 fn billing_proof_file_identity(metadata: &fs::Metadata) -> BillingProofFileIdentity {
     use std::os::windows::fs::MetadataExt as _;
 
     (metadata.volume_serial_number(), metadata.file_index())
 }
-
 #[cfg(not(any(unix, windows)))]
 fn billing_proof_file_identity(_metadata: &fs::Metadata) -> BillingProofFileIdentity {}
-
 #[cfg(unix)]
 const fn billing_proof_file_identity_available(_identity: BillingProofFileIdentity) -> bool {
     true
 }
-
 #[cfg(windows)]
 const fn billing_proof_file_identity_available(identity: BillingProofFileIdentity) -> bool {
     identity.0.is_some() && identity.1.is_some()
 }
-
 #[cfg(not(any(unix, windows)))]
 const fn billing_proof_file_identity_available(_identity: BillingProofFileIdentity) -> bool {
     false
 }
-
 fn billing_proof_file_is_single_link(metadata: &fs::Metadata) -> bool {
     #[cfg(unix)]
     {
@@ -867,7 +815,6 @@ fn billing_proof_file_is_single_link(metadata: &fs::Metadata) -> bool {
         false
     }
 }
-
 #[cfg(windows)]
 fn billing_proof_file_is_reparse_point(metadata: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
@@ -875,16 +822,13 @@ fn billing_proof_file_is_reparse_point(metadata: &fs::Metadata) -> bool {
     const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
     metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
 }
-
 #[cfg(not(windows))]
 fn billing_proof_file_is_reparse_point(_metadata: &fs::Metadata) -> bool {
     false
 }
-
 fn billing_proof_file_is_indirect(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink() || billing_proof_file_is_reparse_point(metadata)
 }
-
 #[cfg(unix)]
 fn billing_proof_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
@@ -898,7 +842,6 @@ fn billing_proof_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-
 #[cfg(windows)]
 fn billing_proof_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
@@ -911,12 +854,10 @@ fn billing_proof_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -
         && left.last_write_time() == right.last_write_time()
         && left.creation_time() == right.creation_time()
 }
-
 #[cfg(not(any(unix, windows)))]
 fn billing_proof_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
     false
 }
-
 #[cfg(unix)]
 fn open_direct_billing_acknowledgement_proof(path: &Path) -> Result<fs::File> {
     let descriptor = rustix::fs::open(
@@ -932,7 +873,6 @@ fn open_direct_billing_acknowledgement_proof(path: &Path) -> Result<fs::File> {
     })?;
     Ok(fs::File::from(descriptor))
 }
-
 #[cfg(windows)]
 fn open_direct_billing_acknowledgement_proof(path: &Path) -> Result<fs::File> {
     use std::os::windows::fs::OpenOptionsExt as _;
@@ -949,7 +889,6 @@ fn open_direct_billing_acknowledgement_proof(path: &Path) -> Result<fs::File> {
         )
     })
 }
-
 #[cfg(not(any(unix, windows)))]
 fn open_direct_billing_acknowledgement_proof(path: &Path) -> Result<fs::File> {
     Err(eyre!(
@@ -957,7 +896,6 @@ fn open_direct_billing_acknowledgement_proof(path: &Path) -> Result<fs::File> {
         path.display()
     ))
 }
-
 fn read_billing_acknowledgement_proof(path: &Path) -> Result<Vec<u8>> {
     let path_metadata = fs::symlink_metadata(path).wrap_err_with(|| {
         format!(
@@ -1033,7 +971,6 @@ fn read_billing_acknowledgement_proof(path: &Path) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-
 fn read_billing_acknowledgement_proof_exact(
     path: &Path,
     reader: &mut impl Read,
@@ -1069,17 +1006,14 @@ fn read_billing_acknowledgement_proof_exact(
     }
     Ok(bytes)
 }
-
 /// Fetch payload-free billing reconciliation status.
 #[derive(clap::Args, Debug, Default)]
 pub struct BillingReconciliationArgs {}
-
 impl Run for BillingReconciliationArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_billing_reconciliation)
     }
 }
-
 impl BillingReconciliationArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -1090,7 +1024,6 @@ impl BillingReconciliationArgs {
         render_json_response(context, get(&client)?)
     }
 }
-
 /// Read-only finalized SoraFS hedging projections.
 #[derive(clap::Subcommand, Debug)]
 pub enum HedgingCommand {
@@ -1099,7 +1032,6 @@ pub enum HedgingCommand {
     /// List deterministic governed hedge intents without executing them.
     Intents(HedgingProjectionArgs),
 }
-
 impl Run for HedgingCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -1108,7 +1040,6 @@ impl Run for HedgingCommand {
         }
     }
 }
-
 /// Exact-checkpoint pagination arguments shared by hedging projections.
 #[derive(clap::Args, Debug)]
 pub struct HedgingProjectionArgs {
@@ -1122,7 +1053,6 @@ pub struct HedgingProjectionArgs {
     #[arg(long, value_name = "COUNT")]
     limit: u16,
 }
-
 impl HedgingProjectionArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -1148,7 +1078,6 @@ impl HedgingProjectionArgs {
         render_json_response(context, get(&client, filter)?)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum AppealsCommand {
     /// Appeal pricing helpers.
@@ -1158,7 +1087,6 @@ pub enum AppealsCommand {
     #[command(subcommand)]
     Finance(AppealsFinanceCommand),
 }
-
 impl Run for AppealsCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -1167,7 +1095,6 @@ impl Run for AppealsCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum AppealsPricingCommand {
     /// Print the active local appeal pricing config.
@@ -1177,7 +1104,6 @@ pub enum AppealsPricingCommand {
     /// Quote a deposit from a Torii pricing quote JSON payload.
     Quote(AppealsPricingQuoteArgs),
 }
-
 impl Run for AppealsPricingCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -1187,40 +1113,33 @@ impl Run for AppealsPricingCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AppealsPricingConfigArgs;
-
 impl Run for AppealsPricingConfigArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = context.client_from_config();
         render_json_response(context, client.get_sorafs_appeal_pricing_config()?)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AppealsPricingStatusArgs;
-
 impl Run for AppealsPricingStatusArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = context.client_from_config();
         render_json_response(context, client.get_sorafs_appeal_pricing_status()?)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AppealsPricingQuoteArgs {
     /// JSON quote request payload path.
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-
 impl Run for AppealsPricingQuoteArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::post_sorafs_appeal_pricing_quote_json)
     }
 }
-
 impl AppealsPricingQuoteArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1233,7 +1152,6 @@ impl AppealsPricingQuoteArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum AppealsFinanceCommand {
     /// Runtime asset-lock deposit helpers.
@@ -1246,7 +1164,6 @@ pub enum AppealsFinanceCommand {
     /// List published appeal finance settlement receipts.
     SettlementReceipts(AppealsFinanceSettlementReceiptsArgs),
 }
-
 impl Run for AppealsFinanceCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -1257,7 +1174,6 @@ impl Run for AppealsFinanceCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum AppealsFinanceDepositsCommand {
     /// Build a runtime asset-lock deposit transaction request.
@@ -1273,7 +1189,6 @@ pub enum AppealsFinanceDepositsCommand {
     /// Submit the next settlement transaction step.
     SubmitSettlement(AppealsFinanceDepositSubmitSettlementArgs),
 }
-
 impl Run for AppealsFinanceDepositsCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -1286,20 +1201,17 @@ impl Run for AppealsFinanceDepositsCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceDepositCreateArgs {
     /// JSON deposit request payload path.
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-
 impl Run for AppealsFinanceDepositCreateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::post_sorafs_appeal_finance_deposit_json)
     }
 }
-
 impl AppealsFinanceDepositCreateArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1315,14 +1227,12 @@ impl AppealsFinanceDepositCreateArgs {
         )
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceDepositConfirmArgs {
     /// JSON deposit confirmation payload path.
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-
 impl Run for AppealsFinanceDepositConfirmArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -1331,7 +1241,6 @@ impl Run for AppealsFinanceDepositConfirmArgs {
         )
     }
 }
-
 impl AppealsFinanceDepositConfirmArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1347,20 +1256,17 @@ impl AppealsFinanceDepositConfirmArgs {
         )
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceDepositGetArgs {
     /// Hex-encoded asset-lock escrow id.
     #[arg(long = "escrow-id", value_name = "HEX")]
     escrow_id: String,
 }
-
 impl Run for AppealsFinanceDepositGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_appeal_finance_deposit)
     }
 }
-
 impl AppealsFinanceDepositGetArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -1373,14 +1279,12 @@ impl AppealsFinanceDepositGetArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceDepositSettleArgs {
     /// JSON deposit settlement payload path.
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-
 impl Run for AppealsFinanceDepositSettleArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -1389,7 +1293,6 @@ impl Run for AppealsFinanceDepositSettleArgs {
         )
     }
 }
-
 impl AppealsFinanceDepositSettleArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1405,14 +1308,12 @@ impl AppealsFinanceDepositSettleArgs {
         )
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceDepositReconcileArgs {
     /// JSON deposit settlement reconciliation payload path.
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-
 impl Run for AppealsFinanceDepositReconcileArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -1421,7 +1322,6 @@ impl Run for AppealsFinanceDepositReconcileArgs {
         )
     }
 }
-
 impl AppealsFinanceDepositReconcileArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1437,14 +1337,12 @@ impl AppealsFinanceDepositReconcileArgs {
         )
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceDepositSubmitSettlementArgs {
     /// JSON deposit settlement submission payload path.
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-
 impl Run for AppealsFinanceDepositSubmitSettlementArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -1453,7 +1351,6 @@ impl Run for AppealsFinanceDepositSubmitSettlementArgs {
         )
     }
 }
-
 impl AppealsFinanceDepositSubmitSettlementArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1469,20 +1366,17 @@ impl AppealsFinanceDepositSubmitSettlementArgs {
         )
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceReportsArgs {
     /// Maximum number of report entries to return.
     #[arg(long)]
     limit: Option<u32>,
 }
-
 impl Run for AppealsFinanceReportsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_appeal_finance_reports)
     }
 }
-
 impl AppealsFinanceReportsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -1495,20 +1389,17 @@ impl AppealsFinanceReportsArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceWeeklyRollupsArgs {
     /// Maximum number of rollup entries to return.
     #[arg(long)]
     limit: Option<u32>,
 }
-
 impl Run for AppealsFinanceWeeklyRollupsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_appeal_finance_weekly_rollups)
     }
 }
-
 impl AppealsFinanceWeeklyRollupsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -1521,14 +1412,12 @@ impl AppealsFinanceWeeklyRollupsArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AppealsFinanceSettlementReceiptsArgs {
     /// Maximum number of settlement receipt entries to return.
     #[arg(long)]
     limit: Option<u32>,
 }
-
 impl Run for AppealsFinanceSettlementReceiptsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -1537,7 +1426,6 @@ impl Run for AppealsFinanceSettlementReceiptsArgs {
         )
     }
 }
-
 impl AppealsFinanceSettlementReceiptsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -1550,7 +1438,6 @@ impl AppealsFinanceSettlementReceiptsArgs {
         render_json_response(context, response)
     }
 }
-
 fn run_appeal_finance_json_submit<C, F>(
     context: &mut C,
     input: &Path,
@@ -1573,13 +1460,11 @@ where
         )),
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum GarCommand {
     /// Render a GAR enforcement receipt artefact (JSON + optional Norito bytes).
     Receipt(GarReceiptArgs),
 }
-
 impl Run for GarCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -1587,7 +1472,6 @@ impl Run for GarCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum TransparencyCommand {
     /// Inspect published transparency cycles and entry proofs.
@@ -1608,7 +1492,6 @@ pub enum TransparencyCommand {
     #[command(subcommand)]
     PrivacyAggregate(TransparencyPrivacyAggregateCommand),
 }
-
 impl Run for TransparencyCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -1622,7 +1505,6 @@ impl Run for TransparencyCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum TransparencyCyclesCommand {
     /// List locally published transparency cycle summaries.
@@ -1632,7 +1514,6 @@ pub enum TransparencyCyclesCommand {
     /// Fetch and verify one published transparency entry proof.
     Entry(TransparencyCyclesEntryArgs),
 }
-
 impl Run for TransparencyCyclesCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -1642,20 +1523,17 @@ impl Run for TransparencyCyclesCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct TransparencyCyclesListArgs {
     /// Maximum number of cycle summaries to return.
     #[arg(long)]
     limit: Option<u32>,
 }
-
 impl Run for TransparencyCyclesListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_transparency_cycles)
     }
 }
-
 impl TransparencyCyclesListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -1668,7 +1546,6 @@ impl TransparencyCyclesListArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct TransparencyCyclesGetArgs {
     /// 16-byte cycle id encoded as hexadecimal.
@@ -1678,13 +1555,11 @@ pub struct TransparencyCyclesGetArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-
 impl Run for TransparencyCyclesGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_transparency_cycle)
     }
 }
-
 impl TransparencyCyclesGetArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -1698,7 +1573,6 @@ impl TransparencyCyclesGetArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct TransparencyCyclesEntryArgs {
     /// 16-byte cycle id encoded as hexadecimal.
@@ -1708,13 +1582,11 @@ pub struct TransparencyCyclesEntryArgs {
     #[arg(long = "entry-id", value_name = "HEX")]
     entry_id: String,
 }
-
 impl Run for TransparencyCyclesEntryArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_transparency_cycle_entry)
     }
 }
-
 impl TransparencyCyclesEntryArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -1728,20 +1600,17 @@ impl TransparencyCyclesEntryArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct TransparencyExplorerArgs {
     /// Maximum number of cycle summaries and token issuance entries per array.
     #[arg(long)]
     limit: Option<u32>,
 }
-
 impl Run for TransparencyExplorerArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_transparency_explorer)
     }
 }
-
 impl TransparencyExplorerArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -1754,7 +1623,6 @@ impl TransparencyExplorerArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct TransparencyExplorerCanaryArgs {
     /// Base URL of the deployed Torii or public explorer gateway.
@@ -1770,7 +1638,6 @@ pub struct TransparencyExplorerCanaryArgs {
     #[arg(long = "out", value_name = "PATH")]
     out: Option<PathBuf>,
 }
-
 impl Run for TransparencyExplorerCanaryArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let timeout = Duration::from_secs(self.timeout_secs.max(1));
@@ -1784,7 +1651,6 @@ impl Run for TransparencyExplorerCanaryArgs {
         })
     }
 }
-
 impl TransparencyExplorerCanaryArgs {
     fn run_with_fetch<C, F>(&self, context: &mut C, mut fetch: F) -> Result<()>
     where
@@ -1814,7 +1680,6 @@ impl TransparencyExplorerCanaryArgs {
         context.print_data(&evidence)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct TransparencyPublicationCanaryArgs {
     /// Base URL of the deployed Torii or public transparency gateway.
@@ -1833,7 +1698,6 @@ pub struct TransparencyPublicationCanaryArgs {
     #[arg(long = "out", value_name = "PATH")]
     out: Option<PathBuf>,
 }
-
 impl Run for TransparencyPublicationCanaryArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let timeout = Duration::from_secs(self.timeout_secs.max(1));
@@ -1847,7 +1711,6 @@ impl Run for TransparencyPublicationCanaryArgs {
         })
     }
 }
-
 impl TransparencyPublicationCanaryArgs {
     fn run_with_fetch<C, F>(&self, context: &mut C, mut fetch: F) -> Result<()>
     where
@@ -1875,20 +1738,17 @@ impl TransparencyPublicationCanaryArgs {
         context.print_data(&evidence)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct TransparencyTokensArgs {
     /// Maximum number of proof-token issuance entries to return.
     #[arg(long)]
     limit: Option<u32>,
 }
-
 impl Run for TransparencyTokensArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_transparency_token_issuances)
     }
 }
-
 impl TransparencyTokensArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -1901,7 +1761,6 @@ impl TransparencyTokensArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum TransparencyTokenIssuanceCommand {
     /// Submit one proof-token issuance JSON payload.
@@ -1909,7 +1768,6 @@ pub enum TransparencyTokenIssuanceCommand {
     /// Probe deployed proof-token issuance producer feed routes.
     Canary(TransparencyTokenIssuanceCanaryArgs),
 }
-
 impl Run for TransparencyTokenIssuanceCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -1918,14 +1776,12 @@ impl Run for TransparencyTokenIssuanceCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct TransparencyTokenIssuanceSubmitArgs {
     /// JSON proof-token issuance payload path.
     #[arg(long = "payload", value_name = "PATH")]
     payload: PathBuf,
 }
-
 impl Run for TransparencyTokenIssuanceSubmitArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -1934,7 +1790,6 @@ impl Run for TransparencyTokenIssuanceSubmitArgs {
         )
     }
 }
-
 impl TransparencyTokenIssuanceSubmitArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -1947,7 +1802,6 @@ impl TransparencyTokenIssuanceSubmitArgs {
         render_json_response_ok_or_accepted(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct TransparencyTokenIssuanceCanaryArgs {
     /// Proof-token issuance JSON payload path to submit.
@@ -1957,7 +1811,6 @@ pub struct TransparencyTokenIssuanceCanaryArgs {
     #[arg(long = "out", value_name = "PATH")]
     out: Option<PathBuf>,
 }
-
 impl Run for TransparencyTokenIssuanceCanaryArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -1966,7 +1819,6 @@ impl Run for TransparencyTokenIssuanceCanaryArgs {
         )
     }
 }
-
 impl TransparencyTokenIssuanceCanaryArgs {
     fn run_with<C, F>(&self, context: &mut C, mut submit: F) -> Result<()>
     where
@@ -1976,7 +1828,6 @@ impl TransparencyTokenIssuanceCanaryArgs {
         if self.issuances.is_empty() {
             return Err(eyre!("at least one --issuance payload is required"));
         }
-
         let client = context.client_from_config();
         let mut probes = Vec::new();
         for path in &self.issuances {
@@ -1987,7 +1838,6 @@ impl TransparencyTokenIssuanceCanaryArgs {
                 path, &payload, response,
             ));
         }
-
         let passed_count = probes
             .iter()
             .filter(|probe| {
@@ -2039,7 +1889,6 @@ impl TransparencyTokenIssuanceCanaryArgs {
         context.print_data(&evidence)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum TransparencyPrivacyAggregateCommand {
     /// Submit one privacy aggregate source-event JSON payload.
@@ -2049,7 +1898,6 @@ pub enum TransparencyPrivacyAggregateCommand {
     /// Probe deployed privacy aggregate producer/scheduler routes.
     Canary(TransparencyPrivacyAggregateCanaryArgs),
 }
-
 impl Run for TransparencyPrivacyAggregateCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -2059,14 +1907,12 @@ impl Run for TransparencyPrivacyAggregateCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct TransparencyPrivacyAggregateSourceEventArgs {
     /// JSON payload path.
     #[arg(long = "payload", value_name = "PATH")]
     payload: PathBuf,
 }
-
 impl Run for TransparencyPrivacyAggregateSourceEventArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -2075,7 +1921,6 @@ impl Run for TransparencyPrivacyAggregateSourceEventArgs {
         )
     }
 }
-
 impl TransparencyPrivacyAggregateSourceEventArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -2089,14 +1934,12 @@ impl TransparencyPrivacyAggregateSourceEventArgs {
         render_json_response_ok_or_accepted(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct TransparencyPrivacyAggregatePublishDueArgs {
     /// JSON payload path.
     #[arg(long = "payload", value_name = "PATH")]
     payload: PathBuf,
 }
-
 impl Run for TransparencyPrivacyAggregatePublishDueArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -2105,7 +1948,6 @@ impl Run for TransparencyPrivacyAggregatePublishDueArgs {
         )
     }
 }
-
 impl TransparencyPrivacyAggregatePublishDueArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -2119,7 +1961,6 @@ impl TransparencyPrivacyAggregatePublishDueArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct TransparencyPrivacyAggregateCanaryArgs {
     /// Privacy aggregate source-event JSON payload path to submit.
@@ -2132,7 +1973,6 @@ pub struct TransparencyPrivacyAggregateCanaryArgs {
     #[arg(long = "out", value_name = "PATH")]
     out: Option<PathBuf>,
 }
-
 impl Run for TransparencyPrivacyAggregateCanaryArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -2142,7 +1982,6 @@ impl Run for TransparencyPrivacyAggregateCanaryArgs {
         )
     }
 }
-
 impl TransparencyPrivacyAggregateCanaryArgs {
     fn run_with<C, FSource, FPublish>(
         &self,
@@ -2160,7 +1999,6 @@ impl TransparencyPrivacyAggregateCanaryArgs {
                 "at least one --source-event or --publish-due payload is required"
             ));
         }
-
         let client = context.client_from_config();
         let mut probes = Vec::new();
         for path in &self.source_events {
@@ -2189,7 +2027,6 @@ impl TransparencyPrivacyAggregateCanaryArgs {
                 response,
             ));
         }
-
         let passed_count = probes
             .iter()
             .filter(|probe| {
@@ -2244,7 +2081,6 @@ impl TransparencyPrivacyAggregateCanaryArgs {
         context.print_data(&evidence)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ModerationCommand {
     /// Inspect finalized moderation cases and submit native ledger actions.
@@ -2260,7 +2096,6 @@ pub enum ModerationCommand {
     #[command(subcommand)]
     Quarantine(ModerationQuarantineCommand),
 }
-
 impl Run for ModerationCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -2271,7 +2106,6 @@ impl Run for ModerationCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ModerationBallotsCommand {
     /// List finalized chain-authoritative moderation case projections.
@@ -2296,7 +2130,6 @@ pub enum ModerationBallotsCommand {
     /// Verify a deployed commit/reveal executor bundle and captured run summary.
     ExecutorCanary(ModerationBallotsExecutorCanaryArgs),
 }
-
 impl Run for ModerationBallotsCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -2313,20 +2146,17 @@ impl Run for ModerationBallotsCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationBallotsListArgs {
     /// Maximum number of ballots, commits, and reveals to return.
     #[arg(long)]
     limit: Option<u32>,
 }
-
 impl Run for ModerationBallotsListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_moderation_ballots)
     }
 }
-
 impl ModerationBallotsListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -2339,7 +2169,6 @@ impl ModerationBallotsListArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationBallotsGetArgs {
     /// Moderation or appeal case identifier.
@@ -2352,13 +2181,11 @@ pub struct ModerationBallotsGetArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-
 impl Run for ModerationBallotsGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_moderation_ballot)
     }
 }
-
 impl ModerationBallotsGetArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -2373,7 +2200,6 @@ impl ModerationBallotsGetArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationBallotsNoShowPlanArgs {
     /// Moderation or appeal case identifier.
@@ -2383,13 +2209,11 @@ pub struct ModerationBallotsNoShowPlanArgs {
     #[arg(long = "round-id", value_name = "TEXT")]
     round_id: String,
 }
-
 impl Run for ModerationBallotsNoShowPlanArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_moderation_ballot_no_show_plan)
     }
 }
-
 impl ModerationBallotsNoShowPlanArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -2403,7 +2227,6 @@ impl ModerationBallotsNoShowPlanArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationBallotsEventsArgs {
     /// Optional event sequence to resume from.
@@ -2413,13 +2236,11 @@ pub struct ModerationBallotsEventsArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-
 impl Run for ModerationBallotsEventsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_moderation_ballot_events)
     }
 }
-
 impl ModerationBallotsEventsArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -2435,7 +2256,6 @@ impl ModerationBallotsEventsArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationBallotsCommitArgs {
     /// Commit payload path.
@@ -2445,13 +2265,11 @@ pub struct ModerationBallotsCommitArgs {
     #[arg(long = "format", default_value = "json")]
     format: String,
 }
-
 impl Run for ModerationBallotsCommitArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::post_sorafs_moderation_ballot_commit)
     }
 }
-
 impl ModerationBallotsCommitArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -2465,7 +2283,6 @@ impl ModerationBallotsCommitArgs {
         render_moderation_transaction_hash(context, &hash)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationBallotsRevealArgs {
     /// Reveal payload path.
@@ -2475,13 +2292,11 @@ pub struct ModerationBallotsRevealArgs {
     #[arg(long = "format", default_value = "json")]
     format: String,
 }
-
 impl Run for ModerationBallotsRevealArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::post_sorafs_moderation_ballot_reveal)
     }
 }
-
 impl ModerationBallotsRevealArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -2495,7 +2310,6 @@ impl ModerationBallotsRevealArgs {
         render_moderation_transaction_hash(context, &hash)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationBallotsTallyArgs {
     /// Moderation or appeal case identifier.
@@ -2505,13 +2319,11 @@ pub struct ModerationBallotsTallyArgs {
     #[arg(long = "round-id", value_name = "TEXT")]
     round_id: String,
 }
-
 impl Run for ModerationBallotsTallyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::post_sorafs_moderation_ballot_tally)
     }
 }
-
 impl ModerationBallotsTallyArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -2526,7 +2338,6 @@ impl ModerationBallotsTallyArgs {
         render_moderation_transaction_hash(context, &hash)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationBallotsExecuteArgs {
     /// Payload-free commit/reveal status JSON from the operator workflow service.
@@ -2548,7 +2359,6 @@ pub struct ModerationBallotsExecuteArgs {
     #[arg(long = "submit-tally")]
     submit_tally: bool,
 }
-
 impl Run for ModerationBallotsExecuteArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -2559,7 +2369,6 @@ impl Run for ModerationBallotsExecuteArgs {
         )
     }
 }
-
 impl ModerationBallotsExecuteArgs {
     fn run_with<C, FCommit, FReveal, FTally>(
         &self,
@@ -2580,12 +2389,10 @@ impl ModerationBallotsExecuteArgs {
                 "at least one --commit-payload, --reveal-payload, or --submit-tally is required"
             ));
         }
-
         let status = load_moderation_commit_reveal_status_payload(&self.status)?;
         let coordination = moderation_commit_reveal_coordination_from_status(&status)?;
         let client = context.client_from_config();
         let mut actions = Vec::new();
-
         for path in &self.commit_payloads {
             let commit = load_moderation_ballot_commit_payload(path, self.commit_format.as_str())?;
             let key = ModerationBallotExecutionKey::from_commit(&commit);
@@ -2607,7 +2414,6 @@ impl ModerationBallotsExecuteArgs {
                 &hash,
             )?);
         }
-
         for path in &self.reveal_payloads {
             let reveal = load_moderation_ballot_reveal_payload(path, self.reveal_format.as_str())?;
             let key = ModerationBallotExecutionKey::from_reveal(&reveal);
@@ -2629,7 +2435,6 @@ impl ModerationBallotsExecuteArgs {
                 &hash,
             )?);
         }
-
         if self.submit_tally {
             for (case_id, round_id) in &coordination.tally_ready {
                 let transaction =
@@ -2640,7 +2445,6 @@ impl ModerationBallotsExecuteArgs {
                 )?);
             }
         }
-
         let mut output = Map::new();
         output.insert(
             "schema".into(),
@@ -2671,7 +2475,6 @@ impl ModerationBallotsExecuteArgs {
         context.print_data(&Value::Object(output))
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationBallotsExecutorBundleArgs {
     /// Runtime path to the payload-free commit/reveal status JSON.
@@ -2714,20 +2517,17 @@ pub struct ModerationBallotsExecutorBundleArgs {
     #[arg(long = "interval-secs", default_value_t = 60)]
     interval_secs: u64,
 }
-
 impl Run for ModerationBallotsExecutorBundleArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context)
     }
 }
-
 impl ModerationBallotsExecutorBundleArgs {
     fn run_with<C: RunContext>(&self, context: &mut C) -> Result<()> {
         let summary = write_moderation_ballots_executor_bundle(self)?;
         context.print_data(&summary)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationBallotsExecutorCanaryArgs {
     /// Executor bundle directory produced by `executor-bundle`.
@@ -2740,13 +2540,11 @@ pub struct ModerationBallotsExecutorCanaryArgs {
     #[arg(long = "out", value_name = "PATH")]
     out: Option<PathBuf>,
 }
-
 impl Run for ModerationBallotsExecutorCanaryArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context)
     }
 }
-
 impl ModerationBallotsExecutorCanaryArgs {
     fn run_with<C: RunContext>(&self, context: &mut C) -> Result<()> {
         let evidence = moderation_ballots_executor_canary_evidence(self)?;
@@ -2760,7 +2558,6 @@ impl ModerationBallotsExecutorCanaryArgs {
         context.print_data(&evidence)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ModerationRegistryCommand {
     /// List local moderation model registry records.
@@ -2770,7 +2567,6 @@ pub enum ModerationRegistryCommand {
     /// Admit an adversarial corpus manifest.
     SubmitCorpus(ModerationRegistrySubmitCorpusArgs),
 }
-
 impl Run for ModerationRegistryCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -2780,20 +2576,17 @@ impl Run for ModerationRegistryCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationRegistryListArgs {
     /// Maximum number of records to return from each registry section.
     #[arg(long)]
     limit: Option<u32>,
 }
-
 impl Run for ModerationRegistryListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_moderation_model_registry)
     }
 }
-
 impl ModerationRegistryListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -2806,7 +2599,6 @@ impl ModerationRegistryListArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationRegistrySubmitReproArgs {
     /// Reproducibility manifest path.
@@ -2816,7 +2608,6 @@ pub struct ModerationRegistrySubmitReproArgs {
     #[arg(long = "format", default_value = "json")]
     format: String,
 }
-
 impl Run for ModerationRegistrySubmitReproArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -2825,7 +2616,6 @@ impl Run for ModerationRegistrySubmitReproArgs {
         )
     }
 }
-
 impl ModerationRegistrySubmitReproArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -2839,7 +2629,6 @@ impl ModerationRegistrySubmitReproArgs {
         render_json_response_ok_or_accepted(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationRegistrySubmitCorpusArgs {
     /// Adversarial corpus manifest path.
@@ -2849,7 +2638,6 @@ pub struct ModerationRegistrySubmitCorpusArgs {
     #[arg(long = "format", default_value = "json")]
     format: String,
 }
-
 impl Run for ModerationRegistrySubmitCorpusArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -2858,7 +2646,6 @@ impl Run for ModerationRegistrySubmitCorpusArgs {
         )
     }
 }
-
 impl ModerationRegistrySubmitCorpusArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -2872,7 +2659,6 @@ impl ModerationRegistrySubmitCorpusArgs {
         render_json_response_ok_or_accepted(context, response)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ModerationScreeningCommand {
     /// List local moderation screening records.
@@ -2880,7 +2666,6 @@ pub enum ModerationScreeningCommand {
     /// Submit one deterministic local screening result JSON file.
     Submit(ModerationScreeningSubmitArgs),
 }
-
 impl Run for ModerationScreeningCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -2889,20 +2674,17 @@ impl Run for ModerationScreeningCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationScreeningListArgs {
     /// Maximum number of screening records to return.
     #[arg(long)]
     limit: Option<u32>,
 }
-
 impl Run for ModerationScreeningListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_moderation_screening_results)
     }
 }
-
 impl ModerationScreeningListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -2915,20 +2697,17 @@ impl ModerationScreeningListArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationScreeningSubmitArgs {
     /// JSON request containing canonical signed-result or committee authority.
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-
 impl Run for ModerationScreeningSubmitArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::post_sorafs_moderation_screening_result)
     }
 }
-
 impl ModerationScreeningSubmitArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -2945,7 +2724,6 @@ impl ModerationScreeningSubmitArgs {
         render_json_response_ok_or_accepted(context, response)
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ModerationScreeningSubmitPayload {
     idempotency_key_hex: String,
@@ -2953,7 +2731,6 @@ struct ModerationScreeningSubmitPayload {
     authority_b64: String,
     committee_member_results_b64: Vec<String>,
 }
-
 impl ModerationScreeningSubmitPayload {
     fn as_request(&self) -> SorafsModerationScreeningResultRequest<'_> {
         SorafsModerationScreeningResultRequest {
@@ -2964,7 +2741,6 @@ impl ModerationScreeningSubmitPayload {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ModerationQuarantineCommand {
     /// List local moderation quarantine records.
@@ -2990,7 +2766,6 @@ pub enum ModerationQuarantineCommand {
     /// Probe a deployed operator workflow service and emit payload-free evidence.
     OperatorCanary(ModerationQuarantineOperatorCanaryArgs),
 }
-
 impl Run for ModerationQuarantineCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -3007,20 +2782,17 @@ impl Run for ModerationQuarantineCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineListArgs {
     /// Maximum number of quarantine records to return.
     #[arg(long)]
     limit: Option<u32>,
 }
-
 impl Run for ModerationQuarantineListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_moderation_quarantine)
     }
 }
-
 impl ModerationQuarantineListArgs {
     fn run_with<C, F>(&self, context: &mut C, list: F) -> Result<()>
     where
@@ -3033,7 +2805,6 @@ impl ModerationQuarantineListArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ModerationQuarantineObjectCommand {
     /// Seal payload bytes into the local encrypted quarantine object store.
@@ -3041,7 +2812,6 @@ pub enum ModerationQuarantineObjectCommand {
     /// Read and verify one local encrypted quarantine object.
     Read(ModerationQuarantineObjectReadArgs),
 }
-
 impl Run for ModerationQuarantineObjectCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -3050,7 +2820,6 @@ impl Run for ModerationQuarantineObjectCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineObjectStoreArgs {
     /// 16-byte local quarantine id encoded as hexadecimal.
@@ -3069,13 +2838,11 @@ pub struct ModerationQuarantineObjectStoreArgs {
     #[arg(long = "notes", value_name = "TEXT")]
     notes: Option<String>,
 }
-
 impl Run for ModerationQuarantineObjectStoreArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::post_sorafs_moderation_quarantine_object)
     }
 }
-
 impl ModerationQuarantineObjectStoreArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -3113,20 +2880,17 @@ impl ModerationQuarantineObjectStoreArgs {
         render_json_response_ok_or_accepted(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineObjectReadArgs {
     /// 16-byte local quarantine id encoded as hexadecimal.
     #[arg(long = "quarantine-id", value_name = "HEX")]
     quarantine_id: String,
 }
-
 impl Run for ModerationQuarantineObjectReadArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_moderation_quarantine_object)
     }
 }
-
 impl ModerationQuarantineObjectReadArgs {
     fn run_with<C, F>(&self, context: &mut C, read: F) -> Result<()>
     where
@@ -3139,7 +2903,6 @@ impl ModerationQuarantineObjectReadArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ModerationQuarantineNotificationsCommand {
     /// Deliver one payload-free juror notification manifest.
@@ -3147,7 +2910,6 @@ pub enum ModerationQuarantineNotificationsCommand {
     /// Probe a deployed juror notification transport and emit payload-free evidence.
     Canary(ModerationQuarantineNotificationsCanaryArgs),
 }
-
 impl Run for ModerationQuarantineNotificationsCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -3156,7 +2918,6 @@ impl Run for ModerationQuarantineNotificationsCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineNotificationsDeliverArgs {
     /// Payload-free juror notification manifest JSON.
@@ -3172,7 +2933,6 @@ pub struct ModerationQuarantineNotificationsDeliverArgs {
     #[arg(long = "timeout-secs", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl Run for ModerationQuarantineNotificationsDeliverArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let timeout = Duration::from_secs(self.timeout_secs.max(1));
@@ -3186,7 +2946,6 @@ impl Run for ModerationQuarantineNotificationsDeliverArgs {
         })
     }
 }
-
 impl ModerationQuarantineNotificationsDeliverArgs {
     fn run_with<C, F>(&self, context: &mut C, mut post_webhook: F) -> Result<()>
     where
@@ -3219,7 +2978,6 @@ impl ModerationQuarantineNotificationsDeliverArgs {
                 )
             })?;
         }
-
         let mut deliveries = Vec::with_capacity(notifications.len());
         for notification in notifications {
             let canonical = norito::json::to_vec(notification.value)
@@ -3238,7 +2996,6 @@ impl ModerationQuarantineNotificationsDeliverArgs {
                 })?;
                 outbox_path = Value::from(path.to_string_lossy().into_owned());
             }
-
             let mut webhook_status = Value::Null;
             let mut webhook_response_bytes = Value::Null;
             let mut webhook_response_body_blake3 = Value::Null;
@@ -3253,7 +3010,6 @@ impl ModerationQuarantineNotificationsDeliverArgs {
                 webhook_response_bytes = Value::from(u64::try_from(body.len()).unwrap_or(u64::MAX));
                 webhook_response_body_blake3 = Value::from(encode(blake3::hash(&body).as_bytes()));
             }
-
             deliveries.push(moderation_juror_notification_delivery_result_json(
                 notification,
                 canonical.len(),
@@ -3264,7 +3020,6 @@ impl ModerationQuarantineNotificationsDeliverArgs {
                 webhook_response_body_blake3,
             ));
         }
-
         let mut output = Map::new();
         output.insert(
             "schema".into(),
@@ -3296,7 +3051,6 @@ impl ModerationQuarantineNotificationsDeliverArgs {
         context.print_data(&Value::Object(output))
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineNotificationsCanaryArgs {
     /// Payload-free juror notification manifest JSON used as the canary probe.
@@ -3312,7 +3066,6 @@ pub struct ModerationQuarantineNotificationsCanaryArgs {
     #[arg(long = "timeout-secs", default_value_t = 10)]
     timeout_secs: u64,
 }
-
 impl Run for ModerationQuarantineNotificationsCanaryArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let timeout = Duration::from_secs(self.timeout_secs.max(1));
@@ -3326,7 +3079,6 @@ impl Run for ModerationQuarantineNotificationsCanaryArgs {
         })
     }
 }
-
 impl ModerationQuarantineNotificationsCanaryArgs {
     fn run_with<C, F>(&self, context: &mut C, mut post_webhook: F) -> Result<()>
     where
@@ -3342,7 +3094,6 @@ impl ModerationQuarantineNotificationsCanaryArgs {
                 self.manifest.display()
             ));
         }
-
         let mut probes = Vec::with_capacity(notifications.len());
         for notification in notifications {
             let canonical = norito::json::to_vec(notification.value)
@@ -3354,7 +3105,6 @@ impl ModerationQuarantineNotificationsCanaryArgs {
                 response,
             )?);
         }
-
         let status = if probes.iter().all(moderation_canary_probe_ok) {
             "passed"
         } else {
@@ -3396,14 +3146,12 @@ impl ModerationQuarantineNotificationsCanaryArgs {
         evidence.insert("private_payloads_included".into(), Value::Bool(false));
         evidence.insert("probes".into(), Value::Array(probes));
         let evidence = Value::Object(evidence);
-
         if let Some(path) = &self.out {
             write_json_artifact(path, &evidence, "juror notification canary evidence")?;
         }
         context.print_data(&evidence)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineReviewArgs {
     /// 16-byte local quarantine id encoded as hexadecimal.
@@ -3419,13 +3167,11 @@ pub struct ModerationQuarantineReviewArgs {
     #[arg(long = "notes", value_name = "TEXT")]
     notes: Option<String>,
 }
-
 impl Run for ModerationQuarantineReviewArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::post_sorafs_moderation_quarantine_review)
     }
 }
-
 impl ModerationQuarantineReviewArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -3451,7 +3197,6 @@ impl ModerationQuarantineReviewArgs {
         render_json_response_ok_or_accepted(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineReleaseArgs {
     /// 16-byte local quarantine id encoded as hexadecimal.
@@ -3467,13 +3212,11 @@ pub struct ModerationQuarantineReleaseArgs {
     #[arg(long = "notes", value_name = "TEXT")]
     notes: Option<String>,
 }
-
 impl Run for ModerationQuarantineReleaseArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::post_sorafs_moderation_quarantine_release)
     }
 }
-
 impl ModerationQuarantineReleaseArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -3502,7 +3245,6 @@ impl ModerationQuarantineReleaseArgs {
         render_json_response_ok_or_accepted(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineAppealHandoffArgs {
     /// 16-byte local quarantine id encoded as hexadecimal.
@@ -3512,7 +3254,6 @@ pub struct ModerationQuarantineAppealHandoffArgs {
     #[arg(long = "input", value_name = "PATH")]
     input: PathBuf,
 }
-
 impl Run for ModerationQuarantineAppealHandoffArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -3521,7 +3262,6 @@ impl Run for ModerationQuarantineAppealHandoffArgs {
         )
     }
 }
-
 impl ModerationQuarantineAppealHandoffArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -3536,7 +3276,6 @@ impl ModerationQuarantineAppealHandoffArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineOperatorPanelArgs {
     /// 16-byte local quarantine id encoded as hexadecimal.
@@ -3546,7 +3285,6 @@ pub struct ModerationQuarantineOperatorPanelArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-
 impl Run for ModerationQuarantineOperatorPanelArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -3555,7 +3293,6 @@ impl Run for ModerationQuarantineOperatorPanelArgs {
         )
     }
 }
-
 impl ModerationQuarantineOperatorPanelArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -3569,7 +3306,6 @@ impl ModerationQuarantineOperatorPanelArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineBridgePlanArgs {
     /// 16-byte local quarantine id encoded as hexadecimal.
@@ -3579,7 +3315,6 @@ pub struct ModerationQuarantineBridgePlanArgs {
     #[arg(long)]
     limit: Option<u32>,
 }
-
 impl Run for ModerationQuarantineBridgePlanArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -3588,11 +3323,9 @@ impl Run for ModerationQuarantineBridgePlanArgs {
         )
     }
 }
-
 const MODERATION_OPERATOR_SERVICE_DEFAULT_LISTEN: &str = "127.0.0.1:9201";
 const MODERATION_OPERATOR_SERVICE_DEFAULT_MAX_BODY_BYTES: usize = 1024 * 1024;
 const MODERATION_OPERATOR_CSRF_HEADER: &str = "X-SoraFS-Operator-CSRF";
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineOperatorServeArgs {
     /// Local host:port for the operator workflow service.
@@ -3605,7 +3338,6 @@ pub struct ModerationQuarantineOperatorServeArgs {
     #[arg(long, default_value_t = MODERATION_OPERATOR_SERVICE_DEFAULT_MAX_BODY_BYTES)]
     max_body_bytes: usize,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ModerationQuarantineOperatorCanaryArgs {
     /// Base URL of the deployed operator workflow service.
@@ -3624,7 +3356,6 @@ pub struct ModerationQuarantineOperatorCanaryArgs {
     #[arg(long = "out", value_name = "PATH")]
     out: Option<PathBuf>,
 }
-
 impl Run for ModerationQuarantineOperatorServeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = context.client_from_config();
@@ -3661,7 +3392,6 @@ impl Run for ModerationQuarantineOperatorServeArgs {
         Ok(())
     }
 }
-
 impl Run for ModerationQuarantineOperatorCanaryArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let timeout = Duration::from_secs(self.timeout_secs.max(1));
@@ -3675,7 +3405,6 @@ impl Run for ModerationQuarantineOperatorCanaryArgs {
         })
     }
 }
-
 impl ModerationQuarantineOperatorCanaryArgs {
     fn run_with_fetch<C, F>(&self, context: &mut C, mut fetch: F) -> Result<()>
     where
@@ -3704,7 +3433,6 @@ impl ModerationQuarantineOperatorCanaryArgs {
         context.print_data(&evidence)
     }
 }
-
 impl ModerationQuarantineOperatorServeArgs {
     fn service(
         &self,
@@ -3730,7 +3458,6 @@ impl ModerationQuarantineOperatorServeArgs {
         })
     }
 }
-
 impl ModerationQuarantineBridgePlanArgs {
     fn run_with<C, F>(&self, context: &mut C, get: F) -> Result<()>
     where
@@ -3744,7 +3471,6 @@ impl ModerationQuarantineBridgePlanArgs {
         render_moderation_quarantine_bridge_plan_response(context, response, &quarantine_id)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum RepairCommand {
     /// List finalized chain-authoritative repair tasks.
@@ -3760,7 +3486,6 @@ pub enum RepairCommand {
     /// Atomically escalate a repair task into a terminal slash proposal.
     Escalate(RepairEscalateArgs),
 }
-
 impl Run for RepairCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -3773,7 +3498,6 @@ impl Run for RepairCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct RepairListArgs {
     /// Fetch one canonical repair ticket instead of a page.
@@ -3792,7 +3516,6 @@ pub struct RepairListArgs {
     #[arg(long = "after-task-id", value_name = "HEX")]
     after_task_id: Option<String>,
 }
-
 impl Run for RepairListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -3802,7 +3525,6 @@ impl Run for RepairListArgs {
         )
     }
 }
-
 impl RepairListArgs {
     fn run_with<C, F, G>(&self, context: &mut C, list: F, get: G) -> Result<()>
     where
@@ -3859,7 +3581,6 @@ impl RepairListArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct RepairClaimArgs {
     /// Repair ticket identifier (e.g., `REP-401`).
@@ -3875,13 +3596,11 @@ pub struct RepairClaimArgs {
     #[arg(long = "idempotency-key", value_name = "KEY")]
     idempotency_key: Option<String>,
 }
-
 impl Run for RepairClaimArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::post_sorafs_repair_claim)
     }
 }
-
 impl RepairClaimArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -3909,7 +3628,6 @@ impl RepairClaimArgs {
         render_repair_transaction_hash(context, &hash)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct RepairRenewArgs {
     /// Repair ticket identifier (e.g., `REP-401`).
@@ -3928,13 +3646,11 @@ pub struct RepairRenewArgs {
     #[arg(long = "idempotency-key", value_name = "KEY")]
     idempotency_key: Option<String>,
 }
-
 impl Run for RepairRenewArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::post_sorafs_repair_heartbeat)
     }
 }
-
 impl RepairRenewArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -3964,7 +3680,6 @@ impl RepairRenewArgs {
         render_repair_transaction_hash(context, &hash)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct RepairCompleteArgs {
     /// Repair ticket identifier (e.g., `REP-401`).
@@ -3983,13 +3698,11 @@ pub struct RepairCompleteArgs {
     #[arg(long = "idempotency-key", value_name = "KEY")]
     idempotency_key: Option<String>,
 }
-
 impl Run for RepairCompleteArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::post_sorafs_repair_complete)
     }
 }
-
 impl RepairCompleteArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -4017,7 +3730,6 @@ impl RepairCompleteArgs {
         render_repair_transaction_hash(context, &hash)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct RepairFailArgs {
     /// Repair ticket identifier (e.g., `REP-401`).
@@ -4036,13 +3748,11 @@ pub struct RepairFailArgs {
     #[arg(long = "idempotency-key", value_name = "KEY")]
     idempotency_key: Option<String>,
 }
-
 impl Run for RepairFailArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::post_sorafs_repair_fail)
     }
 }
-
 impl RepairFailArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -4070,7 +3780,6 @@ impl RepairFailArgs {
         render_repair_transaction_hash(context, &hash)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct RepairEscalateArgs {
     /// Repair ticket identifier (e.g., `REP-401`).
@@ -4104,13 +3813,11 @@ pub struct RepairEscalateArgs {
     #[arg(long = "idempotency-key", value_name = "KEY")]
     idempotency_key: Option<String>,
 }
-
 impl Run for RepairEscalateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::post_sorafs_repair_slash)
     }
 }
-
 impl RepairEscalateArgs {
     fn run_with<C, F>(&self, context: &mut C, submit: F) -> Result<()>
     where
@@ -4167,7 +3874,6 @@ impl RepairEscalateArgs {
         render_repair_transaction_hash(context, &hash)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum GcCommand {
     /// Inspect retained manifests and retention deadlines.
@@ -4175,7 +3881,6 @@ pub enum GcCommand {
     /// Report which manifests would be evicted by GC (dry-run only).
     DryRun(GcDryRunArgs),
 }
-
 impl Run for GcCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -4184,7 +3889,6 @@ impl Run for GcCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct GcInspectArgs {
     /// Root directory for SoraFS storage data (defaults to the node config default).
@@ -4197,7 +3901,6 @@ pub struct GcInspectArgs {
     #[arg(long = "grace-secs", value_name = "SECONDS")]
     grace_secs: Option<u64>,
 }
-
 impl Run for GcInspectArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let report = build_gc_report(
@@ -4210,7 +3913,6 @@ impl Run for GcInspectArgs {
         context.print_data(&report)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct GcDryRunArgs {
     /// Root directory for SoraFS storage data (defaults to the node config default).
@@ -4223,7 +3925,6 @@ pub struct GcDryRunArgs {
     #[arg(long = "grace-secs", value_name = "SECONDS")]
     grace_secs: Option<u64>,
 }
-
 impl Run for GcDryRunArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let report = build_gc_report(
@@ -4236,7 +3937,6 @@ impl Run for GcDryRunArgs {
         context.print_data(&report)
     }
 }
-
 #[derive(Debug)]
 struct GcManifestEntry {
     manifest_id: String,
@@ -4247,7 +3947,6 @@ struct GcManifestEntry {
     payload_bytes: u64,
     car_bytes: u64,
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct GcReportOutput {
     mode: String,
@@ -4262,7 +3961,6 @@ struct GcReportOutput {
     expired_car_bytes: u64,
     entries: Vec<GcReportEntry>,
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct GcReportEntry {
     manifest_id: String,
@@ -4275,10 +3973,8 @@ struct GcReportEntry {
     payload_bytes: u64,
     car_bytes: u64,
 }
-
 const SORAFS_MANIFEST_DIR: &str = "manifests";
 const SORAFS_MANIFEST_FILE: &str = "manifest.to";
-
 fn build_gc_report(
     mode: &str,
     data_dir: Option<&Path>,
@@ -4293,7 +3989,6 @@ fn build_gc_report(
     let grace_secs = grace_secs.unwrap_or(defaults::sorafs::gc::RETENTION_GRACE_SECS);
     let mut entries = load_gc_manifest_entries(&data_dir)?;
     entries.sort_by(|left, right| left.manifest_id.cmp(&right.manifest_id));
-
     let total_manifests = entries.len();
     let mut report_entries = Vec::with_capacity(entries.len());
     let mut total_payload_bytes = 0_u64;
@@ -4301,7 +3996,6 @@ fn build_gc_report(
     let mut expired_count = 0_usize;
     let mut expired_payload_bytes = 0_u64;
     let mut expired_car_bytes = 0_u64;
-
     for entry in entries {
         total_payload_bytes = total_payload_bytes.saturating_add(entry.payload_bytes);
         total_car_bytes = total_car_bytes.saturating_add(entry.car_bytes);
@@ -4327,7 +4021,6 @@ fn build_gc_report(
             car_bytes: entry.car_bytes,
         });
     }
-
     Ok(GcReportOutput {
         mode: mode.to_string(),
         data_dir: data_dir.display().to_string(),
@@ -4342,7 +4035,6 @@ fn build_gc_report(
         entries: report_entries,
     })
 }
-
 fn load_gc_manifest_entries(data_dir: &Path) -> Result<Vec<GcManifestEntry>> {
     let manifests_dir = data_dir.join(SORAFS_MANIFEST_DIR);
     if !manifests_dir.exists() {
@@ -4383,7 +4075,6 @@ fn load_gc_manifest_entries(data_dir: &Path) -> Result<Vec<GcManifestEntry>> {
             .iter()
             .map(|source| source.to_string())
             .collect::<Vec<_>>();
-
         entries.push(GcManifestEntry {
             manifest_id,
             manifest_digest_hex: encode(digest.as_bytes()),
@@ -4396,14 +4087,12 @@ fn load_gc_manifest_entries(data_dir: &Path) -> Result<Vec<GcManifestEntry>> {
     }
     Ok(entries)
 }
-
 fn retention_deadline(retention_epoch: u64, grace_secs: u64) -> Option<u64> {
     if retention_epoch == 0 {
         return None;
     }
     Some(retention_epoch.saturating_add(grace_secs))
 }
-
 const fn manifest_storage_class_label(class: ManifestStorageClass) -> &'static str {
     match class {
         ManifestStorageClass::Hot => "hot",
@@ -4411,7 +4100,6 @@ const fn manifest_storage_class_label(class: ManifestStorageClass) -> &'static s
         ManifestStorageClass::Cold => "cold",
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ReserveQuoteArgs {
     /// Storage class targeted by the commitment (hot, warm, cold).
@@ -4439,7 +4127,6 @@ pub struct ReserveQuoteArgs {
     #[arg(long = "quote-out", value_name = "PATH")]
     pub quote_out: Option<PathBuf>,
 }
-
 impl ReserveQuoteArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let storage_class = self.storage_class.to_storage_class();
@@ -4475,7 +4162,6 @@ impl ReserveQuoteArgs {
         context.print_data(&value)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ReserveLedgerArgs {
     /// Path to the reserve quote JSON (output of `sorafs reserve quote`).
@@ -4494,7 +4180,6 @@ pub struct ReserveLedgerArgs {
     #[arg(long = "asset-definition", value_name = "AID")]
     pub asset_definition: String,
 }
-
 impl ReserveLedgerArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let quote_contents = fs::read_to_string(&self.quote_path).wrap_err_with(|| {
@@ -4525,7 +4210,6 @@ impl ReserveLedgerArgs {
         context.print_data(&plan)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ReserveLifecycleArgs {
     /// Path to the reserve quote JSON (output of `sorafs reserve quote`).
@@ -4541,7 +4225,6 @@ pub struct ReserveLifecycleArgs {
     #[arg(long = "default-after-days", value_name = "DAYS", default_value_t = 30)]
     pub default_after_days: u16,
 }
-
 impl ReserveLifecycleArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let quote_contents = fs::read_to_string(&self.quote_path).wrap_err_with(|| {
@@ -4564,7 +4247,6 @@ impl ReserveLifecycleArgs {
         context.print_data(&value)
     }
 }
-
 #[derive(clap::ValueEnum, Clone, Copy, Debug)]
 enum GarActionArg {
     #[value(name = "purge-static-zone")]
@@ -4586,7 +4268,6 @@ enum GarActionArg {
     #[value(name = "custom")]
     Custom,
 }
-
 impl GarActionArg {
     fn to_enforcement_action(self, custom_slug: Option<&str>) -> Result<GarEnforcementActionV1> {
         Ok(match self {
@@ -4607,7 +4288,6 @@ impl GarActionArg {
         })
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct GarReceiptArgs {
     /// Registered GAR name (`SoraDNS` label, e.g., `docs.sora`).
@@ -4659,7 +4339,6 @@ pub struct GarReceiptArgs {
     #[arg(long = "norito-out", value_name = "PATH")]
     norito_out: Option<PathBuf>,
 }
-
 impl GarReceiptArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let receipt_id = parse_receipt_id(self.receipt_id_hex.as_deref())?;
@@ -4703,11 +4382,9 @@ impl GarReceiptArgs {
         context.print_data(&json_value)
     }
 }
-
 fn parse_receipt_id(receipt_id_hex: Option<&str>) -> Result<[u8; 16]> {
     parse_receipt_id_with_rng(receipt_id_hex, &mut OsRng)
 }
-
 fn parse_receipt_id_with_rng<R: TryCryptoRng>(
     receipt_id_hex: Option<&str>,
     rng: &mut R,
@@ -4720,7 +4397,6 @@ fn parse_receipt_id_with_rng<R: TryCryptoRng>(
         .map_err(|error| eyre!("SoraFS receipt-id OS RNG failed: {error}"))?;
     Ok(bytes)
 }
-
 fn parse_optional_hex_array<const N: usize>(
     value: Option<&str>,
     field: &str,
@@ -4729,7 +4405,6 @@ fn parse_optional_hex_array<const N: usize>(
         .map(|hex| parse_hex_array::<N>(hex, field))
         .transpose()
 }
-
 fn parse_timestamp_value(input: &str, field: &str) -> Result<u64> {
     if let Some(rest) = input.strip_prefix('@') {
         let value = rest
@@ -4743,7 +4418,6 @@ fn parse_timestamp_value(input: &str, field: &str) -> Result<u64> {
         .try_into()
         .wrap_err("timestamp is negative")
 }
-
 fn parse_timestamp_or_now(value: Option<&str>, field: &str) -> Result<u64> {
     value.map_or_else(
         || {
@@ -4755,13 +4429,11 @@ fn parse_timestamp_or_now(value: Option<&str>, field: &str) -> Result<u64> {
         |input| parse_timestamp_value(input, field),
     )
 }
-
 fn parse_optional_timestamp(value: Option<&str>, field: &str) -> Result<Option<u64>> {
     value
         .map(|input| parse_timestamp_value(input, field))
         .transpose()
 }
-
 #[cfg(test)]
 mod gar_receipt_cli_tests {
     use super::*;
@@ -4772,13 +4444,11 @@ mod gar_receipt_cli_tests {
             .expect("timestamp parsed");
         assert_eq!(ts, 1_778_408_100);
     }
-
     #[test]
     fn parse_timestamp_accepts_unix_prefix() {
         let ts = parse_timestamp_value("@1778408100", "triggered-at").expect("timestamp parsed");
         assert_eq!(ts, 1_778_408_100);
     }
-
     #[test]
     fn custom_action_requires_slug() {
         let err = GarActionArg::Custom
@@ -4787,7 +4457,6 @@ mod gar_receipt_cli_tests {
         assert!(err.to_string().contains("--custom-action-slug"));
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct FetchArgs {
     /// Path to the Norito-encoded manifest (`.to`) describing the payload layout.
@@ -4909,33 +4578,28 @@ pub struct FetchArgs {
     #[arg(long = "telemetry-region", value_name = "LABEL")]
     pub telemetry_region: Option<String>,
 }
-
 #[derive(Debug)]
 struct ManifestInputs {
     manifest_path: PathBuf,
     plan_path: PathBuf,
     manifest_id: String,
 }
-
 #[derive(Debug)]
 struct DownloadedManifest {
     manifest_path: PathBuf,
     plan_path: PathBuf,
     manifest_id: String,
 }
-
 #[derive(Debug, Clone)]
 struct ScoreboardCapturePaths {
     scoreboard: PathBuf,
     summary: Option<PathBuf>,
 }
-
 fn default_orchestrator_capture_dir() -> PathBuf {
     PathBuf::from("artifacts")
         .join("sorafs_orchestrator")
         .join("latest")
 }
-
 fn scoreboard_capture_paths(
     scoreboard_override: Option<PathBuf>,
     summary_override: Option<PathBuf>,
@@ -4952,7 +4616,6 @@ fn scoreboard_capture_paths(
         summary,
     }
 }
-
 fn insert_provider_counts(summary: &mut norito::json::Map, counts: ProviderCounts) {
     summary.insert(
         "provider_count".into(),
@@ -4967,7 +4630,6 @@ fn insert_provider_counts(summary: &mut norito::json::Map, counts: ProviderCount
         norito::json::Value::from(counts.mix_label()),
     );
 }
-
 fn insert_transport_policy(
     summary: &mut norito::json::Map,
     transport_policy: Option<TransportPolicy>,
@@ -4985,19 +4647,16 @@ fn insert_transport_policy(
         override_label.map_or(norito::json::Value::Null, norito::json::Value::from),
     );
 }
-
 fn insert_summary_telemetry_source(summary: &mut norito::json::Map, label: Option<&str>) {
     if let Some(value) = label {
         summary.insert("telemetry_source".into(), norito::json::Value::from(value));
     }
 }
-
 fn insert_summary_telemetry_region(summary: &mut norito::json::Map, label: Option<&str>) {
     if let Some(value) = label {
         summary.insert("telemetry_region".into(), norito::json::Value::from(value));
     }
 }
-
 impl Run for FetchArgs {
     #[allow(clippy::too_many_lines)]
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -5006,11 +4665,9 @@ impl Run for FetchArgs {
         {
             return Err(eyre!("--max-peers must be at least 1 when provided"));
         }
-
         if self.guard_target.is_some() && self.guard_directory.is_none() {
             return Err(eyre!("--guard-target requires --guard-directory"));
         }
-
         if self.guard_retention_days.is_some() && self.guard_directory.is_none() {
             return Err(eyre!("--guard-retention-days requires --guard-directory"));
         }
@@ -5019,7 +4676,6 @@ impl Run for FetchArgs {
                 "--guard-directory requires --guard-directory-digest from an independent trusted source"
             ));
         }
-
         let guard_cache_key = match self.guard_cache_key.as_deref() {
             Some(hex) => Some(
                 GuardCacheKey::from_hex(hex)
@@ -5027,14 +4683,12 @@ impl Run for FetchArgs {
             ),
             None => None,
         };
-
         let manifest_inputs = resolve_manifest_inputs(context, &self)?;
         let ManifestInputs {
             manifest_path,
             plan_path,
             manifest_id,
         } = manifest_inputs;
-
         let manifest_bytes = fs::read(&manifest_path).wrap_err_with(|| {
             format!("failed to read manifest from `{}`", manifest_path.display())
         })?;
@@ -5048,7 +4702,6 @@ impl Run for FetchArgs {
         } else {
             hex::encode(manifest_digest.as_bytes())
         };
-
         let plan_bytes = fs::read(&plan_path).wrap_err_with(|| {
             format!("failed to read chunk plan from `{}`", plan_path.display())
         })?;
@@ -5075,7 +4728,6 @@ impl Run for FetchArgs {
             .map(|spec| spec.offset + u64::from(spec.length))
             .max()
             .expect("non-empty chunk specs");
-
         let manifest_id_bytes = parse_digest_hex(&manifest_id)
             .map_err(|_| eyre!("--manifest-id must be a 64-character hex-encoded BLAKE3 digest"))?;
         if manifest_id_bytes != *manifest_digest.as_bytes() {
@@ -5087,7 +4739,6 @@ impl Run for FetchArgs {
         let manifest_id_hex = hex::encode(manifest_id_bytes);
         let payload_digest_hex = hex::encode(plan_payload_digest);
         let payload_digest = blake3::Hash::from_bytes(plan_payload_digest);
-
         let transport_policy =
             parse_transport_policy_flag(self.transport_policy.as_ref(), "--transport-policy")?;
         let anonymity_policy =
@@ -5103,7 +4754,6 @@ impl Run for FetchArgs {
         )?;
         let policy_override =
             PolicyOverride::new(transport_policy_override, anonymity_policy_override);
-
         let chunk_profile = chunker_registry::lookup(manifest.chunking.profile_id).map_or_else(
             || ChunkProfile {
                 min_size: manifest.chunking.min_size as usize,
@@ -5113,7 +4763,6 @@ impl Run for FetchArgs {
             },
             |descriptor| descriptor.profile,
         );
-
         let chunks: Vec<CarChunk> = chunk_specs
             .iter()
             .map(|spec| CarChunk {
@@ -5123,7 +4772,6 @@ impl Run for FetchArgs {
                 taikai_segment_hint: spec.taikai_segment_hint.clone(),
             })
             .collect();
-
         let plan = CarBuildPlan {
             chunk_profile,
             payload_digest,
@@ -5136,14 +4784,12 @@ impl Run for FetchArgs {
                 size: content_length,
             }],
         };
-
         let chunker_handle = self.chunker_handle.unwrap_or_else(|| {
             format!(
                 "{}.{}@{}",
                 manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
             )
         });
-
         let salt_epoch_cli = self.salt_epoch;
         let mut blinded_cid_b64 = self
             .blinded_cid
@@ -5182,12 +4828,10 @@ impl Run for FetchArgs {
             }
             (None, None) => None,
         };
-
         let manifest_envelope_b64 = match self.manifest_envelope.as_ref() {
             Some(path) => Some(load_manifest_envelope(path)?),
             None => None,
         };
-
         let guard_cache_path = self.guard_cache.clone();
         let mut guard_set = if let Some(path) = guard_cache_path.as_ref() {
             load_guard_set(path, guard_cache_key.as_ref())
@@ -5238,7 +4882,6 @@ impl Run for FetchArgs {
         } else {
             None
         };
-
         let mut provider_inputs = Vec::with_capacity(self.gateway_provider.len());
         let mut provider_aliases = Vec::with_capacity(self.gateway_provider.len());
         let mut provider_label_by_id = HashMap::with_capacity(self.gateway_provider.len());
@@ -5258,7 +4901,6 @@ impl Run for FetchArgs {
                 privacy_events_url: parsed.privacy_events_url,
             });
         }
-
         let gateway_config = GatewayFetchConfig {
             manifest_id_hex: manifest_id_hex.clone(),
             chunker_handle,
@@ -5269,7 +4911,6 @@ impl Run for FetchArgs {
             salt_epoch,
             expected_cache_version: None,
         };
-
         let telemetry_source_label = self
             .telemetry_source_label
             .as_ref()
@@ -5284,7 +4925,6 @@ impl Run for FetchArgs {
                 }
             })
             .transpose()?;
-
         let telemetry_region_label = self
             .telemetry_region
             .as_ref()
@@ -5297,12 +4937,10 @@ impl Run for FetchArgs {
                 }
             })
             .transpose()?;
-
         let gateway_provider_count = provider_inputs.len();
         let capture_paths =
             scoreboard_capture_paths(self.scoreboard_out.clone(), self.json_out.clone());
         let write_mode_hint = write_mode.unwrap_or(WriteModeHint::ReadOnly);
-
         let mut scoreboard_options = SorafsGatewayScoreboardOptions::default();
         if let Some(parent) = capture_paths
             .scoreboard
@@ -5342,7 +4980,6 @@ impl Run for FetchArgs {
             .telemetry_source_label
             .clone_from(&telemetry_source_label);
         let scoreboard_options = Some(scoreboard_options);
-
         let fetch_options = SorafsGatewayFetchOptions {
             retry_budget: self.retry_budget,
             max_peers: self.max_peers,
@@ -5356,7 +4993,6 @@ impl Run for FetchArgs {
             scoreboard: scoreboard_options,
             expected_cache_version: gateway_config.expected_cache_version.clone(),
         };
-
         let client = context.client_from_config();
         let runtime = Runtime::new().wrap_err("failed to create Tokio runtime")?;
         let session = runtime
@@ -5367,10 +5003,8 @@ impl Run for FetchArgs {
                 fetch_options,
             ))
             .map_err(|err| eyre!("SoraFS fetch failed: {err}"))?;
-
         let outcome = &session.outcome;
         let policy_report = &session.policy_report;
-
         let assembled = outcome.assemble_payload();
         let computed_digest = blake3::hash(&assembled);
         if computed_digest.as_bytes() != payload_digest.as_bytes() {
@@ -5380,7 +5014,6 @@ impl Run for FetchArgs {
                 payload_digest_hex
             ));
         }
-
         if guard_updated
             && let (Some(path), Some(guard_state)) = (guard_cache_path.as_ref(), guard_set.as_ref())
         {
@@ -5388,18 +5021,15 @@ impl Run for FetchArgs {
                 format!("failed to persist guard cache to `{}`", path.display())
             })?;
         }
-
         let policy = policy_report.policy;
         let soranet_selected = policy_report.selected_soranet_total as u64;
         let pq_selected = policy_report.selected_pq as u64;
         let classical_selected = policy_report.selected_classical() as u64;
         let pq_ratio = policy_report.pq_ratio();
-
         if let Some(path) = &self.output {
             fs::write(path, &assembled)
                 .wrap_err_with(|| format!("failed to write payload to `{}`", path.display()))?;
         }
-
         let provider_reports_json: Vec<norito::json::Value> = outcome
             .provider_reports
             .iter()
@@ -5427,7 +5057,6 @@ impl Run for FetchArgs {
                 norito::json::Value::Object(map)
             })
             .collect();
-
         let chunk_receipts_json: Vec<norito::json::Value> = outcome
             .chunk_receipts
             .iter()
@@ -5462,7 +5091,6 @@ impl Run for FetchArgs {
                 norito::json::Value::Object(map)
             })
             .collect();
-
         let mut summary = norito::json::Map::new();
         summary.insert(
             "manifest_id".into(),
@@ -5586,7 +5214,6 @@ impl Run for FetchArgs {
             "anonymity_uses_classical".into(),
             norito::json::Value::from(policy_report.uses_classical()),
         );
-
         let summary_value = norito::json::Value::Object(summary);
         if let Some(path) = capture_paths.summary.as_ref() {
             if let Some(parent) = path
@@ -5601,11 +5228,9 @@ impl Run for FetchArgs {
             fs::write(path, rendered.as_bytes())
                 .wrap_err_with(|| format!("failed to write summary to `{}`", path.display()))?;
         }
-
         context.print_data(&summary_value)
     }
 }
-
 #[derive(Debug)]
 struct ParsedGatewayProvider {
     name: String,
@@ -5615,7 +5240,6 @@ struct ParsedGatewayProvider {
     stream_token_b64: String,
     privacy_events_url: Option<String>,
 }
-
 fn parse_gateway_provider_spec(value: &str) -> Result<ParsedGatewayProvider> {
     let mut name: Option<String> = None;
     let mut provider_id: Option<String> = None;
@@ -5623,7 +5247,6 @@ fn parse_gateway_provider_spec(value: &str) -> Result<ParsedGatewayProvider> {
     let mut base_url: Option<String> = None;
     let mut stream_token: Option<String> = None;
     let mut privacy_events_url: Option<String> = None;
-
     for pair in value.split(',') {
         let pair = pair.trim();
         if pair.is_empty() {
@@ -5673,7 +5296,6 @@ fn parse_gateway_provider_spec(value: &str) -> Result<ParsedGatewayProvider> {
             }
         }
     }
-
     let name = name.ok_or_else(|| eyre!("--gateway-provider requires name=<alias>"))?;
     let provider_id_hex =
         provider_id.ok_or_else(|| eyre!("--gateway-provider requires provider-id=<hex>"))?;
@@ -5683,7 +5305,6 @@ fn parse_gateway_provider_spec(value: &str) -> Result<ParsedGatewayProvider> {
         base_url.ok_or_else(|| eyre!("--gateway-provider requires base-url=<https://...>"))?;
     let stream_token_b64 =
         stream_token.ok_or_else(|| eyre!("--gateway-provider requires stream-token=<base64>"))?;
-
     Ok(ParsedGatewayProvider {
         name,
         provider_id_hex,
@@ -5693,13 +5314,11 @@ fn parse_gateway_provider_spec(value: &str) -> Result<ParsedGatewayProvider> {
         privacy_events_url,
     })
 }
-
 fn option_usize_to_json_value(value: Option<usize>) -> Value {
     value
         .and_then(|val| u64::try_from(val).ok())
         .map_or(Value::Null, Value::from)
 }
-
 fn transport_policy_labels(
     requested: Option<TransportPolicy>,
     override_policy: Option<TransportPolicy>,
@@ -5709,7 +5328,6 @@ fn transport_policy_labels(
     let effective = override_policy.unwrap_or_else(|| requested.unwrap_or_default());
     (effective.label(), override_flag, override_label)
 }
-
 fn anonymity_policy_labels(
     requested: Option<AnonymityPolicy>,
     override_policy: Option<AnonymityPolicy>,
@@ -5719,26 +5337,21 @@ fn anonymity_policy_labels(
     let effective = override_policy.unwrap_or_else(|| requested.unwrap_or_default());
     (effective.label(), override_flag, override_label)
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ProviderCounts {
     direct: usize,
     gateway: usize,
 }
-
 impl ProviderCounts {
     const fn new(direct: usize, gateway: usize) -> Self {
         Self { direct, gateway }
     }
-
     fn direct_u64(self) -> u64 {
         u64::try_from(self.direct).unwrap_or(u64::MAX)
     }
-
     fn gateway_u64(self) -> u64 {
         u64::try_from(self.gateway).unwrap_or(u64::MAX)
     }
-
     fn mix_label(self) -> &'static str {
         match (self.direct > 0, self.gateway > 0) {
             (true, true) => "mixed",
@@ -5748,7 +5361,6 @@ impl ProviderCounts {
         }
     }
 }
-
 #[derive(Clone)]
 struct ScoreboardMetadataInput {
     provider_counts: ProviderCounts,
@@ -5766,7 +5378,6 @@ struct ScoreboardMetadataInput {
     telemetry_source: Option<String>,
     telemetry_region: Option<String>,
 }
-
 fn cli_scoreboard_metadata(input: &ScoreboardMetadataInput) -> Value {
     let mut metadata = Map::new();
     metadata.insert("version".into(), Value::from(env!("CARGO_PKG_VERSION")));
@@ -5830,7 +5441,6 @@ fn cli_scoreboard_metadata(input: &ScoreboardMetadataInput) -> Value {
         "gateway_manifest_provided".into(),
         Value::from(input.manifest_envelope_present),
     );
-
     let (transport_label, transport_override_flag, transport_override_label) =
         transport_policy_labels(input.transport_policy, input.transport_policy_override);
     metadata.insert("transport_policy".into(), Value::from(transport_label));
@@ -5842,7 +5452,6 @@ fn cli_scoreboard_metadata(input: &ScoreboardMetadataInput) -> Value {
         "transport_policy_override_label".into(),
         transport_override_label.map_or(Value::Null, Value::from),
     );
-
     let (anonymity_label, anonymity_override_flag, anonymity_override_label) =
         anonymity_policy_labels(input.anonymity_policy, input.anonymity_policy_override);
     metadata.insert("anonymity_policy".into(), Value::from(anonymity_label));
@@ -5860,10 +5469,8 @@ fn cli_scoreboard_metadata(input: &ScoreboardMetadataInput) -> Value {
         "write_mode_enforces_pq".into(),
         Value::from(input.write_mode.enforces_pq_only()),
     );
-
     Value::Object(metadata)
 }
-
 fn load_guard_set(path: &Path, key: Option<&GuardCacheKey>) -> Result<Option<GuardSet>> {
     if !path.exists() {
         return Ok(None);
@@ -5886,7 +5493,6 @@ fn load_guard_set(path: &Path, key: Option<&GuardCacheKey>) -> Result<Option<Gua
         })?;
     Ok(Some(guard_set))
 }
-
 fn persist_guard_set(path: &Path, guard_set: &GuardSet, key: Option<&GuardCacheKey>) -> Result<()> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::create_dir_all(parent).wrap_err_with(|| {
@@ -5906,7 +5512,6 @@ fn persist_guard_set(path: &Path, guard_set: &GuardSet, key: Option<&GuardCacheK
         .wrap_err_with(|| format!("failed to write guard cache to `{}`", path.display()))?;
     Ok(())
 }
-
 fn load_guard_directory(
     path: &Path,
     expected_snapshot_digest_hex: &str,
@@ -5922,7 +5527,6 @@ fn load_guard_directory(
         )
     })
 }
-
 #[derive(Debug, Clone, norito::json::JsonSerialize)]
 struct GuardDirectorySummary {
     version: u8,
@@ -5943,7 +5547,6 @@ struct GuardDirectorySummary {
     pq_certificate_relays: usize,
     snapshot_size_bytes: usize,
 }
-
 impl GuardDirectorySummary {
     fn from_components(
         snapshot: &GuardDirectorySnapshotV2,
@@ -5957,7 +5560,6 @@ impl GuardDirectorySummary {
         let mut exit_relays = 0usize;
         let mut dual_signed = 0usize;
         let mut pq_cert_relays = 0usize;
-
         for descriptor in directory.entries() {
             if descriptor.is_entry_guard() {
                 entry_guards += 1;
@@ -5979,14 +5581,12 @@ impl GuardDirectorySummary {
                 pq_cert_relays += 1;
             }
         }
-
         #[allow(clippy::cast_precision_loss)]
         let pq_ratio = if entry_guards == 0 {
             0.0
         } else {
             pq_entry_guards as f64 / entry_guards as f64
         };
-
         Self {
             version: snapshot.version,
             snapshot_digest_hex,
@@ -6012,7 +5612,6 @@ impl GuardDirectorySummary {
         }
     }
 }
-
 fn inspect_guard_directory_bytes(bytes: &[u8]) -> Result<GuardDirectorySummary> {
     let snapshot = GuardDirectorySnapshotV2::inspect_bytes(bytes)
         .wrap_err("failed to decode guard directory snapshot")?;
@@ -6026,7 +5625,6 @@ fn inspect_guard_directory_bytes(bytes: &[u8]) -> Result<GuardDirectorySummary> 
         false,
     ))
 }
-
 fn authenticate_guard_directory_bytes(
     bytes: &[u8],
     expected_snapshot_digest_hex: &str,
@@ -6045,7 +5643,6 @@ fn authenticate_guard_directory_bytes(
         true,
     ))
 }
-
 fn parse_snapshot_digest_hex(value: &str) -> Result<[u8; 32]> {
     let trimmed = value.trim();
     if trimmed.len() != 64 {
@@ -6064,7 +5661,6 @@ fn parse_snapshot_digest_hex(value: &str) -> Result<[u8; 32]> {
     digest.copy_from_slice(&decoded);
     Ok(digest)
 }
-
 fn validation_phase_label(phase: CertificateValidationPhase) -> &'static str {
     match phase {
         CertificateValidationPhase::Phase1AllowSingle => "phase1_allow_single",
@@ -6072,7 +5668,6 @@ fn validation_phase_label(phase: CertificateValidationPhase) -> &'static str {
         CertificateValidationPhase::Phase3RequireDual => "phase3_require_dual",
     }
 }
-
 fn write_guard_directory_snapshot(path: &Path, bytes: &[u8], overwrite: bool) -> Result<()> {
     if path.exists() && !overwrite {
         return Err(eyre!(
@@ -6095,7 +5690,6 @@ fn write_guard_directory_snapshot(path: &Path, bytes: &[u8], overwrite: bool) ->
         )
     })
 }
-
 fn parse_transport_policy_flag(
     value: Option<&String>,
     flag: &'static str,
@@ -6113,7 +5707,6 @@ fn parse_transport_policy_flag(
         Ok(None)
     }
 }
-
 fn parse_anonymity_policy_flag(
     value: Option<&String>,
     flag: &'static str,
@@ -6134,7 +5727,6 @@ fn parse_anonymity_policy_flag(
         Ok(None)
     }
 }
-
 fn parse_write_mode_flag(
     value: Option<&String>,
     flag: &'static str,
@@ -6150,14 +5742,12 @@ fn parse_write_mode_flag(
         Ok(None)
     }
 }
-
 fn validate_hex_digest(value: &str, flag: &str) -> Result<String> {
     if value.len() != 64 || !value.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(eyre!("{flag} must be 64 hex characters"));
     }
     Ok(value.to_ascii_lowercase())
 }
-
 fn anonymity_policy_label(policy: AnonymityPolicy) -> &'static str {
     match policy {
         AnonymityPolicy::GuardPq => "anon-guard-pq",
@@ -6165,7 +5755,6 @@ fn anonymity_policy_label(policy: AnonymityPolicy) -> &'static str {
         AnonymityPolicy::StrictPq => "anon-strict-pq",
     }
 }
-
 impl Run for Command {
     #[allow(clippy::too_many_lines)]
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -6192,7 +5781,6 @@ impl Run for Command {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum IncentivesCommand {
     /// Compute a relay reward instruction from metrics and bond state.
@@ -6205,7 +5793,6 @@ pub enum IncentivesCommand {
     #[command(subcommand)]
     Service(IncentivesServiceCommand),
 }
-
 impl Run for IncentivesCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -6216,7 +5803,6 @@ impl Run for IncentivesCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IncentivesComputeArgs {
     /// Path to the reward configuration JSON.
@@ -6240,23 +5826,18 @@ pub struct IncentivesComputeArgs {
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
-
 impl Run for IncentivesComputeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let config = read_reward_config(&self.config)?;
         let engine = RelayRewardEngine::new(config)
             .map_err(|err| eyre!("invalid reward configuration: {err}"))?;
-
         let metrics = read_metrics_file(&self.metrics)?;
         let bond = read_bond_entry(&self.bond)?;
         let beneficiary = parse_account_id_str(context, &self.beneficiary, "--beneficiary")?;
-
         let instruction = engine.compute_reward(&metrics, &bond, beneficiary, Metadata::default());
-
         if let Some(path) = &self.norito_out {
             write_norito_payload(path, &instruction)?;
         }
-
         let json_bytes = if self.pretty {
             norito::json::to_vec_pretty(&instruction)?
         } else {
@@ -6267,7 +5848,6 @@ impl Run for IncentivesComputeArgs {
         context.println(output)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IncentivesOpenDisputeArgs {
     /// Norito-encoded reward instruction (`RelayRewardInstructionV1`).
@@ -6297,7 +5877,6 @@ pub struct IncentivesOpenDisputeArgs {
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
-
 impl Run for IncentivesOpenDisputeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let instruction = read_reward_instruction(&self.instruction)?;
@@ -6305,7 +5884,6 @@ impl Run for IncentivesOpenDisputeArgs {
         let submitted_by = parse_account_id_str(context, &self.submitted_by, "--submitted-by")?;
         let requested_amount = parse_quantity_str(&self.requested_amount, "--requested-amount")?;
         let submitted_at = self.submitted_at.unwrap_or_else(unix_now);
-
         let ledger = RelayPayoutLedger::new(treasury);
         let dispute = ledger.open_dispute(
             instruction,
@@ -6314,11 +5892,9 @@ impl Run for IncentivesOpenDisputeArgs {
             submitted_at,
             self.reason,
         );
-
         if let Some(path) = &self.norito_out {
             write_norito_payload(path, &dispute)?;
         }
-
         let json_bytes = if self.pretty {
             norito::json::to_vec_pretty(&dispute)?
         } else {
@@ -6329,7 +5905,6 @@ impl Run for IncentivesOpenDisputeArgs {
         context.println(output)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IncentivesDashboardArgs {
     /// Reward instruction payloads to include in the dashboard.
@@ -6341,7 +5916,6 @@ pub struct IncentivesDashboardArgs {
     )]
     pub instructions: Vec<PathBuf>,
 }
-
 impl Run for IncentivesDashboardArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let mut accumulator = RelayEarningsAccumulator::default();
@@ -6349,7 +5923,6 @@ impl Run for IncentivesDashboardArgs {
             let instruction = read_reward_instruction(path)?;
             accumulator.record(&instruction)?;
         }
-
         let mut rows: Vec<_> = accumulator
             .entries()
             .iter()
@@ -6363,7 +5936,6 @@ impl Run for IncentivesDashboardArgs {
         let total_payout = rows.iter().try_fold(Quantity::zero(), |acc, row| {
             acc.checked_add(&row.payout_amount)
         })?;
-
         let summary = IncentivesDashboardSummary {
             total_relays: rows.len(),
             total_payout,
@@ -6372,7 +5944,6 @@ impl Run for IncentivesDashboardArgs {
         context.print_data(&summary)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum IncentivesServiceCommand {
     /// Initialise a new payout ledger state file.
@@ -6395,7 +5966,6 @@ pub enum IncentivesServiceCommand {
     /// Run the treasury daemon against a metrics spool.
     Daemon(IncentivesServiceDaemonArgs),
 }
-
 impl Run for IncentivesServiceCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -6411,7 +5981,6 @@ impl Run for IncentivesServiceCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IncentivesServiceInitArgs {
     /// Path where the incentives state JSON will be stored.
@@ -6427,7 +5996,6 @@ pub struct IncentivesServiceInitArgs {
     #[arg(long = "force", default_value_t = false)]
     pub force: bool,
 }
-
 impl Run for IncentivesServiceInitArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         if self.state.exists() && !self.force {
@@ -6436,14 +6004,12 @@ impl Run for IncentivesServiceInitArgs {
                 self.state.display()
             ));
         }
-
         let config = read_reward_config(&self.config)?;
         if config.budget_approval_id.is_none() {
             return Err(eyre!(
                 "reward_config.budget_approval_id is required for incentives"
             ));
         }
-
         let treasury_account =
             parse_account_id_str(context, &self.treasury_account, "--treasury-account")?;
         let state = IncentivesState::new(&config, treasury_account);
@@ -6454,7 +6020,6 @@ impl Run for IncentivesServiceInitArgs {
         ))
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IncentivesServiceProcessArgs {
     /// Path to the persisted incentives state JSON.
@@ -6484,24 +6049,20 @@ pub struct IncentivesServiceProcessArgs {
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
-
 impl Run for IncentivesServiceProcessArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         if self.metrics.is_empty() {
             return Err(eyre!("at least one --metrics file must be provided"));
         }
-
         let (mut state, mut service) = load_state_service(&self.state)?;
         let budget_approval_id =
             require_budget_approval_id(state.reward_config.budget_approval_id.as_ref())?;
-
         let metrics: Vec<_> = self
             .metrics
             .iter()
             .map(|path| read_metrics_file(path.as_path()))
             .collect::<Result<_, _>>()?;
         let metrics_count = metrics.len();
-
         let bonds: Vec<_> = if self.bond.is_empty() {
             return Err(eyre!("at least one --bond file must be provided"));
         } else if self.bond.len() == 1 {
@@ -6519,7 +6080,6 @@ impl Run for IncentivesServiceProcessArgs {
                 metrics_count
             ));
         };
-
         let beneficiaries: Vec<_> = if self.beneficiary.is_empty() {
             return Err(eyre!("at least one --beneficiary value must be provided"));
         } else if self.beneficiary.len() == 1 {
@@ -6537,13 +6097,11 @@ impl Run for IncentivesServiceProcessArgs {
                 metrics_count
             ));
         };
-
         if metrics_count > 1 && (self.instruction_out.is_some() || self.transfer_out.is_some()) {
             return Err(eyre!(
                 "`--instruction-out` and `--transfer-out` are only supported when processing a single metrics entry"
             ));
         }
-
         let inputs: Vec<_> = metrics
             .iter()
             .zip(bonds.iter())
@@ -6555,11 +6113,9 @@ impl Run for IncentivesServiceProcessArgs {
                 metadata: Metadata::default(),
             })
             .collect();
-
         let outcomes = service
             .process_batch(inputs)
             .map_err(|err| eyre!("failed to process epoch: {err}"))?;
-
         if metrics_count == 1 {
             if let Some(path) = &self.instruction_out {
                 write_norito_payload(path, &outcomes[0].instruction)?;
@@ -6568,7 +6124,6 @@ impl Run for IncentivesServiceProcessArgs {
                 write_norito_payload(path, &outcomes[0].transfer)?;
             }
         }
-
         let mut transfers_to_submit = Vec::new();
         let mut summaries = Vec::new();
         for outcome in &outcomes {
@@ -6581,13 +6136,11 @@ impl Run for IncentivesServiceProcessArgs {
             summaries.push(ServicePayoutSummary::new(&outcome.instruction, snapshot));
         }
         save_incentives_state(&self.state, &state)?;
-
         if self.submit_transfer && !transfers_to_submit.is_empty() {
             context
                 .finish(transfers_to_submit)
                 .wrap_err("failed to submit payout transfer")?;
         }
-
         if summaries.len() == 1 {
             output_summary(context, &summaries[0], self.pretty)
         } else {
@@ -6595,7 +6148,6 @@ impl Run for IncentivesServiceProcessArgs {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IncentivesServiceRecordArgs {
     /// Path to the persisted incentives state JSON.
@@ -6616,7 +6168,6 @@ pub struct IncentivesServiceRecordArgs {
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
-
 impl Run for IncentivesServiceRecordArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let instruction = read_reward_instruction(&self.instruction)?;
@@ -6624,7 +6175,6 @@ impl Run for IncentivesServiceRecordArgs {
         let budget_approval_id =
             require_budget_approval_id(state.reward_config.budget_approval_id.as_ref())?;
         ensure_instruction_budget_approval(&instruction, &budget_approval_id)?;
-
         let transfer_instruction = service.payout_ledger().to_transfer(&instruction);
         if self.submit_transfer
             && !instruction.is_zero_amount()
@@ -6634,15 +6184,12 @@ impl Run for IncentivesServiceRecordArgs {
                 .finish(vec![transfer.clone()])
                 .wrap_err("failed to submit payout transfer")?;
         }
-
         service
             .record_reward(instruction.clone())
             .map_err(|err| eyre!("failed to record reward instruction: {err}"))?;
-
         if let (Some(path), Some(transfer)) = (&self.transfer_out, transfer_instruction.clone()) {
             write_norito_payload(path, &transfer)?;
         }
-
         let dashboard = service
             .earnings_dashboard()
             .map_err(|err| eyre!("failed to build earnings dashboard: {err}"))?;
@@ -6652,15 +6199,12 @@ impl Run for IncentivesServiceRecordArgs {
             .find(|row| row.relay_id == instruction.relay_id)
             .map(ServiceLedgerSnapshot::from_row)
             .ok_or_else(|| eyre!("recorded relay not present in earnings dashboard"))?;
-
         store_payout_instruction(&mut state, &instruction);
         save_incentives_state(&self.state, &state)?;
-
         let summary = ServicePayoutSummary::new(&instruction, ledger);
         output_summary(context, &summary, self.pretty)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum IncentivesServiceDisputeCommand {
     /// File a new dispute against a recorded payout.
@@ -6670,7 +6214,6 @@ pub enum IncentivesServiceDisputeCommand {
     /// Reject a dispute without altering the ledger.
     Reject(IncentivesServiceDisputeRejectArgs),
 }
-
 impl Run for IncentivesServiceDisputeCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -6680,7 +6223,6 @@ impl Run for IncentivesServiceDisputeCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IncentivesServiceDisputeFileArgs {
     /// Path to the persisted incentives state JSON.
@@ -6727,7 +6269,6 @@ pub struct IncentivesServiceDisputeFileArgs {
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
-
 impl Run for IncentivesServiceDisputeFileArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let (mut state, mut service) = load_state_service(&self.state)?;
@@ -6737,7 +6278,6 @@ impl Run for IncentivesServiceDisputeFileArgs {
         let requested_adjustment =
             parse_adjustment_flags(self.adjust_credit.as_ref(), self.adjust_debit.as_ref())?;
         let filed_at = self.filed_at.unwrap_or_else(unix_now);
-
         let dispute = service
             .file_dispute(
                 relay_id,
@@ -6749,19 +6289,15 @@ impl Run for IncentivesServiceDisputeFileArgs {
                 requested_adjustment,
             )
             .map_err(|err| eyre!("failed to file dispute: {err}"))?;
-
         if let Some(path) = &self.norito_out {
             write_norito_payload(path, dispute.norito_record())?;
         }
-
         upsert_dispute_record(&mut state, &dispute);
         save_incentives_state(&self.state, &state)?;
-
         let record = StoredDisputeRecord::from(&dispute);
         output_summary(context, &record, self.pretty)
     }
 }
-
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum IncentivesDisputeResolutionKind {
     #[clap(name = "no-change")]
@@ -6771,7 +6307,6 @@ pub enum IncentivesDisputeResolutionKind {
     #[clap(name = "debit")]
     Debit,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IncentivesServiceDisputeResolveArgs {
     /// Path to the persisted incentives state JSON.
@@ -6801,12 +6336,10 @@ pub struct IncentivesServiceDisputeResolveArgs {
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
-
 impl Run for IncentivesServiceDisputeResolveArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let (mut state, mut service) = load_state_service(&self.state)?;
         let resolved_at = self.resolved_at.unwrap_or_else(unix_now);
-
         let resolution = match self.resolution {
             IncentivesDisputeResolutionKind::NoChange => {
                 if self.amount.is_some() {
@@ -6837,23 +6370,18 @@ impl Run for IncentivesServiceDisputeResolveArgs {
                 }
             }
         };
-
         let outcome = service
             .resolve_dispute(self.dispute_id, resolution, resolved_at)
             .map_err(|err| eyre!("failed to resolve dispute: {err}"))?;
-
         if let (Some(path), Some(transfer)) = (&self.transfer_out, outcome.transfer.as_ref()) {
             write_norito_payload(path, transfer)?;
         }
-
         upsert_dispute_record(&mut state, &outcome.dispute);
         save_incentives_state(&self.state, &state)?;
-
         let record = StoredDisputeRecord::from(&outcome.dispute);
         output_summary(context, &record, self.pretty)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IncentivesServiceDisputeRejectArgs {
     /// Path to the persisted incentives state JSON.
@@ -6874,31 +6402,25 @@ pub struct IncentivesServiceDisputeRejectArgs {
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
-
 impl Run for IncentivesServiceDisputeRejectArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let (mut state, mut service) = load_state_service(&self.state)?;
         let rejected_at = self.rejected_at.unwrap_or_else(unix_now);
-
         let dispute = service
             .reject_dispute(self.dispute_id, rejected_at, self.notes.clone())
             .map_err(|err| eyre!("failed to reject dispute: {err}"))?;
-
         upsert_dispute_record(&mut state, &dispute);
         save_incentives_state(&self.state, &state)?;
-
         let record = StoredDisputeRecord::from(&dispute);
         output_summary(context, &record, self.pretty)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IncentivesServiceDashboardArgs {
     /// Path to the persisted incentives state JSON.
     #[arg(long = "state", value_name = "PATH")]
     pub state: PathBuf,
 }
-
 impl Run for IncentivesServiceDashboardArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let (_state, service) = load_state_service(&self.state)?;
@@ -6909,14 +6431,12 @@ impl Run for IncentivesServiceDashboardArgs {
         context.print_data(&summary)
     }
 }
-
 #[derive(clap::ValueEnum, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum IncentiveAuditScope {
     Bond,
     Budget,
     All,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IncentivesServiceAuditArgs {
     /// Path to the persisted incentives state JSON.
@@ -6939,7 +6459,6 @@ pub struct IncentivesServiceAuditArgs {
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
-
 impl Run for IncentivesServiceAuditArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let state = load_incentives_state(&self.state)?;
@@ -6947,7 +6466,6 @@ impl Run for IncentivesServiceAuditArgs {
             crate::resolve_account_id(context, literal)
         })?;
         let (audit_bond_enabled, audit_budget_enabled) = audit_scope_flags(&self.scopes);
-
         let mut summary = IncentivesAuditSummary::default();
         if audit_bond_enabled {
             let bond_summary = audit_bonds(&config, &state.reward_config)?;
@@ -6957,17 +6475,14 @@ impl Run for IncentivesServiceAuditArgs {
             let budget_summary = audit_budget(&state)?;
             summary.budget = Some(budget_summary);
         }
-
         let failures = summary.failure_count();
         output_summary(context, &summary, self.pretty)?;
         if failures > 0 {
             return Err(eyre!("incentives audit found {failures} issue(s)"));
         }
-
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IncentivesServiceShadowRunArgs {
     /// Path to the persisted incentives state JSON.
@@ -6988,7 +6503,6 @@ pub struct IncentivesServiceShadowRunArgs {
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
-
 impl Run for IncentivesServiceShadowRunArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let state = load_incentives_state(&self.state)?;
@@ -6999,7 +6513,6 @@ impl Run for IncentivesServiceShadowRunArgs {
         let config = load_daemon_config(&self.config, &|literal| {
             crate::resolve_account_id(context, literal)
         })?;
-
         let iteration_summary = process_daemon_iteration(
             &mut state_for_run,
             &mut service,
@@ -7010,7 +6523,6 @@ impl Run for IncentivesServiceShadowRunArgs {
             None,
             Some(&expected_budget),
         )?;
-
         if iteration_summary.missing_budget_approval > 0
             || iteration_summary.mismatched_budget_approval > 0
         {
@@ -7021,9 +6533,7 @@ impl Run for IncentivesServiceShadowRunArgs {
                     .saturating_add(iteration_summary.mismatched_budget_approval)
             ));
         }
-
         let report = build_shadow_run_summary(&iteration_summary);
-
         if let Some(path) = &self.report_out {
             let bytes = norito::json::to_vec_pretty(&report)
                 .wrap_err("failed to serialise shadow run report")?;
@@ -7031,11 +6541,9 @@ impl Run for IncentivesServiceShadowRunArgs {
                 format!("failed to write shadow run report to `{}`", path.display())
             })?;
         }
-
         output_summary(context, &report, self.pretty)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IncentivesServiceReconcileArgs {
     /// Path to the persisted incentives state JSON.
@@ -7050,7 +6558,6 @@ pub struct IncentivesServiceReconcileArgs {
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
-
 impl Run for IncentivesServiceReconcileArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let (_, service) = load_state_service(&self.state)?;
@@ -7060,7 +6567,6 @@ impl Run for IncentivesServiceReconcileArgs {
         output_summary(context, &summary, self.pretty)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct IncentivesServiceDaemonArgs {
     /// Path to the persisted incentives state JSON.
@@ -7093,13 +6599,11 @@ pub struct IncentivesServiceDaemonArgs {
     #[arg(long = "pretty", default_value_t = false)]
     pub pretty: bool,
 }
-
 impl Run for IncentivesServiceDaemonArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let config = load_daemon_config(&self.config, &|literal| {
             crate::resolve_account_id(context, literal)
         })?;
-
         if let Some(dir) = &self.instruction_out_dir {
             fs::create_dir_all(dir).wrap_err_with(|| {
                 format!(
@@ -7108,7 +6612,6 @@ impl Run for IncentivesServiceDaemonArgs {
                 )
             })?;
         }
-
         if let Some(dir) = &self.transfer_out_dir {
             fs::create_dir_all(dir).wrap_err_with(|| {
                 format!(
@@ -7117,18 +6620,15 @@ impl Run for IncentivesServiceDaemonArgs {
                 )
             })?;
         }
-
         if let Some(dir) = &self.archive_dir {
             fs::create_dir_all(dir).wrap_err_with(|| {
                 format!("failed to create archive directory `{}`", dir.display())
             })?;
         }
-
         let poll_interval = self.poll_interval.max(1);
         let (mut state, mut service) = load_state_service(&self.state)?;
         let expected_budget =
             require_budget_approval_id(state.reward_config.budget_approval_id.as_ref())?;
-
         loop {
             let summary = process_daemon_iteration(
                 &mut state,
@@ -7140,11 +6640,9 @@ impl Run for IncentivesServiceDaemonArgs {
                 self.archive_dir.as_deref(),
                 Some(&expected_budget),
             )?;
-
             if !summary.processed.is_empty() {
                 save_incentives_state(&self.state, &state)?;
             }
-
             log_daemon_summary(context, &summary, self.pretty)?;
             if summary.missing_budget_approval > 0 || summary.mismatched_budget_approval > 0 {
                 return Err(eyre!(
@@ -7154,18 +6652,14 @@ impl Run for IncentivesServiceDaemonArgs {
                         .saturating_add(summary.mismatched_budget_approval)
                 ));
             }
-
             if self.once {
                 break;
             }
-
             thread::sleep(Duration::from_secs(poll_interval));
         }
-
         Ok(())
     }
 }
-
 fn resolve_manifest_inputs<C: RunContext>(
     context: &mut C,
     args: &FetchArgs,
@@ -7178,7 +6672,6 @@ fn resolve_manifest_inputs<C: RunContext>(
         downloaded.as_ref(),
     )
 }
-
 fn maybe_download_manifest<C: RunContext>(
     context: &mut C,
     args: &FetchArgs,
@@ -7207,7 +6700,6 @@ fn maybe_download_manifest<C: RunContext>(
         manifest_id: bundle.manifest_hash_hex,
     }))
 }
-
 fn merge_manifest_inputs(
     manifest: Option<&PathBuf>,
     plan: Option<&PathBuf>,
@@ -7238,7 +6730,6 @@ fn merge_manifest_inputs(
         manifest_id,
     })
 }
-
 fn validate_manifest_envelope(bytes: &[u8]) -> Result<()> {
     if bytes.is_empty() {
         return Err(eyre!("manifest envelope must not be empty"));
@@ -7273,14 +6764,12 @@ fn validate_manifest_envelope(bytes: &[u8]) -> Result<()> {
     }
     Ok(())
 }
-
 fn load_manifest_envelope(path: &Path) -> Result<String> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read manifest envelope from `{}`", path.display()))?;
     validate_manifest_envelope(&bytes)?;
     Ok(STANDARD.encode(bytes))
 }
-
 #[cfg(test)]
 mod fetch_args_manifest_tests {
     use super::{DownloadedManifest, merge_manifest_inputs};
@@ -7307,7 +6796,6 @@ mod fetch_args_manifest_tests {
         assert_eq!(inputs.plan_path, plan);
         assert_eq!(inputs.manifest_id, manifest_id);
     }
-
     #[test]
     fn merge_inputs_uses_fallback_when_missing() {
         let manifest_id = "aa".repeat(32);
@@ -7322,7 +6810,6 @@ mod fetch_args_manifest_tests {
         assert_eq!(inputs.plan_path, fallback.plan_path);
         assert_eq!(inputs.manifest_id, manifest_id);
     }
-
     #[test]
     fn merge_inputs_errors_without_source() {
         let err = merge_manifest_inputs(None, None, None, None).expect_err("expected failure");
@@ -7332,7 +6819,6 @@ mod fetch_args_manifest_tests {
         );
     }
 }
-
 #[cfg(test)]
 mod manifest_envelope_tests {
     use super::{HybridSuite, load_manifest_envelope};
@@ -7356,7 +6842,6 @@ mod manifest_envelope_tests {
             "error should mention empty envelope"
         );
     }
-
     #[test]
     fn load_manifest_envelope_encodes_valid_envelope() {
         let mut rng = StdRng::seed_from_u64(7);
@@ -7375,7 +6860,6 @@ mod manifest_envelope_tests {
         let expected = STANDARD.encode(encoded_bytes);
         assert_eq!(encoded, expected);
     }
-
     #[test]
     fn load_manifest_envelope_rejects_invalid_contents() {
         let mut file = NamedTempFile::new().expect("temp file");
@@ -7400,7 +6884,6 @@ mod manifest_envelope_tests {
         );
     }
 }
-
 #[cfg(test)]
 mod cli_scoreboard_metadata_tests {
     use super::*;
@@ -7472,7 +6955,6 @@ mod cli_scoreboard_metadata_tests {
             Some("c0ffee")
         );
     }
-
     #[test]
     fn cli_scoreboard_metadata_includes_timestamp_and_telemetry_label() {
         let value = cli_scoreboard_metadata(&ScoreboardMetadataInput {
@@ -7505,7 +6987,6 @@ mod cli_scoreboard_metadata_tests {
             Some("iad-prod")
         );
     }
-
     #[test]
     fn cli_scoreboard_metadata_defaults_to_soranet_first_transport() {
         let value = cli_scoreboard_metadata(&ScoreboardMetadataInput {
@@ -7547,7 +7028,6 @@ mod cli_scoreboard_metadata_tests {
             Some(2)
         );
     }
-
     #[test]
     fn cli_scoreboard_metadata_distinguishes_gateway_providers() {
         let value = cli_scoreboard_metadata(&ScoreboardMetadataInput {
@@ -7584,7 +7064,6 @@ mod cli_scoreboard_metadata_tests {
             Some("anon-majority-pq")
         );
     }
-
     #[test]
     fn cli_scoreboard_metadata_sets_provider_mix() {
         let value = cli_scoreboard_metadata(&ScoreboardMetadataInput {
@@ -7610,21 +7089,18 @@ mod cli_scoreboard_metadata_tests {
         );
     }
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct IncentivesDashboardRow {
     relay: String,
     payout_count: u64,
     payout_amount: Quantity,
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct IncentivesDashboardSummary {
     total_relays: usize,
     total_payout: Quantity,
     rows: Vec<IncentivesDashboardRow>,
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct DaemonProcessedPayoutSummary {
     relay_id_hex: String,
@@ -7636,7 +7112,6 @@ struct DaemonProcessedPayoutSummary {
     transfer_path: Option<String>,
     metrics_archived_to: Option<String>,
 }
-
 #[derive(Debug, Default, norito::json::JsonSerialize)]
 struct DaemonIterationSummary {
     processed: Vec<DaemonProcessedPayoutSummary>,
@@ -7648,13 +7123,11 @@ struct DaemonIterationSummary {
     expected_budget_approval: Option<String>,
     errors: Vec<String>,
 }
-
 #[derive(Debug, Default, norito::json::JsonSerialize)]
 struct IncentivesAuditSummary {
     bond: Option<BondAuditSummary>,
     budget: Option<BudgetAuditSummary>,
 }
-
 impl IncentivesAuditSummary {
     fn failure_count(&self) -> usize {
         let bond = self
@@ -7668,7 +7141,6 @@ impl IncentivesAuditSummary {
         bond.saturating_add(budget)
     }
 }
-
 #[derive(Debug, Default, norito::json::JsonSerialize)]
 struct BondAuditSummary {
     total_relays: usize,
@@ -7681,7 +7153,6 @@ struct BondAuditSummary {
     policy_bond_asset_id: String,
     errors: Vec<String>,
 }
-
 impl BondAuditSummary {
     fn failure_count(&self) -> usize {
         self.missing_bond
@@ -7690,7 +7161,6 @@ impl BondAuditSummary {
             .saturating_add(self.errors.len())
     }
 }
-
 #[derive(Debug, Default, norito::json::JsonSerialize)]
 struct BudgetAuditSummary {
     configured_budget_approval_id: Option<String>,
@@ -7698,7 +7168,6 @@ struct BudgetAuditSummary {
     payouts_without_budget: usize,
     mismatched_budget_approval: usize,
 }
-
 impl BudgetAuditSummary {
     fn failure_count(&self) -> usize {
         let missing_config: usize = usize::from(self.configured_budget_approval_id.is_none());
@@ -7707,7 +7176,6 @@ impl BudgetAuditSummary {
             .saturating_add(self.mismatched_budget_approval)
     }
 }
-
 #[derive(Debug)]
 struct MetricsCandidate {
     relay_id: RelayId,
@@ -7716,7 +7184,6 @@ struct MetricsCandidate {
     path: PathBuf,
     file_name: String,
 }
-
 #[derive(Debug, Clone, norito::json::JsonSerialize)]
 struct PayoutMetricsSnapshot {
     availability_per_mille: u16,
@@ -7726,37 +7193,31 @@ struct PayoutMetricsSnapshot {
     score_per_mille: u16,
     exit_bonus_applied: bool,
 }
-
 #[derive(Debug, Clone)]
 struct DaemonConfig {
     relays: HashMap<RelayId, DaemonRelayEntry>,
 }
-
 impl DaemonConfig {
     fn entry(&self, relay_id: &RelayId) -> Option<&DaemonRelayEntry> {
         self.relays.get(relay_id)
     }
 }
-
 #[derive(Debug, Clone)]
 struct DaemonRelayEntry {
     relay_hex: String,
     beneficiary: AccountId,
     bond_path: PathBuf,
 }
-
 #[derive(Debug, norito::json::JsonDeserialize)]
 struct DaemonConfigFile {
     relays: Vec<DaemonRelayConfigFile>,
 }
-
 #[derive(Debug, norito::json::JsonDeserialize)]
 struct DaemonRelayConfigFile {
     relay_id: String,
     beneficiary: String,
     bond_path: String,
 }
-
 fn read_reward_config(path: &Path) -> Result<RewardConfig> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read reward config from `{}`", path.display()))?;
@@ -7764,19 +7225,16 @@ fn read_reward_config(path: &Path) -> Result<RewardConfig> {
         norito::json::from_slice(&bytes).wrap_err("failed to parse reward configuration JSON")?;
     RewardConfig::try_from(state)
 }
-
 fn read_metrics_file(path: &Path) -> Result<RelayEpochMetricsV1> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read metrics from `{}`", path.display()))?;
     norito::decode_from_bytes(&bytes).wrap_err("failed to decode RelayEpochMetricsV1 payload")
 }
-
 fn read_bond_entry(path: &Path) -> Result<RelayBondLedgerEntryV1> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read bond entry from `{}`", path.display()))?;
     norito::decode_from_bytes(&bytes).wrap_err("failed to decode RelayBondLedgerEntryV1 payload")
 }
-
 fn read_reward_instruction(path: &Path) -> Result<RelayRewardInstructionV1> {
     let bytes = fs::read(path).wrap_err_with(|| {
         format!(
@@ -7786,7 +7244,6 @@ fn read_reward_instruction(path: &Path) -> Result<RelayRewardInstructionV1> {
     })?;
     norito::decode_from_bytes(&bytes).wrap_err("failed to decode RelayRewardInstructionV1 payload")
 }
-
 fn read_ledger_export(path: &Path) -> Result<LedgerExportFile> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read ledger export from `{}`", path.display()))?;
@@ -7816,7 +7273,6 @@ fn read_ledger_export(path: &Path) -> Result<LedgerExportFile> {
     export.ensure_current()?;
     Ok(export)
 }
-
 fn write_norito_payload<T>(path: &Path, value: &T) -> Result<()>
 where
     T: NoritoSerialize,
@@ -7825,7 +7281,6 @@ where
     fs::write(path, bytes)
         .wrap_err_with(|| format!("failed to write Norito payload to `{}`", path.display()))
 }
-
 fn load_daemon_config(
     path: &Path,
     resolve: &dyn Fn(&str) -> Result<AccountId>,
@@ -7837,16 +7292,13 @@ fn load_daemon_config(
     let base_dir = path
         .parent()
         .map_or_else(|| Path::new(".").to_path_buf(), Path::to_path_buf);
-
     let mut relays = HashMap::new();
     for entry in file.relays {
         let normalised = validate_hex_digest(&entry.relay_id, "daemon_config.relays[].relay_id")
             .map_err(|err| eyre!("invalid relay_id `{}`: {err}", entry.relay_id))?;
-
         let mut relay_id = [0_u8; 32];
         decode_to_slice(&normalised, &mut relay_id)
             .map_err(|err| eyre!("failed to decode relay_id `{}`: {err}", entry.relay_id))?;
-
         let beneficiary = resolve(entry.beneficiary.trim()).map_err(|err| {
             eyre!(
                 "invalid beneficiary `{}` for relay {}: {err}",
@@ -7854,15 +7306,12 @@ fn load_daemon_config(
                 normalised
             )
         })?;
-
         let bond_path = resolve_relative_path(&base_dir, entry.bond_path.trim());
-
         let relay_entry = DaemonRelayEntry {
             relay_hex: normalised.clone(),
             beneficiary,
             bond_path,
         };
-
         if relays.insert(relay_id, relay_entry).is_some() {
             return Err(eyre!(
                 "duplicate daemon config entry for relay {}",
@@ -7870,10 +7319,8 @@ fn load_daemon_config(
             ));
         }
     }
-
     Ok(DaemonConfig { relays })
 }
-
 fn audit_scope_flags(scopes: &[IncentiveAuditScope]) -> (bool, bool) {
     let mut bond = false;
     let mut budget = false;
@@ -7895,21 +7342,18 @@ fn audit_scope_flags(scopes: &[IncentiveAuditScope]) -> (bool, bool) {
     }
     (bond, budget)
 }
-
 fn audit_bonds(
     config: &DaemonConfig,
     reward_config: &RewardConfigState,
 ) -> Result<BondAuditSummary> {
     let policy = RelayBondPolicyV1::try_from(reward_config.policy.clone())
         .map_err(|err| eyre!("invalid reward policy in state: {err}"))?;
-
     let mut summary = BondAuditSummary {
         total_relays: config.relays.len(),
         policy_minimum_exit_bond: reward_config.policy.minimum_exit_bond.clone(),
         policy_bond_asset_id: reward_config.policy.bond_asset_id.clone(),
         ..BondAuditSummary::default()
     };
-
     for entry in config.relays.values() {
         let bond_entry = match read_bond_entry(&entry.bond_path) {
             Ok(entry) => entry,
@@ -7923,16 +7367,13 @@ fn audit_bonds(
                 continue;
             }
         };
-
         if bond_entry.exit_capable {
             summary.exit_relays = summary.exit_relays.saturating_add(1);
         }
-
         if bond_entry.meets_exit_minimum(&policy) {
             summary.satisfied = summary.satisfied.saturating_add(1);
             continue;
         }
-
         if bond_entry.bond_asset_id != policy.bond_asset_id {
             summary.asset_mismatch = summary.asset_mismatch.saturating_add(1);
             summary.errors.push(format!(
@@ -7941,17 +7382,14 @@ fn audit_bonds(
             ));
             continue;
         }
-
         summary.insufficient_bond = summary.insufficient_bond.saturating_add(1);
         summary.errors.push(format!(
             "relay {} bonded {} below minimum {}",
             entry.relay_hex, bond_entry.bonded_amount, policy.minimum_exit_bond
         ));
     }
-
     Ok(summary)
 }
-
 #[allow(clippy::unnecessary_wraps)]
 fn audit_budget(state: &IncentivesState) -> Result<BudgetAuditSummary> {
     let mut summary = BudgetAuditSummary {
@@ -7959,13 +7397,11 @@ fn audit_budget(state: &IncentivesState) -> Result<BudgetAuditSummary> {
         total_payouts: state.payouts.len(),
         ..BudgetAuditSummary::default()
     };
-
     let expected_budget =
         match require_budget_approval_id(state.reward_config.budget_approval_id.as_ref()) {
             Ok(id) => id,
             Err(_) => return Ok(summary),
         };
-
     for payout in &state.payouts {
         match payout.budget_approval_id {
             Some(value) if value == expected_budget => {}
@@ -7978,10 +7414,8 @@ fn audit_budget(state: &IncentivesState) -> Result<BudgetAuditSummary> {
             }
         }
     }
-
     Ok(summary)
 }
-
 fn resolve_relative_path(base: &Path, value: &str) -> PathBuf {
     let path = Path::new(value);
     if path.is_absolute() {
@@ -7990,7 +7424,6 @@ fn resolve_relative_path(base: &Path, value: &str) -> PathBuf {
         base.join(path)
     }
 }
-
 #[allow(clippy::too_many_lines)]
 #[allow(clippy::too_many_arguments)]
 fn process_daemon_iteration(
@@ -8007,7 +7440,6 @@ fn process_daemon_iteration(
         expected_budget_approval: expected_budget.map(hex::encode),
         ..DaemonIterationSummary::default()
     };
-
     let entries = match fs::read_dir(metrics_dir) {
         Ok(entries) => entries,
         Err(err) => {
@@ -8019,7 +7451,6 @@ fn process_daemon_iteration(
             });
         }
     };
-
     let mut candidates = Vec::new();
     for entry in entries {
         let entry = match entry {
@@ -8031,7 +7462,6 @@ fn process_daemon_iteration(
                 continue;
             }
         };
-
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -8043,14 +7473,12 @@ fn process_daemon_iteration(
         if !extension.eq_ignore_ascii_case("to") {
             continue;
         }
-
         let file_name = entry.file_name().to_string_lossy().into_owned();
         let stem = path
             .file_stem()
             .and_then(|stem| stem.to_str())
             .unwrap_or_default()
             .to_string();
-
         let stem = stem.trim();
         if !stem.starts_with("relay-") {
             summary.errors.push(format!(
@@ -8058,7 +7486,6 @@ fn process_daemon_iteration(
             ));
             continue;
         }
-
         let relay_split = if let Some(split) = stem[6..].split_once("-epoch-") {
             split
         } else {
@@ -8067,14 +7494,12 @@ fn process_daemon_iteration(
             ));
             continue;
         };
-
         let relay_hex_raw = relay_split.0;
         let epoch_segment = relay_split.1;
         let epoch_str = epoch_segment
             .split(['-', '.'])
             .next()
             .unwrap_or(epoch_segment);
-
         let epoch = match epoch_str.parse::<u32>() {
             Ok(epoch) => epoch,
             Err(err) => {
@@ -8084,7 +7509,6 @@ fn process_daemon_iteration(
                 continue;
             }
         };
-
         let normalised = match validate_hex_digest(relay_hex_raw, "metrics relay id") {
             Ok(hex) => hex,
             Err(err) => {
@@ -8094,7 +7518,6 @@ fn process_daemon_iteration(
                 continue;
             }
         };
-
         let mut relay_id = [0_u8; 32];
         if let Err(err) = decode_to_slice(&normalised, &mut relay_id) {
             summary.errors.push(format!(
@@ -8102,7 +7525,6 @@ fn process_daemon_iteration(
             ));
             continue;
         }
-
         candidates.push(MetricsCandidate {
             relay_id,
             relay_hex: normalised,
@@ -8111,13 +7533,11 @@ fn process_daemon_iteration(
             file_name,
         });
     }
-
     candidates.sort_by(|left, right| {
         left.epoch
             .cmp(&right.epoch)
             .then_with(|| left.relay_hex.cmp(&right.relay_hex))
     });
-
     for candidate in candidates {
         let Some(relay_entry) = config.entry(&candidate.relay_id) else {
             summary.skipped_missing_config = summary.skipped_missing_config.saturating_add(1);
@@ -8127,7 +7547,6 @@ fn process_daemon_iteration(
             ));
             continue;
         };
-
         let bond_entry = match read_bond_entry(&relay_entry.bond_path) {
             Ok(entry) => entry,
             Err(err) => {
@@ -8140,7 +7559,6 @@ fn process_daemon_iteration(
                 continue;
             }
         };
-
         let metrics = match read_metrics_file(&candidate.path) {
             Ok(metrics) => metrics,
             Err(err) => {
@@ -8151,7 +7569,6 @@ fn process_daemon_iteration(
                 continue;
             }
         };
-
         if metrics.relay_id != candidate.relay_id {
             summary.errors.push(format!(
                 "metrics snapshot `{}` relay id mismatch (expected {}, found {})",
@@ -8161,7 +7578,6 @@ fn process_daemon_iteration(
             ));
             continue;
         }
-
         if metrics.epoch != candidate.epoch {
             summary.errors.push(format!(
                 "metrics snapshot `{}` epoch mismatch (expected {}, found {})",
@@ -8169,7 +7585,6 @@ fn process_daemon_iteration(
             ));
             continue;
         }
-
         let outcome = match service.process_epoch(
             &metrics,
             &bond_entry,
@@ -8189,7 +7604,6 @@ fn process_daemon_iteration(
                 continue;
             }
         };
-
         if let Some(expected) = expected_budget {
             if let Err(err) = ensure_instruction_budget_approval(&outcome.instruction, expected) {
                 if outcome.instruction.budget_approval_id.is_some() {
@@ -8204,11 +7618,9 @@ fn process_daemon_iteration(
         } else if outcome.instruction.budget_approval_id.is_none() {
             summary.missing_budget_approval = summary.missing_budget_approval.saturating_add(1);
         }
-
         store_payout_instruction(state, &outcome.instruction);
         let metrics_snapshot = extract_payout_metrics(&outcome.instruction, &metrics);
         let budget_approval_id = outcome.instruction.budget_approval_id.map(hex::encode);
-
         let instruction_path = if let Some(dir) = instruction_out_dir {
             let file_name = format!(
                 "relay-{}-epoch-{}.reward.to",
@@ -8228,7 +7640,6 @@ fn process_daemon_iteration(
         } else {
             None
         };
-
         let transfer_path = if let Some(dir) = transfer_out_dir {
             if outcome.instruction.is_zero_amount() {
                 None
@@ -8252,7 +7663,6 @@ fn process_daemon_iteration(
         } else {
             None
         };
-
         let metrics_archived_to = if let Some(dir) = archive_dir {
             match archive_metrics_snapshot(&candidate.path, dir, &candidate.file_name) {
                 Ok(archived_path) => Some(archived_path.to_string_lossy().into_owned()),
@@ -8264,7 +7674,6 @@ fn process_daemon_iteration(
         } else {
             None
         };
-
         summary.processed.push(DaemonProcessedPayoutSummary {
             relay_id_hex: relay_entry.relay_hex.clone(),
             epoch: candidate.epoch,
@@ -8276,17 +7685,14 @@ fn process_daemon_iteration(
             metrics_archived_to,
         });
     }
-
     if summary.missing_budget_approval > 0 && summary.expected_budget_approval.is_some() {
         summary.errors.push(format!(
             "{} payout(s) missing budget_approval_id; set reward_config.budget_approval_id to the signed Parliament hash",
             summary.missing_budget_approval
         ));
     }
-
     Ok(summary)
 }
-
 fn archive_metrics_snapshot(path: &Path, archive_dir: &Path, file_name: &str) -> Result<PathBuf> {
     let mut attempt = 0_u32;
     loop {
@@ -8295,7 +7701,6 @@ fn archive_metrics_snapshot(path: &Path, archive_dir: &Path, file_name: &str) ->
         } else {
             archive_dir.join(format!("{file_name}.{attempt}"))
         };
-
         match fs::rename(path, &candidate) {
             Ok(()) => return Ok(candidate),
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -8313,7 +7718,6 @@ fn archive_metrics_snapshot(path: &Path, archive_dir: &Path, file_name: &str) ->
         }
     }
 }
-
 fn log_daemon_summary<C: RunContext>(
     context: &mut C,
     summary: &DaemonIterationSummary,
@@ -8350,7 +7754,6 @@ fn log_daemon_summary<C: RunContext>(
                     let _ =
                         context.println(format_args!("  expected budget approval id: {expected}"));
                 }
-
                 for payout in &summary.processed {
                     let _ = context.println(format_args!(
                         "  relay {} epoch {} payout {}",
@@ -8371,7 +7774,6 @@ fn log_daemon_summary<C: RunContext>(
                         let _ = context.println(format_args!("    archived metrics: {path}"));
                     }
                 }
-
                 if !summary.errors.is_empty() {
                     let _ = context.println(format_args!(
                         "Encountered {} error(s):",
@@ -8384,17 +7786,14 @@ fn log_daemon_summary<C: RunContext>(
             }
         }
     }
-
     if summary.expected_budget_approval.is_some() && summary.missing_budget_approval > 0 {
         return Err(eyre!(
             "budget_approval_id missing for {} payout(s); configure reward_config.budget_approval_id before running payouts",
             summary.missing_budget_approval
         ));
     }
-
     Ok(())
 }
-
 #[derive(
     Debug,
     Clone,
@@ -8413,7 +7812,6 @@ struct RewardConfigState {
     budget_approval_id: Option<String>,
     metrics_log_path: Option<String>,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -8429,7 +7827,6 @@ struct RewardPolicyState {
     slash_penalty_basis_points: u16,
     activation_grace_epochs: u16,
 }
-
 impl From<&RewardConfig> for RewardConfigState {
     fn from(config: &RewardConfig) -> Self {
         Self {
@@ -8447,10 +7844,8 @@ impl From<&RewardConfig> for RewardConfigState {
         }
     }
 }
-
 impl TryFrom<RewardConfigState> for RewardConfig {
     type Error = eyre::Report;
-
     fn try_from(value: RewardConfigState) -> Result<Self> {
         let RewardConfigState {
             policy: policy_state,
@@ -8462,7 +7857,6 @@ impl TryFrom<RewardConfigState> for RewardConfig {
             budget_approval_id,
             metrics_log_path,
         } = value;
-
         let policy = RelayBondPolicyV1::try_from(policy_state)?;
         let base_reward =
             Quantity::from_str(&base_reward).map_err(|err| eyre!("invalid base_reward: {err}"))?;
@@ -8478,7 +7872,6 @@ impl TryFrom<RewardConfigState> for RewardConfig {
             None => None,
         };
         let metrics_log_path = metrics_log_path.map(PathBuf::from);
-
         Ok(Self {
             policy,
             base_reward,
@@ -8491,7 +7884,6 @@ impl TryFrom<RewardConfigState> for RewardConfig {
         })
     }
 }
-
 impl From<&RelayBondPolicyV1> for RewardPolicyState {
     fn from(policy: &RelayBondPolicyV1) -> Self {
         Self {
@@ -8503,10 +7895,8 @@ impl From<&RelayBondPolicyV1> for RewardPolicyState {
         }
     }
 }
-
 impl TryFrom<RewardPolicyState> for RelayBondPolicyV1 {
     type Error = eyre::Report;
-
     fn try_from(value: RewardPolicyState) -> Result<Self> {
         let minimum_exit_bond = Quantity::from_str(&value.minimum_exit_bond)
             .map_err(|err| eyre!("invalid minimum_exit_bond: {err}"))?;
@@ -8521,7 +7911,6 @@ impl TryFrom<RewardPolicyState> for RelayBondPolicyV1 {
         })
     }
 }
-
 fn require_budget_approval_id(budget_hex: Option<&String>) -> Result<[u8; 32]> {
     let budget_hex = budget_hex
         .map(String::as_str)
@@ -8532,7 +7921,6 @@ fn require_budget_approval_id(budget_hex: Option<&String>) -> Result<[u8; 32]> {
         .map_err(|err| eyre!("invalid budget_approval_id hex: {err}"))?;
     Ok(digest)
 }
-
 #[derive(
     Debug,
     Clone,
@@ -8549,7 +7937,6 @@ struct IncentivesState {
     payouts: Vec<RelayRewardInstructionV1>,
     disputes: Vec<StoredDisputeRecord>,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -8563,10 +7950,8 @@ struct LedgerExportFile {
     version: u16,
     transfers: Vec<LedgerTransferRecord>,
 }
-
 impl LedgerExportFile {
     const VERSION: u16 = 1;
-
     fn ensure_current(&self) -> Result<()> {
         if self.version != Self::VERSION {
             return Err(eyre!(
@@ -8578,10 +7963,8 @@ impl LedgerExportFile {
         Ok(())
     }
 }
-
 impl IncentivesState {
     const VERSION: u16 = 1;
-
     fn new(reward_config: &RewardConfig, treasury_account: AccountId) -> Self {
         Self {
             version: Self::VERSION,
@@ -8591,7 +7974,6 @@ impl IncentivesState {
             disputes: Vec::new(),
         }
     }
-
     fn ensure_current(&self) -> Result<()> {
         if self.version != Self::VERSION {
             return Err(eyre!(
@@ -8603,7 +7985,6 @@ impl IncentivesState {
         Ok(())
     }
 }
-
 #[derive(
     Debug,
     Clone,
@@ -8624,7 +8005,6 @@ struct StoredDisputeRecord {
     requested_adjustment: Option<StoredAdjustmentRequest>,
     status: StoredDisputeStatus,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -8638,7 +8018,6 @@ struct StoredAdjustmentRequest {
     kind: StoredAdjustmentKind,
     amount: Quantity,
 }
-
 impl StoredAdjustmentRequest {
     fn to_adjustment_request(&self) -> AdjustmentRequest {
         AdjustmentRequest {
@@ -8647,7 +8026,6 @@ impl StoredAdjustmentRequest {
         }
     }
 }
-
 impl From<&AdjustmentRequest> for StoredAdjustmentRequest {
     fn from(request: &AdjustmentRequest) -> Self {
         Self {
@@ -8656,7 +8034,6 @@ impl From<&AdjustmentRequest> for StoredAdjustmentRequest {
         }
     }
 }
-
 #[derive(
     Debug,
     Clone,
@@ -8674,7 +8051,6 @@ enum StoredAdjustmentKind {
     Credit,
     Debit,
 }
-
 impl From<AdjustmentKind> for StoredAdjustmentKind {
     fn from(kind: AdjustmentKind) -> Self {
         match kind {
@@ -8683,7 +8059,6 @@ impl From<AdjustmentKind> for StoredAdjustmentKind {
         }
     }
 }
-
 impl From<StoredAdjustmentKind> for AdjustmentKind {
     fn from(kind: StoredAdjustmentKind) -> Self {
         match kind {
@@ -8692,7 +8067,6 @@ impl From<StoredAdjustmentKind> for AdjustmentKind {
         }
     }
 }
-
 #[derive(
     Debug,
     Clone,
@@ -8711,7 +8085,6 @@ enum StoredResolutionKind {
     Credit,
     Debit,
 }
-
 impl From<ResolutionKind> for StoredResolutionKind {
     fn from(kind: ResolutionKind) -> Self {
         match kind {
@@ -8721,7 +8094,6 @@ impl From<ResolutionKind> for StoredResolutionKind {
         }
     }
 }
-
 #[derive(
     Debug,
     Clone,
@@ -8745,7 +8117,6 @@ enum StoredDisputeStatus {
         notes: String,
     },
 }
-
 impl From<&DisputeStatus> for StoredDisputeStatus {
     fn from(status: &DisputeStatus) -> Self {
         match status {
@@ -8769,7 +8140,6 @@ impl From<&DisputeStatus> for StoredDisputeStatus {
         }
     }
 }
-
 impl From<&RewardDispute> for StoredDisputeRecord {
     fn from(dispute: &RewardDispute) -> Self {
         let norito_record = dispute.norito_record();
@@ -8789,7 +8159,6 @@ impl From<&RewardDispute> for StoredDisputeRecord {
         }
     }
 }
-
 impl StoredDisputeRecord {
     fn apply_to_service(&self, service: &mut RelayPayoutService) -> Result<()> {
         let relay_id = relay_id_from_hex(&self.relay_id_hex)
@@ -8798,7 +8167,6 @@ impl StoredDisputeRecord {
             .requested_adjustment
             .as_ref()
             .map(StoredAdjustmentRequest::to_adjustment_request);
-
         let dispute = service
             .file_dispute(
                 relay_id,
@@ -8810,7 +8178,6 @@ impl StoredDisputeRecord {
                 requested_adjustment,
             )
             .wrap_err_with(|| format!("failed to replay dispute {}", self.id))?;
-
         if dispute.id != self.id {
             return Err(eyre!(
                 "dispute id mismatch when replaying state: expected {}, got {}",
@@ -8818,7 +8185,6 @@ impl StoredDisputeRecord {
                 dispute.id
             ));
         }
-
         match &self.status {
             StoredDisputeStatus::Open => Ok(()),
             StoredDisputeStatus::Rejected {
@@ -8846,7 +8212,6 @@ impl StoredDisputeRecord {
         }
     }
 }
-
 fn stored_resolution_to_resolution(
     kind: StoredResolutionKind,
     amount: Option<Quantity>,
@@ -8866,11 +8231,9 @@ fn stored_resolution_to_resolution(
         },
     })
 }
-
 fn parse_incentives_state_snapshot(bytes: &[u8]) -> Result<IncentivesState> {
     norito::json::from_slice(bytes).wrap_err("failed to parse incentives state JSON")
 }
-
 fn load_incentives_state(path: &Path) -> Result<IncentivesState> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read incentives state from `{}`", path.display()))?;
@@ -8878,14 +8241,12 @@ fn load_incentives_state(path: &Path) -> Result<IncentivesState> {
     state.ensure_current()?;
     Ok(state)
 }
-
 fn save_incentives_state(path: &Path, state: &IncentivesState) -> Result<()> {
     let bytes =
         norito::json::to_vec_pretty(state).wrap_err("failed to render incentives state JSON")?;
     fs::write(path, bytes)
         .wrap_err_with(|| format!("failed to write incentives state to `{}`", path.display()))
 }
-
 fn build_clean_payout_service(state: &IncentivesState) -> Result<RelayPayoutService> {
     let config = RewardConfig::try_from(state.reward_config.clone())
         .map_err(|err| eyre!("invalid reward configuration in state: {err}"))?;
@@ -8896,11 +8257,9 @@ fn build_clean_payout_service(state: &IncentivesState) -> Result<RelayPayoutServ
         RelayPayoutLedger::new(state.treasury_account.clone()),
     ))
 }
-
 fn build_payout_service(state: &IncentivesState) -> Result<RelayPayoutService> {
     state.ensure_current()?;
     let mut service = build_clean_payout_service(state)?;
-
     for instruction in &state.payouts {
         service
             .record_reward(instruction.clone())
@@ -8912,20 +8271,16 @@ fn build_payout_service(state: &IncentivesState) -> Result<RelayPayoutService> {
                 )
             })?;
     }
-
     let mut disputes = state.disputes.clone();
     disputes.sort_by_key(|d| d.id);
     for dispute in disputes {
         dispute.apply_to_service(&mut service)?;
     }
-
     Ok(service)
 }
-
 fn store_payout_instruction(state: &mut IncentivesState, instruction: &RelayRewardInstructionV1) {
     state.payouts.push(instruction.clone());
 }
-
 fn upsert_dispute_record(state: &mut IncentivesState, dispute: &RewardDispute) {
     let record = StoredDisputeRecord::from(dispute);
     if let Some(existing) = state
@@ -8939,30 +8294,24 @@ fn upsert_dispute_record(state: &mut IncentivesState, dispute: &RewardDispute) {
         state.disputes.sort_by_key(|entry| entry.id);
     }
 }
-
 fn relay_id_to_hex(relay_id: RelayId) -> String {
     hex::encode(relay_id)
 }
-
 fn saturating_u16(value: u64) -> u16 {
     u16::try_from(value).unwrap_or(u16::MAX)
 }
-
 #[allow(clippy::cast_precision_loss)]
 fn u64_to_f64(value: u64) -> f64 {
     value as f64
 }
-
 #[allow(clippy::cast_precision_loss)]
 fn u128_to_f64(value: u128) -> f64 {
     value as f64
 }
-
 #[allow(clippy::cast_precision_loss)]
 fn usize_to_f64(value: usize) -> f64 {
     value as f64
 }
-
 fn transfer_kind_label(kind: TransferKind) -> &'static str {
     match kind {
         TransferKind::Payout => "payout",
@@ -8970,7 +8319,6 @@ fn transfer_kind_label(kind: TransferKind) -> &'static str {
         TransferKind::Debit => "debit",
     }
 }
-
 fn mismatch_reason_label(reason: MismatchReason) -> &'static str {
     match reason {
         MismatchReason::Amount => "amount",
@@ -8978,14 +8326,12 @@ fn mismatch_reason_label(reason: MismatchReason) -> &'static str {
         MismatchReason::Destination => "destination",
     }
 }
-
 fn ledger_amount_source_label(source: LedgerAmountSource) -> &'static str {
     match source {
         LedgerAmountSource::Expected => "expected",
         LedgerAmountSource::Exported => "exported",
     }
 }
-
 fn quantity_to_nanos_error_label(error: QuantityToNanosError) -> &'static str {
     match error {
         QuantityToNanosError::TooWideMantissa => "too_wide_mantissa",
@@ -8995,7 +8341,6 @@ fn quantity_to_nanos_error_label(error: QuantityToNanosError) -> &'static str {
         QuantityToNanosError::TotalOverflow => "total_overflow",
     }
 }
-
 fn quantity_to_nanos_checked(amount: &Quantity) -> Result<u128, QuantityToNanosError> {
     let scale = amount.scale();
     let mantissa = amount
@@ -9019,17 +8364,14 @@ fn quantity_to_nanos_checked(amount: &Quantity) -> Result<u128, QuantityToNanosE
             .ok_or(QuantityToNanosError::NanosOverflow)
     }
 }
-
 fn metadata_get_u64(metadata: &Metadata, key: &str) -> Option<u64> {
     let name = Name::from_str(key).ok()?;
     metadata.get(&name)?.try_into_any::<u64>().ok()
 }
-
 fn metadata_get_bool(metadata: &Metadata, key: &str) -> Option<bool> {
     let name = Name::from_str(key).ok()?;
     metadata.get(&name)?.try_into_any::<bool>().ok()
 }
-
 fn extract_payout_metrics(
     instruction: &RelayRewardInstructionV1,
     metrics: &RelayEpochMetricsV1,
@@ -9044,19 +8386,15 @@ fn extract_payout_metrics(
             RelayComplianceStatusV1::Suspended => 0,
         },
     );
-
     let exit_bonus_applied =
         metadata_get_bool(&instruction.metadata, "exit_bonus_applied").unwrap_or(false);
-
     let score_per_mille = instruction.reward_score.try_into().unwrap_or(u16::MAX);
-
     let compliance_status = match metrics.compliance {
         RelayComplianceStatusV1::Clean => "clean",
         RelayComplianceStatusV1::Warning => "warning",
         RelayComplianceStatusV1::Suspended => "suspended",
     }
     .to_string();
-
     PayoutMetricsSnapshot {
         availability_per_mille: saturating_u16(availability_raw),
         bandwidth_per_mille: saturating_u16(bandwidth_raw),
@@ -9066,7 +8404,6 @@ fn extract_payout_metrics(
         exit_bonus_applied,
     }
 }
-
 fn relay_id_from_hex(value: &str) -> Result<RelayId> {
     if value.len() != 64 {
         return Err(eyre!("relay id must be 64 hex characters"));
@@ -9076,7 +8413,6 @@ fn relay_id_from_hex(value: &str) -> Result<RelayId> {
         .map_err(|err| eyre!("failed to decode relay id hex: {err}"))?;
     Ok(bytes)
 }
-
 fn ensure_instruction_budget_approval(
     instruction: &RelayRewardInstructionV1,
     expected_budget: &[u8; 32],
@@ -9097,13 +8433,11 @@ fn ensure_instruction_budget_approval(
         )),
     }
 }
-
 fn load_state_service(path: &Path) -> Result<(IncentivesState, RelayPayoutService)> {
     let state = load_incentives_state(path)?;
     let service = build_payout_service(&state)?;
     Ok((state, service))
 }
-
 fn parse_adjustment_flags(
     credit: Option<&String>,
     debit: Option<&String>,
@@ -9124,7 +8458,6 @@ fn parse_adjustment_flags(
     }
     Ok(None)
 }
-
 fn output_summary<C, T>(context: &mut C, summary: &T, pretty: bool) -> Result<()>
 where
     C: RunContext,
@@ -9145,7 +8478,6 @@ where
         }
     }
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct ServicePayoutSummary {
     relay_id_hex: String,
@@ -9154,7 +8486,6 @@ struct ServicePayoutSummary {
     reward_score: u64,
     ledger: ServiceLedgerSnapshot,
 }
-
 impl ServicePayoutSummary {
     fn new(instruction: &RelayRewardInstructionV1, ledger: ServiceLedgerSnapshot) -> Self {
         Self {
@@ -9166,7 +8497,6 @@ impl ServicePayoutSummary {
         }
     }
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct ServiceLedgerSnapshot {
     total_paid: Quantity,
@@ -9178,7 +8508,6 @@ struct ServiceLedgerSnapshot {
     last_reward_score: Option<u64>,
     open_disputes: usize,
 }
-
 impl ServiceLedgerSnapshot {
     fn from_snapshot(snapshot: &RewardLedgerSnapshot) -> Self {
         Self {
@@ -9192,7 +8521,6 @@ impl ServiceLedgerSnapshot {
             open_disputes: 0,
         }
     }
-
     fn from_row(row: &EarningsRow) -> Self {
         Self {
             total_paid: row.total_paid.clone(),
@@ -9206,14 +8534,12 @@ impl ServiceLedgerSnapshot {
         }
     }
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct ServiceDashboardSummary {
     total_relays: usize,
     total_open_disputes: usize,
     rows: Vec<ServiceDashboardRow>,
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct ReconciliationTransferSummary {
     relay_id: String,
@@ -9226,7 +8552,6 @@ struct ReconciliationTransferSummary {
     source_asset: String,
     destination: String,
 }
-
 impl ReconciliationTransferSummary {
     fn from_record(record: &LedgerTransferRecord) -> Self {
         let (amount_nanos, amount_conversion_error) =
@@ -9247,14 +8572,12 @@ impl ReconciliationTransferSummary {
         }
     }
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct ReconciliationMismatchSummary {
     expected: ReconciliationTransferSummary,
     actual: ReconciliationTransferSummary,
     reasons: Vec<String>,
 }
-
 impl ReconciliationMismatchSummary {
     fn from_mismatch(mismatch: &LedgerTransferMismatch) -> Self {
         let reasons = mismatch
@@ -9270,13 +8593,11 @@ impl ReconciliationMismatchSummary {
         }
     }
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct ReconciliationAmountArithmeticSummary {
     source: String,
     record: ReconciliationTransferSummary,
 }
-
 impl ReconciliationAmountArithmeticSummary {
     fn from_error(error: &LedgerAmountArithmeticError) -> Self {
         Self {
@@ -9285,7 +8606,6 @@ impl ReconciliationAmountArithmeticSummary {
         }
     }
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct ReconciliationReportSummary {
     clean: bool,
@@ -9298,7 +8618,6 @@ struct ReconciliationReportSummary {
     mismatched_transfers: Vec<ReconciliationMismatchSummary>,
     amount_arithmetic_errors: Vec<ReconciliationAmountArithmeticSummary>,
 }
-
 impl ReconciliationReportSummary {
     fn from_report(report: &LedgerReconciliationReport) -> Self {
         let missing_transfers = report
@@ -9321,7 +8640,6 @@ impl ReconciliationReportSummary {
             .iter()
             .map(ReconciliationAmountArithmeticSummary::from_error)
             .collect();
-
         Self {
             clean: report.is_clean(),
             matched_transfers: report.matched_transfers,
@@ -9335,7 +8653,6 @@ impl ReconciliationReportSummary {
         }
     }
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct ShadowRunRelaySummary {
     relay_id_hex: String,
@@ -9350,7 +8667,6 @@ struct ShadowRunRelaySummary {
     suspended_epochs: usize,
     zero_score_epochs: usize,
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct ShadowRunAmountConversionError {
     relay_id_hex: String,
@@ -9358,7 +8674,6 @@ struct ShadowRunAmountConversionError {
     amount: String,
     reason: String,
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct ShadowRunSummary {
     processed_payouts: usize,
@@ -9381,7 +8696,6 @@ struct ShadowRunSummary {
     errors: Vec<String>,
     relays: Vec<ShadowRunRelaySummary>,
 }
-
 #[allow(clippy::too_many_lines)]
 fn build_shadow_run_summary(summary: &DaemonIterationSummary) -> ShadowRunSummary {
     use std::collections::BTreeMap;
@@ -9398,7 +8712,6 @@ fn build_shadow_run_summary(summary: &DaemonIterationSummary) -> ShadowRunSummar
         zero_score_epochs: usize,
         amount_conversion_errors: usize,
     }
-
     let mut accumulators: BTreeMap<&str, RelayAccumulator> = BTreeMap::new();
     let mut payout_amount_conversion_errors = Vec::new();
     let mut payout_totals: Vec<u128> = Vec::new();
@@ -9409,7 +8722,6 @@ fn build_shadow_run_summary(summary: &DaemonIterationSummary) -> ShadowRunSummar
     let mut suspended_epochs_total = 0_usize;
     let mut zero_score_epochs_total = 0_usize;
     let mut max_relay_payout = 0_u128;
-
     for payout in &summary.processed {
         let relay_entry = accumulators.entry(&payout.relay_id_hex).or_default();
         let payout_nanos = match quantity_to_nanos_checked(&payout.payout_amount) {
@@ -9437,7 +8749,6 @@ fn build_shadow_run_summary(summary: &DaemonIterationSummary) -> ShadowRunSummar
         relay_entry.total_bandwidth = relay_entry
             .total_bandwidth
             .saturating_add(u64::from(payout.metrics.bandwidth_per_mille));
-
         match payout.metrics.compliance_status.as_str() {
             "warning" => {
                 relay_entry.warning_epochs = relay_entry.warning_epochs.saturating_add(1);
@@ -9449,27 +8760,22 @@ fn build_shadow_run_summary(summary: &DaemonIterationSummary) -> ShadowRunSummar
             }
             _ => {}
         }
-
         if payout.metrics.score_per_mille == 0 {
             relay_entry.zero_score_epochs = relay_entry.zero_score_epochs.saturating_add(1);
             zero_score_epochs_total = zero_score_epochs_total.saturating_add(1);
         }
-
         sum_availability =
             sum_availability.saturating_add(u64::from(payout.metrics.availability_per_mille));
         sum_bandwidth = sum_bandwidth.saturating_add(u64::from(payout.metrics.bandwidth_per_mille));
         total_epochs = total_epochs.saturating_add(1);
         payout_totals.push(payout_nanos);
     }
-
     let total_payout_nanos: u128 = accumulators.values().map(|acc| acc.payout_nanos).sum();
-
     for acc in accumulators.values() {
         if acc.payout_nanos > max_relay_payout {
             max_relay_payout = acc.payout_nanos;
         }
     }
-
     let mut relay_summaries: Vec<ShadowRunRelaySummary> = accumulators
         .into_iter()
         .map(|(relay_id_hex, acc)| {
@@ -9490,33 +8796,28 @@ fn build_shadow_run_summary(summary: &DaemonIterationSummary) -> ShadowRunSummar
             }
         })
         .collect();
-
     relay_summaries.sort_by(|left, right| {
         right
             .payout_nanos
             .cmp(&left.payout_nanos)
             .then_with(|| left.relay_id_hex.cmp(&right.relay_id_hex))
     });
-
     let gini_coefficient = compute_gini(&payout_totals);
     let top_share = if total_payout_nanos == 0 {
         0.0
     } else {
         u128_to_f64(max_relay_payout) / u128_to_f64(total_payout_nanos)
     };
-
     let average_availability = if total_epochs == 0 {
         0.0
     } else {
         u64_to_f64(sum_availability) / usize_to_f64(total_epochs)
     };
-
     let average_bandwidth = if total_epochs == 0 {
         0.0
     } else {
         u64_to_f64(sum_bandwidth) / usize_to_f64(total_epochs)
     };
-
     ShadowRunSummary {
         processed_payouts: total_epochs,
         total_relays: relay_summaries.len(),
@@ -9539,7 +8840,6 @@ fn build_shadow_run_summary(summary: &DaemonIterationSummary) -> ShadowRunSummar
         relays: relay_summaries,
     }
 }
-
 fn compute_gini(values: &[u128]) -> f64 {
     if values.is_empty() {
         return 0.0;
@@ -9557,7 +8857,6 @@ fn compute_gini(values: &[u128]) -> f64 {
     }
     (2.0 * cumulative / (n * sum)) - (n + 1.0) / n
 }
-
 impl ServiceDashboardSummary {
     fn new(dashboard: &EarningsDashboard) -> Self {
         let rows = dashboard
@@ -9572,7 +8871,6 @@ impl ServiceDashboardSummary {
         }
     }
 }
-
 #[derive(Debug, norito::json::JsonSerialize)]
 struct ServiceDashboardRow {
     relay_id_hex: String,
@@ -9585,7 +8883,6 @@ struct ServiceDashboardRow {
     last_reward_score: Option<u64>,
     open_disputes: usize,
 }
-
 impl ServiceDashboardRow {
     fn from_row(row: &EarningsRow) -> Self {
         Self {
@@ -9601,13 +8898,11 @@ impl ServiceDashboardRow {
         }
     }
 }
-
 fn parse_account_id_str<C: RunContext>(context: &C, value: &str, flag: &str) -> Result<AccountId> {
     let trimmed = value.trim();
     crate::resolve_account_id(context, trimmed)
         .wrap_err_with(|| format!("{flag} must be a valid account identifier"))
 }
-
 fn moderation_actor_or_default<C: RunContext>(
     context: &C,
     value: Option<&str>,
@@ -9618,7 +8913,6 @@ fn moderation_actor_or_default<C: RunContext>(
         None => Ok(context.config().account.to_string()),
     }
 }
-
 fn required_trimmed_text(value: &str, flag: &str) -> Result<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -9626,31 +8920,26 @@ fn required_trimmed_text(value: &str, flag: &str) -> Result<String> {
     }
     Ok(trimmed.to_owned())
 }
-
 fn optional_trimmed_text(value: Option<&str>, flag: &str) -> Result<Option<String>> {
     value
         .map(|text| required_trimmed_text(text, flag))
         .transpose()
 }
-
 fn required_path_string(path: &Path, flag: &str) -> Result<String> {
     required_trimmed_text(&path.display().to_string(), flag)
 }
-
 fn required_path_strings(paths: &[PathBuf], flag: &str) -> Result<Vec<String>> {
     paths
         .iter()
         .map(|path| required_path_string(path, flag))
         .collect()
 }
-
 fn shell_single_quote(value: &str) -> String {
     if value.is_empty() {
         return "''".to_string();
     }
     format!("'{}'", value.replace('\'', "'\\''"))
 }
-
 fn systemd_quote(value: &str) -> String {
     let mut out = String::from("\"");
     for ch in value.chars() {
@@ -9663,7 +8952,6 @@ fn systemd_quote(value: &str) -> String {
     out.push('"');
     out
 }
-
 fn xml_escape(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -9678,10 +8966,8 @@ fn xml_escape(value: &str) -> String {
     }
     out
 }
-
 const MODERATION_NATIVE_ACTION_INPUT_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
 const MODERATION_COORDINATION_STATUS_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
-
 fn load_moderation_ballot_commit_payload(
     path: &Path,
     format: &str,
@@ -9708,7 +8994,6 @@ fn load_moderation_ballot_commit_payload(
         .wrap_err("moderation ballot commit validation failed")?;
     Ok(commit)
 }
-
 fn load_moderation_ballot_reveal_payload(
     path: &Path,
     format: &str,
@@ -9735,7 +9020,6 @@ fn load_moderation_ballot_reveal_payload(
         .wrap_err("moderation ballot reveal validation failed")?;
     Ok(reveal)
 }
-
 fn read_moderation_ballot_payload_file(path: &Path) -> Result<Vec<u8>> {
     read_bounded_moderation_file(
         path,
@@ -9743,7 +9027,6 @@ fn read_moderation_ballot_payload_file(path: &Path) -> Result<Vec<u8>> {
         MODERATION_NATIVE_ACTION_INPUT_MAX_BYTES_V1,
     )
 }
-
 fn load_moderation_commit_reveal_status_payload(path: &Path) -> Result<Value> {
     let bytes = read_bounded_moderation_file(
         path,
@@ -9759,7 +9042,6 @@ fn load_moderation_commit_reveal_status_payload(path: &Path) -> Result<Value> {
     ensure_moderation_bridge_plan_has_no_payload(&status)?;
     Ok(status)
 }
-
 fn read_bounded_moderation_file(path: &Path, label: &str, maximum: usize) -> Result<Vec<u8>> {
     let metadata = fs::metadata(path)
         .wrap_err_with(|| format!("failed to inspect {label} `{}`", path.display()))?;
@@ -9779,14 +9061,12 @@ fn read_bounded_moderation_file(path: &Path, label: &str, maximum: usize) -> Res
     }
     Ok(bytes)
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct ModerationBallotExecutionKey {
     case_id: String,
     round_id: String,
     juror_id: String,
 }
-
 impl ModerationBallotExecutionKey {
     fn from_commit(commit: &SoraFsModerationBallotCommitV1) -> Self {
         Self {
@@ -9795,7 +9075,6 @@ impl ModerationBallotExecutionKey {
             juror_id: commit.juror_id.clone(),
         }
     }
-
     fn from_reveal(reveal: &SoraFsModerationBallotRevealV1) -> Self {
         Self {
             case_id: reveal.context.case_id.clone(),
@@ -9803,7 +9082,6 @@ impl ModerationBallotExecutionKey {
             juror_id: reveal.juror_id.clone(),
         }
     }
-
     fn new(case_id: &str, round_id: &str, juror_id: &str) -> Result<Self> {
         Ok(Self {
             case_id: required_trimmed_text(case_id, "case_id")?,
@@ -9812,14 +9090,12 @@ impl ModerationBallotExecutionKey {
         })
     }
 }
-
 #[derive(Debug, Default)]
 struct ModerationCommitRevealCoordination {
     pending_commits: BTreeSet<ModerationBallotExecutionKey>,
     pending_reveals: BTreeSet<ModerationBallotExecutionKey>,
     tally_ready: BTreeSet<(String, String)>,
 }
-
 fn moderation_commit_reveal_coordination_from_status(
     status: &Value,
 ) -> Result<ModerationCommitRevealCoordination> {
@@ -9869,7 +9145,6 @@ fn moderation_commit_reveal_coordination_from_status(
     }
     Ok(coordination)
 }
-
 fn moderation_commit_reveal_juror_list<'a>(
     ballot_obj: &'a Map,
     field: &str,
@@ -9889,7 +9164,6 @@ fn moderation_commit_reveal_juror_list<'a>(
         })
         .collect()
 }
-
 fn build_moderation_commit_transaction(
     client: &Client,
     commit: &SoraFsModerationBallotCommitV1,
@@ -9912,7 +9186,6 @@ fn build_moderation_commit_transaction(
         .try_build_sorafs_moderation_transaction(SubmitSorafsModerationCommit::new(payload))
         .wrap_err("build caller-signed native moderation commit transaction")
 }
-
 fn build_moderation_reveal_transaction(
     client: &Client,
     reveal: &SoraFsModerationBallotRevealV1,
@@ -9935,7 +9208,6 @@ fn build_moderation_reveal_transaction(
         .try_build_sorafs_moderation_transaction(SubmitSorafsModerationReveal::new(payload))
         .wrap_err("build caller-signed native moderation reveal transaction")
 }
-
 fn build_moderation_finalization_transaction(
     client: &Client,
     case_id: impl Into<String>,
@@ -9948,7 +9220,6 @@ fn build_moderation_finalization_transaction(
         ))
         .wrap_err("build governed native moderation finalization transaction")
 }
-
 fn render_moderation_transaction_hash<C: RunContext>(
     context: &mut C,
     hash: &HashOf<SignedTransaction>,
@@ -9957,7 +9228,6 @@ fn render_moderation_transaction_hash<C: RunContext>(
         "transaction_hash_hex": (encode(hash.as_ref()))
     }))
 }
-
 fn moderation_ballot_execution_action_json(
     action: &str,
     case_id: &str,
@@ -9981,7 +9251,6 @@ fn moderation_ballot_execution_action_json(
     fields.insert("private_payloads_included".into(), Value::Bool(false));
     Ok(Value::Object(fields))
 }
-
 fn write_moderation_ballots_executor_bundle(
     args: &ModerationBallotsExecutorBundleArgs,
 ) -> Result<Value> {
@@ -10005,7 +9274,6 @@ fn write_moderation_ballots_executor_bundle(
     let service_group = required_trimmed_text(&args.service_group, "--service-group")?;
     let commit_payloads = required_path_strings(&args.commit_payloads, "--commit-payload")?;
     let reveal_payloads = required_path_strings(&args.reveal_payloads, "--reveal-payload")?;
-
     fs::create_dir_all(&args.bundle_out).wrap_err_with(|| {
         format!(
             "failed to create moderation ballots executor bundle directory `{}`",
@@ -10023,7 +9291,6 @@ fn write_moderation_ballots_executor_bundle(
     let launchd_plist_name = format!("{service_name}.plist");
     let metadata_path = bundle_dir.join("bundle.json");
     let readme_path = bundle_dir.join("README.md");
-
     let env = moderation_ballots_executor_bundle_env(
         &iroha_bin,
         &status_path,
@@ -10088,7 +9355,6 @@ fn write_moderation_ballots_executor_bundle(
         &readme,
         "moderation ballots executor bundle README",
     )?;
-
     let files = vec![
         "executor.env",
         "run.sh",
@@ -10123,7 +9389,6 @@ fn write_moderation_ballots_executor_bundle(
     )?;
     Ok(summary)
 }
-
 fn moderation_ballots_executor_bundle_env(
     iroha_bin: &str,
     status_path: &str,
@@ -10138,7 +9403,6 @@ fn moderation_ballots_executor_bundle_env(
         shell_single_quote(reveal_format)
     )
 }
-
 fn moderation_ballots_executor_bundle_run_script(
     commit_payloads: &[String],
     reveal_payloads: &[String],
@@ -10162,13 +9426,11 @@ fn moderation_ballots_executor_bundle_run_script(
     if submit_tally {
         command_args.push("  --submit-tally".to_string());
     }
-
     format!(
         "#!/usr/bin/env sh\nset -eu\nSCRIPT_DIR=$(CDPATH= cd -- \"$(dirname -- \"$0\")\" && pwd)\nif [ -f \"$SCRIPT_DIR/executor.env\" ]; then\n  . \"$SCRIPT_DIR/executor.env\"\nfi\n: \"${{IROHA_BIN:=iroha}}\"\n: \"${{SORAFS_BALLOTS_EXECUTOR_STATUS_PATH:?set SORAFS_BALLOTS_EXECUTOR_STATUS_PATH in executor.env}}\"\n: \"${{SORAFS_BALLOTS_EXECUTOR_COMMIT_FORMAT:=json}}\"\n: \"${{SORAFS_BALLOTS_EXECUTOR_REVEAL_FORMAT:=json}}\"\nexec \"$IROHA_BIN\" sorafs moderation ballots execute \\\n{}\n",
         command_args.join(" \\\n")
     )
 }
-
 fn moderation_ballots_executor_bundle_systemd_unit(
     service_name: &str,
     service_user: &str,
@@ -10187,7 +9449,6 @@ fn moderation_ballots_executor_bundle_systemd_unit(
         systemd_quote(&run_path.display().to_string())
     )
 }
-
 fn moderation_ballots_executor_bundle_systemd_timer(
     service_name: &str,
     interval_secs: u64,
@@ -10197,7 +9458,6 @@ fn moderation_ballots_executor_bundle_systemd_timer(
         service_name, interval_secs
     )
 }
-
 fn moderation_ballots_executor_bundle_launchd_plist(
     service_name: &str,
     bundle_dir: &Path,
@@ -10214,7 +9474,6 @@ fn moderation_ballots_executor_bundle_launchd_plist(
         xml_escape(&bundle_dir.join("executor.err.log").display().to_string())
     )
 }
-
 fn moderation_ballots_executor_bundle_readme(
     status_path: &str,
     commit_payload_count: usize,
@@ -10239,7 +9498,6 @@ fn moderation_ballots_executor_bundle_readme(
         launchd_plist_name
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn moderation_ballots_executor_bundle_summary_json(
     bundle_dir: &Path,
@@ -10321,7 +9579,6 @@ fn moderation_ballots_executor_bundle_summary_json(
     summary.insert("private_payload_files_copied".into(), Value::Bool(false));
     Value::Object(summary)
 }
-
 fn moderation_ballots_executor_canary_evidence(
     args: &ModerationBallotsExecutorCanaryArgs,
 ) -> Result<Value> {
@@ -10361,7 +9618,6 @@ fn moderation_ballots_executor_canary_evidence(
         "private_payload_files_copied",
         "moderation ballots executor bundle metadata",
     )?;
-
     let service_name = required_nonblank_string_field(
         metadata_fields,
         "service_name",
@@ -10386,7 +9642,6 @@ fn moderation_ballots_executor_canary_evidence(
         "launchd_plist",
         "moderation ballots executor bundle metadata",
     )?;
-
     let artifact_specs = [
         ("executor.env", "env"),
         ("run.sh", "run_script"),
@@ -10409,7 +9664,6 @@ fn moderation_ballots_executor_canary_evidence(
         }
         artifacts.push(probe);
     }
-
     let execution_summary = args
         .execution_summary
         .as_deref()
@@ -10427,7 +9681,6 @@ fn moderation_ballots_executor_canary_evidence(
     } else {
         "failed"
     };
-
     let mut evidence = Map::new();
     evidence.insert(
         "schema".into(),
@@ -10468,7 +9721,6 @@ fn moderation_ballots_executor_canary_evidence(
     evidence.insert("artifacts".into(), Value::Array(artifacts));
     Ok(Value::Object(evidence))
 }
-
 fn moderation_ballots_executor_canary_artifact(
     bundle_dir: &Path,
     name: &str,
@@ -10481,14 +9733,12 @@ fn moderation_ballots_executor_canary_artifact(
     fields.insert("path".into(), Value::from(path.display().to_string()));
     fields.insert("payload_bytes_included".into(), Value::Bool(false));
     fields.insert("private_payloads_included".into(), Value::Bool(false));
-
     if !path.exists() {
         fields.insert("exists".into(), Value::Bool(false));
         fields.insert("passed".into(), Value::Bool(false));
         fields.insert("checks".into(), Value::Array(Vec::new()));
         return Ok(Value::Object(fields));
     }
-
     let bytes = fs::read(&path).wrap_err_with(|| {
         format!(
             "failed to read executor canary artifact `{}`",
@@ -10522,7 +9772,6 @@ fn moderation_ballots_executor_canary_artifact(
     fields.insert("checks".into(), Value::Array(checks));
     Ok(Value::Object(fields))
 }
-
 fn moderation_ballots_executor_artifact_checks(
     kind: &str,
     body: &str,
@@ -10594,7 +9843,6 @@ fn moderation_ballots_executor_artifact_checks(
     }
     Ok(checks)
 }
-
 fn moderation_ballots_executor_canary_execution_summary(path: &Path) -> Result<Value> {
     let (summary, bytes) =
         read_json_artifact(path, "moderation ballots executor execution summary")?;
@@ -10659,7 +9907,6 @@ fn moderation_ballots_executor_canary_execution_summary(path: &Path) -> Result<V
             "moderation ballots executor action summary",
         )?;
     }
-
     let mut evidence = Map::new();
     evidence.insert("passed".into(), Value::Bool(true));
     evidence.insert("path".into(), Value::from(path.display().to_string()));
@@ -10700,14 +9947,12 @@ fn moderation_ballots_executor_canary_execution_summary(path: &Path) -> Result<V
     evidence.insert("private_payloads_included".into(), Value::Bool(false));
     Ok(Value::Object(evidence))
 }
-
 fn check_json(name: &str, passed: bool) -> Value {
     let mut fields = Map::new();
     fields.insert("name".into(), Value::from(name.to_string()));
     fields.insert("passed".into(), Value::Bool(passed));
     Value::Object(fields)
 }
-
 fn file_is_executable(path: &Path) -> bool {
     #[cfg(unix)]
     {
@@ -10722,7 +9967,6 @@ fn file_is_executable(path: &Path) -> bool {
         path.is_file()
     }
 }
-
 fn post_moderation_juror_notification_webhook(
     client: &BlockingHttpClient,
     url: &str,
@@ -10743,7 +9987,6 @@ fn post_moderation_juror_notification_webhook(
         .to_vec();
     Ok(Response::builder().status(status).body(body).unwrap())
 }
-
 fn load_moderation_juror_notifications_manifest(path: &Path) -> Result<Value> {
     let bytes = fs::read(path).wrap_err_with(|| {
         format!(
@@ -10766,7 +10009,6 @@ fn load_moderation_juror_notifications_manifest(path: &Path) -> Result<Value> {
     ensure_moderation_bridge_plan_has_no_payload(&manifest)?;
     Ok(manifest)
 }
-
 #[derive(Clone, Copy)]
 struct ModerationJurorNotificationEntry<'a> {
     value: &'a Value,
@@ -10777,7 +10019,6 @@ struct ModerationJurorNotificationEntry<'a> {
     round_id: &'a str,
     juror_id: &'a str,
 }
-
 fn moderation_juror_notification_entries(
     manifest: &Value,
 ) -> Result<Vec<ModerationJurorNotificationEntry<'_>>> {
@@ -10807,7 +10048,6 @@ fn moderation_juror_notification_entries(
         .map(moderation_juror_notification_entry)
         .collect()
 }
-
 fn moderation_juror_notification_entry(
     value: &Value,
 ) -> Result<ModerationJurorNotificationEntry<'_>> {
@@ -10838,7 +10078,6 @@ fn moderation_juror_notification_entry(
         juror_id: required_nonblank_string_field(fields, "juror_id", "juror notification entry")?,
     })
 }
-
 fn require_json_bool_false(fields: &Map, field: &str, context: &str) -> Result<()> {
     match fields.get(field).and_then(Value::as_bool) {
         Some(false) => Ok(()),
@@ -10846,7 +10085,6 @@ fn require_json_bool_false(fields: &Map, field: &str, context: &str) -> Result<(
         None => Err(eyre!("{context} is missing boolean `{field}`")),
     }
 }
-
 fn required_nonblank_string_field<'a>(
     fields: &'a Map,
     field: &str,
@@ -10858,7 +10096,6 @@ fn required_nonblank_string_field<'a>(
     }
     Ok(value)
 }
-
 fn safe_moderation_notification_filename(value: &str) -> String {
     value
         .chars()
@@ -10871,7 +10108,6 @@ fn safe_moderation_notification_filename(value: &str) -> String {
         })
         .collect()
 }
-
 fn moderation_juror_notification_delivery_result_json(
     notification: ModerationJurorNotificationEntry<'_>,
     notification_bytes: usize,
@@ -10925,7 +10161,6 @@ fn moderation_juror_notification_delivery_result_json(
     fields.insert("private_payloads_included".into(), Value::Bool(false));
     Value::Object(fields)
 }
-
 fn moderation_juror_notification_canary_probe_json(
     notification: ModerationJurorNotificationEntry<'_>,
     canonical: &[u8],
@@ -10983,14 +10218,12 @@ fn moderation_juror_notification_canary_probe_json(
     fields.insert("private_payloads_included".into(), Value::Bool(false));
     Ok(Value::Object(fields))
 }
-
 fn moderation_canary_probe_ok(probe: &Value) -> bool {
     probe
         .get("response_success")
         .and_then(Value::as_bool)
         .unwrap_or(false)
 }
-
 fn write_json_artifact(path: &Path, value: &Value, label: &str) -> Result<()> {
     if let Some(parent) = path
         .parent()
@@ -11003,7 +10236,6 @@ fn write_json_artifact(path: &Path, value: &Value, label: &str) -> Result<()> {
     fs::write(path, norito::json::to_vec_pretty(value)?)
         .wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
 }
-
 fn read_json_artifact(path: &Path, label: &str) -> Result<(Value, Vec<u8>)> {
     let bytes =
         fs::read(path).wrap_err_with(|| format!("failed to read {label} `{}`", path.display()))?;
@@ -11014,7 +10246,6 @@ fn read_json_artifact(path: &Path, label: &str) -> Result<(Value, Vec<u8>)> {
         .wrap_err_with(|| format!("failed to parse {label} JSON `{}`", path.display()))?;
     Ok((value, bytes))
 }
-
 fn write_text_artifact(path: &Path, value: &str, label: &str) -> Result<()> {
     if let Some(parent) = path
         .parent()
@@ -11026,7 +10257,6 @@ fn write_text_artifact(path: &Path, value: &str, label: &str) -> Result<()> {
     }
     fs::write(path, value).wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
 }
-
 fn set_executable_if_supported(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
@@ -11041,7 +10271,6 @@ fn set_executable_if_supported(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 fn transparency_token_issuance_canary_probe_json(
     path: &Path,
     payload: &[u8],
@@ -11081,7 +10310,6 @@ fn transparency_token_issuance_canary_probe_json(
     fields.insert("response_body_included".into(), Value::Bool(false));
     Value::Object(fields)
 }
-
 fn transparency_privacy_aggregate_canary_probe_json(
     action: &str,
     path: &Path,
@@ -11122,7 +10350,6 @@ fn transparency_privacy_aggregate_canary_probe_json(
     fields.insert("private_payloads_included".into(), Value::Bool(false));
     Value::Object(fields)
 }
-
 fn load_sorafs_json_payload(path: &Path, label: &str) -> Result<Vec<u8>> {
     let bytes = fs::read(path)
         .wrap_err_with(|| format!("failed to read {label} payload `{}`", path.display(),))?;
@@ -11136,7 +10363,6 @@ fn load_sorafs_json_payload(path: &Path, label: &str) -> Result<Vec<u8>> {
         .wrap_err_with(|| format!("failed to parse {label} JSON `{}`", path.display()))?;
     norito::json::to_vec(&value).wrap_err_with(|| format!("failed to encode {label} JSON"))
 }
-
 fn normalize_moderation_ballot_payload_format(format: &str) -> Result<&'static str> {
     match format.trim().to_ascii_lowercase().as_str() {
         "json" => Ok("json"),
@@ -11146,7 +10372,6 @@ fn normalize_moderation_ballot_payload_format(format: &str) -> Result<&'static s
         )),
     }
 }
-
 fn load_moderation_registry_repro_manifest_bytes(path: &Path, format: &str) -> Result<Vec<u8>> {
     let format = normalize_moderation_registry_manifest_format(format)?;
     let bytes = read_moderation_registry_manifest_file(path)?;
@@ -11170,7 +10395,6 @@ fn load_moderation_registry_repro_manifest_bytes(path: &Path, format: &str) -> R
         .wrap_err("reproducibility manifest validation failed")?;
     norito::to_bytes(&manifest).wrap_err("failed to encode canonical reproducibility manifest")
 }
-
 fn load_moderation_registry_corpus_manifest_bytes(path: &Path, format: &str) -> Result<Vec<u8>> {
     let format = normalize_moderation_registry_manifest_format(format)?;
     let bytes = read_moderation_registry_manifest_file(path)?;
@@ -11194,7 +10418,6 @@ fn load_moderation_registry_corpus_manifest_bytes(path: &Path, format: &str) -> 
         .wrap_err("adversarial corpus manifest validation failed")?;
     norito::to_bytes(&manifest).wrap_err("failed to encode canonical adversarial corpus manifest")
 }
-
 fn read_moderation_registry_manifest_file(path: &Path) -> Result<Vec<u8>> {
     let bytes = fs::read(path).wrap_err_with(|| {
         format!(
@@ -11210,7 +10433,6 @@ fn read_moderation_registry_manifest_file(path: &Path) -> Result<Vec<u8>> {
     }
     Ok(bytes)
 }
-
 fn normalize_moderation_registry_manifest_format(format: &str) -> Result<&'static str> {
     match format.trim().to_ascii_lowercase().as_str() {
         "json" => Ok("json"),
@@ -11220,7 +10442,6 @@ fn normalize_moderation_registry_manifest_format(format: &str) -> Result<&'stati
         )),
     }
 }
-
 fn load_moderation_screening_submit_payload(
     path: &Path,
 ) -> Result<ModerationScreeningSubmitPayload> {
@@ -11264,7 +10485,6 @@ fn load_moderation_screening_submit_payload(
     })?;
     moderation_screening_submit_payload_from_json(&value)
 }
-
 fn moderation_screening_submit_payload_from_json(
     value: &Value,
 ) -> Result<ModerationScreeningSubmitPayload> {
@@ -11310,7 +10530,6 @@ fn moderation_screening_submit_payload_from_json(
         committee_member_results_b64,
     })
 }
-
 fn required_json_string_array(fields: &Map, field: &str) -> Result<Vec<String>> {
     let Some(Value::Array(values)) = fields.get(field) else {
         return if fields.contains_key(field) {
@@ -11329,7 +10548,6 @@ fn required_json_string_array(fields: &Map, field: &str) -> Result<Vec<String>> 
         })
         .collect()
 }
-
 fn required_json_text(fields: &Map, field: &str) -> Result<String> {
     match fields.get(field) {
         Some(Value::String(value)) => required_trimmed_text(value, field),
@@ -11337,7 +10555,6 @@ fn required_json_text(fields: &Map, field: &str) -> Result<String> {
         None => Err(eyre!("{field} is required")),
     }
 }
-
 fn optional_json_text(fields: &Map, field: &str) -> Result<Option<String>> {
     match fields.get(field) {
         Some(Value::String(value)) => optional_trimmed_text(Some(value), field),
@@ -11345,12 +10562,10 @@ fn optional_json_text(fields: &Map, field: &str) -> Result<Option<String>> {
         Some(_) => Err(eyre!("{field} must be a JSON string or null")),
     }
 }
-
 fn required_json_hex_digest<const N: usize>(fields: &Map, field: &str) -> Result<String> {
     let value = required_json_text(fields, field)?;
     normalize_hex_digest::<N>(&value, field)
 }
-
 fn optional_json_u64(fields: &Map, field: &str) -> Result<Option<u64>> {
     match fields.get(field) {
         Some(Value::Null) | None => Ok(None),
@@ -11360,7 +10575,6 @@ fn optional_json_u64(fields: &Map, field: &str) -> Result<Option<u64>> {
             .ok_or_else(|| eyre!("{field} must be an unsigned integer or null")),
     }
 }
-
 fn parse_repair_ticket_id(value: &str, flag: &str) -> Result<RepairTicketId> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -11372,14 +10586,12 @@ fn parse_repair_ticket_id(value: &str, flag: &str) -> Result<RepairTicketId> {
         .map_err(|err| eyre!("{flag} is invalid: {err}"))?;
     Ok(ticket_id)
 }
-
 fn validate_repair_revision(value: u64, flag: &str) -> Result<()> {
     if value == 0 {
         return Err(eyre!("{flag} must be non-zero"));
     }
     Ok(())
 }
-
 fn build_repair_action_transaction(
     client: &Client,
     ticket_id: &RepairTicketId,
@@ -11396,7 +10608,6 @@ fn build_repair_action_transaction(
         )
         .wrap_err("failed to build caller-signed native SoraFS repair transaction")
 }
-
 fn render_repair_transaction_hash<C: RunContext>(
     context: &mut C,
     hash: &HashOf<SignedTransaction>,
@@ -11405,17 +10616,14 @@ fn render_repair_transaction_hash<C: RunContext>(
         "transaction_hash_hex": (encode(hash.as_ref()))
     }))
 }
-
 fn parse_quantity_str(value: &str, flag: &str) -> Result<Quantity> {
     Quantity::from_str(value)
         .map_err(|err| eyre!("{flag} must be a valid non-negative quantity: {err}"))
 }
-
 fn unix_now() -> u64 {
     let seconds = OffsetDateTime::now_utc().unix_timestamp();
     u64::try_from(seconds.max(0)).unwrap_or(0)
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum HandshakeCommand {
     /// Display the current `SoraNet` handshake summary as reported by Torii.
@@ -11426,7 +10634,6 @@ pub enum HandshakeCommand {
     #[command(subcommand)]
     Token(HandshakeTokenCommand),
 }
-
 impl Run for HandshakeCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -11451,7 +10658,6 @@ impl Run for HandshakeCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug, Default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct HandshakeUpdateArgs {
@@ -11517,7 +10723,6 @@ pub struct HandshakeUpdateArgs {
     #[arg(long = "require-sm-openssl-preview-match", action = clap::ArgAction::SetTrue)]
     require_sm_openssl_preview_match: bool,
 }
-
 impl HandshakeUpdateArgs {
     #[cfg(test)]
     fn into_update(self) -> Result<SoranetHandshakeUpdate> {
@@ -11526,14 +10731,12 @@ impl HandshakeUpdateArgs {
             eyre!("no handshake overrides provided; specify at least one handshake option")
         })
     }
-
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client = context.client_from_config();
         let config = client
             .get_config()
             .wrap_err("failed to fetch configuration for update")?;
         let (handshake_update, network_update) = self.into_payload()?;
-
         let dto = ConfigUpdateDTO {
             logger: LoggerDTO {
                 level: config.logger.level,
@@ -11545,14 +10748,12 @@ impl HandshakeUpdateArgs {
             transport: None,
             compute_pricing: None,
         };
-
         client
             .set_config(&dto)
             .wrap_err("failed to submit SoraNet handshake update")?;
         context.println("SoraNet handshake updated.")?;
         Ok(())
     }
-
     #[allow(clippy::too_many_lines)]
     fn into_payload(self) -> Result<(Option<SoranetHandshakeUpdate>, Option<NetworkUpdate>)> {
         let mut update = SoranetHandshakeUpdate::default();
@@ -11600,7 +10801,6 @@ impl HandshakeUpdateArgs {
         } else {
             false
         };
-
         let mut pow_update = SoranetHandshakePowUpdate::default();
         if self.pow_required {
             pow_update.required = Some(true);
@@ -11646,7 +10846,6 @@ impl HandshakeUpdateArgs {
         if pow_touched {
             update.pow = Some(pow_update);
         }
-
         let handshake_update = if descriptor_commit_touched
             || client_capabilities_touched
             || relay_capabilities_touched
@@ -11659,7 +10858,6 @@ impl HandshakeUpdateArgs {
         } else {
             None
         };
-
         let mut network_update = NetworkUpdate::default();
         if self.require_sm_handshake_match {
             network_update.require_sm_handshake_match = Some(true);
@@ -11674,16 +10872,13 @@ impl HandshakeUpdateArgs {
         } else {
             None
         };
-
         if handshake_update.is_none() && network_update.is_none() {
             return Err(eyre!(
                 "no handshake or SM policy overrides provided; specify at least one option"
             ));
         }
-
         Ok((handshake_update, network_update))
     }
-
     fn normalise_hex(value: &str, flag: &str) -> Result<String> {
         let trimmed = value.trim();
         if trimmed.is_empty() {
@@ -11700,7 +10895,6 @@ impl HandshakeUpdateArgs {
         }
         Ok(stripped.to_ascii_lowercase())
     }
-
     fn normalise_resume_hash(value: &str) -> Result<String> {
         let hex = Self::normalise_hex(value, "--resume-hash")?;
         if hex.len() != 64 {
@@ -11711,7 +10905,6 @@ impl HandshakeUpdateArgs {
         Ok(hex)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum HandshakeTokenCommand {
     /// Issue an ML-DSA admission token bound to a relay and transcript hash.
@@ -11721,7 +10914,6 @@ pub enum HandshakeTokenCommand {
     /// Compute the issuer fingerprint from an ML-DSA public key.
     Fingerprint(HandshakeTokenFingerprintArgs),
 }
-
 impl Run for HandshakeTokenCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -11731,7 +10923,6 @@ impl Run for HandshakeTokenCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct HandshakeTokenIssueArgs {
     /// ML-DSA suite used to sign the token (mldsa44, mldsa65, mldsa87).
@@ -11794,7 +10985,6 @@ pub struct HandshakeTokenIssueArgs {
     #[arg(long = "token-encoding", value_enum, default_value_t = TokenOutputFormat::Base64)]
     token_encoding: TokenOutputFormat,
 }
-
 #[derive(Debug)]
 struct TokenIssueArtifacts {
     token: AdmissionToken,
@@ -11807,7 +10997,6 @@ struct TokenIssueArtifacts {
     relay_id: [u8; 32],
     transcript_hash: [u8; 32],
 }
-
 impl HandshakeTokenIssueArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let mut rng = token_issue_rng()?;
@@ -11821,7 +11010,6 @@ impl HandshakeTokenIssueArgs {
         )?;
         Ok(())
     }
-
     fn issue_with_rng<C, R>(
         &self,
         context: &mut C,
@@ -11847,11 +11035,9 @@ impl HandshakeTokenIssueArgs {
         )?;
         let relay_id = parse_hex_array::<32>(&self.relay_id, "--relay-id")?;
         let transcript_hash = parse_hex_array::<32>(&self.transcript_hash, "--transcript-hash")?;
-
         let issued_dt = parse_timestamp(self.issued_at.as_deref(), "--issued-at")?
             .unwrap_or_else(|| OffsetDateTime::from(default_now));
         let issued_secs = issued_dt.unix_timestamp();
-
         let expires_dt =
             if let Some(explicit) = parse_timestamp(self.expires_at.as_deref(), "--expires-at")? {
                 explicit
@@ -11867,7 +11053,6 @@ impl HandshakeTokenIssueArgs {
                     ))
                     .ok_or_else(|| eyre!("computed expiry timestamp overflowed"))?
             };
-
         let expires_secs = expires_dt.unix_timestamp();
         if expires_secs <= issued_secs {
             return Err(eyre!("token expiry must be greater than the issuance time"));
@@ -11875,7 +11060,6 @@ impl HandshakeTokenIssueArgs {
         let ttl_secs = u64::try_from(expires_secs - issued_secs).map_err(|_| {
             eyre!("token lifetime overflowed when computing expires_at - issued_at")
         })?;
-
         let issuer_fingerprint = compute_issuer_fingerprint(&public_key);
         let issued_at_instant =
             UNIX_EPOCH
@@ -11887,7 +11071,6 @@ impl HandshakeTokenIssueArgs {
                 eyre!("--expires-at must not be earlier than 1970-01-01T00:00:00Z")
             })?);
         let flags = self.flags.unwrap_or(0);
-
         let token = AdmissionToken::mint(
             suite.as_suite(),
             &secret_key,
@@ -11900,7 +11083,6 @@ impl HandshakeTokenIssueArgs {
             rng,
         )
         .map_err(|err| map_mint_error(&err, context))?;
-
         let token_bytes = token.encode();
         Ok(TokenIssueArtifacts {
             token,
@@ -11914,7 +11096,6 @@ impl HandshakeTokenIssueArgs {
             transcript_hash,
         })
     }
-
     fn emit<C: RunContext>(
         context: &mut C,
         artifacts: &TokenIssueArtifacts,
@@ -11924,7 +11105,6 @@ impl HandshakeTokenIssueArgs {
         if let Some(path) = output {
             write_token_to_file(path, format, &artifacts.token_bytes)?;
         }
-
         let token_base64 = URL_SAFE_NO_PAD.encode(&artifacts.token_bytes);
         let token_hex = hex::encode(&artifacts.token_bytes);
         let token_id = artifacts.token.token_id();
@@ -11934,7 +11114,6 @@ impl HandshakeTokenIssueArgs {
         let fingerprint_b64 = URL_SAFE_NO_PAD.encode(artifacts.issuer_fingerprint);
         let relay_id_hex = hex::encode(artifacts.relay_id);
         let transcript_hash_hex = hex::encode(artifacts.transcript_hash);
-
         let issued_str = artifacts
             .issued_dt
             .format(&Rfc3339)
@@ -11943,7 +11122,6 @@ impl HandshakeTokenIssueArgs {
             .expires_dt
             .format(&Rfc3339)
             .map_err(|err| eyre!("failed to format expires_at: {err}"))?;
-
         let mut obj = Map::new();
         obj.insert("suite".into(), Value::from(artifacts.suite.to_string()));
         obj.insert("token_base64url".into(), Value::from(token_base64));
@@ -11981,22 +11159,18 @@ impl HandshakeTokenIssueArgs {
                 Value::from(path.to_string_lossy().into_owned())
             }),
         );
-
         let text = render_token_issue_text(artifacts, &obj, output, format.describe());
         print_with_optional_text(context, Some(text), &Value::Object(obj))
     }
 }
-
 fn token_issue_rng() -> Result<StdRng> {
     token_issue_rng_from_rng(&mut OsRng)
 }
-
 fn token_issue_rng_from_rng<R: TryCryptoRng>(rng: &mut R) -> Result<StdRng> {
     StdRng::try_from_rng(rng).map_err(|error| {
         eyre!("failed to seed SoraNet admission-token RNG from OS entropy: {error}")
     })
 }
-
 fn render_token_issue_text(
     artifacts: &TokenIssueArtifacts,
     payload: &Map,
@@ -12035,7 +11209,6 @@ fn render_token_issue_text(
         .get("ttl_secs")
         .and_then(Value::as_u64)
         .unwrap_or(artifacts.ttl_secs);
-
     let mut out = String::new();
     let _ = writeln!(out, "SoraNet admission token issued");
     let _ = writeln!(out, "suite: {}", artifacts.suite);
@@ -12052,7 +11225,6 @@ fn render_token_issue_text(
     }
     out
 }
-
 #[derive(clap::Args, Debug)]
 pub struct HandshakeTokenIdArgs {
     /// Path to the admission token frame (binary).
@@ -12080,7 +11252,6 @@ pub struct HandshakeTokenIdArgs {
     )]
     base64_input: Option<String>,
 }
-
 impl HandshakeTokenIdArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let bytes = materialise_token_bytes(
@@ -12104,7 +11275,6 @@ impl HandshakeTokenIdArgs {
                 .map_err(|_| eyre!("expires_at does not fit in i64"))?,
         )
         .map_err(|err| eyre!("invalid expires_at timestamp: {err}"))?;
-
         let issued_str = issued_dt
             .format(&Rfc3339)
             .map_err(|err| eyre!("failed to format issued_at: {err}"))?;
@@ -12112,7 +11282,6 @@ impl HandshakeTokenIdArgs {
             .format(&Rfc3339)
             .map_err(|err| eyre!("failed to format expires_at: {err}"))?;
         let ttl_secs = token.expires_at().saturating_sub(token.issued_at());
-
         let mut obj = Map::new();
         obj.insert("token_id_hex".into(), Value::from(token_id_hex));
         obj.insert("token_id_base64url".into(), Value::from(token_id_b64));
@@ -12128,11 +11297,9 @@ impl HandshakeTokenIdArgs {
         obj.insert("issued_at".into(), Value::from(issued_str));
         obj.insert("expires_at".into(), Value::from(expires_str));
         obj.insert("ttl_secs".into(), Value::from(ttl_secs));
-
         context.print_data(&Value::Object(obj))
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct HandshakeTokenFingerprintArgs {
     /// Path to the ML-DSA public key (raw bytes).
@@ -12150,7 +11317,6 @@ pub struct HandshakeTokenFingerprintArgs {
     )]
     public_key_hex: Option<String>,
 }
-
 impl HandshakeTokenFingerprintArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let public_key = materialise_key_bytes(
@@ -12162,7 +11328,6 @@ impl HandshakeTokenFingerprintArgs {
         let fingerprint = compute_issuer_fingerprint(&public_key);
         let fingerprint_hex = hex::encode(fingerprint);
         let fingerprint_b64 = URL_SAFE_NO_PAD.encode(fingerprint);
-
         let mut obj = Map::new();
         obj.insert(
             "public_key_len".into(),
@@ -12176,15 +11341,12 @@ impl HandshakeTokenFingerprintArgs {
             "issuer_fingerprint_base64url".into(),
             Value::from(fingerprint_b64),
         );
-
         context.print_data(&Value::Object(obj))
     }
 }
-
 fn map_mint_error<C: RunContext>(err: &AdmissionTokenMintError, _context: &C) -> eyre::Report {
     eyre!("failed to mint admission token: {err}")
 }
-
 fn materialise_key_bytes(
     path: Option<&PathBuf>,
     hex: Option<&str>,
@@ -12207,7 +11369,6 @@ fn materialise_key_bytes(
         (None, None) => Err(eyre!("either {path_flag} or {hex_flag} must be provided")),
     }
 }
-
 fn materialise_token_bytes(
     path: Option<&Path>,
     hex: Option<&str>,
@@ -12229,7 +11390,6 @@ fn materialise_token_bytes(
         )),
     }
 }
-
 fn write_token_to_file(path: &Path, format: TokenOutputFormat, bytes: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -12255,7 +11415,6 @@ fn write_token_to_file(path: &Path, format: TokenOutputFormat, bytes: &[u8]) -> 
     }
     Ok(())
 }
-
 fn decode_hex_string(value: &str, flag: &str) -> Result<Vec<u8>> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -12268,7 +11427,6 @@ fn decode_hex_string(value: &str, flag: &str) -> Result<Vec<u8>> {
     }
     hex::decode(trimmed).map_err(|err| eyre!("failed to decode {flag}: {err}"))
 }
-
 fn decode_base64_string(value: &str, flag: &str) -> Result<Vec<u8>> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -12279,7 +11437,6 @@ fn decode_base64_string(value: &str, flag: &str) -> Result<Vec<u8>> {
         .or_else(|_| STANDARD.decode(trimmed.as_bytes()))
         .map_err(|err| eyre!("failed to decode {flag}: {err}"))
 }
-
 fn parse_hex_array<const N: usize>(value: &str, flag: &str) -> Result<[u8; N]> {
     let trimmed = value.trim();
     let without_prefix = trimmed.strip_prefix("0x").unwrap_or(trimmed);
@@ -12294,12 +11451,10 @@ fn parse_hex_array<const N: usize>(value: &str, flag: &str) -> Result<[u8; N]> {
         .map_err(|err| eyre!("failed to decode {flag}: {err}"))?;
     Ok(bytes)
 }
-
 fn normalize_hex_digest<const N: usize>(value: &str, flag: &str) -> Result<String> {
     let bytes = parse_hex_array::<N>(value, flag)?;
     Ok(encode(bytes))
 }
-
 fn parse_alias_label(raw: &str) -> Result<String> {
     let (namespace_raw, name_raw) = raw
         .split_once(':')
@@ -12310,7 +11465,6 @@ fn parse_alias_label(raw: &str) -> Result<String> {
         .map_err(|err| eyre!("invalid alias name `{name_raw}`: {err}"))?;
     Ok(format!("{namespace}:{name}"))
 }
-
 const ROUTE_HEADER_ORDER: &[&str] = &[
     "Sora-Name",
     "Sora-Content-CID",
@@ -12321,11 +11475,9 @@ const ROUTE_HEADER_ORDER: &[&str] = &[
     "Strict-Transport-Security",
     "Permissions-Policy",
 ];
-
 const DEFAULT_ROUTE_CSP: &str = "default-src 'self'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'";
 const DEFAULT_ROUTE_PERMISSIONS: &str = "accelerometer=(), ambient-light-sensor=(), autoplay=(), camera=(), clipboard-read=(self), clipboard-write=(self), encrypted-media=(), fullscreen=(self), geolocation=(), gyroscope=(), hid=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), speaker-selection=(), usb=(), xr-spatial-tracking=()";
 const DEFAULT_ROUTE_HSTS_MAX_AGE: u32 = 63_072_000;
-
 struct RouteBindingContext {
     manifest_json: PathBuf,
     alias: Option<String>,
@@ -12337,14 +11489,12 @@ struct RouteBindingContext {
     include_hsts: bool,
     generated_at: OffsetDateTime,
 }
-
 struct RouteBindingOutput {
     content_cid: String,
     route_binding: String,
     headers: BTreeMap<String, String>,
     headers_template: String,
 }
-
 fn build_route_binding(context: &RouteBindingContext) -> Result<RouteBindingOutput> {
     let manifest_bytes = fs::read(&context.manifest_json).wrap_err_with(|| {
         format!(
@@ -12365,7 +11515,6 @@ fn build_route_binding(context: &RouteBindingContext) -> Result<RouteBindingOutp
     let content_cid = format!("b{}", encode_base32_lower(&root_bytes));
     let mut headers = BTreeMap::new();
     headers.insert("Sora-Content-CID".into(), content_cid.clone());
-
     if let Some(alias) = context.alias.as_deref() {
         headers.insert("Sora-Name".into(), alias.to_string());
         let proof_payload = norito::json!({
@@ -12381,7 +11530,6 @@ fn build_route_binding(context: &RouteBindingContext) -> Result<RouteBindingOutp
             .unwrap_or_else(|| "ok".to_string());
         headers.insert("Sora-Proof-Status".into(), status);
     }
-
     let generated_at = context
         .generated_at
         .format(&Rfc3339)
@@ -12396,7 +11544,6 @@ fn build_route_binding(context: &RouteBindingContext) -> Result<RouteBindingOutp
     }
     let route_binding = binding_parts.join(";");
     headers.insert("Sora-Route-Binding".into(), route_binding.clone());
-
     if context.include_csp {
         headers.insert("Content-Security-Policy".into(), DEFAULT_ROUTE_CSP.into());
     }
@@ -12412,7 +11559,6 @@ fn build_route_binding(context: &RouteBindingContext) -> Result<RouteBindingOutp
             DEFAULT_ROUTE_PERMISSIONS.into(),
         );
     }
-
     let headers_template = format_headers_template(&headers);
     Ok(RouteBindingOutput {
         content_cid,
@@ -12421,7 +11567,6 @@ fn build_route_binding(context: &RouteBindingContext) -> Result<RouteBindingOutp
         headers_template,
     })
 }
-
 fn manifest_root_bytes(manifest: &Value) -> Result<Vec<u8>> {
     if let Some(array) = manifest.get("root_cid").and_then(Value::as_array) {
         let mut bytes = Vec::with_capacity(array.len());
@@ -12452,12 +11597,10 @@ fn manifest_root_bytes(manifest: &Value) -> Result<Vec<u8>> {
         return decode(hex_value.trim())
             .map_err(|err| eyre!("failed to decode root_cid_hex value: {err}"));
     }
-
     Err(eyre!(
         "manifest JSON is missing `root_cid`, `root_cids_hex`, or `root_cid_hex` fields"
     ))
 }
-
 fn encode_base32_lower(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
     if bytes.is_empty() {
@@ -12481,7 +11624,6 @@ fn encode_base32_lower(bytes: &[u8]) -> String {
     }
     output
 }
-
 fn format_headers_template(headers: &BTreeMap<String, String>) -> String {
     let mut lines = Vec::new();
     for &key in ROUTE_HEADER_ORDER {
@@ -12499,7 +11641,6 @@ fn format_headers_template(headers: &BTreeMap<String, String>) -> String {
     rendered.push('\n');
     rendered
 }
-
 fn headers_to_value(headers: &BTreeMap<String, String>) -> Map {
     let mut map = Map::new();
     for (key, value) in headers {
@@ -12507,7 +11648,6 @@ fn headers_to_value(headers: &BTreeMap<String, String>) -> Map {
     }
     map
 }
-
 fn write_optional_output(path: Option<&PathBuf>, contents: &str) -> Result<()> {
     if let Some(path) = path {
         if let Some(parent) = path.parent() {
@@ -12520,7 +11660,6 @@ fn write_optional_output(path: Option<&PathBuf>, contents: &str) -> Result<()> {
     }
     Ok(())
 }
-
 fn build_cache_invalidation_payload(
     aliases: &[String],
     manifest_digest: &str,
@@ -12546,7 +11685,6 @@ fn build_cache_invalidation_payload(
     );
     Value::Object(map)
 }
-
 fn render_cache_invalidation_curl(endpoint: &str, auth_env: &str, payload_json: &str) -> String {
     let mut lines = Vec::new();
     lines.push(format!("curl -X POST {endpoint}"));
@@ -12558,7 +11696,6 @@ fn render_cache_invalidation_curl(endpoint: &str, auth_env: &str, payload_json: 
     lines.push(format!("  --data '{escaped}'"));
     lines.join(" \\\n")
 }
-
 fn shell_escape_single_quotes(input: &str) -> String {
     if input.contains('\'') {
         input.replace('\'', "'\"'\"'")
@@ -12566,7 +11703,6 @@ fn shell_escape_single_quotes(input: &str) -> String {
         input.to_owned()
     }
 }
-
 fn render_handshake_summary<C: RunContext>(
     context: &mut C,
     summary: &SoranetHandshakeSummary,
@@ -12616,7 +11752,6 @@ fn render_handshake_summary<C: RunContext>(
     }
     Ok(())
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum GatewayCommand {
     /// Emit a TOML snippet with gateway configuration defaults.
@@ -12631,7 +11766,6 @@ pub enum GatewayCommand {
     #[command(subcommand)]
     DirectMode(GatewayDirectModeCommand),
 }
-
 impl Run for GatewayCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -12643,13 +11777,11 @@ impl Run for GatewayCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ToolkitCommand {
     /// Package a payload into a CAR + manifest bundle using the canonical tooling.
     Pack(ToolkitPackArgs),
 }
-
 impl Run for ToolkitCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -12657,7 +11789,6 @@ impl Run for ToolkitCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum GuardDirectoryCommand {
     /// Fetch a guard directory snapshot over HTTPS, verify it, and emit a summary.
@@ -12667,7 +11798,6 @@ pub enum GuardDirectoryCommand {
     /// Inspect snapshot structure without claiming authenticity or freshness.
     Inspect(GuardDirectoryInspectArgs),
 }
-
 impl Run for GuardDirectoryCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -12677,7 +11807,6 @@ impl Run for GuardDirectoryCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct GuardDirectoryFetchArgs {
     /// URLs publishing the guard directory snapshot (first success wins).
@@ -12696,7 +11825,6 @@ pub struct GuardDirectoryFetchArgs {
     #[arg(long = "overwrite")]
     pub overwrite: bool,
 }
-
 impl Run for GuardDirectoryFetchArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         if self.url.is_empty() {
@@ -12704,14 +11832,12 @@ impl Run for GuardDirectoryFetchArgs {
                 "at least one --url must be supplied when fetching guard directory snapshots"
             ));
         }
-
         let timeout = Duration::from_secs(self.timeout_secs.max(1));
         let client = BlockingHttpClient::builder()
             .timeout(timeout)
             .user_agent("sorafs-cli guard-directory")
             .build()
             .wrap_err("failed to construct HTTP client")?;
-
         let mut errors = Vec::new();
         let mut snapshot: Option<Vec<u8>> = None;
         for url in &self.url {
@@ -12738,7 +11864,6 @@ impl Run for GuardDirectoryFetchArgs {
                 }
             }
         }
-
         let bytes = snapshot.ok_or_else(|| {
             eyre!(
                 "failed to fetch guard directory from {} url(s): {}",
@@ -12746,19 +11871,15 @@ impl Run for GuardDirectoryFetchArgs {
                 errors.join("; ")
             )
         })?;
-
         let now_unix = OffsetDateTime::now_utc().unix_timestamp();
         let summary =
             authenticate_guard_directory_bytes(&bytes, &self.expected_snapshot_digest, now_unix)?;
-
         if let Some(path) = &self.output {
             write_guard_directory_snapshot(path, &bytes, self.overwrite)?;
         }
-
         context.print_data(&summary)
     }
 }
-
 fn read_guard_directory_http_body_bounded<R: Read>(
     reader: R,
     content_length: Option<u64>,
@@ -12769,7 +11890,6 @@ fn read_guard_directory_http_body_bounded<R: Read>(
         iroha_crypto::soranet::directory::GUARD_DIRECTORY_SNAPSHOT_MAX_BYTES_V1,
     )
 }
-
 fn read_guard_directory_http_body_with_limit<R: Read>(
     mut reader: R,
     content_length: Option<u64>,
@@ -12784,7 +11904,6 @@ fn read_guard_directory_http_body_with_limit<R: Read>(
     if content_length.is_some_and(|length| length > max_bytes_u64) {
         return Err(guard_directory_http_body_too_large(max_bytes));
     }
-
     let capacity = content_length
         .and_then(|length| usize::try_from(length).ok())
         .unwrap_or(0)
@@ -12799,14 +11918,12 @@ fn read_guard_directory_http_body_with_limit<R: Read>(
     }
     Ok(bytes)
 }
-
 fn guard_directory_http_body_too_large(max_bytes: usize) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
         format!("guard directory HTTP body exceeds the {max_bytes}-byte first-release limit"),
     )
 }
-
 #[derive(clap::Args, Debug)]
 pub struct GuardDirectoryVerifyArgs {
     /// Path to the guard directory snapshot to verify.
@@ -12816,7 +11933,6 @@ pub struct GuardDirectoryVerifyArgs {
     #[arg(long = "expected-snapshot-digest", value_name = "HEX")]
     pub expected_snapshot_digest: String,
 }
-
 impl Run for GuardDirectoryVerifyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let bytes = read_guard_directory_snapshot_file(&self.path).wrap_err_with(|| {
@@ -12831,14 +11947,12 @@ impl Run for GuardDirectoryVerifyArgs {
         context.print_data(&summary)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct GuardDirectoryInspectArgs {
     /// Path to the guard directory snapshot to inspect.
     #[arg(long = "path", value_name = "PATH")]
     pub path: PathBuf,
 }
-
 impl Run for GuardDirectoryInspectArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let bytes = read_guard_directory_snapshot_file(&self.path).wrap_err_with(|| {
@@ -12851,7 +11965,6 @@ impl Run for GuardDirectoryInspectArgs {
         context.print_data(&summary)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum GatewayDirectModeCommand {
     /// Analyse manifest/admission data and emit a direct-mode readiness plan.
@@ -12861,7 +11974,6 @@ pub enum GatewayDirectModeCommand {
     /// Emit a configuration snippet restoring default gateway security settings.
     Rollback(GatewayDirectModeRollbackArgs),
 }
-
 impl Run for GatewayDirectModeCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -12871,7 +11983,6 @@ impl Run for GatewayDirectModeCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct GatewayDirectModePlanArgs {
     /// Path to the Norito-encoded manifest (`.to`) file to analyse.
@@ -12890,7 +12001,6 @@ pub struct GatewayDirectModePlanArgs {
     #[arg(long, default_value = "https")]
     pub scheme: String,
 }
-
 impl Run for GatewayDirectModePlanArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let manifest_bytes = fs::read(&self.manifest).wrap_err_with(|| {
@@ -12902,7 +12012,6 @@ impl Run for GatewayDirectModePlanArgs {
             .digest()
             .wrap_err("failed to compute manifest digest")?;
         let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
-
         let envelope = if let Some(path) = &self.admission_envelope {
             let bytes = fs::read(path).wrap_err_with(|| {
                 format!(
@@ -12919,7 +12028,6 @@ impl Run for GatewayDirectModePlanArgs {
         } else {
             None
         };
-
         let provider_id = if let Some(hex) = self.provider_id {
             parse_hex_array::<32>(&hex, "provider_id")?
         } else if let Some(env) = envelope.as_ref() {
@@ -12929,11 +12037,9 @@ impl Run for GatewayDirectModePlanArgs {
                 "provider identifier required; pass --provider-id or --admission-envelope"
             ));
         };
-
         let chain_id = self
             .chain_id
             .unwrap_or_else(|| context.config().chain.as_str().to_owned());
-
         let host_input = HostMappingInput {
             chain_id: chain_id.as_str(),
             provider_id: &provider_id,
@@ -12942,12 +12048,10 @@ impl Run for GatewayDirectModePlanArgs {
         let direct_car = host_input
             .direct_car_locator(&self.scheme, &manifest_digest_hex)
             .wrap_err("invalid URL scheme for direct CAR locator")?;
-
         let capability_summary = detect_manifest_capabilities(
             Some(&manifest),
             envelope.as_ref().map(|env| &env.advert_body),
         );
-
         let plan = DirectModePlanOutput::from_components(
             &chain_id,
             provider_id,
@@ -12956,11 +12060,9 @@ impl Run for GatewayDirectModePlanArgs {
             direct_car,
             capability_summary,
         );
-
         context.print_data(&plan)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ToolkitPackArgs {
     /// Payload path (file or directory) to package into a CAR archive.
@@ -12987,7 +12089,6 @@ pub struct ToolkitPackArgs {
     #[arg(long = "hybrid-recipient-kyber", value_name = "HEX")]
     pub hybrid_recipient_kyber: Option<String>,
 }
-
 impl Run for ToolkitPackArgs {
     #[allow(clippy::too_many_lines)]
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -13001,13 +12102,11 @@ impl Run for ToolkitPackArgs {
             hybrid_recipient_x25519,
             hybrid_recipient_kyber,
         } = self;
-
         let descriptor = chunker_registry::default_descriptor();
         let (plan, payload) = build_pack_plan(&input, descriptor.profile)?;
         if plan.chunk_profile != descriptor.profile {
             return Err(eyre!("computed chunk plan used unexpected profile"));
         }
-
         let mut chunk_store = ChunkStore::with_profile(descriptor.profile);
         chunk_store
             .ingest_plan(&payload, &plan)
@@ -13015,24 +12114,20 @@ impl Run for ToolkitPackArgs {
         if chunk_store.por_tree().chunks().len() != plan.chunks.len() {
             return Err(eyre!("chunk store PoR layout diverged from CAR plan"));
         }
-
         let car_stats = write_pack_car(car_out.as_ref(), &plan, &payload)?;
         if car_stats.chunk_profile != descriptor.profile {
             return Err(eyre!("computed CAR used unexpected chunking profile"));
         }
-
         let root_cid = car_stats
             .root_cids
             .first()
             .cloned()
             .ok_or_else(|| eyre!("CAR emission produced no root CID"))?;
         let car_archive_digest = *car_stats.car_archive_digest.as_bytes();
-
         let produce_hybrid_envelope = hybrid_envelope_out.is_some()
             || hybrid_envelope_json_out.is_some()
             || hybrid_recipient_x25519.is_some()
             || hybrid_recipient_kyber.is_some();
-
         let mut metadata: Vec<(String, String)> = Vec::new();
         let hybrid_recipient = if produce_hybrid_envelope {
             let x25519_hex = hybrid_recipient_x25519.as_deref().ok_or_else(|| {
@@ -13055,7 +12150,6 @@ impl Run for ToolkitPackArgs {
         } else {
             None
         };
-
         let chunk_profile = ChunkingProfileV1::from_descriptor(descriptor);
         let chunk_digest_sha3 = compute_chunk_digest_sha3(&plan.chunks);
         let mut builder = ManifestBuilder::new()
@@ -13073,11 +12167,9 @@ impl Run for ToolkitPackArgs {
                 retention_epoch: 86_400,
             })
             .governance(GovernanceProofs::default());
-
         if !metadata.is_empty() {
             builder = builder.extend_metadata(metadata);
         }
-
         let manifest = builder.build().wrap_err("failed to build manifest")?;
         let manifest_bytes = manifest.encode().wrap_err("failed to encode manifest")?;
         let manifest_digest = manifest
@@ -13087,7 +12179,6 @@ impl Run for ToolkitPackArgs {
             path.file_name()
                 .map(|name| name.to_string_lossy().into_owned())
         });
-
         let hybrid_output = if let Some(recipient) = hybrid_recipient {
             let aad = build_hybrid_manifest_aad(
                 &manifest_digest,
@@ -13107,13 +12198,11 @@ impl Run for ToolkitPackArgs {
         } else {
             None
         };
-
         if let Some(path) = manifest_out.as_ref() {
             ensure_parent_dir(path)?;
             fs::write(path, &manifest_bytes)
                 .wrap_err_with(|| format!("failed to write manifest to `{}`", path.display()))?;
         }
-
         if let Some(hybrid) = hybrid_output.as_ref() {
             if let Some(path) = hybrid_envelope_out.as_ref() {
                 ensure_parent_dir(path)?;
@@ -13136,7 +12225,6 @@ impl Run for ToolkitPackArgs {
                 })?;
             }
         }
-
         let mut report = build_pack_report(&PackReportContext {
             profile: &chunk_profile,
             plan: &plan,
@@ -13178,13 +12266,11 @@ impl Run for ToolkitPackArgs {
             }
             report_object.insert("hybrid_envelope".into(), Value::Object(obj));
         }
-
         let mut report_string =
             norito::json::to_string_pretty(&report).wrap_err("failed to render JSON report")?;
         if !report_string.ends_with('\n') {
             report_string.push('\n');
         }
-
         let mut report_written_to_stdout = false;
         if let Some(path) = json_out.as_ref() {
             if path == Path::new("-") {
@@ -13197,23 +12283,18 @@ impl Run for ToolkitPackArgs {
                 })?;
             }
         }
-
         if !report_written_to_stdout {
             context.println(report_string.trim_end())?;
         }
-
         Ok(())
     }
 }
-
 const HYBRID_MANIFEST_AAD_DOMAIN: &[u8] = b"sorafs.hybrid.manifest.v1";
-
 struct HybridEnvelopeArtefact {
     envelope: HybridPayloadEnvelopeV1,
     bytes: Vec<u8>,
     aad: Vec<u8>,
 }
-
 struct PackReportContext<'a> {
     profile: &'a ChunkingProfileV1,
     plan: &'a CarBuildPlan,
@@ -13224,7 +12305,6 @@ struct PackReportContext<'a> {
     manifest_digest: &'a blake3::Hash,
     por_tree: &'a PorMerkleTree,
 }
-
 fn build_pack_plan(input: &Path, profile: ChunkProfile) -> Result<(CarBuildPlan, Vec<u8>)> {
     let metadata =
         fs::metadata(input).wrap_err_with(|| format!("failed to access `{}`", input.display()))?;
@@ -13241,7 +12321,6 @@ fn build_pack_plan(input: &Path, profile: ChunkProfile) -> Result<(CarBuildPlan,
         Err(eyre!("input must be a file or directory"))
     }
 }
-
 fn write_pack_car(
     car_out: Option<&PathBuf>,
     plan: &CarBuildPlan,
@@ -13264,7 +12343,6 @@ fn write_pack_car(
             .wrap_err("failed to compute CAR metadata")
     }
 }
-
 fn ensure_metadata_entry(metadata: &mut Vec<(String, String)>, key: &str, value: &str) {
     if metadata
         .iter()
@@ -13274,7 +12352,6 @@ fn ensure_metadata_entry(metadata: &mut Vec<(String, String)>, key: &str, value:
     }
     metadata.push((key.to_string(), value.to_string()));
 }
-
 fn compute_chunk_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
     let mut hasher = Sha3::v256();
     for chunk in chunks {
@@ -13286,7 +12363,6 @@ fn compute_chunk_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
     hasher.finalize(&mut out);
     out
 }
-
 fn build_hybrid_manifest_aad(
     manifest_digest: &blake3::Hash,
     chunk_digest_sha3: [u8; 32],
@@ -13309,7 +12385,6 @@ fn build_hybrid_manifest_aad(
     }
     aad
 }
-
 #[allow(clippy::too_many_lines)]
 fn build_pack_report(ctx: &PackReportContext<'_>) -> Result<Value> {
     let chunk_digests: Vec<Value> = ctx
@@ -13324,10 +12399,8 @@ fn build_pack_report(ctx: &PackReportContext<'_>) -> Result<Value> {
             Value::Object(obj)
         })
         .collect();
-
     let chunk_fetch_specs = try_chunk_fetch_specs_to_json(ctx.plan)
         .map_err(|err| eyre!("failed to derive chunk fetch plan: {err}"))?;
-
     let mut chunking_obj = Map::new();
     chunking_obj.insert(
         "namespace".into(),
@@ -13371,7 +12444,6 @@ fn build_pack_report(ctx: &PackReportContext<'_>) -> Result<Value> {
         "multihash_code".into(),
         Value::from(ctx.profile.multihash_code),
     );
-
     let mut pin_policy_obj = Map::new();
     pin_policy_obj.insert(
         "min_replicas".into(),
@@ -13385,7 +12457,6 @@ fn build_pack_report(ctx: &PackReportContext<'_>) -> Result<Value> {
         "retention_epoch".into(),
         Value::from(ctx.manifest.pin_policy.retention_epoch),
     );
-
     let alias_claims: Vec<Value> = ctx
         .manifest
         .alias_claims
@@ -13398,7 +12469,6 @@ fn build_pack_report(ctx: &PackReportContext<'_>) -> Result<Value> {
             Value::Object(obj)
         })
         .collect();
-
     let metadata_entries: Vec<Value> = ctx
         .manifest
         .metadata
@@ -13410,7 +12480,6 @@ fn build_pack_report(ctx: &PackReportContext<'_>) -> Result<Value> {
             Value::Object(obj)
         })
         .collect();
-
     let mut manifest_obj = Map::new();
     manifest_obj.insert("version".into(), Value::from(ctx.manifest.version));
     manifest_obj.insert(
@@ -13471,7 +12540,6 @@ fn build_pack_report(ctx: &PackReportContext<'_>) -> Result<Value> {
         })
         .collect();
     manifest_obj.insert("council_signatures".into(), Value::Array(council_entries));
-
     let mut report_obj = Map::new();
     report_obj.insert("schema".into(), Value::from(TOOLKIT_PACK_REPORT_SCHEMA_V1));
     report_obj.insert("chunking".into(), Value::Object(chunking_obj));
@@ -13517,17 +12585,14 @@ fn build_pack_report(ctx: &PackReportContext<'_>) -> Result<Value> {
         "por_chunk_count".into(),
         Value::from(ctx.por_tree.chunks().len() as u64),
     );
-
     Ok(Value::Object(report_obj))
 }
-
 #[derive(clap::Args, Debug)]
 pub struct GatewayDirectModeEnableArgs {
     /// Path to the JSON output produced by `sorafs gateway direct-mode plan`.
     #[arg(long, value_name = "PATH")]
     pub plan: PathBuf,
 }
-
 impl Run for GatewayDirectModeEnableArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let bytes = fs::read(&self.plan)
@@ -13538,16 +12603,13 @@ impl Run for GatewayDirectModeEnableArgs {
         context.println(render_direct_mode_enable_snippet(&plan))
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct GatewayDirectModeRollbackArgs;
-
 impl Run for GatewayDirectModeRollbackArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         context.println(render_direct_mode_rollback_snippet())
     }
 }
-
 #[derive(Debug, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct DirectModePlanOutput {
     provider_id_hex: String,
@@ -13557,7 +12619,6 @@ struct DirectModePlanOutput {
     direct_car: DirectModePlanDirectCar,
     capabilities: DirectModePlanCapabilities,
 }
-
 impl DirectModePlanOutput {
     fn from_components(
         chain_id: &str,
@@ -13583,19 +12644,16 @@ impl DirectModePlanOutput {
         }
     }
 }
-
 #[derive(Debug, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct DirectModePlanHosts {
     canonical: String,
     vanity: String,
 }
-
 #[derive(Debug, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct DirectModePlanDirectCar {
     canonical_url: String,
     vanity_url: String,
 }
-
 #[derive(Debug, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 #[allow(clippy::struct_excessive_bools)]
 struct DirectModePlanCapabilities {
@@ -13611,7 +12669,6 @@ struct DirectModePlanCapabilities {
     chunk_profile: Option<DirectModePlanChunkProfile>,
     manifest_metadata: Vec<DirectModePlanMetadataEntry>,
 }
-
 impl DirectModePlanCapabilities {
     fn from_summary(summary: ManifestCapabilitySummary) -> Self {
         let ManifestCapabilitySummary {
@@ -13627,7 +12684,6 @@ impl DirectModePlanCapabilities {
             range_capability,
             advertised_capabilities,
         } = summary;
-
         Self {
             requires_manifest_envelope,
             direct_car_supported,
@@ -13650,7 +12706,6 @@ impl DirectModePlanCapabilities {
         }
     }
 }
-
 #[derive(Debug, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct DirectModePlanChunkProfile {
     profile_id: u32,
@@ -13663,7 +12718,6 @@ struct DirectModePlanChunkProfile {
     aliases: Vec<String>,
     multihash_code: u64,
 }
-
 impl From<ChunkProfileSummary> for DirectModePlanChunkProfile {
     fn from(summary: ChunkProfileSummary) -> Self {
         Self {
@@ -13679,13 +12733,11 @@ impl From<ChunkProfileSummary> for DirectModePlanChunkProfile {
         }
     }
 }
-
 #[derive(Debug, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct DirectModePlanMetadataEntry {
     key: String,
     value: String,
 }
-
 #[derive(Debug, norito::json::JsonSerialize, norito::json::JsonDeserialize)]
 struct DirectModePlanRangeCapability {
     max_chunk_span: u32,
@@ -13694,7 +12746,6 @@ struct DirectModePlanRangeCapability {
     requires_alignment: bool,
     supports_merkle_proof: bool,
 }
-
 impl From<ProviderCapabilityRangeV1> for DirectModePlanRangeCapability {
     fn from(range: ProviderCapabilityRangeV1) -> Self {
         Self {
@@ -13706,7 +12757,6 @@ impl From<ProviderCapabilityRangeV1> for DirectModePlanRangeCapability {
         }
     }
 }
-
 fn capability_type_label(cap: CapabilityType) -> &'static str {
     match cap {
         CapabilityType::ToriiGateway => "torii_gateway",
@@ -13717,7 +12767,6 @@ fn capability_type_label(cap: CapabilityType) -> &'static str {
         CapabilityType::VendorReserved => "vendor_reserved",
     }
 }
-
 fn validate_direct_mode_enable_plan(plan: &DirectModePlanOutput) -> Result<()> {
     let provider_id = parse_hex_array::<32>(&plan.provider_id_hex, "provider_id_hex")?;
     let canonical_provider_id_hex = encode(provider_id);
@@ -13726,7 +12775,6 @@ fn validate_direct_mode_enable_plan(plan: &DirectModePlanOutput) -> Result<()> {
             "provider_id_hex must be canonical lowercase hex; expected {canonical_provider_id_hex}"
         ));
     }
-
     let manifest_digest = parse_hex_array::<32>(&plan.manifest_digest_hex, "manifest_digest_hex")?;
     let canonical_manifest_digest_hex = encode(manifest_digest);
     if plan.manifest_digest_hex != canonical_manifest_digest_hex {
@@ -13734,7 +12782,6 @@ fn validate_direct_mode_enable_plan(plan: &DirectModePlanOutput) -> Result<()> {
             "manifest_digest_hex must be canonical lowercase hex; expected {canonical_manifest_digest_hex}"
         ));
     }
-
     if plan.chain_id.trim().is_empty() {
         return Err(eyre!("chain_id must not be empty"));
     }
@@ -13748,7 +12795,6 @@ fn validate_direct_mode_enable_plan(plan: &DirectModePlanOutput) -> Result<()> {
             "direct-mode enable requires capabilities.direct_car_supported=true; advertise capability.direct_car=true before emitting config"
         ));
     }
-
     let host_input = HostMappingInput {
         chain_id: plan.chain_id.as_str(),
         provider_id: &provider_id,
@@ -13768,7 +12814,6 @@ fn validate_direct_mode_enable_plan(plan: &DirectModePlanOutput) -> Result<()> {
             plan.hosts.vanity
         ));
     }
-
     let expected_direct_car = host_input
         .direct_car_locator("https", &canonical_manifest_digest_hex)
         .wrap_err("failed to derive expected direct-CAR locators")?;
@@ -13783,7 +12828,6 @@ fn validate_direct_mode_enable_plan(plan: &DirectModePlanOutput) -> Result<()> {
         &expected_direct_car.vanity_url,
     )
 }
-
 fn validate_direct_mode_url(value: &str, label: &str, expected: &str) -> Result<()> {
     let parsed = reqwest::Url::parse(value)
         .wrap_err_with(|| format!("{label} must be a valid direct-CAR URL"))?;
@@ -13808,7 +12852,6 @@ fn validate_direct_mode_url(value: &str, label: &str, expected: &str) -> Result<
     }
     Ok(())
 }
-
 fn escape_toml_basic_string(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -13829,7 +12872,6 @@ fn escape_toml_basic_string(value: &str) -> String {
     }
     escaped
 }
-
 fn render_direct_mode_enable_snippet(plan: &DirectModePlanOutput) -> String {
     let provider = escape_toml_basic_string(&plan.provider_id_hex);
     let chain = escape_toml_basic_string(&plan.chain_id);
@@ -13838,7 +12880,6 @@ fn render_direct_mode_enable_snippet(plan: &DirectModePlanOutput) -> String {
     let direct_canonical = escape_toml_basic_string(&plan.direct_car.canonical_url);
     let direct_vanity = escape_toml_basic_string(&plan.direct_car.vanity_url);
     let digest = escape_toml_basic_string(&plan.manifest_digest_hex);
-
     format!(
         r#"# Direct-mode configuration snippet (generated; enforcement remains enabled)
 [sorafs.gateway]
@@ -13857,7 +12898,6 @@ manifest_digest_hex = "{digest}"
 "#,
     )
 }
-
 fn render_direct_mode_rollback_snippet() -> &'static str {
     r"# Direct-mode rollback snippet
 [sorafs.gateway]
@@ -13868,14 +12908,12 @@ enforce_capabilities = true
 # Remove the `sorafs.gateway.direct_mode` table to disable overrides.
 "
 }
-
 #[derive(clap::Args, Debug)]
 pub struct GatewayTemplateConfigArgs {
     /// Hostname to include in the ACME / gateway sample (repeatable).
     #[arg(long = "host", value_name = "HOSTNAME")]
     pub hosts: Vec<String>,
 }
-
 #[derive(clap::Args, Debug)]
 pub struct GatewayGenerateHostsArgs {
     /// Provider identifier (hex, 32 bytes).
@@ -13885,7 +12923,6 @@ pub struct GatewayGenerateHostsArgs {
     #[arg(long = "chain-id", default_value = "nexus")]
     pub chain_id: String,
 }
-
 impl Run for GatewayTemplateConfigArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let hosts = if self.hosts.is_empty() {
@@ -13893,13 +12930,11 @@ impl Run for GatewayTemplateConfigArgs {
         } else {
             self.hosts
         };
-
         let host_list = hosts
             .iter()
             .map(|h| format!("\"{h}\""))
             .collect::<Vec<_>>()
             .join(", ");
-
         let template = format!(
             r#"# Paste this snippet into your configuration (e.g. config.toml)
 [sorafs.gateway]
@@ -13927,11 +12962,9 @@ tls_alpn_01 = true
 "#,
             hosts = host_list,
         );
-
         context.println(template)
     }
 }
-
 impl Run for GatewayGenerateHostsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let chain_id = self
@@ -13956,7 +12989,6 @@ impl Run for GatewayGenerateHostsArgs {
         context.print_data(&norito::json::Value::Object(map))
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct GatewayRoutePlanArgs {
     /// Manifest JSON path for the route being promoted.
@@ -14015,7 +13047,6 @@ pub struct GatewayRoutePlanArgs {
     #[arg(long = "now", value_name = "RFC3339", hide = true)]
     pub now_override: Option<String>,
 }
-
 fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -14025,7 +13056,6 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)]
 impl Run for GatewayRoutePlanArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -14051,7 +13081,6 @@ impl Run for GatewayRoutePlanArgs {
         let include_csp = !self.no_csp;
         let include_permissions = !self.no_permissions_policy;
         let include_hsts = !self.no_hsts;
-
         let primary_context = RouteBindingContext {
             manifest_json: self.manifest_json.clone(),
             alias: alias.clone(),
@@ -14065,7 +13094,6 @@ impl Run for GatewayRoutePlanArgs {
         };
         let primary_binding = build_route_binding(&primary_context)?;
         write_optional_output(headers_out.as_ref(), &primary_binding.headers_template)?;
-
         let rollback_value = if let Some(rollback_manifest) = self.rollback_manifest_json.as_ref() {
             let rollback_context = RouteBindingContext {
                 manifest_json: rollback_manifest.clone(),
@@ -14104,7 +13132,6 @@ impl Run for GatewayRoutePlanArgs {
         } else {
             None
         };
-
         if let Some(parent) = self.output_path.parent() {
             fs::create_dir_all(parent).wrap_err_with(|| {
                 format!(
@@ -14113,7 +13140,6 @@ impl Run for GatewayRoutePlanArgs {
                 )
             })?;
         }
-
         let mut plan = Map::new();
         plan.insert("version".into(), Value::from(1u64));
         plan.insert("generated_at".into(), Value::from(generated_at));
@@ -14156,7 +13182,6 @@ impl Run for GatewayRoutePlanArgs {
         if let Some(rollback) = rollback_value {
             plan.insert("rollback".into(), rollback);
         }
-
         let mut payload = norito::json::to_vec_pretty(&Value::Object(plan))?;
         payload.push(b'\n');
         fs::write(&self.output_path, &payload).wrap_err_with(|| {
@@ -14165,7 +13190,6 @@ impl Run for GatewayRoutePlanArgs {
                 self.output_path.display()
             )
         })?;
-
         context.println(format_args!("wrote {}", self.output_path.display()))?;
         if let Some(path) = headers_out.as_ref() {
             context.println(format_args!("headers written to {}", path.display()))?;
@@ -14178,11 +13202,9 @@ impl Run for GatewayRoutePlanArgs {
                 path.display()
             ))?;
         }
-
         Ok(())
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct GatewayCacheInvalidateArgs {
     /// Cache invalidation API endpoint (HTTP/S).
@@ -14211,7 +13233,6 @@ pub struct GatewayCacheInvalidateArgs {
     #[arg(long = "output", value_name = "PATH")]
     pub output: Option<PathBuf>,
 }
-
 impl Run for GatewayCacheInvalidateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         if self.endpoint.trim().is_empty() {
@@ -14254,7 +13275,6 @@ impl Run for GatewayCacheInvalidateArgs {
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod gateway_tests {
     use super::tests::{TestContext, assert_sorafs_config_snippet_is_schema_valid};
@@ -14268,7 +13288,6 @@ mod gateway_tests {
                 "gateway-b.example.com".to_owned(),
             ],
         };
-
         let mut ctx = TestContext::new();
         args.run(&mut ctx).expect("template command runs");
         let rendered = ctx.outputs().join("\n");
@@ -14293,14 +13312,12 @@ mod gateway_tests {
         assert!(rendered.contains("gateway-b.example.com"));
         assert!(!rendered.contains("denylist"));
     }
-
     #[test]
     fn direct_mode_documentation_fixture_satisfies_config_schema() {
         let fixture = include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../fixtures/documentation/sorafs_gateway_direct_mode.toml"
         ));
-
         let config = assert_sorafs_config_snippet_is_schema_valid(fixture);
         assert_eq!(config.gateway.rate_limit.window, Duration::from_secs(60));
         assert_eq!(
@@ -14309,7 +13326,6 @@ mod gateway_tests {
         );
         assert!(config.gateway.direct_mode.is_some());
     }
-
     #[test]
     fn generate_hosts_outputs_summary() {
         let args = GatewayGenerateHostsArgs {
@@ -14330,7 +13346,6 @@ mod gateway_tests {
         assert!(output.contains("aaaa.nexus.direct.sorafs"));
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum PinCommand {
     /// List manifests registered in the pin registry.
@@ -14340,7 +13355,6 @@ pub enum PinCommand {
     /// Register a manifest in the pin registry via Torii.
     Register(PinRegisterArgs),
 }
-
 impl Run for PinCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -14350,7 +13364,6 @@ impl Run for PinCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct PinListArgs {
     /// Optional closed lifecycle filter.
@@ -14372,7 +13385,6 @@ pub struct PinListArgs {
     #[arg(long, value_name = "HEX", requires = "expected_finalized_height")]
     pub expected_finalized_block_hash_hex: Option<String>,
 }
-
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
 pub enum PinStatusSelector {
     /// Manifests awaiting governance approval.
@@ -14382,7 +13394,6 @@ pub enum PinStatusSelector {
     /// Retired manifests retained as lifecycle evidence.
     Retired,
 }
-
 impl From<PinStatusSelector> for PinStatusKindV1 {
     fn from(value: PinStatusSelector) -> Self {
         match value {
@@ -14392,7 +13403,6 @@ impl From<PinStatusSelector> for PinStatusKindV1 {
         }
     }
 }
-
 impl Run for PinListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, |client, filter| {
@@ -14400,7 +13410,6 @@ impl Run for PinListArgs {
         })
     }
 }
-
 impl PinListArgs {
     fn run_with<C, F>(&self, context: &mut C, fetch: F) -> Result<()>
     where
@@ -14424,14 +13433,12 @@ impl PinListArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct PinShowArgs {
     /// Hex-encoded manifest digest.
     #[arg(long, value_name = "HEX")]
     pub digest: String,
 }
-
 impl Run for PinShowArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, |client, digest| {
@@ -14439,7 +13446,6 @@ impl Run for PinShowArgs {
         })
     }
 }
-
 impl PinShowArgs {
     fn run_with<C, F>(&self, context: &mut C, fetch: F) -> Result<()>
     where
@@ -14459,7 +13465,6 @@ impl PinShowArgs {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct PinRegisterArgs {
     /// Path to the Norito-encoded manifest (`.to`) file.
@@ -14478,7 +13483,6 @@ pub struct PinRegisterArgs {
     #[arg(long, value_name = "HEX")]
     pub successor_of: Option<String>,
 }
-
 impl Run for PinRegisterArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let manifest_bytes = fs::read(&self.manifest).wrap_err_with(|| {
@@ -14492,15 +13496,12 @@ impl Run for PinRegisterArgs {
             .as_ref()
             .map(|hex| parse_hex_array::<32>(hex, "successor_of"))
             .transpose()?;
-
         let client = context.client_from_config();
-
         let alias_ref = alias_inputs.as_ref().map(|alias| SorafsPinAlias {
             namespace: alias.namespace.as_str(),
             name: alias.name.as_str(),
             proof: alias.proof.as_slice(),
         });
-
         let response = client
             .post_sorafs_pin_register(SorafsPinRegisterArgs {
                 manifest_payload: &manifest_bytes,
@@ -14511,13 +13512,11 @@ impl Run for PinRegisterArgs {
         context.print_data(&response)
     }
 }
-
 struct AliasInputs {
     namespace: String,
     name: String,
     proof: Vec<u8>,
 }
-
 impl PinRegisterArgs {
     fn load_alias_inputs(&self) -> Result<Option<AliasInputs>> {
         match (&self.alias_namespace, &self.alias_name, &self.alias_proof) {
@@ -14541,13 +13540,11 @@ impl PinRegisterArgs {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum AliasCommand {
     /// List alias bindings exposed via Torii.
     List(AliasListArgs),
 }
-
 impl Run for AliasCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -14555,7 +13552,6 @@ impl Run for AliasCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct AliasListArgs {
     /// Maximum number of aliases to return.
@@ -14571,13 +13567,11 @@ pub struct AliasListArgs {
     #[arg(long, value_name = "HEX")]
     pub manifest_digest: Option<String>,
 }
-
 impl Run for AliasListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, Client::get_sorafs_aliases)
     }
 }
-
 impl AliasListArgs {
     fn run_with<C, F>(&self, context: &mut C, fetch: F) -> Result<()>
     where
@@ -14595,13 +13589,11 @@ impl AliasListArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum ReplicationCommand {
     /// List replication orders.
     List(ReplicationListArgs),
 }
-
 impl Run for ReplicationCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -14609,7 +13601,6 @@ impl Run for ReplicationCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct ReplicationListArgs {
     /// Maximum number of orders to return.
@@ -14625,7 +13616,6 @@ pub struct ReplicationListArgs {
     #[arg(long, value_name = "HEX")]
     pub manifest_digest: Option<String>,
 }
-
 impl Run for ReplicationListArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(context, |client, filter| {
@@ -14633,7 +13623,6 @@ impl Run for ReplicationListArgs {
         })
     }
 }
-
 impl ReplicationListArgs {
     fn run_with<C, F>(&self, context: &mut C, fetch: F) -> Result<()>
     where
@@ -14651,14 +13640,12 @@ impl ReplicationListArgs {
         render_json_response(context, response)
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum StorageCommand {
     /// Issue and inspect stream tokens for chunk-range gateways.
     #[command(subcommand)]
     Token(StorageTokenCommand),
 }
-
 impl Run for StorageCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -14666,13 +13653,11 @@ impl Run for StorageCommand {
         }
     }
 }
-
 #[derive(clap::Subcommand, Debug)]
 pub enum StorageTokenCommand {
     /// Issue a stream token for a manifest/provider pair.
     Issue(StorageTokenIssueArgs),
 }
-
 impl Run for StorageTokenCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
@@ -14680,7 +13665,6 @@ impl Run for StorageTokenCommand {
         }
     }
 }
-
 #[derive(clap::Args, Debug)]
 pub struct StorageTokenIssueArgs {
     /// Hex-encoded manifest identifier stored on the gateway.
@@ -14708,7 +13692,6 @@ pub struct StorageTokenIssueArgs {
     #[arg(long, value_name = "COUNT")]
     pub requests_per_minute: Option<u32>,
 }
-
 impl Run for StorageTokenIssueArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         self.run_with(
@@ -14719,7 +13702,6 @@ impl Run for StorageTokenIssueArgs {
         )
     }
 }
-
 impl StorageTokenIssueArgs {
     fn run_with<C, F>(&self, context: &mut C, issue: F) -> Result<()>
     where
@@ -14743,7 +13725,6 @@ impl StorageTokenIssueArgs {
             rate_limit_bytes: self.rate_limit_bytes,
             requests_per_minute: self.requests_per_minute,
         };
-
         let client = context.client_from_config();
         let response = issue(
             &client,
@@ -14753,15 +13734,12 @@ impl StorageTokenIssueArgs {
             &nonce,
             &overrides,
         )?;
-
         if self.nonce.is_none() && response.status().is_success() {
             context.println(format!("nonce: {nonce}"))?;
         }
-
         render_json_response(context, response)
     }
 }
-
 fn parse_timestamp(raw: Option<&str>, field: &str) -> Result<Option<OffsetDateTime>> {
     let Some(value) = raw else {
         return Ok(None);
@@ -14774,7 +13752,6 @@ fn parse_timestamp(raw: Option<&str>, field: &str) -> Result<Option<OffsetDateTi
         OffsetDateTime::parse(trimmed, &Rfc3339).wrap_err_with(|| format!("invalid `{field}`"))?;
     Ok(Some(parsed))
 }
-
 fn ensure_optional_non_empty(field: Option<&str>, name: &str) -> Result<()> {
     if let Some(value) = field
         && value.trim().is_empty()
@@ -14783,14 +13760,12 @@ fn ensure_optional_non_empty(field: Option<&str>, name: &str) -> Result<()> {
     }
     Ok(())
 }
-
 #[derive(Debug)]
 struct ModerationOperatorCanaryHttpResponse {
     status: StatusCode,
     content_type: Option<String>,
     body: Vec<u8>,
 }
-
 #[derive(Clone)]
 struct ModerationOperatorCanaryRouteSpec {
     name: &'static str,
@@ -14799,7 +13774,6 @@ struct ModerationOperatorCanaryRouteSpec {
     expect_html_marker: Option<&'static str>,
     include_limit: bool,
 }
-
 fn moderation_operator_canary_http_get(
     client: &BlockingHttpClient,
     url: &str,
@@ -14827,14 +13801,12 @@ fn moderation_operator_canary_http_get(
         body,
     })
 }
-
 #[derive(Debug)]
 struct TransparencyExplorerCanaryHttpResponse {
     status: StatusCode,
     content_type: Option<String>,
     body: Vec<u8>,
 }
-
 #[derive(Clone)]
 struct TransparencyExplorerCanaryRouteSpec {
     name: &'static str,
@@ -14843,7 +13815,6 @@ struct TransparencyExplorerCanaryRouteSpec {
     expect_html_marker: Option<&'static str>,
     include_limit: bool,
 }
-
 fn transparency_explorer_canary_http_get(
     client: &BlockingHttpClient,
     url: &str,
@@ -14873,7 +13844,6 @@ fn transparency_explorer_canary_http_get(
         body,
     })
 }
-
 fn transparency_publication_canary_http_get(
     client: &BlockingHttpClient,
     url: &str,
@@ -14903,7 +13873,6 @@ fn transparency_publication_canary_http_get(
         body,
     })
 }
-
 fn transparency_explorer_canary_evidence_json<F>(
     torii_url: &str,
     limit: Option<u32>,
@@ -14938,7 +13907,6 @@ where
     evidence.insert("routes".into(), Value::Array(routes));
     Ok(Value::Object(evidence))
 }
-
 fn transparency_publication_canary_evidence_json<F>(
     torii_url: &str,
     cycle_ids: &[String],
@@ -15010,7 +13978,6 @@ where
     evidence.insert("routes".into(), Value::Array(routes));
     Ok(Value::Object(evidence))
 }
-
 fn transparency_publication_canary_probe_route<F>(
     torii_url: &str,
     route_name: &'static str,
@@ -15054,12 +14021,10 @@ where
     route.insert("payload_bytes_included".into(), Value::Bool(false));
     route.insert("publication_body_included".into(), Value::Bool(false));
     route.insert("private_payloads_included".into(), Value::Bool(false));
-
     if !status_success {
         route.insert("passed".into(), Value::Bool(false));
         return Ok(Value::Object(route));
     }
-
     let value: Value = norito::json::from_slice(&response.body).wrap_err_with(|| {
         format!("failed to decode SoraFS transparency publication canary `{route_name}` JSON")
     })?;
@@ -15094,7 +14059,6 @@ where
     };
     let passed =
         schema_ok && anchor_metadata_present && verification_valid && publisher_identity_present;
-
     route.insert("passed".into(), Value::Bool(passed));
     route.insert("schema".into(), Value::from(actual_schema.to_string()));
     route.insert("schema_ok".into(), Value::Bool(schema_ok));
@@ -15148,7 +14112,6 @@ where
     }
     Ok(Value::Object(route))
 }
-
 fn transparency_explorer_canary_route_specs() -> Vec<TransparencyExplorerCanaryRouteSpec> {
     vec![
         TransparencyExplorerCanaryRouteSpec {
@@ -15174,7 +14137,6 @@ fn transparency_explorer_canary_route_specs() -> Vec<TransparencyExplorerCanaryR
         },
     ]
 }
-
 fn transparency_explorer_canary_probe_route<F>(
     torii_url: &str,
     spec: &TransparencyExplorerCanaryRouteSpec,
@@ -15255,7 +14217,6 @@ where
     route.insert("private_digest_keys_included".into(), Value::Bool(false));
     Ok(Value::Object(route))
 }
-
 fn transparency_explorer_canary_route_url(
     torii_url: &str,
     spec: &TransparencyExplorerCanaryRouteSpec,
@@ -15274,7 +14235,6 @@ fn transparency_explorer_canary_route_url(
     }
     Ok(url.to_string())
 }
-
 fn transparency_publication_canary_route_url(
     torii_url: &str,
     cycle_id: Option<&str>,
@@ -15296,7 +14256,6 @@ fn transparency_publication_canary_route_url(
     }
     Ok(url.to_string())
 }
-
 fn transparency_publication_canary_anchor_metadata_present(
     value: &Value,
     cycle_detail: bool,
@@ -15307,7 +14266,6 @@ fn transparency_publication_canary_anchor_metadata_present(
             .and_then(Value::as_str)
             .is_some_and(|value| !value.trim().is_empty() && !matches!(value, "0" | "0x0"))
     }
-
     if cycle_detail {
         let Some(fields) = value.as_object() else {
             return false;
@@ -15334,7 +14292,6 @@ fn transparency_publication_canary_anchor_metadata_present(
             && has_string_field(first_cycle, "encoded_blake3")
     }
 }
-
 fn transparency_publication_canary_publisher_identity_present(value: &Value) -> bool {
     fn visit(value: &Value) -> bool {
         match value {
@@ -15362,7 +14319,6 @@ fn transparency_publication_canary_publisher_identity_present(value: &Value) -> 
     }
     visit(value)
 }
-
 fn transparency_explorer_canary_ensure_payload_free(value: &Value) -> Result<()> {
     fn visit(path: &str, value: &Value) -> Result<()> {
         match value {
@@ -15413,7 +14369,6 @@ fn transparency_explorer_canary_ensure_payload_free(value: &Value) -> Result<()>
     }
     visit("", value)
 }
-
 fn transparency_explorer_canary_ensure_html_payload_free(
     body: &str,
     route_name: &str,
@@ -15434,7 +14389,6 @@ fn transparency_explorer_canary_ensure_html_payload_free(
     }
     Ok(())
 }
-
 fn moderation_operator_canary_evidence_json<F>(
     operator_url: &str,
     quarantine_id_hex: &str,
@@ -15477,7 +14431,6 @@ where
     evidence.insert("routes".into(), Value::Array(routes));
     Ok(Value::Object(evidence))
 }
-
 fn moderation_operator_canary_route_specs(
     quarantine_id_hex: &str,
 ) -> Vec<ModerationOperatorCanaryRouteSpec> {
@@ -15542,7 +14495,6 @@ fn moderation_operator_canary_route_specs(
         },
     ]
 }
-
 fn moderation_operator_canary_probe_route<F>(
     operator_url: &str,
     spec: &ModerationOperatorCanaryRouteSpec,
@@ -15619,7 +14571,6 @@ where
     route.insert("private_payloads_included".into(), Value::Bool(false));
     Ok(Value::Object(route))
 }
-
 fn moderation_operator_canary_route_url(
     operator_url: &str,
     spec: &ModerationOperatorCanaryRouteSpec,
@@ -15638,7 +14589,6 @@ fn moderation_operator_canary_route_url(
     }
     Ok(url.to_string())
 }
-
 fn moderation_operator_canary_ensure_payload_free(value: &Value) -> Result<()> {
     fn visit(path: &str, value: &Value) -> Result<()> {
         match value {
@@ -15679,18 +14629,15 @@ fn moderation_operator_canary_ensure_payload_free(value: &Value) -> Result<()> {
     }
     visit("", value)
 }
-
 fn current_unix_timestamp() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
 }
-
 fn generate_nonce_hex(bytes: usize) -> Result<String> {
     generate_nonce_hex_with_rng(bytes, &mut OsRng)
 }
-
 fn generate_moderation_operator_csrf_token() -> Result<String> {
     let mut token = [0_u8; 32];
     OsRng
@@ -15698,14 +14645,12 @@ fn generate_moderation_operator_csrf_token() -> Result<String> {
         .map_err(|error| eyre!("SoraFS moderation operator CSRF token OS RNG failed: {error}"))?;
     Ok(URL_SAFE_NO_PAD.encode(token))
 }
-
 fn generate_nonce_hex_with_rng<R: TryCryptoRng>(bytes: usize, rng: &mut R) -> Result<String> {
     let mut data = vec![0u8; bytes];
     rng.try_fill_bytes(&mut data)
         .map_err(|error| eyre!("SoraFS CLI nonce OS RNG failed: {error}"))?;
     Ok(hex::encode(data))
 }
-
 fn render_json_response<C: RunContext>(context: &mut C, response: Response<Vec<u8>>) -> Result<()> {
     let status = response.status();
     let body = response.into_body();
@@ -15714,7 +14659,6 @@ fn render_json_response<C: RunContext>(context: &mut C, response: Response<Vec<u
         status => Err(make_http_error(status, &body)),
     }
 }
-
 fn render_json_response_ok_or_accepted<C: RunContext>(
     context: &mut C,
     response: Response<Vec<u8>>,
@@ -15726,12 +14670,10 @@ fn render_json_response_ok_or_accepted<C: RunContext>(
         status => Err(make_http_error(status, &body)),
     }
 }
-
 fn render_json_body<C: RunContext>(context: &mut C, body: &[u8]) -> Result<()> {
     let value: norito::json::Value = norito::json::from_slice(body)?;
     context.print_data(&value)
 }
-
 fn render_moderation_quarantine_bridge_plan_response<C: RunContext>(
     context: &mut C,
     response: Response<Vec<u8>>,
@@ -15749,7 +14691,6 @@ fn render_moderation_quarantine_bridge_plan_response<C: RunContext>(
         status => Err(make_http_error(status, &body)),
     }
 }
-
 fn moderation_quarantine_bridge_plan_json(quarantine_id_hex: &str, panel: &Value) -> Result<Value> {
     ensure_moderation_bridge_plan_has_no_payload(panel)?;
     let root = value_object(panel, "operator panel response")?;
@@ -15798,7 +14739,6 @@ fn moderation_quarantine_bridge_plan_json(quarantine_id_hex: &str, panel: &Value
         }
         actions.push(planned);
     }
-
     let mut plan = Map::new();
     plan.insert(
         "schema".into(),
@@ -15826,7 +14766,6 @@ fn moderation_quarantine_bridge_plan_json(quarantine_id_hex: &str, panel: &Value
     plan.insert("actions".into(), Value::Array(actions));
     Ok(Value::Object(plan))
 }
-
 fn moderation_quarantine_bridge_action_json(
     index: usize,
     action: &Value,
@@ -15863,7 +14802,6 @@ fn moderation_quarantine_bridge_action_json(
     );
     Ok(Value::Object(fields))
 }
-
 fn moderation_quarantine_bridge_action_status(action: &str, required: bool) -> &'static str {
     match action {
         "store_object" => "blocked_until_payload_is_sealed",
@@ -15883,7 +14821,6 @@ fn moderation_quarantine_bridge_action_status(action: &str, required: bool) -> &
         _ => "operator_attention_required",
     }
 }
-
 fn moderation_quarantine_bridge_action_cli(
     action: &str,
     quarantine_id_hex: &str,
@@ -15994,7 +14931,6 @@ fn moderation_quarantine_bridge_action_cli(
         ]),
     }
 }
-
 fn moderation_quarantine_juror_plan_json(quarantine_id_hex: &str, panel: &Value) -> Result<Value> {
     ensure_moderation_bridge_plan_has_no_payload(panel)?;
     let root = value_object(panel, "operator panel response")?;
@@ -16062,7 +14998,6 @@ fn moderation_quarantine_juror_plan_json(quarantine_id_hex: &str, panel: &Value)
     plan.insert("ballots".into(), Value::Array(planned_ballots));
     Ok(Value::Object(plan))
 }
-
 fn moderation_quarantine_juror_notifications_json(
     quarantine_id_hex: &str,
     panel: &Value,
@@ -16070,7 +15005,6 @@ fn moderation_quarantine_juror_notifications_json(
     let plan = moderation_quarantine_juror_plan_json(quarantine_id_hex, panel)?;
     moderation_quarantine_juror_notifications_from_plan(quarantine_id_hex, &plan)
 }
-
 fn moderation_quarantine_juror_notifications_from_plan(
     quarantine_id_hex: &str,
     plan: &Value,
@@ -16131,7 +15065,6 @@ fn moderation_quarantine_juror_notifications_from_plan(
             notifications.push(notification);
         }
     }
-
     let mut delivery = Map::new();
     delivery.insert(
         "schema".into(),
@@ -16173,7 +15106,6 @@ fn moderation_quarantine_juror_notifications_from_plan(
     delivery.insert("notifications".into(), Value::Array(notifications));
     Ok(Value::Object(delivery))
 }
-
 fn moderation_quarantine_commit_reveal_status_json(
     quarantine_id_hex: &str,
     panel: &Value,
@@ -16181,7 +15113,6 @@ fn moderation_quarantine_commit_reveal_status_json(
     let plan = moderation_quarantine_juror_plan_json(quarantine_id_hex, panel)?;
     moderation_quarantine_commit_reveal_status_from_plan(quarantine_id_hex, &plan)
 }
-
 fn moderation_quarantine_commit_reveal_status_from_plan(
     quarantine_id_hex: &str,
     plan: &Value,
@@ -16262,7 +15193,6 @@ fn moderation_quarantine_commit_reveal_status_from_plan(
     status.insert("ballots".into(), Value::Array(ballot_statuses));
     Ok(Value::Object(status))
 }
-
 #[derive(Default)]
 struct ModerationCommitRevealStatusCounts {
     pending_commit_count: u64,
@@ -16272,7 +15202,6 @@ struct ModerationCommitRevealStatusCounts {
     ready_to_tally: bool,
     tallied: bool,
 }
-
 fn moderation_quarantine_commit_reveal_ballot_status_json(
     quarantine_id_hex: &str,
     ballot: &Value,
@@ -16423,7 +15352,6 @@ fn moderation_quarantine_commit_reveal_ballot_status_json(
         },
     ))
 }
-
 fn moderation_quarantine_juror_notification_delivery_json(
     quarantine_id_hex: &str,
     case_id: &str,
@@ -16482,7 +15410,6 @@ fn moderation_quarantine_juror_notification_delivery_json(
     let body = format!(
         "Juror {juror_id} must {title_action} moderation ballot {case_id}/{round_id}. Sign as {signed_by} and submit to {route}. Build any private commit/reveal payload locally; this notification intentionally carries no payload bytes."
     );
-
     let mut notification = Map::new();
     notification.insert(
         "schema".into(),
@@ -16519,7 +15446,6 @@ fn moderation_quarantine_juror_notification_delivery_json(
     notification.insert("private_payload_source".into(), Value::from("juror-local"));
     Ok(Value::Object(notification))
 }
-
 fn moderation_juror_notification_delivery_id(
     quarantine_id_hex: &str,
     case_id: &str,
@@ -16541,14 +15467,12 @@ fn moderation_juror_notification_delivery_id(
     }
     encode(hasher.finalize().as_bytes())
 }
-
 #[derive(Default)]
 struct ModerationJurorPlanCounts {
     notification_count: u64,
     pending_commit_count: u64,
     pending_reveal_count: u64,
 }
-
 fn moderation_quarantine_juror_plan_ballot_json(
     ballot: &Value,
 ) -> Result<(Value, ModerationJurorPlanCounts)> {
@@ -16605,7 +15529,6 @@ fn moderation_quarantine_juror_plan_ballot_json(
         counts.notification_count = counts.notification_count.saturating_add(1);
         jurors.push(planned);
     }
-
     let mut fields = Map::new();
     fields.insert("case_id".into(), Value::from(case_id.to_string()));
     fields.insert("round_id".into(), Value::from(round_id.to_string()));
@@ -16656,7 +15579,6 @@ fn moderation_quarantine_juror_plan_ballot_json(
     fields.insert("jurors".into(), Value::Array(jurors));
     Ok((Value::Object(fields), counts))
 }
-
 fn moderation_juror_ids_from_entries(ballot_obj: &Map, field: &str) -> Result<BTreeSet<String>> {
     let mut jurors = BTreeSet::new();
     let Some(entries) = ballot_obj.get(field).and_then(Value::as_array) else {
@@ -16669,7 +15591,6 @@ fn moderation_juror_ids_from_entries(ballot_obj: &Map, field: &str) -> Result<BT
     }
     Ok(jurors)
 }
-
 fn moderation_quarantine_juror_plan_entry_json(
     case_id: &str,
     round_id: &str,
@@ -16755,7 +15676,6 @@ fn moderation_quarantine_juror_plan_entry_json(
     );
     Ok(Value::Object(entry))
 }
-
 fn first_moderation_case_reference(cases: &[Value]) -> Option<(&str, &str)> {
     for case in cases {
         let case_obj = case.as_object()?.get("case")?.as_object()?;
@@ -16767,7 +15687,6 @@ fn first_moderation_case_reference(cases: &[Value]) -> Option<(&str, &str)> {
     }
     None
 }
-
 fn ensure_moderation_bridge_plan_has_no_payload(value: &Value) -> Result<()> {
     fn visit(path: &str, value: &Value) -> Result<()> {
         match value {
@@ -16797,32 +15716,27 @@ fn ensure_moderation_bridge_plan_has_no_payload(value: &Value) -> Result<()> {
     }
     visit("", value)
 }
-
 fn value_object<'a>(value: &'a Value, context: &str) -> Result<&'a Map> {
     value
         .as_object()
         .ok_or_else(|| eyre!("{context} must be a JSON object"))
 }
-
 fn required_string_field<'a>(fields: &'a Map, field: &str, context: &str) -> Result<&'a str> {
     fields
         .get(field)
         .and_then(Value::as_str)
         .ok_or_else(|| eyre!("{context} is missing string `{field}`"))
 }
-
 fn make_http_error(status: StatusCode, body: &[u8]) -> eyre::Report {
     let message = String::from_utf8_lossy(body);
     eyre!("request failed with status {status}: {message}")
 }
-
 trait ModerationOperatorWorkflowSource: Send + Sync {
     fn get_operator_panel(
         &self,
         quarantine_id_hex: &str,
         filter: SorafsModerationQuarantineFilter,
     ) -> Result<Response<Vec<u8>>>;
-
     fn post_review(
         &self,
         _quarantine_id_hex: &str,
@@ -16832,7 +15746,6 @@ trait ModerationOperatorWorkflowSource: Send + Sync {
             "SoraFS moderation operator service review forwarding is unavailable"
         ))
     }
-
     fn post_release(
         &self,
         _quarantine_id_hex: &str,
@@ -16842,7 +15755,6 @@ trait ModerationOperatorWorkflowSource: Send + Sync {
             "SoraFS moderation operator service release forwarding is unavailable"
         ))
     }
-
     fn post_appeal_handoff(
         &self,
         _quarantine_id_hex: &str,
@@ -16853,7 +15765,6 @@ trait ModerationOperatorWorkflowSource: Send + Sync {
         ))
     }
 }
-
 impl ModerationOperatorWorkflowSource for Client {
     fn get_operator_panel(
         &self,
@@ -16862,7 +15773,6 @@ impl ModerationOperatorWorkflowSource for Client {
     ) -> Result<Response<Vec<u8>>> {
         self.get_sorafs_moderation_quarantine_operator_panel(quarantine_id_hex, filter)
     }
-
     fn post_review(
         &self,
         quarantine_id_hex: &str,
@@ -16870,7 +15780,6 @@ impl ModerationOperatorWorkflowSource for Client {
     ) -> Result<Response<Vec<u8>>> {
         self.post_sorafs_moderation_quarantine_review(quarantine_id_hex, request)
     }
-
     fn post_release(
         &self,
         quarantine_id_hex: &str,
@@ -16878,7 +15787,6 @@ impl ModerationOperatorWorkflowSource for Client {
     ) -> Result<Response<Vec<u8>>> {
         self.post_sorafs_moderation_quarantine_release(quarantine_id_hex, request)
     }
-
     fn post_appeal_handoff(
         &self,
         quarantine_id_hex: &str,
@@ -16887,7 +15795,6 @@ impl ModerationOperatorWorkflowSource for Client {
         self.post_sorafs_moderation_quarantine_appeal_handoff_json(quarantine_id_hex, payload)
     }
 }
-
 struct ModerationOperatorService {
     listen: String,
     default_limit: Option<u32>,
@@ -16897,11 +15804,9 @@ struct ModerationOperatorService {
     csrf_token: String,
     workflow_source: Arc<dyn ModerationOperatorWorkflowSource>,
 }
-
 impl ModerationOperatorService {
     const HTML_CONTENT_TYPE: &'static str = "text/html; charset=utf-8";
     const JSON_CONTENT_TYPE: &'static str = "application/json";
-
     fn status_json(&self) -> Value {
         let mut fields = Map::new();
         fields.insert(
@@ -16953,7 +15858,6 @@ impl ModerationOperatorService {
         );
         Value::Object(fields)
     }
-
     fn handle_request(
         &self,
         request: &ModerationOperatorHttpRequest<'_>,
@@ -17059,7 +15963,6 @@ impl ModerationOperatorService {
             }
         }
     }
-
     fn require_csrf_token(
         &self,
         request: &ModerationOperatorHttpRequest<'_>,
@@ -17093,7 +15996,6 @@ impl ModerationOperatorService {
         }
         Ok(())
     }
-
     fn operator_panel_response(
         &self,
         quarantine_id_hex: &str,
@@ -17124,7 +16026,6 @@ impl ModerationOperatorService {
             ),
         }
     }
-
     fn bridge_plan_response(
         &self,
         quarantine_id_hex: &str,
@@ -17157,7 +16058,6 @@ impl ModerationOperatorService {
             ),
         }
     }
-
     fn juror_plan_response(
         &self,
         quarantine_id_hex: &str,
@@ -17190,7 +16090,6 @@ impl ModerationOperatorService {
             ),
         }
     }
-
     fn commit_reveal_status_response(
         &self,
         quarantine_id_hex: &str,
@@ -17223,7 +16122,6 @@ impl ModerationOperatorService {
             ),
         }
     }
-
     fn juror_notifications_response(
         &self,
         quarantine_id_hex: &str,
@@ -17256,7 +16154,6 @@ impl ModerationOperatorService {
             ),
         }
     }
-
     fn review_response(
         &self,
         quarantine_id_hex: &str,
@@ -17282,7 +16179,6 @@ impl ModerationOperatorService {
         };
         moderation_operator_success_json_response(response, "review")
     }
-
     fn release_response(
         &self,
         quarantine_id_hex: &str,
@@ -17308,7 +16204,6 @@ impl ModerationOperatorService {
         };
         moderation_operator_success_json_response(response, "release")
     }
-
     fn appeal_handoff_response(
         &self,
         quarantine_id_hex: &str,
@@ -17333,7 +16228,6 @@ impl ModerationOperatorService {
         };
         moderation_operator_success_json_response(response, "appeal-handoff")
     }
-
     fn browser_ui_response(&self) -> ModerationOperatorHttpResponse {
         let html = MODERATION_OPERATOR_BROWSER_UI_HTML
             .replace(
@@ -17348,411 +16242,8 @@ impl ModerationOperatorService {
         }
     }
 }
-
-const MODERATION_OPERATOR_BROWSER_UI_HTML: &str = r#"<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SoraFS Moderation Operator</title>
-<style>
-:root {
-  color-scheme: light;
-  --ink: #17202a;
-  --muted: #5f6b7a;
-  --line: #d7dee8;
-  --panel: #f7f9fb;
-  --surface: #ffffff;
-  --accent: #0f766e;
-  --accent-strong: #115e59;
-  --warn: #9a3412;
-  --ok: #166534;
-  --err: #991b1b;
-  --focus: #2563eb;
-}
-* {
-  box-sizing: border-box;
-}
-body {
-  margin: 0;
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: var(--ink);
-  background: #eef3f7;
-}
-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 24px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface);
-}
-h1 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 700;
-}
-main {
-  display: grid;
-  grid-template-columns: minmax(300px, 420px) minmax(0, 1fr);
-  min-height: calc(100vh - 66px);
-}
-aside,
-section {
-  padding: 20px;
-}
-aside {
-  border-right: 1px solid var(--line);
-  background: var(--surface);
-}
-section {
-  display: grid;
-  grid-template-rows: auto 1fr;
-  gap: 16px;
-}
-.toolbar,
-.field-grid,
-.action-grid {
-  display: grid;
-  gap: 10px;
-}
-.toolbar {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-.action-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-label {
-  display: grid;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-input,
-textarea {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 10px 11px;
-  font: inherit;
-  color: var(--ink);
-  background: var(--surface);
-}
-textarea {
-  min-height: 92px;
-  resize: vertical;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-}
-input:focus,
-textarea:focus,
-button:focus {
-  outline: 2px solid var(--focus);
-  outline-offset: 1px;
-}
-button {
-  min-height: 38px;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  padding: 8px 10px;
-  font: inherit;
-  font-weight: 700;
-  color: #ffffff;
-  background: var(--accent);
-  cursor: pointer;
-}
-button.secondary {
-  color: var(--accent-strong);
-  background: #eefaf8;
-}
-button.warn {
-  border-color: var(--warn);
-  background: var(--warn);
-}
-button:disabled {
-  cursor: wait;
-  opacity: 0.65;
-}
-.status {
-  min-width: 120px;
-  border-radius: 999px;
-  padding: 6px 10px;
-  color: var(--muted);
-  background: var(--panel);
-  text-align: center;
-  font-size: 12px;
-  font-weight: 700;
-}
-.status.ok {
-  color: var(--ok);
-}
-.status.err {
-  color: var(--err);
-}
-.block {
-  display: grid;
-  gap: 12px;
-  margin-top: 18px;
-}
-.block h2,
-.output h2 {
-  margin: 0;
-  font-size: 14px;
-}
-.output-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-  min-height: 0;
-}
-.output {
-  display: grid;
-  grid-template-rows: auto minmax(220px, 1fr);
-  gap: 10px;
-  min-width: 0;
-}
-pre {
-  margin: 0;
-  overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 12px;
-  background: var(--surface);
-  white-space: pre-wrap;
-  word-break: break-word;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.45;
-}
-@media (max-width: 900px) {
-  main,
-  .output-grid {
-    grid-template-columns: 1fr;
-  }
-  aside {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-  main {
-    min-height: auto;
-  }
-}
-</style>
-</head>
-<body>
-<header>
-  <h1>SoraFS Moderation Operator</h1>
-  <div class="status" id="status">Idle</div>
-</header>
-<main>
-  <aside>
-    <div class="field-grid">
-      <label>Quarantine ID
-        <input id="quarantineId" autocomplete="off" spellcheck="false" inputmode="text">
-      </label>
-      <label>Limit
-        <input id="limit" type="number" min="1" step="1">
-      </label>
-      <div class="toolbar">
-        <button type="button" id="loadPanel">Load</button>
-        <button type="button" id="loadPlan" class="secondary">Plan</button>
-      </div>
-      <div class="toolbar">
-        <button type="button" id="loadJurors" class="secondary">Jurors</button>
-        <button type="button" id="loadNotifications" class="secondary">Notify</button>
-      </div>
-      <button type="button" id="loadCommitReveal" class="secondary">Commit/Reveal</button>
-    </div>
-    <div class="block">
-      <h2>Review</h2>
-      <textarea id="reviewPayload">{"notes":null}</textarea>
-      <button type="button" id="sendReview">Review</button>
-    </div>
-    <div class="block">
-      <h2>Release</h2>
-      <textarea id="releasePayload">{"notes":null}</textarea>
-      <button type="button" id="sendRelease" class="warn">Release</button>
-    </div>
-    <div class="block">
-      <h2>Bridge</h2>
-      <textarea id="handoffPayload">{}</textarea>
-      <button type="button" id="sendHandoff">Handoff</button>
-    </div>
-  </aside>
-  <section>
-    <div class="toolbar">
-      <button type="button" id="refreshAll">Refresh</button>
-      <button type="button" id="clearOutput" class="secondary">Clear</button>
-    </div>
-    <div class="output-grid">
-      <div class="output">
-        <h2>Operator Panel</h2>
-        <pre id="panelOutput"></pre>
-      </div>
-      <div class="output">
-        <h2>Bridge Plan</h2>
-        <pre id="planOutput"></pre>
-      </div>
-      <div class="output">
-        <h2>Juror Plan</h2>
-        <pre id="jurorOutput"></pre>
-      </div>
-      <div class="output">
-        <h2>Notifications</h2>
-        <pre id="notificationOutput"></pre>
-      </div>
-      <div class="output">
-        <h2>Commit/Reveal</h2>
-        <pre id="commitRevealOutput"></pre>
-      </div>
-      <div class="output">
-        <h2>Mutation Result</h2>
-        <pre id="mutationOutput"></pre>
-      </div>
-      <div class="output">
-        <h2>Service Status</h2>
-        <pre id="serviceOutput"></pre>
-      </div>
-    </div>
-  </section>
-</main>
-<script>
-const $ = (id) => document.getElementById(id);
-const buttons = Array.from(document.querySelectorAll("button"));
-const csrfHeader = "__SORAFS_OPERATOR_CSRF_HEADER__";
-const csrfToken = "__SORAFS_OPERATOR_CSRF_TOKEN__";
-
-function setStatus(text, kind) {
-  const el = $("status");
-  el.textContent = text;
-  el.className = kind ? `status ${kind}` : "status";
-}
-
-function setBusy(busy) {
-  buttons.forEach((button) => {
-    button.disabled = busy;
-  });
-}
-
-function quarantineId() {
-  const value = $("quarantineId").value.trim().replace(/^0x/i, "").toLowerCase();
-  if (!/^[0-9a-f]{32}$/.test(value)) {
-    throw new Error("quarantine id must be 16 bytes encoded as hex");
-  }
-  return value;
-}
-
-function limitQuery() {
-  const value = $("limit").value.trim();
-  return value ? `?limit=${encodeURIComponent(value)}` : "";
-}
-
-function parsePayload(id) {
-  const text = $(id).value.trim() || "{}";
-  if (text.includes("payload_b64")) {
-    throw new Error("payload_b64 is not accepted by the operator UI");
-  }
-  return JSON.parse(text);
-}
-
-async function requestJson(path, options = {}) {
-  const method = (options.method || "GET").toUpperCase();
-  const headers = {
-    "Accept": "application/json",
-    ...(options.body ? {"Content-Type": "application/json"} : {})
-  };
-  if (method !== "GET") {
-    headers[csrfHeader] = csrfToken;
-  }
-  const response = await fetch(path, {
-    ...options,
-    headers,
-    cache: "no-store"
-  });
-  const text = await response.text();
-  let value = text;
-  try {
-    value = text ? JSON.parse(text) : null;
-  } catch (_err) {
-    value = text;
-  }
-  if (!response.ok) {
-    throw new Error(JSON.stringify(value, null, 2));
-  }
-  return value;
-}
-
-function render(id, value) {
-  $(id).textContent = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-}
-
-async function run(target, work) {
-  setBusy(true);
-  setStatus("Working", "");
-  try {
-    const value = await work();
-    render(target, value);
-    setStatus("Ready", "ok");
-  } catch (err) {
-    render(target, err && err.message ? err.message : String(err));
-    setStatus("Error", "err");
-  } finally {
-    setBusy(false);
-  }
-}
-
-function workflowPath(suffix) {
-  return `/v1/sorafs/moderation/quarantine/${quarantineId()}/${suffix}`;
-}
-
-$("loadPanel").addEventListener("click", () => run("panelOutput", () =>
-  requestJson(`${workflowPath("operator-panel")}${limitQuery()}`)
-));
-$("loadPlan").addEventListener("click", () => run("planOutput", () =>
-  requestJson(`${workflowPath("bridge-plan")}${limitQuery()}`)
-));
-$("loadJurors").addEventListener("click", () => run("jurorOutput", () =>
-  requestJson(`${workflowPath("juror-plan")}${limitQuery()}`)
-));
-$("loadNotifications").addEventListener("click", () => run("notificationOutput", () =>
-  requestJson(`${workflowPath("juror-notifications")}${limitQuery()}`)
-));
-$("loadCommitReveal").addEventListener("click", () => run("commitRevealOutput", () =>
-  requestJson(`${workflowPath("commit-reveal-status")}${limitQuery()}`)
-));
-$("sendReview").addEventListener("click", () => run("mutationOutput", () =>
-  requestJson(workflowPath("review"), {method: "POST", body: JSON.stringify(parsePayload("reviewPayload"))})
-));
-$("sendRelease").addEventListener("click", () => run("mutationOutput", () =>
-  requestJson(workflowPath("release"), {method: "POST", body: JSON.stringify(parsePayload("releasePayload"))})
-));
-$("sendHandoff").addEventListener("click", () => run("mutationOutput", () =>
-  requestJson(workflowPath("appeal-handoff"), {method: "POST", body: JSON.stringify(parsePayload("handoffPayload"))})
-));
-$("refreshAll").addEventListener("click", async () => {
-  await run("serviceOutput", () => requestJson("/v1/sorafs/moderation/operator-panel/status"));
-  if ($("quarantineId").value.trim()) {
-    await run("panelOutput", () => requestJson(`${workflowPath("operator-panel")}${limitQuery()}`));
-    await run("planOutput", () => requestJson(`${workflowPath("bridge-plan")}${limitQuery()}`));
-    await run("jurorOutput", () => requestJson(`${workflowPath("juror-plan")}${limitQuery()}`));
-    await run("notificationOutput", () => requestJson(`${workflowPath("juror-notifications")}${limitQuery()}`));
-    await run("commitRevealOutput", () => requestJson(`${workflowPath("commit-reveal-status")}${limitQuery()}`));
-  }
-});
-$("clearOutput").addEventListener("click", () => {
-  ["panelOutput", "planOutput", "jurorOutput", "notificationOutput", "commitRevealOutput", "mutationOutput", "serviceOutput"].forEach((id) => render(id, ""));
-  setStatus("Idle", "");
-});
-
-run("serviceOutput", () => requestJson("/v1/sorafs/moderation/operator-panel/status"));
-</script>
-</body>
-</html>
-"#;
-
+const MODERATION_OPERATOR_BROWSER_UI_HTML: &str =
+    include_str!("sorafs/moderation_operator_browser_ui.v1.html");
 #[derive(Debug)]
 struct ModerationOperatorHttpRequest<'a> {
     method: &'a str,
@@ -17761,14 +16252,12 @@ struct ModerationOperatorHttpRequest<'a> {
     headers: Vec<(&'a str, &'a str)>,
     body: &'a [u8],
 }
-
 #[derive(Debug)]
 struct ModerationOperatorHttpResponse {
     status: StatusCode,
     content_type: &'static str,
     body: Vec<u8>,
 }
-
 impl ModerationOperatorHttpResponse {
     fn to_http_bytes(&self) -> Vec<u8> {
         let mut response = format!(
@@ -17783,13 +16272,11 @@ impl ModerationOperatorHttpResponse {
         response
     }
 }
-
 #[derive(Debug)]
 struct ModerationOperatorRequestError {
     status: StatusCode,
     message: String,
 }
-
 impl ModerationOperatorRequestError {
     fn new(status: StatusCode, message: impl Into<String>) -> Self {
         Self {
@@ -17797,12 +16284,10 @@ impl ModerationOperatorRequestError {
             message: message.into(),
         }
     }
-
     fn into_response(self) -> ModerationOperatorHttpResponse {
         moderation_operator_json_error(self.status, self.message)
     }
 }
-
 #[derive(Debug, PartialEq, Eq)]
 enum ModerationOperatorRoute {
     BrowserUi,
@@ -17816,7 +16301,6 @@ enum ModerationOperatorRoute {
     Release { quarantine_id_hex: String },
     AppealHandoff { quarantine_id_hex: String },
 }
-
 fn moderation_operator_handle_stream(
     mut stream: TcpStream,
     service: &ModerationOperatorService,
@@ -17836,7 +16320,6 @@ fn moderation_operator_handle_stream(
         .flush()
         .wrap_err("failed to flush SoraFS moderation operator service response")
 }
-
 fn moderation_operator_read_http_request(
     stream: &mut TcpStream,
     max_body_bytes: usize,
@@ -17868,7 +16351,6 @@ fn moderation_operator_read_http_request(
         }
         buffer.extend_from_slice(&chunk[..read]);
     };
-
     let header_text = moderation_operator_header_text(&buffer, header_end)?;
     let content_length = moderation_operator_content_length(header_text)?;
     if content_length.is_none() && buffer.len() > header_end {
@@ -17916,7 +16398,6 @@ fn moderation_operator_read_http_request(
     buffer.truncate(request_len);
     Ok(buffer)
 }
-
 fn moderation_operator_parse_http_request(
     raw: &[u8],
     max_body_bytes: usize,
@@ -18010,7 +16491,6 @@ fn moderation_operator_parse_http_request(
         body: &raw[header_end..body_end],
     })
 }
-
 fn moderation_operator_header_text(
     raw: &[u8],
     header_end: usize,
@@ -18028,7 +16508,6 @@ fn moderation_operator_header_text(
         )
     })
 }
-
 fn moderation_operator_content_length(
     header_text: &str,
 ) -> Result<Option<usize>, ModerationOperatorRequestError> {
@@ -18055,7 +16534,6 @@ fn moderation_operator_content_length(
     }
     Ok(content_length)
 }
-
 fn moderation_operator_headers(header_text: &str) -> Vec<(&str, &str)> {
     header_text
         .lines()
@@ -18066,7 +16544,6 @@ fn moderation_operator_headers(header_text: &str) -> Vec<(&str, &str)> {
         })
         .collect()
 }
-
 fn moderation_operator_split_target(
     target: &str,
 ) -> Result<(&str, Option<&str>), ModerationOperatorRequestError> {
@@ -18081,13 +16558,11 @@ fn moderation_operator_split_target(
     }
     Ok((path, query))
 }
-
 fn moderation_operator_find_header_end(raw: &[u8]) -> Option<usize> {
     raw.windows(4)
         .position(|window| window == b"\r\n\r\n")
         .map(|offset| offset + 4)
 }
-
 fn moderation_operator_route(
     path: &str,
 ) -> Result<ModerationOperatorRoute, ModerationOperatorRequestError> {
@@ -18139,7 +16614,6 @@ fn moderation_operator_route(
         )),
     }
 }
-
 fn moderation_operator_expect_method(
     request: &ModerationOperatorHttpRequest<'_>,
     expected_method: &str,
@@ -18166,7 +16640,6 @@ fn moderation_operator_expect_method(
     }
     Ok(())
 }
-
 fn moderation_operator_reject_query(
     query: Option<&str>,
 ) -> Result<(), ModerationOperatorRequestError> {
@@ -18178,7 +16651,6 @@ fn moderation_operator_reject_query(
     }
     Ok(())
 }
-
 fn moderation_operator_query_limit(
     query: Option<&str>,
     default_limit: Option<u32>,
@@ -18222,20 +16694,17 @@ fn moderation_operator_query_limit(
     }
     Ok(limit)
 }
-
 fn moderation_operator_payload_free_panel_json(body: &[u8]) -> Result<Value> {
     let panel: Value =
         norito::json::from_slice(body).wrap_err("failed to decode operator-panel JSON")?;
     ensure_moderation_bridge_plan_has_no_payload(&panel)?;
     Ok(panel)
 }
-
 struct ModerationOperatorReviewPayload {
     reviewed_by: String,
     reviewed_at_unix: Option<u64>,
     notes: Option<String>,
 }
-
 impl ModerationOperatorReviewPayload {
     fn as_request(&self) -> SorafsModerationQuarantineReviewRequest<'_> {
         SorafsModerationQuarantineReviewRequest {
@@ -18245,13 +16714,11 @@ impl ModerationOperatorReviewPayload {
         }
     }
 }
-
 struct ModerationOperatorReleasePayload {
     release_authority: String,
     released_at_unix: Option<u64>,
     notes: Option<String>,
 }
-
 impl ModerationOperatorReleasePayload {
     fn as_request(&self) -> SorafsModerationQuarantineReleaseRequest<'_> {
         SorafsModerationQuarantineReleaseRequest {
@@ -18261,7 +16728,6 @@ impl ModerationOperatorReleasePayload {
         }
     }
 }
-
 fn moderation_operator_review_payload_from_body(
     body: &[u8],
     default_actor: &str,
@@ -18293,7 +16759,6 @@ fn moderation_operator_review_payload_from_body(
         notes,
     })
 }
-
 fn moderation_operator_release_payload_from_body(
     body: &[u8],
     default_actor: &str,
@@ -18325,7 +16790,6 @@ fn moderation_operator_release_payload_from_body(
         notes,
     })
 }
-
 fn moderation_operator_payload_free_json_body(
     body: &[u8],
     label: &str,
@@ -18338,7 +16802,6 @@ fn moderation_operator_payload_free_json_body(
         )
     })
 }
-
 fn moderation_operator_payload_free_json_value(
     body: &[u8],
     label: &str,
@@ -18354,7 +16817,6 @@ fn moderation_operator_payload_free_json_value(
     })?;
     Ok(value)
 }
-
 fn moderation_operator_success_json_response(
     response: Response<Vec<u8>>,
     operation: &str,
@@ -18375,7 +16837,6 @@ fn moderation_operator_success_json_response(
         ),
     }
 }
-
 fn moderation_operator_upstream_response(
     status: StatusCode,
     body: Vec<u8>,
@@ -18390,7 +16851,6 @@ fn moderation_operator_upstream_response(
         }
     }
 }
-
 fn moderation_operator_json_response(
     status: StatusCode,
     value: &Value,
@@ -18404,7 +16864,6 @@ fn moderation_operator_json_response(
         body,
     }
 }
-
 fn moderation_operator_json_error(
     status: StatusCode,
     message: impl Into<String>,
@@ -18418,7 +16877,6 @@ fn moderation_operator_json_error(
         }),
     )
 }
-
 fn moderation_operator_status_reason(status: StatusCode) -> &'static str {
     match status {
         StatusCode::OK => "OK",
@@ -18434,7 +16892,6 @@ fn moderation_operator_status_reason(status: StatusCode) -> &'static str {
         _ => "Status",
     }
 }
-
 fn normalize_hex_lower(value: &str, flag: &str, byte_len: usize) -> Result<String> {
     let trimmed = required_trimmed_text(value, flag)?;
     let hex_value = trimmed.strip_prefix("0x").unwrap_or(&trimmed);
@@ -18445,15 +16902,12 @@ fn normalize_hex_lower(value: &str, flag: &str, byte_len: usize) -> Result<Strin
     }
     Ok(encode(bytes))
 }
-
 fn normalize_hex_16_lower(value: &str, flag: &str) -> Result<String> {
     normalize_hex_lower(value, flag, 16)
 }
-
 fn parse_xor_quantity(input: &str) -> Result<XorQuantity> {
     parse_xor_quantity_labeled(input, "reserve balance")
 }
-
 fn parse_xor_quantity_labeled(input: &str, label: &str) -> Result<XorQuantity> {
     if input.is_empty() {
         return Err(eyre!("{label} must not be empty"));
@@ -18469,7 +16923,6 @@ fn parse_xor_quantity_labeled(input: &str, label: &str) -> Result<XorQuantity> {
     }
     Ok(amount)
 }
-
 fn load_reserve_policy_from_paths(
     json_path: Option<&Path>,
     norito_path: Option<&Path>,
@@ -18500,7 +16953,6 @@ fn load_reserve_policy_from_paths(
         )),
     }
 }
-
 #[allow(clippy::too_many_arguments)]
 fn build_reserve_quote_value(
     policy: &ReservePolicyV1,
@@ -18517,7 +16969,6 @@ fn build_reserve_quote_value(
         "policy_source".into(),
         Value::from(policy_source.to_string()),
     );
-
     let mut inputs = Map::new();
     inputs.insert(
         "storage_class".into(),
@@ -18536,7 +16987,6 @@ fn build_reserve_quote_value(
         norito::json::to_value(reserve_balance).wrap_err("serialize reserve balance to JSON")?;
     inputs.insert("reserve_balance".into(), reserve_value);
     root.insert("inputs".into(), Value::Object(inputs));
-
     let policy_value =
         norito::json::to_value(policy).wrap_err("serialize reserve policy to JSON")?;
     root.insert("policy".into(), policy_value);
@@ -18548,10 +16998,8 @@ fn build_reserve_quote_value(
     let projection_value = norito::json::to_value(&projection)
         .wrap_err("serialize reserve ledger projection to JSON")?;
     root.insert("ledger_projection".into(), projection_value);
-
     Ok(Value::Object(root))
 }
-
 fn write_reserve_quote_artifact(path: &Path, value: &Value) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -18572,14 +17020,12 @@ fn write_reserve_quote_artifact(path: &Path, value: &Value) -> Result<()> {
         )
     })
 }
-
 #[derive(Clone)]
 struct LedgerProjectionAmounts {
     rent_due: XorQuantity,
     reserve_shortfall: XorQuantity,
     top_up_shortfall: XorQuantity,
 }
-
 fn extract_ledger_projection(value: &Value) -> Result<LedgerProjectionAmounts> {
     let root = value
         .as_object()
@@ -18587,7 +17033,6 @@ fn extract_ledger_projection(value: &Value) -> Result<LedgerProjectionAmounts> {
     let ledger_value = root
         .get("ledger_projection")
         .ok_or_else(|| eyre!("reserve quote missing `ledger_projection` block"))?;
-
     let projection: ReserveLedgerProjection = norito::json::from_value(ledger_value.clone())
         .wrap_err("failed to parse reserve ledger projection from quote")?;
     Ok(LedgerProjectionAmounts {
@@ -18596,7 +17041,6 @@ fn extract_ledger_projection(value: &Value) -> Result<LedgerProjectionAmounts> {
         top_up_shortfall: projection.top_up_shortfall,
     })
 }
-
 fn extract_reserve_quote(value: &Value) -> Result<ReserveQuote> {
     let root = value
         .as_object()
@@ -18607,7 +17051,6 @@ fn extract_reserve_quote(value: &Value) -> Result<ReserveQuote> {
     norito::json::from_value(quote_value.clone())
         .wrap_err("failed to parse reserve quote from quote artifact")
 }
-
 fn build_reserve_ledger_plan(
     quote_path: &Path,
     projection: LedgerProjectionAmounts,
@@ -18631,7 +17074,6 @@ fn build_reserve_ledger_plan(
         &projection.reserve_shortfall,
         asset_definition,
     )?;
-
     let mut root = Map::new();
     root.insert(
         "quote_path".into(),
@@ -18649,7 +17091,6 @@ fn build_reserve_ledger_plan(
     root.insert("instructions".into(), Value::Array(instructions));
     Ok(Value::Object(root))
 }
-
 fn build_reserve_lifecycle_value(
     quote_path: &Path,
     lifecycle: &ReserveLifecycleProjection,
@@ -18726,7 +17167,6 @@ fn build_reserve_lifecycle_value(
     root.insert("lifecycle_projection".into(), projection);
     Ok(Value::Object(root))
 }
-
 fn append_transfer_instruction(
     instructions: &mut Vec<Value>,
     source_account: &AccountId,
@@ -18748,11 +17188,9 @@ fn append_transfer_instruction(
     instructions.push(value);
     Ok(())
 }
-
 fn xor_quantity_value(amount: &XorQuantity) -> Value {
     Value::String(amount.to_string())
 }
-
 const fn storage_class_label(class: StorageClass) -> &'static str {
     match class {
         StorageClass::Hot => "hot",
@@ -18760,7 +17198,6 @@ const fn storage_class_label(class: StorageClass) -> &'static str {
         StorageClass::Cold => "cold",
     }
 }
-
 const fn reserve_tier_label(tier: ReserveTier) -> &'static str {
     match tier {
         ReserveTier::TierA => "tier-a",
@@ -18768,7 +17205,6 @@ const fn reserve_tier_label(tier: ReserveTier) -> &'static str {
         ReserveTier::TierC => "tier-c",
     }
 }
-
 const fn reserve_duration_label(duration: ReserveDuration) -> &'static str {
     match duration {
         ReserveDuration::Monthly => "monthly",
@@ -18776,7 +17212,6 @@ const fn reserve_duration_label(duration: ReserveDuration) -> &'static str {
         ReserveDuration::Annual => "annual",
     }
 }
-
 const fn reserve_lifecycle_stage_label(stage: ReserveLifecycleStage) -> &'static str {
     match stage {
         ReserveLifecycleStage::Active => "active",
@@ -18786,7 +17221,6 @@ const fn reserve_lifecycle_stage_label(stage: ReserveLifecycleStage) -> &'static
         ReserveLifecycleStage::Default => "default",
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -18859,7 +17293,6 @@ mod tests {
     use url::Url;
 
     include!("sorafs_nonce_rng_tests.rs");
-
     #[test]
     fn hedging_billing_subcommands_parse_all_read_and_ack_routes() {
         use clap::Parser as _;
@@ -18869,7 +17302,6 @@ mod tests {
             #[command(subcommand)]
             command: Command,
         }
-
         let checkpoint = "11".repeat(32);
         let statement_id = "22".repeat(32);
         let request_nonce = "33".repeat(32);
@@ -18936,13 +17368,11 @@ mod tests {
                 "10".to_owned(),
             ],
         ];
-
         for command in commands {
             let parsed = Parser::try_parse_from(command).expect("hedging/billing command parses");
             let _ = parsed.command;
         }
     }
-
     #[test]
     fn billing_statements_cli_builds_exact_checkpoint_filter() {
         let checkpoint = "11".repeat(32);
@@ -18953,7 +17383,6 @@ mod tests {
             limit: 25,
         };
         let mut context = TestContext::new();
-
         args.run_with(&mut context, |_client, filter| {
             assert_eq!(
                 filter.expected_checkpoint_fingerprint_hex,
@@ -18974,11 +17403,9 @@ mod tests {
                 .expect("billing statement page response"))
         })
         .expect("billing statement list succeeds");
-
         assert_eq!(context.printed.len(), 1);
         assert!(context.printed[0].contains("\"items\""));
     }
-
     #[test]
     fn hedging_projection_cli_builds_read_only_exact_checkpoint_filter() {
         let checkpoint = "33".repeat(32);
@@ -18989,7 +17416,6 @@ mod tests {
             limit: 100,
         };
         let mut context = TestContext::new();
-
         args.run_with(&mut context, |_client, filter| {
             assert_eq!(
                 filter.expected_checkpoint_fingerprint_hex,
@@ -19007,7 +17433,6 @@ mod tests {
                 .expect("hedging projection response"))
         })
         .expect("hedging projection read succeeds");
-
         assert_eq!(context.printed.len(), 1);
         let output: Value =
             norito::json::from_str(&context.printed[0]).expect("projection output JSON");
@@ -19019,7 +17444,6 @@ mod tests {
             "projection output must preserve the disabled execution claim",
         );
     }
-
     #[test]
     fn billing_acknowledgement_cli_reads_bounded_binary_proof() {
         let checkpoint = "55".repeat(32);
@@ -19039,7 +17463,6 @@ mod tests {
             SorafsBillingAcknowledgementProof::try_from_hex(&request_nonce, vec![0xA5; 48])
                 .expect("expected proof");
         let mut context = TestContext::new();
-
         args.run_with(
             &mut context,
             |_client, actual_statement_id, actual_checkpoint, proof| {
@@ -19060,7 +17483,6 @@ mod tests {
             },
         )
         .expect("billing acknowledgement succeeds");
-
         assert_eq!(context.printed.len(), 1);
         let output: Value =
             norito::json::from_str(&context.printed[0]).expect("acknowledgement output JSON");
@@ -19069,14 +17491,12 @@ mod tests {
             Some(true)
         );
     }
-
     #[test]
     fn hedging_billing_cli_rejects_non_regular_and_oversized_proofs() {
         let proof_dir = TempDir::new().expect("proof directory");
         let error = read_billing_acknowledgement_proof(proof_dir.path())
             .expect_err("directory proof must fail closed");
         assert!(error.to_string().contains("regular non-symlink file"));
-
         let oversized = proof_dir.path().join("oversized-proof.bin");
         fs::write(
             &oversized,
@@ -19087,7 +17507,6 @@ mod tests {
             .expect_err("oversized proof must fail closed");
         assert!(error.to_string().contains("must contain between 1 and"));
     }
-
     #[cfg(any(unix, windows))]
     #[test]
     fn hedging_billing_cli_rejects_multiply_linked_proof() {
@@ -19096,12 +17515,10 @@ mod tests {
         let alias = proof_dir.path().join("proof-alias.bin");
         fs::write(&target, [0xA5; 32]).expect("write proof target");
         fs::hard_link(&target, &alias).expect("create proof hard link");
-
         let error = read_billing_acknowledgement_proof(&target)
             .expect_err("multiply linked proof must fail closed");
         assert!(error.to_string().contains("stable single-link identity"));
     }
-
     #[cfg(unix)]
     #[test]
     fn hedging_billing_cli_rejects_symlink_proof() {
@@ -19112,16 +17529,13 @@ mod tests {
         let link = proof_dir.path().join("proof-link.bin");
         fs::write(&target, [0xA5; 32]).expect("write proof target");
         symlink(&target, &link).expect("create proof symlink");
-
         let error =
             read_billing_acknowledgement_proof(&link).expect_err("symlink proof must fail closed");
         assert!(error.to_string().contains("regular non-symlink file"));
     }
-
     #[test]
     fn billing_proof_reader_retains_windows_direct_identity_guards() {
         let source = include_str!("sorafs.rs");
-
         for required_guard in [
             "FILE_FLAG_OPEN_REPARSE_POINT",
             "metadata.volume_serial_number()",
@@ -19140,7 +17554,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn hedging_billing_proof_exact_read_detects_length_drift() {
         let path = Path::new("drifting-proof.bin");
@@ -19148,13 +17561,11 @@ mod tests {
         let error = read_billing_acknowledgement_proof_exact(path, &mut truncated, 4)
             .expect_err("truncated proof must fail closed");
         assert!(error.to_string().contains("changed length"));
-
         let mut extended = std::io::Cursor::new(vec![0xA5; 5]);
         let error = read_billing_acknowledgement_proof_exact(path, &mut extended, 4)
             .expect_err("extended proof must fail closed");
         assert!(error.to_string().contains("changed length"));
     }
-
     #[test]
     fn billing_statement_cli_writes_exact_norito_response() {
         let checkpoint = "88".repeat(32);
@@ -19168,7 +17579,6 @@ mod tests {
         };
         let expected_bytes = vec![0x4E, 0x52, 0x54, 0x31];
         let mut context = TestContext::new();
-
         args.run_with(&mut context, |_client, actual_id, actual_checkpoint| {
             assert_eq!(actual_id, statement_id);
             assert_eq!(actual_checkpoint, checkpoint);
@@ -19179,7 +17589,6 @@ mod tests {
                 .expect("published statement response"))
         })
         .expect("published statement write succeeds");
-
         assert_eq!(
             fs::read(output).expect("read written statement"),
             expected_bytes
@@ -19192,7 +17601,6 @@ mod tests {
             Some(4)
         );
     }
-
     #[test]
     fn billing_statement_cli_refuses_to_clobber_existing_file() {
         let output_dir = TempDir::new().expect("statement output directory");
@@ -19205,7 +17613,6 @@ mod tests {
             output: output.clone(),
         };
         let mut context = TestContext::new();
-
         let error = args
             .run_with(&mut context, |_client, _statement_id, _checkpoint| {
                 Ok(Response::builder()
@@ -19215,7 +17622,6 @@ mod tests {
                     .expect("published statement response"))
             })
             .expect_err("existing output must fail closed");
-
         assert!(error.to_string().contains("without replacing"));
         assert_eq!(
             fs::read(&output).expect("read preserved statement"),
@@ -19223,7 +17629,6 @@ mod tests {
         );
         assert!(context.printed.is_empty());
     }
-
     #[cfg(unix)]
     #[test]
     fn billing_statement_cli_refuses_to_follow_output_symlink() {
@@ -19241,7 +17646,6 @@ mod tests {
             output: output.clone(),
         };
         let mut context = TestContext::new();
-
         let error = args
             .run_with(&mut context, |_client, _statement_id, _checkpoint| {
                 Ok(Response::builder()
@@ -19251,7 +17655,6 @@ mod tests {
                     .expect("published statement response"))
             })
             .expect_err("symlink output must fail closed");
-
         assert!(error.to_string().contains("without replacing"));
         assert_eq!(
             fs::read(&target).expect("read preserved target statement"),
@@ -19265,7 +17668,6 @@ mod tests {
         );
         assert!(context.printed.is_empty());
     }
-
     #[test]
     fn billing_statement_cli_rejects_substituted_media_type() {
         let output_dir = TempDir::new().expect("statement output directory");
@@ -19276,7 +17678,6 @@ mod tests {
             output: output.clone(),
         };
         let mut context = TestContext::new();
-
         let error = args
             .run_with(&mut context, |_client, _statement_id, _checkpoint| {
                 Ok(Response::builder()
@@ -19286,7 +17687,6 @@ mod tests {
                     .expect("substituted statement response"))
             })
             .expect_err("non-Norito response must fail closed");
-
         assert!(error.to_string().contains("application/x-norito"));
         assert!(
             !output.exists(),
@@ -19294,7 +17694,6 @@ mod tests {
         );
         assert!(context.printed.is_empty());
     }
-
     #[test]
     fn hedging_billing_cli_rejects_aliases_and_invalid_bounds_before_http() {
         let mut context = TestContext::new();
@@ -19310,7 +17709,6 @@ mod tests {
             })
             .expect_err("uppercase checkpoint rejected");
         assert!(error.to_string().contains("lowercase hexadecimal"));
-
         let projection = HedgingProjectionArgs {
             expected_checkpoint_fingerprint: "11".repeat(32),
             after: None,
@@ -19322,25 +17720,20 @@ mod tests {
             })
             .expect_err("out-of-range limit rejected");
         assert!(error.to_string().contains("--limit"));
-
         let zero_nonce = SorafsBillingAcknowledgementProof::try_from_hex(&"00".repeat(32), vec![1])
             .expect_err("zero nonce rejected");
         assert!(zero_nonce.to_string().contains("request nonce"));
         assert!(context.printed.is_empty());
     }
-
     #[test]
     fn token_issue_rng_reports_os_seed_failure() {
         let mut rng = FailingSorafsCliNonceRng;
-
         let error = token_issue_rng_from_rng(&mut rng)
             .expect_err("token RNG seeding should fail when entropy fails");
         let message = format!("{error:?}");
-
         assert!(message.contains("failed to seed SoraNet admission-token RNG"));
         assert!(message.contains("failing SoraFS CLI nonce RNG"));
     }
-
     #[test]
     fn parse_xor_quantity_accepts_canonical_sub_micro_and_wide_inputs() {
         for canonical in [
@@ -19352,7 +17745,6 @@ mod tests {
             assert_eq!(amount.to_string(), canonical);
         }
     }
-
     #[test]
     fn parse_xor_quantity_rejects_noncanonical_negative_and_over_scale_inputs() {
         for invalid in [
@@ -19373,7 +17765,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn reserve_quote_builder_renders_inputs() {
         let policy = ReservePolicyV1::default();
@@ -19427,7 +17818,6 @@ mod tests {
             "ledger projection exposes rent_due amount: {ledger_projection:?}"
         );
     }
-
     #[test]
     fn reserve_ledger_projection_rejects_non_string_and_noncanonical_quantities() {
         let policy = ReservePolicyV1::default();
@@ -19452,7 +17842,6 @@ mod tests {
             "test policy",
         )
         .expect("quote artifact");
-
         for invalid in [
             Value::Number(Number::from(1_u64)),
             Value::String("+1".into()),
@@ -19476,7 +17865,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn reserve_ledger_plan_preserves_sub_micro_and_wide_quantities() {
         let sub_micro: XorQuantity = "0.000000001".parse().expect("sub-micro quantity");
@@ -19520,7 +17908,6 @@ mod tests {
         assert!(rendered.contains(&sub_micro.to_string()));
         assert!(rendered.contains(&wide.to_string()));
     }
-
     #[test]
     fn reserve_lifecycle_builder_renders_stage_and_credit_fields() {
         let policy = ReservePolicyV1::default();
@@ -19541,7 +17928,6 @@ mod tests {
         let root = value
             .as_object()
             .expect("lifecycle payload should be a JSON object");
-
         assert_eq!(root.get("stage").and_then(Value::as_str), Some("grace"));
         assert_eq!(root.get("credit_draw").and_then(Value::as_str), Some("120"));
         assert_eq!(
@@ -19553,20 +17939,17 @@ mod tests {
             "full projection should be embedded"
         );
     }
-
     fn sample_guard_directory_snapshot_bytes() -> Vec<u8> {
         let mut rng = StdRng::seed_from_u64(0x5EED);
         let mut ed_seed = [0u8; 32];
         rng.fill_bytes(&mut ed_seed);
         let signing_key = SigningKey::from_bytes(&ed_seed);
         let ed_public = Ed25519VerifyingKey::from(&signing_key).to_bytes();
-
         let mldsa_keys = generate_mldsa_keypair(MlDsaSuite::MlDsa65)
             .expect("ML-DSA keypair generation should succeed");
         let mldsa_public = mldsa_keys.public_key().to_vec();
         let fingerprint = compute_issuer_fingerprint(&ed_public, &mldsa_public)
             .expect("sample issuer fingerprint should compute");
-
         let directory_hash = [0xAB; 32];
         let preferred_kem_suite = MlKemSuite::MlKem1024;
         let certificate = RelayCertificateV2 {
@@ -19613,15 +17996,12 @@ mod tests {
             issuer_fingerprint: fingerprint,
             pq_kem_public: vec![0x55; preferred_kem_suite.public_key_len()],
         };
-
         let published_at = certificate.published_at;
         let valid_after = certificate.valid_after;
         let valid_until = certificate.valid_until;
-
         let bundle = certificate
             .issue(&signing_key, mldsa_keys.secret_key())
             .expect("issue certificate");
-
         let snapshot = GuardDirectorySnapshotV2 {
             version: 2,
             directory_hash,
@@ -19638,22 +18018,18 @@ mod tests {
                 certificate: bundle.to_cbor(),
             }],
         };
-
         to_bytes(&snapshot).expect("encode snapshot")
     }
-
     pub(super) struct TestContext {
         cfg: Config,
         printed: Vec<String>,
         i18n: Localizer,
         output_format: CliOutputFormat,
     }
-
     impl TestContext {
         pub(super) fn new() -> Self {
             Self::with_output_format(CliOutputFormat::Json)
         }
-
         pub(super) fn with_output_format(output_format: CliOutputFormat) -> Self {
             let kp = checked_sorafs_ed25519_key_fixture();
             let account = AccountId::new(kp.public_key().clone());
@@ -19686,17 +18062,14 @@ mod tests {
                 output_format,
             }
         }
-
         pub(super) fn outputs(&self) -> &[String] {
             &self.printed
         }
     }
-
     fn checked_sorafs_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
             .expect("generate checked SoraFS fixture key")
     }
-
     #[test]
     fn sorafs_fixture_uses_checked_ed25519_key_generation() {
         let key_pair = checked_sorafs_ed25519_key_fixture();
@@ -19704,17 +18077,14 @@ mod tests {
             .public_key()
             .try_algorithm()
             .expect("SoraFS fixture key advertises a valid algorithm");
-
         assert_eq!(actual, Algorithm::Ed25519);
     }
-
     struct OutputModeContext {
         config: Config,
         output_format: CliOutputFormat,
         printed: Vec<String>,
         i18n: Localizer,
     }
-
     impl OutputModeContext {
         fn new(output_format: CliOutputFormat) -> Self {
             Self {
@@ -19725,32 +18095,25 @@ mod tests {
             }
         }
     }
-
     impl RunContext for OutputModeContext {
         fn config(&self) -> &Config {
             &self.config
         }
-
         fn transaction_metadata(&self) -> Option<&Metadata> {
             None
         }
-
         fn input_instructions(&self) -> bool {
             false
         }
-
         fn output_instructions(&self) -> bool {
             false
         }
-
         fn i18n(&self) -> &Localizer {
             &self.i18n
         }
-
         fn output_format(&self) -> CliOutputFormat {
             self.output_format
         }
-
         fn print_data<T>(&mut self, _data: &T) -> Result<()>
         where
             T: JsonSerialize + ?Sized,
@@ -19758,13 +18121,11 @@ mod tests {
             self.printed.push("json".to_string());
             Ok(())
         }
-
         fn println(&mut self, _data: impl Display) -> Result<()> {
             self.printed.push("text".to_string());
             Ok(())
         }
     }
-
     #[test]
     fn output_summary_prefers_json_in_json_mode() {
         let mut ctx = OutputModeContext::new(CliOutputFormat::Json);
@@ -19772,7 +18133,6 @@ mod tests {
         output_summary(&mut ctx, &summary, false).expect("summary output");
         assert_eq!(ctx.printed, vec!["json"]);
     }
-
     #[test]
     fn output_summary_uses_text_in_text_mode() {
         let mut ctx = OutputModeContext::new(CliOutputFormat::Text);
@@ -19780,7 +18140,6 @@ mod tests {
         output_summary(&mut ctx, &summary, false).expect("summary output");
         assert_eq!(ctx.printed, vec!["text"]);
     }
-
     #[test]
     fn log_daemon_summary_emits_json_in_json_mode() {
         let mut ctx = OutputModeContext::new(CliOutputFormat::Json);
@@ -19788,13 +18147,11 @@ mod tests {
         log_daemon_summary(&mut ctx, &summary, false).expect("daemon summary");
         assert_eq!(ctx.printed, vec!["json"]);
     }
-
     #[test]
     fn handshake_update_requires_flags() {
         let result = HandshakeUpdateArgs::default().into_update();
         assert!(result.is_err(), "expected at least one override");
     }
-
     #[test]
     fn handshake_update_accepts_pow_overrides() {
         let args = HandshakeUpdateArgs {
@@ -19813,7 +18170,6 @@ mod tests {
         assert!(pow.min_ticket_ttl_secs.is_none());
         assert!(pow.ticket_ttl_secs.is_none());
     }
-
     #[test]
     fn handshake_update_validates_resume_hash_length() {
         let args = HandshakeUpdateArgs {
@@ -19822,7 +18178,6 @@ mod tests {
             ..Default::default()
         };
         assert!(args.into_update().is_err(), "resume hash must be 32 bytes");
-
         let ok_args = HandshakeUpdateArgs {
             descriptor_commit: Some("aa".into()),
             resume_hash: Some("ab".repeat(32)),
@@ -19837,7 +18192,6 @@ mod tests {
             ResumeHashDirective::Clear => panic!("expected Set directive"),
         }
     }
-
     fn sample_reward_config_json() -> norito::json::Value {
         let mut policy = norito::json::Map::new();
         policy.insert(
@@ -19860,7 +18214,6 @@ mod tests {
             "activation_grace_epochs".to_string(),
             norito::json::Value::Number(0u64.into()),
         );
-
         let mut root = norito::json::Map::new();
         root.insert("policy".to_string(), norito::json::Value::Object(policy));
         root.insert(
@@ -19888,10 +18241,8 @@ mod tests {
             norito::json::Value::String(sample_budget_id_hex()),
         );
         root.insert("metrics_log_path".to_string(), norito::json::Value::Null);
-
         norito::json::Value::Object(root)
     }
-
     fn sample_bond_entry(amount: u32) -> RelayBondLedgerEntryV1 {
         RelayBondLedgerEntryV1 {
             relay_id: [0xAB; 32],
@@ -19901,7 +18252,6 @@ mod tests {
             exit_capable: true,
         }
     }
-
     fn sample_metrics() -> RelayEpochMetricsV1 {
         RelayEpochMetricsV1 {
             relay_id: [0xAB; 32],
@@ -19916,7 +18266,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     fn sample_reward_instruction() -> RelayRewardInstructionV1 {
         RelayRewardInstructionV1 {
             relay_id: [0xCD; 32],
@@ -19929,7 +18278,6 @@ mod tests {
             metadata: Metadata::default(),
         }
     }
-
     fn sample_transfer_record(kind: TransferKind, amount: u32) -> LedgerTransferRecord {
         LedgerTransferRecord {
             relay_id: [0xAA; 32],
@@ -19941,18 +18289,15 @@ mod tests {
             destination: sample_account_id("relay"),
         }
     }
-
     #[test]
     fn incentive_quantity_parser_rejects_negative_amounts() {
         let error = parse_quantity_str("-1", "--requested-amount")
             .expect_err("negative reward quantities must be rejected");
         assert!(error.to_string().contains("non-negative quantity"));
     }
-
     #[test]
     fn ledger_export_schema_mismatch_reports_expected_and_actual() {
         const SCHEMA_OFFSET: usize = 4 + 1 + 1;
-
         let export = LedgerExportFile {
             version: LedgerExportFile::VERSION,
             transfers: vec![sample_transfer_record(TransferKind::Payout, 5)],
@@ -19977,7 +18322,6 @@ mod tests {
             "expected actual schema hash detail in error chain: {combined}"
         );
     }
-
     #[test]
     fn reconciliation_summary_builds_expected_counts() {
         let missing_record = sample_transfer_record(TransferKind::Payout, 100);
@@ -19989,7 +18333,6 @@ mod tests {
         invalid_amount_record.amount = "340282366920938463463374607431768211456"
             .parse::<Quantity>()
             .expect("2^128 quantity");
-
         let report = LedgerReconciliationReport {
             total_expected_transfers: 3,
             matched_transfers: 1,
@@ -20009,7 +18352,6 @@ mod tests {
                 record: invalid_amount_record.clone(),
             }],
         };
-
         let summary = ReconciliationReportSummary::from_report(&report);
         assert!(!summary.clean);
         assert_eq!(summary.matched_transfers, 1);
@@ -20048,7 +18390,6 @@ mod tests {
                 .is_some()
         );
     }
-
     fn sample_account_id(name: &str) -> AccountId {
         let mut hasher = Blake3Hasher::new();
         hasher.update(b"sorafs-sample-account");
@@ -20062,27 +18403,22 @@ mod tests {
             PublicKey::from_bytes(Algorithm::Ed25519, verifying.as_bytes()).expect("public key");
         AccountId::new(public_key)
     }
-
     fn sample_account_literal(name: &str) -> String {
         let account = sample_account_id(name);
         account.to_string()
     }
-
     fn xor_asset_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
             "xor".parse().unwrap(),
         )
     }
-
     fn sample_budget_id_hex() -> String {
         hex::encode(sample_budget_id())
     }
-
     fn sample_budget_id() -> [u8; 32] {
         [0x11_u8; 32]
     }
-
     fn write_reward_config_with_budget(budget_hex: Option<&str>) -> NamedTempFile {
         let mut config = sample_reward_config_json();
         let budget_value = budget_hex.map_or(Value::Null, |hex| Value::String(hex.to_string()));
@@ -20095,28 +18431,24 @@ mod tests {
         file.write_all(&bytes).expect("write config");
         file
     }
-
     fn write_sample_reward_config_file() -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("config file");
         let bytes = norito::json::to_vec(&sample_reward_config_json()).expect("encode config");
         file.write_all(&bytes).expect("write config");
         file
     }
-
     fn write_metrics_file(metrics: &RelayEpochMetricsV1) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("metrics file");
         let bytes = to_bytes(metrics).expect("encode metrics");
         file.write_all(&bytes).expect("write metrics");
         file
     }
-
     fn write_bond_file(bond: &RelayBondLedgerEntryV1) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("bond file");
         let bytes = to_bytes(bond).expect("encode bond");
         file.write_all(&bytes).expect("write bond");
         file
     }
-
     fn write_gc_manifest(
         root: &Path,
         manifest_id: &str,
@@ -20161,25 +18493,21 @@ mod tests {
         fs::create_dir_all(&manifest_dir).expect("create manifest dir");
         fs::write(manifest_dir.join(SORAFS_MANIFEST_FILE), bytes).expect("write manifest file");
     }
-
     fn read_state(path: &Path) -> IncentivesState {
         load_incentives_state(path).expect("decode incentives state")
     }
-
     fn write_state_without_budget(path: &Path) {
         let config_file = write_reward_config_with_budget(None);
         let reward_config = read_reward_config(config_file.path()).expect("reward config");
         let state = IncentivesState::new(&reward_config, sample_account_id("treasury"));
         save_incentives_state(path, &state).expect("write incentives state");
     }
-
     #[test]
     fn handshake_token_issue_generates_verifiable_token() {
         let mut ctx = TestContext::new();
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keypair");
         let secret_hex = hex::encode(keypair.secret_key());
         let public_hex = hex::encode(keypair.public_key());
-
         let args = HandshakeTokenIssueArgs {
             suite: MlDsaSuiteArg::MlDsa44,
             issuer_secret_key: None,
@@ -20195,13 +18523,11 @@ mod tests {
             output: None,
             token_encoding: TokenOutputFormat::Base64,
         };
-
         let mut rng = StdRng::seed_from_u64(0x5eed);
         let default_now = SystemTime::UNIX_EPOCH + Duration::from_secs(1);
         let artifacts = args
             .issue_with_rng(&mut ctx, &mut rng, default_now)
             .expect("issue token");
-
         let verifier = AdmissionTokenVerifier::new(
             MlDsaSuite::MlDsa44,
             keypair.public_key().to_vec(),
@@ -20218,7 +18544,6 @@ mod tests {
                 verify_now,
             )
             .expect("token should verify");
-
         HandshakeTokenIssueArgs::emit(&mut ctx, &artifacts, None, TokenOutputFormat::Base64)
             .expect("emit output");
         let output = ctx.outputs().last().expect("json output present");
@@ -20229,14 +18554,12 @@ mod tests {
             Value::from(hex::encode(artifacts.token.token_id()))
         );
     }
-
     #[test]
     fn handshake_token_id_reports_expected_digest() {
         let mut ctx = TestContext::new();
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa44).expect("keypair");
         let secret_hex = hex::encode(keypair.secret_key());
         let public_hex = hex::encode(keypair.public_key());
-
         let args = HandshakeTokenIssueArgs {
             suite: MlDsaSuiteArg::MlDsa44,
             issuer_secret_key: None,
@@ -20252,7 +18575,6 @@ mod tests {
             output: None,
             token_encoding: TokenOutputFormat::Base64,
         };
-
         let mut rng = StdRng::seed_from_u64(0xabad_1dea);
         let artifacts = args
             .issue_with_rng(
@@ -20262,14 +18584,12 @@ mod tests {
             )
             .expect("issue token");
         let token_hex = hex::encode(&artifacts.token_bytes);
-
         let id_args = HandshakeTokenIdArgs {
             path: None,
             hex_input: Some(token_hex),
             base64_input: None,
         };
         id_args.run(&mut ctx).expect("compute id");
-
         let output = ctx.outputs().last().expect("json output");
         let json: Value = norito::json::from_str(output).expect("valid json");
         assert_eq!(
@@ -20277,20 +18597,17 @@ mod tests {
             Value::from(hex::encode(artifacts.token.token_id()))
         );
     }
-
     #[test]
     fn handshake_token_fingerprint_matches_helper() {
         let mut ctx = TestContext::new();
         let keypair = generate_mldsa_keypair(MlDsaSuite::MlDsa65).expect("keypair");
         let public_hex = hex::encode(keypair.public_key());
         let expected = token::compute_issuer_fingerprint(keypair.public_key());
-
         let args = HandshakeTokenFingerprintArgs {
             public_key: None,
             public_key_hex: Some(public_hex),
         };
         args.run(&mut ctx).expect("fingerprint");
-
         let output = ctx.outputs().last().expect("json output");
         let json: Value = norito::json::from_str(output).expect("valid json");
         assert_eq!(
@@ -20298,32 +18615,25 @@ mod tests {
             Value::from(hex::encode(expected))
         );
     }
-
     impl RunContext for TestContext {
         fn config(&self) -> &Config {
             &self.cfg
         }
-
         fn transaction_metadata(&self) -> Option<&Metadata> {
             None
         }
-
         fn input_instructions(&self) -> bool {
             false
         }
-
         fn output_instructions(&self) -> bool {
             false
         }
-
         fn i18n(&self) -> &Localizer {
             &self.i18n
         }
-
         fn output_format(&self) -> CliOutputFormat {
             self.output_format
         }
-
         fn print_data<T>(&mut self, data: &T) -> Result<()>
         where
             T: JsonSerialize + ?Sized,
@@ -20333,13 +18643,11 @@ mod tests {
             self.printed.push(out);
             Ok(())
         }
-
         fn println(&mut self, data: impl Display) -> Result<()> {
             self.printed.push(data.to_string());
             Ok(())
         }
     }
-
     #[test]
     fn gateway_provider_spec_parses_expected_keys() {
         let id_hex = "11".repeat(32);
@@ -20354,7 +18662,6 @@ mod tests {
         assert_eq!(parsed.base_url, "https://example.com");
         assert_eq!(parsed.stream_token_b64, "YWJj");
     }
-
     #[test]
     fn gateway_provider_spec_rejects_missing_fields() {
         let err = parse_gateway_provider_spec("name=alpha, base-url=https://example.com")
@@ -20364,16 +18671,13 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn validate_hex_digest_enforces_format() {
         let valid = validate_hex_digest(&"ab".repeat(32), "--flag").expect("valid digest");
         assert_eq!(valid, "ab".repeat(32));
-
         let err = validate_hex_digest("zz", "--flag").expect_err("invalid digest");
         assert!(err.to_string().contains("--flag"));
     }
-
     #[test]
     fn parse_transport_policy_flag_accepts_valid_value() {
         let value = "soranet-strict".to_string();
@@ -20381,7 +18685,6 @@ mod tests {
             .expect("parse transport policy");
         assert_eq!(parsed, Some(TransportPolicy::SoranetStrict));
     }
-
     #[test]
     fn parse_transport_policy_flag_rejects_noncanonical_inputs() {
         for rejected in [
@@ -20403,7 +18706,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_anonymity_policy_flag_accepts_canonical_value() {
         let value = "anon-majority-pq".to_string();
@@ -20411,7 +18713,6 @@ mod tests {
             .expect("parse anonymity policy");
         assert_eq!(parsed, Some(AnonymityPolicy::MajorityPq));
     }
-
     #[test]
     fn parse_anonymity_policy_flag_rejects_noncanonical_inputs() {
         for rejected in [
@@ -20441,7 +18742,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_write_mode_flag_accepts_only_exact_v1_labels() {
         for (label, expected) in [
@@ -20471,7 +18771,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn anonymity_policy_label_matches_expected_values() {
         assert_eq!(
@@ -20487,7 +18786,6 @@ mod tests {
             "anon-strict-pq"
         );
     }
-
     #[test]
     fn load_guard_directory_json_rejected() {
         let mut file = NamedTempFile::new().expect("temp file");
@@ -20529,13 +18827,11 @@ mod tests {
             "error should mention the canonical SRCv2 Norito format: {msg}"
         );
     }
-
     #[test]
     fn load_guard_directory_decodes_srcv2_bundle() {
         let bytes = sample_guard_directory_snapshot_bytes();
         let mut file = NamedTempFile::new().expect("temp file");
         file.write_all(&bytes).expect("write snapshot");
-
         let digest = hex::encode(compute_snapshot_digest(&bytes));
         let directory =
             load_guard_directory(file.path(), &digest, 1_734_000_000).expect("load directory");
@@ -20552,9 +18848,7 @@ mod tests {
         assert_eq!(directory.valid_after(), Some(1_734_000_000));
         assert_eq!(directory.valid_until(), Some(1_734_086_400));
     }
-
     include!("sorafs_guard_directory_tests.rs");
-
     #[test]
     fn authenticated_directory_accepts_matching_snapshot_digest() {
         let bytes = sample_guard_directory_snapshot_bytes();
@@ -20563,31 +18857,26 @@ mod tests {
             .expect("digest and time should authenticate");
         assert_eq!(summary.authentication, "authenticated");
     }
-
     #[test]
     fn authenticated_directory_rejects_mismatch_and_expiry() {
         let bytes = sample_guard_directory_snapshot_bytes();
         let mismatch = authenticate_guard_directory_bytes(&bytes, &"00".repeat(32), 1_734_000_000);
         assert!(mismatch.is_err(), "snapshot digest mismatch should fail");
-
         let expected = hex::encode(compute_snapshot_digest(&bytes));
         let expired = authenticate_guard_directory_bytes(&bytes, &expected, 1_734_086_400);
         assert!(expired.is_err(), "expired snapshot should fail");
     }
-
     #[test]
     fn write_guard_directory_snapshot_honours_overwrite_flag() {
         use tempfile::TempDir;
         let temp_dir = TempDir::new().expect("temp dir");
         let path = temp_dir.path().join("snapshot.norito");
         let bytes = sample_guard_directory_snapshot_bytes();
-
         write_guard_directory_snapshot(&path, &bytes, false).expect("first write should succeed");
         let second = write_guard_directory_snapshot(&path, &bytes, false);
         assert!(second.is_err(), "expected overwrite protection");
         write_guard_directory_snapshot(&path, &bytes, true).expect("overwrite when allowed");
     }
-
     #[test]
     fn pin_list_with_prints_payload() {
         let block_hash = "11".repeat(32);
@@ -20601,7 +18890,6 @@ mod tests {
             expected_finalized_block_hash_hex: Some(block_hash.clone()),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, filter| {
             assert_eq!(filter.status, Some(PinStatusKindV1::Approved));
             assert_eq!(filter.limit, Some(5));
@@ -20621,11 +18909,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"manifests\""));
     }
-
     #[test]
     fn pin_list_with_propagates_error_status() {
         let args = PinListArgs {
@@ -20637,7 +18923,6 @@ mod tests {
             expected_finalized_block_hash_hex: None,
         };
         let mut ctx = TestContext::new();
-
         let result = args.run_with(&mut ctx, |_client, _| {
             Ok(Response::builder()
                 .status(StatusCode::BAD_REQUEST)
@@ -20647,18 +18932,15 @@ mod tests {
                 )?)
                 .unwrap())
         });
-
         assert!(result.is_err());
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn pin_show_with_handles_not_found() {
         let args = PinShowArgs {
             digest: "deadbeef".to_string(),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, digest| {
             assert_eq!(digest, "deadbeef");
             Ok(Response::builder()
@@ -20670,13 +18952,11 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed for 404");
-
         assert_eq!(
             ctx.printed,
             vec!["manifest `deadbeef` not found".to_string()]
         );
     }
-
     #[test]
     fn alias_list_with_prints_payload() {
         let args = AliasListArgs {
@@ -20686,7 +18966,6 @@ mod tests {
             manifest_digest: Some("aa".to_string()),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, filter| {
             assert_eq!(filter.limit, Some(3));
             assert_eq!(filter.namespace, Some("docs"));
@@ -20702,11 +18981,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"aliases\""));
     }
-
     #[test]
     fn replication_list_with_prints_payload() {
         let args = ReplicationListArgs {
@@ -20716,7 +18993,6 @@ mod tests {
             manifest_digest: None,
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, filter| {
             assert_eq!(filter.status, Some("completed"));
             Ok(Response::builder()
@@ -20730,16 +19006,13 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"orders\""));
     }
-
     #[test]
     fn transparency_cycles_list_prints_payload() {
         let args = TransparencyCyclesListArgs { limit: Some(8) };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, filter| {
             assert_eq!(filter.limit, Some(8));
             Ok(Response::builder()
@@ -20753,11 +19026,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"cycles\""));
     }
-
     #[test]
     fn transparency_cycles_get_normalizes_cycle_id() {
         let args = TransparencyCyclesGetArgs {
@@ -20765,7 +19036,6 @@ mod tests {
             limit: Some(3),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, cycle_id, filter| {
             assert_eq!(cycle_id, "aa".repeat(16));
             assert_eq!(filter.limit, Some(3));
@@ -20778,11 +19048,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"cycle_id_hex\""));
     }
-
     #[test]
     fn transparency_cycles_entry_normalizes_identifiers() {
         let args = TransparencyCyclesEntryArgs {
@@ -20790,7 +19058,6 @@ mod tests {
             entry_id: format!(" 0x{} ", "CD".repeat(16)),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, cycle_id, entry_id| {
             assert_eq!(cycle_id, "ab".repeat(16));
             assert_eq!(entry_id, "cd".repeat(16));
@@ -20803,16 +19070,13 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"entry_id_hex\""));
     }
-
     #[test]
     fn transparency_explorer_prints_payload() {
         let args = TransparencyExplorerArgs { limit: Some(5) };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, filter| {
             assert_eq!(filter.limit, Some(5));
             Ok(Response::builder()
@@ -20824,11 +19088,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("explorer_snapshot"));
     }
-
     fn transparency_explorer_canary_fixture_json(
         value: Value,
     ) -> Result<TransparencyExplorerCanaryHttpResponse> {
@@ -20838,7 +19100,6 @@ mod tests {
             body: norito::json::to_vec(&value)?,
         })
     }
-
     fn transparency_explorer_canary_fixture_response(
         url: &str,
         include_private_key: bool,
@@ -20897,7 +19158,6 @@ mod tests {
         }
         panic!("unexpected transparency explorer canary route: {url}");
     }
-
     #[test]
     fn transparency_explorer_canary_builds_payload_free_evidence() {
         let out_dir = TempDir::new().expect("canary evidence dir");
@@ -20910,13 +19170,11 @@ mod tests {
         };
         let mut ctx = TestContext::new();
         let mut requested = Vec::new();
-
         args.run_with_fetch(&mut ctx, |url| {
             requested.push(url.to_string());
             transparency_explorer_canary_fixture_response(url, false)
         })
         .expect("transparency explorer canary should render evidence");
-
         assert_eq!(requested.len(), 3);
         assert_eq!(ctx.printed.len(), 1);
         assert!(!ctx.printed[0].contains("proof_token_digest_key"));
@@ -20963,7 +19221,6 @@ mod tests {
             .expect("explorer URL");
         assert!(explorer_url.contains("/root/v1/sorafs/transparency/explorer"));
         assert!(explorer_url.contains("limit=6"));
-
         let written: Value =
             norito::json::from_slice(&fs::read(out).expect("written canary evidence"))
                 .expect("written evidence JSON");
@@ -20972,7 +19229,6 @@ mod tests {
             Some("sorafs.transparency.explorer_canary.v1")
         );
     }
-
     #[test]
     fn transparency_explorer_canary_rejects_private_digest_keys() {
         let args = TransparencyExplorerCanaryArgs {
@@ -20982,17 +19238,14 @@ mod tests {
             out: None,
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with_fetch(&mut ctx, |url| {
                 transparency_explorer_canary_fixture_response(url, true)
             })
             .expect_err("transparency explorer canary must reject private digest keys");
-
         assert!(err.to_string().contains("digest-key"));
         assert!(ctx.printed.is_empty());
     }
-
     fn transparency_publication_canary_fixture_response(
         url: &str,
         include_publisher_identity: bool,
@@ -21073,7 +19326,6 @@ mod tests {
         }
         panic!("unexpected transparency publication canary route: {url}");
     }
-
     #[test]
     fn transparency_publication_canary_builds_payload_free_evidence() {
         let out_dir = TempDir::new().expect("publication canary evidence dir");
@@ -21088,13 +19340,11 @@ mod tests {
         };
         let mut ctx = TestContext::new();
         let mut requested = Vec::new();
-
         args.run_with_fetch(&mut ctx, |url| {
             requested.push(url.to_string());
             transparency_publication_canary_fixture_response(url, true, StatusCode::OK)
         })
         .expect("publication canary should render evidence");
-
         assert_eq!(requested.len(), 2);
         assert_eq!(ctx.printed.len(), 1);
         assert!(!ctx.printed[0].contains("manifest-must-not-leak"));
@@ -21138,7 +19388,6 @@ mod tests {
                 .and_then(Value::as_bool)
                 == Some(true)
         }));
-
         let written: Value =
             norito::json::from_slice(&fs::read(out).expect("written publication canary evidence"))
                 .expect("written evidence JSON");
@@ -21147,7 +19396,6 @@ mod tests {
             Some("sorafs.transparency.publication_canary.v1")
         );
     }
-
     #[test]
     fn transparency_publication_canary_rejects_malformed_cycle_id_before_fetch() {
         let args = TransparencyPublicationCanaryArgs {
@@ -21158,20 +19406,17 @@ mod tests {
             out: None,
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with_fetch(&mut ctx, |_url| {
                 panic!("malformed cycle id must fail before HTTP fetch")
             })
             .expect_err("malformed cycle id must be rejected");
-
         assert!(
             err.to_string()
                 .contains("--cycle-id must be a 16-byte hex string")
         );
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn transparency_publication_canary_fails_missing_publisher_identity() {
         let args = TransparencyPublicationCanaryArgs {
@@ -21182,12 +19427,10 @@ mod tests {
             out: None,
         };
         let mut ctx = TestContext::new();
-
         args.run_with_fetch(&mut ctx, |url| {
             transparency_publication_canary_fixture_response(url, false, StatusCode::OK)
         })
         .expect("publication canary should emit failed evidence");
-
         let value: Value =
             norito::json::from_str(&ctx.printed[0]).expect("publication canary evidence JSON");
         assert_eq!(value.get("status").and_then(Value::as_str), Some("failed"));
@@ -21207,7 +19450,6 @@ mod tests {
                     == Some(false))
         );
     }
-
     #[test]
     fn transparency_publication_canary_records_http_failure_without_body() {
         let args = TransparencyPublicationCanaryArgs {
@@ -21218,12 +19460,10 @@ mod tests {
             out: None,
         };
         let mut ctx = TestContext::new();
-
         args.run_with_fetch(&mut ctx, |url| {
             transparency_publication_canary_fixture_response(url, true, StatusCode::BAD_GATEWAY)
         })
         .expect("HTTP failure should still emit canary evidence");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(!ctx.printed[0].contains("publication route unavailable"));
         let value: Value =
@@ -21234,12 +19474,10 @@ mod tests {
             Some(0)
         );
     }
-
     #[test]
     fn transparency_tokens_prints_payload() {
         let args = TransparencyTokensArgs { limit: Some(7) };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, filter| {
             assert_eq!(filter.limit, Some(7));
             Ok(Response::builder()
@@ -21253,11 +19491,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"proof_token_issuance\""));
     }
-
     #[test]
     fn transparency_token_issuance_submit_reads_json_payload() {
         let file = write_json_file(&norito::json!({
@@ -21273,7 +19509,6 @@ mod tests {
             payload: file.path().to_path_buf(),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, payload| {
             let value: Value = norito::json::from_slice(payload).expect("payload is json");
             assert_eq!(
@@ -21293,11 +19528,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("proof_token_issuance"));
     }
-
     #[test]
     fn transparency_token_issuance_canary_writes_payload_free_evidence() {
         let issuance_file = write_json_file(&norito::json!({
@@ -21317,7 +19550,6 @@ mod tests {
         };
         let mut ctx = TestContext::new();
         let mut submitted = 0_usize;
-
         args.run_with(&mut ctx, |_client, payload| {
             submitted += 1;
             let value: Value = norito::json::from_slice(payload).expect("issuance payload JSON");
@@ -21335,7 +19567,6 @@ mod tests {
                 .unwrap())
         })
         .expect("proof-token issuance canary should succeed");
-
         assert_eq!(submitted, 1);
         assert!(out.exists(), "canary evidence should be written");
         assert_eq!(ctx.printed.len(), 1);
@@ -21385,7 +19616,6 @@ mod tests {
             "canary evidence must not archive response bodies"
         );
     }
-
     #[test]
     fn transparency_token_issuance_canary_records_failed_probe_without_body() {
         let issuance_file = write_json_file(&norito::json!({
@@ -21399,7 +19629,6 @@ mod tests {
             out: None,
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, _payload| {
             Ok(Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
@@ -21410,7 +19639,6 @@ mod tests {
                 .unwrap())
         })
         .expect("failed probe should still emit canary evidence");
-
         assert_eq!(ctx.printed.len(), 1);
         let evidence: Value =
             norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
@@ -21427,7 +19655,6 @@ mod tests {
             "canary evidence must not archive response bodies"
         );
     }
-
     #[test]
     fn transparency_token_issuance_canary_rejects_empty_payload_list() {
         let args = TransparencyTokenIssuanceCanaryArgs {
@@ -21435,14 +19662,12 @@ mod tests {
             out: None,
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
             .expect_err("missing issuance payloads must be rejected");
         assert!(err.to_string().contains("at least one --issuance"));
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn transparency_privacy_aggregate_source_event_reads_json_payload() {
         let mut file = NamedTempFile::new().expect("privacy aggregate source-event file");
@@ -21463,7 +19688,6 @@ mod tests {
             payload: file.path().to_path_buf(),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, payload| {
             let value: Value = norito::json::from_slice(payload).expect("payload is json");
             assert_eq!(
@@ -21483,11 +19707,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"accepted\""));
     }
-
     #[test]
     fn transparency_privacy_aggregate_publish_due_reads_json_payload() {
         let mut file = NamedTempFile::new().expect("privacy aggregate publish-due file");
@@ -21503,7 +19725,6 @@ mod tests {
             payload: file.path().to_path_buf(),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, payload| {
             let value: Value = norito::json::from_slice(payload).expect("payload is json");
             assert_eq!(
@@ -21520,16 +19741,13 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"published\""));
     }
-
     #[test]
     fn transparency_privacy_aggregate_commands_reject_empty_payloads() {
         let file = NamedTempFile::new().expect("empty privacy aggregate file");
         let mut ctx = TestContext::new();
-
         let source_args = TransparencyPrivacyAggregateSourceEventArgs {
             payload: file.path().to_path_buf(),
         };
@@ -21537,7 +19755,6 @@ mod tests {
             .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
             .expect_err("empty source-event payload must be rejected");
         assert!(err.to_string().contains("source-event payload"));
-
         let publish_args = TransparencyPrivacyAggregatePublishDueArgs {
             payload: file.path().to_path_buf(),
         };
@@ -21547,7 +19764,6 @@ mod tests {
         assert!(err.to_string().contains("publish-due payload"));
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn transparency_privacy_aggregate_canary_writes_payload_free_evidence() {
         let source_file = write_json_file(&norito::json!({
@@ -21574,7 +19790,6 @@ mod tests {
         let mut ctx = TestContext::new();
         let mut submitted_source = 0_usize;
         let mut submitted_publish = 0_usize;
-
         args.run_with(
             &mut ctx,
             |_client, payload| {
@@ -21612,7 +19827,6 @@ mod tests {
             },
         )
         .expect("privacy aggregate canary should succeed");
-
         assert_eq!(submitted_source, 1);
         assert_eq!(submitted_publish, 1);
         assert!(out.exists(), "canary evidence should be written");
@@ -21653,7 +19867,6 @@ mod tests {
             "canary evidence must not include raw metric names"
         );
     }
-
     #[test]
     fn transparency_privacy_aggregate_canary_records_failed_probe_without_body() {
         let publish_file = write_json_file(&norito::json!({
@@ -21668,7 +19881,6 @@ mod tests {
             out: None,
         };
         let mut ctx = TestContext::new();
-
         args.run_with(
             &mut ctx,
             |_client, _payload| unreachable!("source-event submit must not run"),
@@ -21683,7 +19895,6 @@ mod tests {
             },
         )
         .expect("failed probe should still emit canary evidence");
-
         assert_eq!(ctx.printed.len(), 1);
         let evidence: Value =
             norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
@@ -21700,14 +19911,12 @@ mod tests {
             "canary evidence must not archive response bodies"
         );
     }
-
     fn write_json_file(value: &Value) -> NamedTempFile {
         let mut file = NamedTempFile::new().expect("json file");
         file.write_all(&norito::json::to_vec(value).expect("serialize json"))
             .expect("write json file");
         file
     }
-
     #[test]
     fn appeals_pricing_quote_reads_json_payload() {
         let file = write_json_file(&norito::json!({
@@ -21720,7 +19929,6 @@ mod tests {
             input: file.path().to_path_buf(),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, payload| {
             let value: Value = norito::json::from_slice(payload).expect("payload is json");
             assert_eq!(value.get("class").and_then(Value::as_str), Some("content"));
@@ -21733,11 +19941,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"123\""));
     }
-
     #[test]
     fn appeals_finance_deposit_create_reads_json_payload() {
         let file = write_json_file(&norito::json!({
@@ -21752,7 +19958,6 @@ mod tests {
             input: file.path().to_path_buf(),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, payload| {
             let value: Value = norito::json::from_slice(payload).expect("payload is json");
             assert_eq!(
@@ -21768,18 +19973,15 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("deposit_instruction"));
     }
-
     #[test]
     fn appeals_finance_deposit_get_trims_escrow_id() {
         let args = AppealsFinanceDepositGetArgs {
             escrow_id: " 0xAAAA ".to_string(),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, escrow_id| {
             assert_eq!(escrow_id, "0xAAAA");
             Ok(Response::builder()
@@ -21791,11 +19993,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("escrow_id_hex"));
     }
-
     #[test]
     fn appeals_finance_deposit_submit_settlement_accepts_accepted_status() {
         let file = write_json_file(&norito::json!({
@@ -21814,7 +20014,6 @@ mod tests {
             input: file.path().to_path_buf(),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, payload| {
             let value: Value = norito::json::from_slice(payload).expect("payload is json");
             assert_eq!(value.get("outcome").and_then(Value::as_str), Some("uphold"));
@@ -21827,16 +20026,13 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("queued"));
     }
-
     #[test]
     fn appeals_finance_reports_list_prints_payload() {
         let args = AppealsFinanceReportsArgs { limit: Some(5) };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, filter| {
             assert_eq!(filter.limit, Some(5));
             Ok(Response::builder()
@@ -21850,11 +20046,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("appeal_finance_report"));
     }
-
     #[test]
     fn appeals_finance_deposit_create_rejects_empty_payload() {
         let file = NamedTempFile::new().expect("empty payload");
@@ -21862,21 +20056,18 @@ mod tests {
             input: file.path().to_path_buf(),
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
             .expect_err("empty payload must be rejected");
         assert!(err.to_string().contains("appeal finance deposit payload"));
         assert!(ctx.printed.is_empty());
     }
-
     fn signed_moderation_repro_manifest_fixture() -> ModerationReproManifestV1 {
         use iroha_data_model::sorafs::moderation::{
             MODERATION_REPRO_MANIFEST_VERSION_V1, ModerationModelFingerprintV1,
             ModerationReproBodyV1, ModerationReproSignatureV1, ModerationSeedMaterialV1,
             ModerationThresholdsV1,
         };
-
         let mut body = ModerationReproBodyV1 {
             schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
             manifest_id: [0xA1; 16],
@@ -21924,13 +20115,11 @@ mod tests {
             }],
         }
     }
-
     fn adversarial_corpus_manifest_fixture() -> AdversarialCorpusManifestV1 {
         use iroha_data_model::sorafs::moderation::{
             ADVERSARIAL_CORPUS_VERSION_V1, AdversarialPerceptualFamilyV1,
             AdversarialPerceptualVariantV1,
         };
-
         AdversarialCorpusManifestV1 {
             schema_version: ADVERSARIAL_CORPUS_VERSION_V1,
             issued_at_unix: 1_800_000_100,
@@ -21950,14 +20139,12 @@ mod tests {
             }],
         }
     }
-
     fn moderation_ballot_reveal_fixture() -> SoraFsModerationBallotRevealV1 {
         use iroha_data_model::sorafs::moderation::{
             SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
             SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1, SoraFsModerationBallotContextV1,
             SoraFsModerationVoteChoice,
         };
-
         SoraFsModerationBallotRevealV1 {
             version: SORAFS_MODERATION_BALLOT_REVEAL_VERSION_V1,
             context: SoraFsModerationBallotContextV1 {
@@ -21976,7 +20163,6 @@ mod tests {
             revealed_at_unix_ms: 0,
         }
     }
-
     fn moderation_ballot_reveal_fixture_for_juror(
         juror_id: &str,
     ) -> SoraFsModerationBallotRevealV1 {
@@ -21984,7 +20170,6 @@ mod tests {
         reveal.juror_id = juror_id.to_string();
         reveal
     }
-
     fn moderation_ballot_commit_fixture_for_juror(
         juror_id: &str,
     ) -> SoraFsModerationBallotCommitV1 {
@@ -22000,7 +20185,6 @@ mod tests {
             committed_at_unix_ms: 0,
         }
     }
-
     fn moderation_commit_from_transaction(
         transaction: &SignedTransaction,
     ) -> SoraFsModerationBallotCommitV1 {
@@ -22016,7 +20200,6 @@ mod tests {
             .expect("native moderation commit instruction");
         decode_from_bytes(instruction.commit_payload()).expect("decode embedded moderation commit")
     }
-
     fn moderation_reveal_from_transaction(
         transaction: &SignedTransaction,
     ) -> SoraFsModerationBallotRevealV1 {
@@ -22032,7 +20215,6 @@ mod tests {
             .expect("native moderation reveal instruction");
         decode_from_bytes(instruction.reveal_payload()).expect("decode embedded moderation reveal")
     }
-
     fn moderation_finalization_from_transaction(
         transaction: &SignedTransaction,
     ) -> &FinalizeSorafsModerationCase {
@@ -22047,7 +20229,6 @@ mod tests {
             .downcast_ref::<FinalizeSorafsModerationCase>()
             .expect("native moderation finalization instruction")
     }
-
     fn write_commit_reveal_status_file(
         missing_commit_jurors: &[&str],
         missing_reveal_jurors: &[&str],
@@ -22080,7 +20261,6 @@ mod tests {
         });
         write_json_file(&status)
     }
-
     fn juror_notifications_manifest_fixture(private_payload_included: bool) -> Value {
         norito::json!({
             "schema": "sorafs.moderation.quarantine.juror_notifications.v1",
@@ -22121,12 +20301,10 @@ mod tests {
             }]
         })
     }
-
     #[test]
     fn moderation_ballots_list_prints_payload() {
         let args = ModerationBallotsListArgs { limit: Some(8) };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, filter| {
             assert_eq!(filter.limit, Some(8));
             Ok(Response::builder()
@@ -22140,11 +20318,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"ballots\""));
     }
-
     #[test]
     fn moderation_ballots_get_trims_identifiers() {
         let args = ModerationBallotsGetArgs {
@@ -22153,7 +20329,6 @@ mod tests {
             limit: Some(3),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, case_id, round_id, filter| {
             assert_eq!(case_id, "case-401");
             assert_eq!(round_id, "round-7");
@@ -22168,11 +20343,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"case-401\""));
     }
-
     #[test]
     fn moderation_ballots_no_show_plan_trims_identifiers_and_prints_payload() {
         let args = ModerationBallotsNoShowPlanArgs {
@@ -22180,7 +20353,6 @@ mod tests {
             round_id: " round-7 ".to_string(),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, case_id, round_id| {
             assert_eq!(case_id, "case-401");
             assert_eq!(round_id, "round-7");
@@ -22197,12 +20369,10 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"no_show_count\""));
         assert!(ctx.printed[0].contains("\"penalty_plan_digest_hex\""));
     }
-
     #[test]
     fn moderation_ballots_events_prints_payload() {
         let args = ModerationBallotsEventsArgs {
@@ -22210,7 +20380,6 @@ mod tests {
             limit: Some(4),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, filter| {
             assert_eq!(filter.since, Some(12));
             assert_eq!(filter.limit, Some(4));
@@ -22225,11 +20394,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"events\""));
     }
-
     #[test]
     fn moderation_ballots_commit_reads_json_payload() {
         let mut ctx = TestContext::new();
@@ -22250,11 +20417,9 @@ mod tests {
             Ok(transaction.hash())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"transaction_hash_hex\""));
     }
-
     #[test]
     fn moderation_ballots_reveal_reads_norito_payload() {
         let mut ctx = TestContext::new();
@@ -22271,11 +20436,9 @@ mod tests {
             Ok(transaction.hash())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"transaction_hash_hex\""));
     }
-
     #[test]
     fn moderation_ballots_tally_builds_request() {
         let args = ModerationBallotsTallyArgs {
@@ -22283,7 +20446,6 @@ mod tests {
             round_id: " round-7 ".to_string(),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, transaction| {
             let instruction = moderation_finalization_from_transaction(transaction);
             assert_eq!(instruction.case_id(), "case-401");
@@ -22291,11 +20453,9 @@ mod tests {
             Ok(transaction.hash())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"transaction_hash_hex\""));
     }
-
     #[test]
     fn moderation_ballots_commit_rejects_invalid_format() {
         let file = NamedTempFile::new().expect("commit file");
@@ -22304,14 +20464,12 @@ mod tests {
             format: "yaml".to_string(),
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
             .expect_err("invalid format must be rejected");
         assert!(err.to_string().contains("--format"));
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn moderation_native_action_and_coordination_inputs_are_bounded() {
         let action = NamedTempFile::new().expect("action payload file");
@@ -22322,7 +20480,6 @@ mod tests {
         let action_err = read_moderation_ballot_payload_file(action.path())
             .expect_err("oversized native action input must be rejected");
         assert!(action_err.to_string().contains("between 1 and"));
-
         let status = NamedTempFile::new().expect("coordination status file");
         status
             .as_file()
@@ -22332,7 +20489,6 @@ mod tests {
             .expect_err("oversized coordination input must be rejected");
         assert!(status_err.to_string().contains("between 1 and"));
     }
-
     #[test]
     fn moderation_native_juror_actions_reject_caller_timestamps() {
         let ctx = TestContext::new();
@@ -22343,14 +20499,12 @@ mod tests {
         let commit_err = build_moderation_commit_transaction(&client, &commit)
             .expect_err("caller-supplied commit timestamp must be rejected");
         assert!(commit_err.to_string().contains("must be zero"));
-
         let mut reveal = moderation_ballot_reveal_fixture_for_juror(&juror_id);
         reveal.revealed_at_unix_ms = 1;
         let reveal_err = build_moderation_reveal_transaction(&client, &reveal)
             .expect_err("caller-supplied reveal timestamp must be rejected");
         assert!(reveal_err.to_string().contains("must be zero"));
     }
-
     #[test]
     fn moderation_native_juror_actions_require_transaction_authority() {
         let ctx = TestContext::new();
@@ -22359,13 +20513,11 @@ mod tests {
         let commit_err = build_moderation_commit_transaction(&client, &commit)
             .expect_err("substituted commit juror must be rejected");
         assert!(commit_err.to_string().contains("transaction authority"));
-
         let reveal = moderation_ballot_reveal_fixture_for_juror("other-juror@moderation");
         let reveal_err = build_moderation_reveal_transaction(&client, &reveal)
             .expect_err("substituted reveal juror must be rejected");
         assert!(reveal_err.to_string().contains("transaction authority"));
     }
-
     #[test]
     fn moderation_ballots_execute_submits_pending_actions_payload_free() {
         let mut ctx = TestContext::new();
@@ -22397,7 +20549,6 @@ mod tests {
         let mut committed = Vec::new();
         let mut revealed = Vec::new();
         let mut tallied = Vec::new();
-
         args.run_with(
             &mut ctx,
             |_client, transaction| {
@@ -22418,7 +20569,6 @@ mod tests {
             },
         )
         .expect("execution should succeed");
-
         assert_eq!(committed, vec![juror_id.clone()]);
         assert_eq!(revealed, vec![juror_id]);
         assert_eq!(
@@ -22450,7 +20600,6 @@ mod tests {
             "execution summary must not print reveal payload internals"
         );
     }
-
     #[test]
     fn moderation_ballots_execute_rejects_non_pending_commit() {
         let commit = moderation_ballot_commit_fixture_for_juror("juror-1@moderation");
@@ -22472,7 +20621,6 @@ mod tests {
             submit_tally: false,
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with(
                 &mut ctx,
@@ -22481,11 +20629,9 @@ mod tests {
                 |_client, _| unreachable!("tally submit must not run"),
             )
             .expect_err("non-pending commit must be rejected");
-
         assert!(err.to_string().contains("not pending in --status"));
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn moderation_ballots_executor_bundle_writes_supervised_job_payload_free() {
         let temp = TempDir::new().expect("executor bundle temp dir");
@@ -22508,10 +20654,8 @@ mod tests {
             interval_secs: 30,
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx)
             .expect("executor bundle should be written");
-
         assert_eq!(ctx.printed.len(), 1);
         let summary: Value =
             norito::json::from_str(&ctx.printed[0]).expect("executor bundle summary JSON");
@@ -22549,14 +20693,12 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
-
         let run_script = fs::read_to_string(bundle_dir.join("run.sh")).expect("read run script");
         assert!(run_script.contains("sorafs moderation ballots execute"));
         assert!(run_script.contains("--submit-tally"));
         assert!(run_script.contains(&format!("--commit-payload='{}'", commit_path.display())));
         assert!(run_script.contains(&format!("--reveal-payload='{}'", reveal_path.display())));
         assert!(!run_script.contains("nonce"));
-
         let env = fs::read_to_string(bundle_dir.join("executor.env")).expect("read env");
         assert!(env.contains("IROHA_BIN='/usr/local/bin/iroha'"));
         assert!(env.contains(&format!(
@@ -22564,7 +20706,6 @@ mod tests {
             status_path.display()
         )));
         assert!(!env.contains("commitment_blake2b_256"));
-
         let systemd =
             fs::read_to_string(bundle_dir.join("org.sora.sorafs.ballots-executor-test.service"))
                 .expect("read systemd unit");
@@ -22586,7 +20727,6 @@ mod tests {
             metadata.get("schema").and_then(Value::as_str),
             Some("sorafs.moderation.ballots.executor_bundle.v1")
         );
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -22598,7 +20738,6 @@ mod tests {
             assert_ne!(mode & 0o111, 0, "run.sh should be executable");
         }
     }
-
     #[test]
     fn moderation_ballots_executor_bundle_rejects_empty_action_set() {
         let temp = TempDir::new().expect("executor bundle temp dir");
@@ -22617,11 +20756,9 @@ mod tests {
             interval_secs: 60,
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with(&mut ctx)
             .expect_err("empty executor bundle action set must be rejected");
-
         assert!(err.to_string().contains("at least one --commit-payload"));
         assert!(ctx.printed.is_empty());
         assert!(
@@ -22629,7 +20766,6 @@ mod tests {
             "bundle directory must not be created on validation failure"
         );
     }
-
     #[test]
     fn moderation_ballots_executor_canary_writes_payload_free_evidence() {
         let temp = TempDir::new().expect("executor canary temp dir");
@@ -22687,10 +20823,8 @@ mod tests {
             out: Some(out.clone()),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx)
             .expect("executor canary should emit evidence");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(out.exists(), "executor canary evidence should be written");
         let evidence: Value =
@@ -22749,7 +20883,6 @@ mod tests {
                 .any(|artifact| artifact.get("kind").and_then(Value::as_str) == Some("run_script"))
         );
     }
-
     #[test]
     fn moderation_ballots_executor_canary_rejects_payload_bearing_summary() {
         let temp = TempDir::new().expect("executor canary temp dir");
@@ -22785,15 +20918,12 @@ mod tests {
             out: None,
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with(&mut ctx)
             .expect_err("payload-bearing execution summary must be rejected");
-
         assert!(err.to_string().contains("payload bytes"));
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn moderation_quarantine_notifications_deliver_writes_outbox_and_webhook_summary() {
         let manifest = juror_notifications_manifest_fixture(false);
@@ -22807,7 +20937,6 @@ mod tests {
         };
         let mut ctx = TestContext::new();
         let mut posts = Vec::new();
-
         args.run_with(&mut ctx, |url, body| {
             assert_eq!(url, "https://moderation.example.test/webhook");
             posts.push(body.to_vec());
@@ -22820,7 +20949,6 @@ mod tests {
                 .unwrap())
         })
         .expect("notification delivery should succeed");
-
         assert_eq!(posts.len(), 1);
         let posted: Value = norito::json::from_slice(&posts[0]).expect("posted notification JSON");
         assert_eq!(
@@ -22831,7 +20959,6 @@ mod tests {
         assert!(outbox_file.exists(), "outbox file should be written");
         let outbox_body = fs::read_to_string(outbox_file).expect("read outbox file");
         assert!(!outbox_body.contains("payload_b64"));
-
         assert_eq!(ctx.printed.len(), 1);
         let summary: Value =
             norito::json::from_str(&ctx.printed[0]).expect("delivery summary JSON");
@@ -22860,7 +20987,6 @@ mod tests {
             "delivery summary must not repeat notification body text"
         );
     }
-
     #[test]
     fn moderation_quarantine_notifications_deliver_rejects_private_payload_flags() {
         let manifest = juror_notifications_manifest_fixture(true);
@@ -22873,13 +20999,11 @@ mod tests {
             timeout_secs: 5,
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with(&mut ctx, |_url, _body| {
                 unreachable!("webhook delivery must not run")
             })
             .expect_err("private payload flag must be rejected");
-
         assert!(err.to_string().contains("private_payload_included"));
         assert!(ctx.printed.is_empty());
         assert!(
@@ -22890,7 +21014,6 @@ mod tests {
             "outbox must stay empty on validation failure"
         );
     }
-
     #[test]
     fn moderation_quarantine_notifications_canary_writes_payload_free_evidence() {
         let manifest = juror_notifications_manifest_fixture(false);
@@ -22905,7 +21028,6 @@ mod tests {
         };
         let mut ctx = TestContext::new();
         let mut posts = Vec::new();
-
         args.run_with(&mut ctx, |url, body| {
             assert_eq!(url, "https://moderation.example.test/webhook");
             posts.push(body.to_vec());
@@ -22918,7 +21040,6 @@ mod tests {
                 .unwrap())
         })
         .expect("canary should succeed");
-
         assert_eq!(posts.len(), 1);
         assert!(out.exists(), "canary evidence file should be written");
         assert_eq!(ctx.printed.len(), 1);
@@ -22965,7 +21086,6 @@ mod tests {
             "canary evidence must not repeat notification body text"
         );
     }
-
     #[test]
     fn moderation_quarantine_notifications_canary_records_failed_probe_without_body() {
         let manifest = juror_notifications_manifest_fixture(false);
@@ -22977,7 +21097,6 @@ mod tests {
             timeout_secs: 5,
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_url, _body| {
             Ok(Response::builder()
                 .status(StatusCode::BAD_GATEWAY)
@@ -22988,7 +21107,6 @@ mod tests {
                 .unwrap())
         })
         .expect("canary should emit failed evidence instead of hiding probe failure");
-
         let evidence: Value =
             norito::json::from_str(&ctx.printed[0]).expect("canary evidence JSON");
         assert_eq!(
@@ -23004,12 +21122,10 @@ mod tests {
             "canary evidence must hash response bodies instead of archiving them"
         );
     }
-
     #[test]
     fn moderation_registry_list_with_prints_payload() {
         let args = ModerationRegistryListArgs { limit: Some(5) };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, filter| {
             assert_eq!(filter.limit, Some(5));
             Ok(Response::builder()
@@ -23024,11 +21140,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"repro_manifests\""));
     }
-
     #[test]
     fn moderation_registry_submit_repro_reads_json_manifest() {
         let manifest = signed_moderation_repro_manifest_fixture();
@@ -23045,7 +21159,6 @@ mod tests {
             format: "json".to_string(),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, manifest_bytes| {
             assert_eq!(manifest_bytes, expected_bytes.as_slice());
             Ok(Response::builder()
@@ -23057,11 +21170,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"admitted\""));
     }
-
     #[test]
     fn moderation_registry_submit_corpus_reads_norito_manifest() {
         let manifest = adversarial_corpus_manifest_fixture();
@@ -23074,7 +21185,6 @@ mod tests {
             format: "norito".to_string(),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, manifest_bytes| {
             assert_eq!(manifest_bytes, expected_bytes.as_slice());
             Ok(Response::builder()
@@ -23086,11 +21196,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"admitted\""));
     }
-
     #[test]
     fn moderation_registry_submit_repro_rejects_invalid_format() {
         let file = NamedTempFile::new().expect("manifest file");
@@ -23099,19 +21207,16 @@ mod tests {
             format: "yaml".to_string(),
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
             .expect_err("invalid format must be rejected");
         assert!(err.to_string().contains("--format"));
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn moderation_screening_list_with_prints_payload() {
         let args = ModerationScreeningListArgs { limit: Some(6) };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, filter| {
             assert_eq!(filter.limit, Some(6));
             Ok(Response::builder()
@@ -23125,11 +21230,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"screening_records\""));
     }
-
     #[test]
     fn moderation_screening_submit_reads_authenticated_authority_json() {
         let idempotency_key = [0xA1_u8; 32];
@@ -23169,7 +21272,6 @@ mod tests {
             input: file.path().to_path_buf(),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, request| {
             assert_eq!(request.idempotency_key_hex, expected_idempotency_key);
             assert_eq!(request.evidence_kind, "committee_aggregate");
@@ -23187,11 +21289,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"accepted\""));
     }
-
     #[test]
     fn moderation_screening_submit_rejects_missing_field() {
         let mut file = NamedTempFile::new().expect("screening result file");
@@ -23208,19 +21308,16 @@ mod tests {
             input: file.path().to_path_buf(),
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with(&mut ctx, |_client, _| unreachable!("submit must not run"))
             .expect_err("missing authority must be rejected");
         assert!(err.to_string().contains("authority_b64"));
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn moderation_quarantine_list_with_prints_payload() {
         let args = ModerationQuarantineListArgs { limit: Some(4) };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, filter| {
             assert_eq!(filter.limit, Some(4));
             Ok(Response::builder()
@@ -23234,11 +21331,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"quarantine_records\""));
     }
-
     #[test]
     fn moderation_quarantine_object_store_reads_payload_file() {
         let quarantine_id = [0xA7_u8; 16];
@@ -23253,7 +21348,6 @@ mod tests {
             notes: Some(" sealed via cli ".to_string()),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, id, request| {
             assert_eq!(id, encode(quarantine_id));
             assert_eq!(request.payload, b"quarantine payload bytes");
@@ -23269,11 +21363,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"stored\""));
     }
-
     #[test]
     fn moderation_quarantine_object_read_prints_payload_json() {
         let quarantine_id = [0xB8_u8; 16];
@@ -23281,7 +21373,6 @@ mod tests {
             quarantine_id: encode(quarantine_id),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, id| {
             assert_eq!(id, encode(quarantine_id));
             Ok(Response::builder()
@@ -23294,11 +21385,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"payload_b64\""));
     }
-
     #[test]
     fn moderation_quarantine_object_store_rejects_empty_payload_file() {
         let file = NamedTempFile::new().expect("empty payload");
@@ -23310,7 +21399,6 @@ mod tests {
             notes: None,
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with(&mut ctx, |_client, _, _| {
                 unreachable!("submit must not run")
@@ -23319,7 +21407,6 @@ mod tests {
         assert!(err.to_string().contains("--payload-file"));
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn moderation_quarantine_review_builds_request() {
         let quarantine_id = [0xAB_u8; 16];
@@ -23330,7 +21417,6 @@ mod tests {
             notes: Some(" reviewed locally ".to_string()),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, id, request| {
             assert_eq!(id, encode(quarantine_id));
             assert_eq!(request.reviewed_by, "operator@moderation");
@@ -23345,11 +21431,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"reviewed\""));
     }
-
     #[test]
     fn moderation_quarantine_release_defaults_authority_to_cli_account() {
         let quarantine_id = [0xCD_u8; 16];
@@ -23361,7 +21445,6 @@ mod tests {
         };
         let mut ctx = TestContext::new();
         let expected_authority = ctx.config().account.to_string();
-
         args.run_with(&mut ctx, |_client, id, request| {
             assert_eq!(id, encode(quarantine_id));
             assert_eq!(request.release_authority, expected_authority);
@@ -23376,11 +21459,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"released\""));
     }
-
     #[test]
     fn moderation_quarantine_appeal_handoff_reads_json_payload() {
         let quarantine_id = [0xA4_u8; 16];
@@ -23397,7 +21478,6 @@ mod tests {
             input: input.path().to_path_buf(),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, id, payload| {
             assert_eq!(id, encode(quarantine_id));
             let value: Value = norito::json::from_slice(payload)?;
@@ -23412,11 +21492,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("ready_for_deposit"));
     }
-
     #[test]
     fn moderation_quarantine_appeal_handoff_rejects_empty_payload() {
         let input = NamedTempFile::new().expect("empty appeal handoff payload");
@@ -23425,7 +21503,6 @@ mod tests {
             input: input.path().to_path_buf(),
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with(&mut ctx, |_client, _, _| {
                 unreachable!("submit must not run")
@@ -23437,7 +21514,6 @@ mod tests {
         );
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn moderation_quarantine_operator_panel_reads_workflow_view() {
         let quarantine_id = [0xA8_u8; 16];
@@ -23446,7 +21522,6 @@ mod tests {
             limit: Some(4),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, id, filter| {
             assert_eq!(id, encode(quarantine_id));
             assert_eq!(filter.limit, Some(4));
@@ -23460,11 +21535,9 @@ mod tests {
                 .unwrap())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("operator_panel"));
     }
-
     #[test]
     fn moderation_quarantine_operator_panel_rejects_bad_quarantine_id() {
         let args = ModerationQuarantineOperatorPanelArgs {
@@ -23472,14 +21545,12 @@ mod tests {
             limit: None,
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with(&mut ctx, |_client, _, _| unreachable!("get must not run"))
             .expect_err("bad quarantine id must be rejected");
         assert!(err.to_string().contains("--quarantine-id"));
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn moderation_quarantine_bridge_plan_derives_workflow_actions() {
         let quarantine_id = [0xA9_u8; 16];
@@ -23488,7 +21559,6 @@ mod tests {
             limit: Some(5),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, id, filter| {
             assert_eq!(id, encode(quarantine_id));
             assert_eq!(filter.limit, Some(5));
@@ -23525,7 +21595,6 @@ mod tests {
                 .unwrap())
         })
         .expect("bridge plan should render");
-
         assert_eq!(ctx.printed.len(), 1);
         let value: Value = norito::json::from_str(&ctx.printed[0]).expect("bridge plan json");
         assert_eq!(
@@ -23555,7 +21624,6 @@ mod tests {
         );
         assert!(!ctx.printed[0].contains("payload_b64"));
     }
-
     #[test]
     fn moderation_quarantine_bridge_plan_rejects_payload_bytes() {
         let quarantine_id = [0xAA_u8; 16];
@@ -23564,7 +21632,6 @@ mod tests {
             limit: None,
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with(&mut ctx, |_client, _id, _filter| {
                 Ok(Response::builder()
@@ -23585,7 +21652,6 @@ mod tests {
         assert!(err.to_string().contains("payload bytes"));
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn moderation_quarantine_bridge_plan_rejects_bad_quarantine_id() {
         let args = ModerationQuarantineBridgePlanArgs {
@@ -23593,14 +21659,12 @@ mod tests {
             limit: None,
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with(&mut ctx, |_client, _, _| unreachable!("get must not run"))
             .expect_err("bad quarantine id must be rejected");
         assert!(err.to_string().contains("--quarantine-id"));
         assert!(ctx.printed.is_empty());
     }
-
     fn moderation_operator_canary_fixture_json(
         value: Value,
     ) -> Result<ModerationOperatorCanaryHttpResponse> {
@@ -23610,7 +21674,6 @@ mod tests {
             body: norito::json::to_vec(&value)?,
         })
     }
-
     fn moderation_operator_canary_fixture_response(
         url: &str,
         quarantine_id_hex: &str,
@@ -23703,7 +21766,6 @@ mod tests {
         }
         panic!("unexpected canary route: {url}");
     }
-
     #[test]
     fn moderation_quarantine_operator_canary_builds_payload_free_evidence() {
         let quarantine_id = [0xBA_u8; 16];
@@ -23719,7 +21781,6 @@ mod tests {
         };
         let mut ctx = TestContext::new();
         let mut requested = Vec::new();
-
         args.run_with_fetch(&mut ctx, |url| {
             requested.push(url.to_string());
             moderation_operator_canary_fixture_response(
@@ -23730,7 +21791,6 @@ mod tests {
             )
         })
         .expect("operator canary should render evidence");
-
         assert_eq!(requested.len(), 8);
         assert_eq!(ctx.printed.len(), 1);
         assert!(!ctx.printed[0].contains("payload_b64"));
@@ -23770,7 +21830,6 @@ mod tests {
         assert!(routes.iter().all(|route| {
             route.get("payload_bytes_included").and_then(Value::as_bool) == Some(false)
         }));
-
         let written: Value =
             norito::json::from_slice(&fs::read(out).expect("written canary evidence"))
                 .expect("written evidence JSON");
@@ -23779,7 +21838,6 @@ mod tests {
             Some("sorafs.moderation.quarantine.operator_canary.v1")
         );
     }
-
     #[test]
     fn moderation_quarantine_operator_canary_rejects_payload_bytes() {
         let quarantine_id = [0xBB_u8; 16];
@@ -23792,7 +21850,6 @@ mod tests {
             out: None,
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with_fetch(&mut ctx, |url| {
                 moderation_operator_canary_fixture_response(
@@ -23803,11 +21860,9 @@ mod tests {
                 )
             })
             .expect_err("operator canary must reject payload bytes");
-
         assert!(err.to_string().contains("payload bytes"));
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn moderation_quarantine_operator_canary_rejects_schema_drift() {
         let quarantine_id = [0xBC_u8; 16];
@@ -23820,7 +21875,6 @@ mod tests {
             out: None,
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with_fetch(&mut ctx, |url| {
                 moderation_operator_canary_fixture_response(
@@ -23831,18 +21885,15 @@ mod tests {
                 )
             })
             .expect_err("operator canary must reject schema drift");
-
         assert!(err.to_string().contains("schema"));
         assert!(ctx.printed.is_empty());
     }
-
     struct FixtureModerationOperatorPanelSource {
         expected_quarantine_id_hex: String,
         expected_limit: Option<u32>,
         status: StatusCode,
         body: Vec<u8>,
     }
-
     impl ModerationOperatorWorkflowSource for FixtureModerationOperatorPanelSource {
         fn get_operator_panel(
             &self,
@@ -23858,7 +21909,6 @@ mod tests {
                 .unwrap())
         }
     }
-
     fn fixture_moderation_operator_service(
         quarantine_id: [u8; 16],
         expected_limit: Option<u32>,
@@ -23881,7 +21931,6 @@ mod tests {
         )
         .expect("operator service")
     }
-
     fn fixture_finalized_moderation_case(
         jurors: &[&str],
         committed_jurors: &[&str],
@@ -23919,7 +21968,6 @@ mod tests {
             "no_shows": []
         })
     }
-
     fn fixture_payload_bearing_finalized_moderation_case() -> Value {
         let mut case = fixture_finalized_moderation_case(&["juror-a@moderation"], &[], &[]);
         case.as_object_mut()
@@ -23930,14 +21978,12 @@ mod tests {
             );
         case
     }
-
     struct FixtureModerationOperatorMutationSource {
         expected_quarantine_id_hex: String,
         expected_kind: &'static str,
         status: StatusCode,
         body: Vec<u8>,
     }
-
     impl FixtureModerationOperatorMutationSource {
         fn response(&self) -> Result<Response<Vec<u8>>> {
             Ok(Response::builder()
@@ -23947,7 +21993,6 @@ mod tests {
                 .unwrap())
         }
     }
-
     impl ModerationOperatorWorkflowSource for FixtureModerationOperatorMutationSource {
         fn get_operator_panel(
             &self,
@@ -23956,7 +22001,6 @@ mod tests {
         ) -> Result<Response<Vec<u8>>> {
             unreachable!("mutation fixture does not serve operator-panel reads")
         }
-
         fn post_review(
             &self,
             quarantine_id_hex: &str,
@@ -23969,7 +22013,6 @@ mod tests {
             assert_eq!(request.notes, Some("reviewed through service"));
             self.response()
         }
-
         fn post_release(
             &self,
             quarantine_id_hex: &str,
@@ -23982,7 +22025,6 @@ mod tests {
             assert_eq!(request.notes, Some("released through service"));
             self.response()
         }
-
         fn post_appeal_handoff(
             &self,
             quarantine_id_hex: &str,
@@ -23996,7 +22038,6 @@ mod tests {
             self.response()
         }
     }
-
     fn fixture_moderation_operator_mutation_service(
         quarantine_id: [u8; 16],
         expected_kind: &'static str,
@@ -24020,21 +22061,18 @@ mod tests {
         )
         .expect("operator mutation service")
     }
-
     fn handle_moderation_operator_raw_request(
         service: &ModerationOperatorService,
         raw: String,
     ) -> ModerationOperatorHttpResponse {
         handle_moderation_operator_raw_request_with_csrf(service, raw, true)
     }
-
     fn handle_moderation_operator_raw_request_without_csrf(
         service: &ModerationOperatorService,
         raw: String,
     ) -> ModerationOperatorHttpResponse {
         handle_moderation_operator_raw_request_with_csrf(service, raw, false)
     }
-
     fn handle_moderation_operator_raw_request_with_csrf(
         service: &ModerationOperatorService,
         mut raw: String,
@@ -24054,7 +22092,6 @@ mod tests {
         let request = moderation_operator_parse_http_request(&raw, 1024).expect("HTTP request");
         service.handle_request(&request)
     }
-
     #[test]
     fn moderation_operator_service_routes_operator_panel_with_query_limit() {
         let quarantine_id = [0xAB_u8; 16];
@@ -24079,7 +22116,6 @@ mod tests {
                 "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel?limit=7 HTTP/1.1\r\nHost: local\r\n\r\n"
             ),
         );
-
         assert_eq!(response.status, StatusCode::OK);
         let value: Value = norito::json::from_slice(&response.body).expect("operator panel JSON");
         assert_eq!(
@@ -24088,7 +22124,6 @@ mod tests {
         );
         assert!(!String::from_utf8_lossy(&response.body).contains("payload_b64"));
     }
-
     #[test]
     fn moderation_operator_service_builds_bridge_plan_without_payload() {
         let quarantine_id = [0xAC_u8; 16];
@@ -24120,7 +22155,6 @@ mod tests {
                 "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/bridge-plan HTTP/1.1\r\nHost: local\r\n\r\n"
             ),
         );
-
         assert_eq!(response.status, StatusCode::OK);
         let value: Value = norito::json::from_slice(&response.body).expect("bridge plan JSON");
         assert_eq!(
@@ -24140,7 +22174,6 @@ mod tests {
             Some("operator_review_required")
         );
     }
-
     #[test]
     fn moderation_operator_service_builds_juror_plan_without_payload() {
         let quarantine_id = [0xA4_u8; 16];
@@ -24175,7 +22208,6 @@ mod tests {
                 "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-plan HTTP/1.1\r\nHost: local\r\n\r\n"
             ),
         );
-
         assert_eq!(response.status, StatusCode::OK);
         let body = String::from_utf8(response.body.clone()).expect("juror plan body UTF-8");
         assert!(!body.contains("payload_b64"));
@@ -24229,7 +22261,6 @@ mod tests {
             Some("/v1/sorafs/moderation/ballots/commits")
         );
     }
-
     #[test]
     fn moderation_operator_service_builds_juror_notifications_without_payload() {
         let quarantine_id = [0xA6_u8; 16];
@@ -24268,7 +22299,6 @@ mod tests {
                 "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-notifications HTTP/1.1\r\nHost: local\r\n\r\n"
             ),
         );
-
         assert_eq!(response.status, StatusCode::OK);
         let body = String::from_utf8(response.body.clone()).expect("notification body UTF-8");
         assert!(!body.contains("payload_b64"));
@@ -24342,7 +22372,6 @@ mod tests {
                 .contains("carries no payload bytes")
         );
     }
-
     #[test]
     fn moderation_operator_service_builds_commit_reveal_status_without_payload() {
         let quarantine_id = [0xA8_u8; 16];
@@ -24381,7 +22410,6 @@ mod tests {
                 "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/commit-reveal-status HTTP/1.1\r\nHost: local\r\n\r\n"
             ),
         );
-
         assert_eq!(response.status, StatusCode::OK);
         let body = String::from_utf8(response.body.clone()).expect("status body UTF-8");
         assert!(!body.contains("payload_b64"));
@@ -24453,7 +22481,6 @@ mod tests {
                 .is_some_and(|request| !request.contains_key("body"))
         );
     }
-
     #[test]
     fn moderation_operator_service_rejects_juror_plan_payload_bytes() {
         let quarantine_id = [0xA5_u8; 16];
@@ -24481,12 +22508,10 @@ mod tests {
                 "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-plan HTTP/1.1\r\nHost: local\r\n\r\n"
             ),
         );
-
         assert_eq!(response.status, StatusCode::BAD_GATEWAY);
         let body = String::from_utf8(response.body).expect("error JSON is UTF-8");
         assert!(body.contains("payload bytes"));
     }
-
     #[test]
     fn moderation_operator_service_rejects_juror_notifications_payload_bytes() {
         let quarantine_id = [0xA7_u8; 16];
@@ -24514,12 +22539,10 @@ mod tests {
                 "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/juror-notifications HTTP/1.1\r\nHost: local\r\n\r\n"
             ),
         );
-
         assert_eq!(response.status, StatusCode::BAD_GATEWAY);
         let body = String::from_utf8(response.body).expect("error JSON is UTF-8");
         assert!(body.contains("payload bytes"));
     }
-
     #[test]
     fn moderation_operator_service_rejects_commit_reveal_status_payload_bytes() {
         let quarantine_id = [0xA9_u8; 16];
@@ -24547,12 +22570,10 @@ mod tests {
                 "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/commit-reveal-status HTTP/1.1\r\nHost: local\r\n\r\n"
             ),
         );
-
         assert_eq!(response.status, StatusCode::BAD_GATEWAY);
         let body = String::from_utf8(response.body).expect("error JSON is UTF-8");
         assert!(body.contains("payload bytes"));
     }
-
     #[test]
     fn moderation_operator_service_rejects_payload_b64_from_upstream() {
         let quarantine_id = [0xAD_u8; 16];
@@ -24578,12 +22599,10 @@ mod tests {
                 "GET /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/operator-panel HTTP/1.1\r\nHost: local\r\n\r\n"
             ),
         );
-
         assert_eq!(response.status, StatusCode::BAD_GATEWAY);
         let body = String::from_utf8(response.body).expect("error JSON is UTF-8");
         assert!(body.contains("payload bytes"));
     }
-
     #[test]
     fn moderation_operator_service_rejects_request_body() {
         let request = b"GET /healthz HTTP/1.1\r\nHost: local\r\nContent-Length: 2\r\n\r\n{}";
@@ -24606,48 +22625,36 @@ mod tests {
                 "operator@moderation".to_string(),
             )
             .expect("operator service");
-
         let response = service.handle_request(&parsed);
-
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
     }
-
     #[test]
     fn moderation_operator_parse_rejects_post_without_content_length() {
         let quarantine_id_hex = encode([0x42_u8; 16]);
         let request = format!(
             "POST /v1/sorafs/moderation/quarantine/{quarantine_id_hex}/review HTTP/1.1\r\nHost: local\r\n\r\n{{}}"
         );
-
         let error = moderation_operator_parse_http_request(request.as_bytes(), 1024)
             .expect_err("POST bodies must declare Content-Length");
-
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert!(error.message.contains("requires Content-Length"));
     }
-
     #[test]
     fn moderation_operator_parse_rejects_body_without_content_length() {
         let request = b"GET /healthz HTTP/1.1\r\nHost: local\r\n\r\n{}";
-
         let error = moderation_operator_parse_http_request(request, 1024)
             .expect_err("undeclared body bytes must be rejected");
-
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert!(error.message.contains("requires Content-Length"));
     }
-
     #[test]
     fn moderation_operator_parse_rejects_trailing_bytes_after_declared_body() {
         let request = b"GET /healthz HTTP/1.1\r\nHost: local\r\nContent-Length: 0\r\n\r\nGET / HTTP/1.1\r\n\r\n";
-
         let error = moderation_operator_parse_http_request(request, 1024)
             .expect_err("trailing bytes after declared body must be rejected");
-
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert!(error.message.contains("trailing bytes"));
     }
-
     #[test]
     fn moderation_operator_read_rejects_trailing_bytes_after_declared_body() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test listener");
@@ -24661,25 +22668,20 @@ mod tests {
                 .expect("write trailing request bytes");
         });
         let (mut stream, _) = listener.accept().expect("accept test client");
-
         let error = moderation_operator_read_http_request(&mut stream, 1024)
             .expect_err("socket reader must reject trailing request bytes");
-
         assert_eq!(error.status, StatusCode::BAD_REQUEST);
         assert!(error.message.contains("trailing bytes"));
         client.join().expect("client thread finished");
     }
-
     #[test]
     fn moderation_operator_service_serves_browser_ui() {
         let quarantine_id = [0xA1_u8; 16];
         let service = fixture_moderation_operator_service(quarantine_id, None, norito::json!({}));
-
         let response = handle_moderation_operator_raw_request(
             &service,
             "GET / HTTP/1.1\r\nHost: local\r\n\r\n".to_string(),
         );
-
         assert_eq!(response.status, StatusCode::OK);
         assert_eq!(
             response.content_type,
@@ -24697,18 +22699,15 @@ mod tests {
         assert!(http.contains("Content-Type: text/html; charset=utf-8"));
         assert!(http.contains("X-Content-Type-Options: nosniff"));
     }
-
     #[test]
     fn moderation_operator_service_status_lists_browser_ui_route() {
         let quarantine_id = [0xA2_u8; 16];
         let service = fixture_moderation_operator_service(quarantine_id, None, norito::json!({}));
-
         let response = handle_moderation_operator_raw_request(
             &service,
             "GET /v1/sorafs/moderation/operator-panel/status HTTP/1.1\r\nHost: local\r\n\r\n"
                 .to_string(),
         );
-
         assert_eq!(response.status, StatusCode::OK);
         let value: Value = norito::json::from_slice(&response.body).expect("status JSON");
         let routes = value
@@ -24741,25 +22740,21 @@ mod tests {
                 == Some("/v1/sorafs/moderation/quarantine/{quarantine_id_hex}/commit-reveal-status")
         }));
     }
-
     #[test]
     fn moderation_operator_service_rejects_browser_ui_request_body() {
         let quarantine_id = [0xA3_u8; 16];
         let service = fixture_moderation_operator_service(quarantine_id, None, norito::json!({}));
-
         let response = handle_moderation_operator_raw_request(
             &service,
             "GET /v1/sorafs/moderation/operator-panel/ui HTTP/1.1\r\nHost: local\r\nContent-Length: 2\r\n\r\n{}"
                 .to_string(),
         );
-
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
         assert_eq!(
             response.content_type,
             ModerationOperatorService::JSON_CONTENT_TYPE
         );
     }
-
     #[test]
     fn moderation_operator_service_rejects_mutation_without_csrf_token() {
         let quarantine_id = [0xA9_u8; 16];
@@ -24778,12 +22773,10 @@ mod tests {
                 body.len()
             ),
         );
-
         assert_eq!(response.status, StatusCode::FORBIDDEN);
         let body = String::from_utf8(response.body).expect("error body UTF-8");
         assert!(body.contains(MODERATION_OPERATOR_CSRF_HEADER));
     }
-
     #[test]
     fn moderation_operator_service_rejects_mutation_with_wrong_csrf_token() {
         let quarantine_id = [0xAA_u8; 16];
@@ -24802,12 +22795,10 @@ mod tests {
                 body.len()
             ),
         );
-
         assert_eq!(response.status, StatusCode::FORBIDDEN);
         let body = String::from_utf8(response.body).expect("error body UTF-8");
         assert!(body.contains("CSRF"));
     }
-
     #[test]
     fn moderation_operator_service_forwards_review_with_default_actor() {
         let quarantine_id = [0xAE_u8; 16];
@@ -24829,7 +22820,6 @@ mod tests {
                 body.len()
             ),
         );
-
         assert_eq!(response.status, StatusCode::ACCEPTED);
         let value: Value = norito::json::from_slice(&response.body).expect("review response JSON");
         assert_eq!(
@@ -24837,7 +22827,6 @@ mod tests {
             Some("reviewed")
         );
     }
-
     #[test]
     fn moderation_operator_service_forwards_release_with_explicit_authority() {
         let quarantine_id = [0xAF_u8; 16];
@@ -24859,7 +22848,6 @@ mod tests {
                 body.len()
             ),
         );
-
         assert_eq!(response.status, StatusCode::ACCEPTED);
         let value: Value = norito::json::from_slice(&response.body).expect("release response JSON");
         assert_eq!(
@@ -24867,7 +22855,6 @@ mod tests {
             Some("released")
         );
     }
-
     #[test]
     fn moderation_operator_service_forwards_appeal_handoff_payload() {
         let quarantine_id = [0xB0_u8; 16];
@@ -24889,7 +22876,6 @@ mod tests {
                 body.len()
             ),
         );
-
         assert_eq!(response.status, StatusCode::OK);
         let value: Value = norito::json::from_slice(&response.body).expect("handoff response JSON");
         assert_eq!(
@@ -24897,7 +22883,6 @@ mod tests {
             Some("handoff_ready")
         );
     }
-
     #[test]
     fn moderation_operator_service_rejects_mutation_payload_bytes() {
         let quarantine_id = [0xB2_u8; 16];
@@ -24916,12 +22901,10 @@ mod tests {
                 body.len()
             ),
         );
-
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
         let body = String::from_utf8(response.body).expect("error body UTF-8");
         assert!(body.contains("payload bytes"));
     }
-
     #[test]
     fn moderation_quarantine_review_rejects_blank_notes() {
         let args = ModerationQuarantineReviewArgs {
@@ -24931,7 +22914,6 @@ mod tests {
             notes: Some("   ".to_string()),
         };
         let mut ctx = TestContext::new();
-
         let err = args
             .run_with(&mut ctx, |_client, _, _| {
                 unreachable!("submit must not run")
@@ -24940,13 +22922,11 @@ mod tests {
         assert!(err.to_string().contains("--notes"));
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn repair_ticket_id_rejects_lowercase() {
         let result = parse_repair_ticket_id("rep-1", "--ticket-id");
         assert!(result.is_err(), "lowercase ticket id should fail");
     }
-
     fn single_repair_action(transaction: &SignedTransaction) -> &ApplySorafsRepairTaskAction {
         let iroha_data_model::transaction::Executable::Instructions(instructions) =
             transaction.instructions()
@@ -24959,7 +22939,6 @@ mod tests {
             .downcast_ref::<ApplySorafsRepairTaskAction>()
             .expect("repair transaction contains ApplySorafsRepairTaskAction")
     }
-
     #[test]
     fn repair_list_uses_finalized_task_cursor() {
         let args = RepairListArgs {
@@ -24970,7 +22949,6 @@ mod tests {
             after_task_id: Some("CD".repeat(32)),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(
             &mut ctx,
             |_client, filter| {
@@ -24992,11 +22970,9 @@ mod tests {
             |_client, _, _| unreachable!("single-task lookup should not be called"),
         )
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("\"tasks\""));
     }
-
     #[test]
     fn repair_claim_builds_native_signed_transaction() {
         let args = RepairClaimArgs {
@@ -25006,7 +22982,6 @@ mod tests {
             idempotency_key: Some("claim-501".to_string()),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, transaction| {
             let apply = single_repair_action(transaction);
             assert_eq!(apply.ticket_id, "REP-501");
@@ -25019,11 +22994,9 @@ mod tests {
             Ok(transaction.hash())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
         assert!(ctx.printed[0].contains("transaction_hash_hex"));
     }
-
     #[test]
     fn repair_renew_builds_native_signed_transaction() {
         let args = RepairRenewArgs {
@@ -25034,7 +23007,6 @@ mod tests {
             idempotency_key: Some("renew-502".to_string()),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, transaction| {
             let apply = single_repair_action(transaction);
             assert_eq!(apply.ticket_id, "REP-502");
@@ -25048,10 +23020,8 @@ mod tests {
             Ok(transaction.hash())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
     }
-
     #[test]
     fn repair_complete_builds_native_signed_transaction() {
         let evidence_digest = [0x33_u8; 32];
@@ -25063,7 +23033,6 @@ mod tests {
             idempotency_key: Some("complete-503".to_string()),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, transaction| {
             let apply = single_repair_action(transaction);
             assert_eq!(apply.ticket_id, "REP-503");
@@ -25077,10 +23046,8 @@ mod tests {
             Ok(transaction.hash())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
     }
-
     #[test]
     fn repair_fail_builds_native_signed_transaction() {
         let failure_digest = [0x55_u8; 32];
@@ -25092,7 +23059,6 @@ mod tests {
             idempotency_key: Some("fail-504".to_string()),
         };
         let mut ctx = TestContext::new();
-
         args.run_with(&mut ctx, |_client, transaction| {
             let apply = single_repair_action(transaction);
             assert_eq!(apply.ticket_id, "REP-504");
@@ -25106,10 +23072,8 @@ mod tests {
             Ok(transaction.hash())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
     }
-
     #[test]
     fn repair_escalate_builds_native_atomic_slash_transaction() {
         let manifest_digest = [0x77_u8; 32];
@@ -25128,7 +23092,6 @@ mod tests {
         };
         let mut ctx = TestContext::new();
         let expected_auditor = ctx.config().account.to_string();
-
         args.run_with(&mut ctx, |_client, transaction| {
             let apply = single_repair_action(transaction);
             assert_eq!(apply.ticket_id, "REP-505");
@@ -25154,10 +23117,8 @@ mod tests {
             Ok(transaction.hash())
         })
         .expect("run should succeed");
-
         assert_eq!(ctx.printed.len(), 1);
     }
-
     #[test]
     fn repair_action_rejects_zero_compare_and_set_revision() {
         let args = RepairClaimArgs {
@@ -25175,7 +23136,6 @@ mod tests {
         assert!(error.to_string().contains("--expected-revision"));
         assert!(ctx.printed.is_empty());
     }
-
     #[test]
     fn gc_inspect_reports_expiry_state() {
         let dir = TempDir::new().expect("temp dir");
@@ -25196,10 +23156,8 @@ mod tests {
             20,
         );
         write_gc_manifest(dir.path(), "gamma", 0, ManifestStorageClass::Cold, 300, 30);
-
         let report = build_gc_report("inspect", Some(dir.path()), Some("@1500"), Some(100), false)
             .expect("report");
-
         assert_eq!(report.mode, "inspect");
         assert_eq!(report.total_manifests, 3);
         assert_eq!(report.total_payload_bytes, 600);
@@ -25210,7 +23168,6 @@ mod tests {
         assert_eq!(report.entries.len(), 3);
         assert_eq!(report.now_unix, 1_500);
         assert_eq!(report.grace_secs, 100);
-
         let first = &report.entries[0];
         assert_eq!(first.manifest_id, "alpha");
         assert_eq!(first.storage_class, "hot");
@@ -25219,14 +23176,12 @@ mod tests {
         assert_eq!(first.payload_bytes, 100);
         assert_eq!(first.car_bytes, 10);
         assert_eq!(first.manifest_digest_hex.len(), 64);
-
         let last = &report.entries[2];
         assert_eq!(last.manifest_id, "gamma");
         assert_eq!(last.storage_class, "cold");
         assert_eq!(last.expires_at_unix, None);
         assert!(!last.expired);
     }
-
     #[test]
     fn gc_dry_run_filters_expired() {
         let dir = TempDir::new().expect("temp dir");
@@ -25246,10 +23201,8 @@ mod tests {
             200,
             20,
         );
-
         let report = build_gc_report("dry_run", Some(dir.path()), Some("@1500"), Some(100), true)
             .expect("report");
-
         assert_eq!(report.mode, "dry_run");
         assert_eq!(report.total_manifests, 2);
         assert_eq!(report.expired_count, 1);
@@ -25257,7 +23210,6 @@ mod tests {
         assert_eq!(report.entries[0].manifest_id, "alpha");
         assert!(report.entries[0].expired);
     }
-
     #[test]
     fn gc_inspect_command_prints_json_report() {
         let dir = TempDir::new().expect("temp dir");
@@ -25268,16 +23220,13 @@ mod tests {
             grace_secs: Some(100),
         };
         let mut ctx = TestContext::new();
-
         GcCommand::Inspect(args).run(&mut ctx).expect("inspect run");
-
         let output = ctx.outputs().last().expect("output");
         let json: Value = norito::json::from_str(output).expect("json");
         assert_eq!(json["mode"], Value::from("inspect"));
         assert_eq!(json["total_manifests"], Value::from(1u64));
         assert_eq!(json["entries"].as_array().map(Vec::len), Some(1));
     }
-
     #[test]
     fn gc_dry_run_command_filters_json_entries() {
         let dir = TempDir::new().expect("temp dir");
@@ -25296,16 +23245,13 @@ mod tests {
             grace_secs: Some(100),
         };
         let mut ctx = TestContext::new();
-
         GcCommand::DryRun(args).run(&mut ctx).expect("dry run");
-
         let output = ctx.outputs().last().expect("output");
         let json: Value = norito::json::from_str(output).expect("json");
         assert_eq!(json["mode"], Value::from("dry_run"));
         assert_eq!(json["total_manifests"], Value::from(2u64));
         assert_eq!(json["entries"].as_array().map(Vec::len), Some(1));
     }
-
     #[test]
     fn gc_manifest_entries_require_manifest_dir() {
         let dir = TempDir::new().expect("temp dir");
@@ -25315,13 +23261,11 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn gc_retention_deadline_respects_zero_epoch() {
         assert_eq!(retention_deadline(0, 5), None);
         assert_eq!(retention_deadline(10, 5), Some(15));
     }
-
     #[test]
     fn gc_storage_class_labels_match_expected_values() {
         assert_eq!(
@@ -25337,7 +23281,6 @@ mod tests {
             "cold"
         );
     }
-
     #[test]
     fn storage_token_issue_passes_arguments_and_prints_nonce() {
         use std::cell::RefCell;
@@ -25354,7 +23297,6 @@ mod tests {
         };
         let mut ctx = TestContext::new();
         let captured = RefCell::new(None);
-
         args.run_with(
             &mut ctx,
             |_, manifest, provider, client_id, nonce, overrides| {
@@ -25374,7 +23316,6 @@ mod tests {
             },
         )
         .expect("token issue succeeds");
-
         let (manifest, provider, client_id, nonce, overrides) =
             captured.borrow().clone().expect("captured arguments");
         assert_eq!(manifest, "aa".repeat(32));
@@ -25400,7 +23341,6 @@ mod tests {
             "nonce should be 12 random bytes hex encoded"
         );
     }
-
     #[test]
     fn direct_mode_plan_generates_summary() {
         let manifest = ManifestBuilder::new()
@@ -25437,7 +23377,6 @@ mod tests {
         temp_manifest
             .write_all(&bytes)
             .expect("write manifest bytes");
-
         let provider = [0xAA; 32];
         let args = GatewayDirectModePlanArgs {
             manifest: temp_manifest.path().to_path_buf(),
@@ -25446,7 +23385,6 @@ mod tests {
             chain_id: Some("nexus".to_owned()),
             scheme: "https".to_owned(),
         };
-
         let mut ctx = TestContext::new();
         args.run(&mut ctx).expect("plan command runs");
         assert_eq!(ctx.outputs().len(), 1);
@@ -25460,7 +23398,6 @@ mod tests {
         );
         assert!(plan.capabilities.direct_car_supported);
     }
-
     #[test]
     fn toolkit_pack_emits_manifest_and_report() {
         let temp = TempDir::new().expect("temp dir");
@@ -25469,7 +23406,6 @@ mod tests {
         let manifest_path = temp.path().join("manifest.to");
         let car_path = temp.path().join("payload.car");
         let json_path = temp.path().join("report.json");
-
         let args = ToolkitPackArgs {
             input: payload_path,
             manifest_out: Some(manifest_path.clone()),
@@ -25482,7 +23418,6 @@ mod tests {
         };
         let mut ctx = TestContext::new();
         args.run(&mut ctx).expect("pack");
-
         let manifest_bytes = fs::read(&manifest_path).expect("read manifest");
         let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("decode manifest");
         assert_eq!(manifest.content_length, 13);
@@ -25494,7 +23429,6 @@ mod tests {
             manifest.car_digest, archive_digest,
             "manifest must bind every byte of the canonical CARv2 archive"
         );
-
         let report_bytes = fs::read(&json_path).expect("read report");
         let report: Value = norito::json::from_slice(&report_bytes).expect("decode report");
         assert_eq!(
@@ -25531,7 +23465,6 @@ mod tests {
             Some(por_root_hex.as_str())
         );
     }
-
     #[test]
     fn hybrid_manifest_aad_appends_filename() {
         let digest = blake3::hash(b"manifest");
@@ -25545,14 +23478,12 @@ mod tests {
         assert_eq!(length as usize, "manifest.to".len());
         assert_eq!(&aad[name_len_offset + 4..], b"manifest.to");
     }
-
     #[test]
     fn chunk_digest_sha3_matches_manual_hash() {
         let payload = b"hello-world".to_vec();
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let computed = compute_chunk_digest_sha3(&plan.chunks);
-
         let mut hasher = Sha3::v256();
         for chunk in &plan.chunks {
             hasher.update(&chunk.offset.to_le_bytes());
@@ -25563,7 +23494,6 @@ mod tests {
         hasher.finalize(&mut expected);
         assert_eq!(computed, expected);
     }
-
     #[test]
     fn ensure_metadata_entry_dedupes_case_insensitive() {
         let mut metadata = vec![("manifest.requires_envelope".to_string(), "true".to_string())];
@@ -25572,14 +23502,12 @@ mod tests {
         ensure_metadata_entry(&mut metadata, "manifest.hybrid_suite", "suite");
         assert_eq!(metadata.len(), 2);
     }
-
     fn direct_mode_enable_capabilities() -> ManifestCapabilitySummary {
         ManifestCapabilitySummary {
             direct_car_supported: true,
             ..ManifestCapabilitySummary::default()
         }
     }
-
     fn direct_mode_enable_test_plan(
         capabilities: ManifestCapabilitySummary,
     ) -> DirectModePlanOutput {
@@ -25603,7 +23531,6 @@ mod tests {
             capabilities,
         )
     }
-
     fn write_direct_mode_plan(plan: &DirectModePlanOutput) -> NamedTempFile {
         let mut plan_file = NamedTempFile::new().expect("temp plan");
         plan_file
@@ -25611,7 +23538,6 @@ mod tests {
             .expect("write plan");
         plan_file
     }
-
     pub(super) fn assert_sorafs_config_snippet_is_schema_valid(snippet: &str) -> UserSorafsConfig {
         let mut root: toml::Table =
             toml::from_str(snippet).expect("generated snippet must parse as TOML");
@@ -25626,18 +23552,15 @@ mod tests {
             .as_table()
             .expect("top-level `sorafs` value must be a table")
             .clone();
-
         ConfigReader::new()
             .with_toml_source(TomlSource::inline(sorafs))
             .read_and_complete::<UserSorafsConfig>()
             .expect("generated snippet must satisfy the iroha_config SoraFS schema")
     }
-
     #[test]
     fn direct_mode_enable_renders_snippet() {
         let plan = direct_mode_enable_test_plan(direct_mode_enable_capabilities());
         let plan_file = write_direct_mode_plan(&plan);
-
         let args = GatewayDirectModeEnableArgs {
             plan: plan_file.path().to_path_buf(),
         };
@@ -25655,7 +23578,6 @@ mod tests {
         assert!(!snippet.contains("[torii.sorafs_gateway]"));
         assert_sorafs_config_snippet_is_schema_valid(snippet);
     }
-
     #[test]
     fn direct_mode_enable_rejects_missing_direct_car_capability() {
         let plan = direct_mode_enable_test_plan(ManifestCapabilitySummary::default());
@@ -25670,7 +23592,6 @@ mod tests {
         assert!(format!("{err:#}").contains("capabilities.direct_car_supported=true"));
         assert!(ctx.outputs().is_empty());
     }
-
     #[test]
     fn direct_mode_enable_rejects_manifest_envelope_disabled() {
         let capabilities = ManifestCapabilitySummary {
@@ -25690,7 +23611,6 @@ mod tests {
         assert!(format!("{err:#}").contains("requires_manifest_envelope=true"));
         assert!(ctx.outputs().is_empty());
     }
-
     #[test]
     fn direct_mode_enable_rejects_tampered_direct_car_locator() {
         let mut plan = direct_mode_enable_test_plan(direct_mode_enable_capabilities());
@@ -25709,7 +23629,6 @@ mod tests {
         assert!(format!("{err:#}").contains("direct_car.canonical_url mismatch"));
         assert!(ctx.outputs().is_empty());
     }
-
     #[test]
     fn direct_mode_toml_string_escape_blocks_config_injection() {
         assert_eq!(
@@ -25717,7 +23636,6 @@ mod tests {
             "nexus\\\"\\nenforce_admission = false\\\\"
         );
     }
-
     #[test]
     fn direct_mode_rollback_snippet_matches_defaults() {
         let args = GatewayDirectModeRollbackArgs;
@@ -25732,7 +23650,6 @@ mod tests {
         assert!(!snippet.contains("[torii.sorafs_gateway]"));
         assert_sorafs_config_snippet_is_schema_valid(snippet);
     }
-
     #[test]
     fn gateway_route_plan_writes_plan_and_headers() {
         use base64::engine::general_purpose::STANDARD as BASE64;
@@ -25743,7 +23660,6 @@ mod tests {
         fs::write(&manifest_path, r#"{"root_cid":[1,2,3]}"#).expect("write manifest");
         let output_path = tmp.path().join("route_plan.json");
         let headers_path = tmp.path().join("gateway.route.headers.txt");
-
         let args = GatewayRoutePlanArgs {
             manifest_json: manifest_path.clone(),
             hostname: "docs.sora.link".to_owned(),
@@ -25764,10 +23680,8 @@ mod tests {
             now_override: Some("2026-03-21T10:00:00Z".to_owned()),
         };
         let mut ctx = TestContext::new();
-
         args.run(&mut ctx)
             .expect("route plan command should succeed");
-
         let plan_bytes = fs::read(&output_path).expect("route plan json");
         let plan: Value =
             norito::json::from_slice(&plan_bytes).expect("route plan JSON should parse");
@@ -25808,7 +23722,6 @@ mod tests {
                 .any(|line| line.contains(output_path.to_string_lossy().as_ref()))
         );
     }
-
     #[test]
     fn gateway_route_plan_supports_rollback_and_toggles() {
         use tempfile::TempDir;
@@ -25821,7 +23734,6 @@ mod tests {
         let output_path = tmp.path().join("route_plan.json");
         let headers_path = tmp.path().join("gateway.route.headers.txt");
         let rollback_headers_path = tmp.path().join("gateway.route.rollback.headers.txt");
-
         let args = GatewayRoutePlanArgs {
             manifest_json: manifest_path.clone(),
             hostname: "nexus.sora.link".to_owned(),
@@ -25842,10 +23754,8 @@ mod tests {
             now_override: Some("2026-03-21T10:00:00Z".to_owned()),
         };
         let mut ctx = TestContext::new();
-
         args.run(&mut ctx)
             .expect("route plan command should succeed");
-
         let plan_bytes = fs::read(&output_path).expect("route plan json");
         let plan: Value =
             norito::json::from_slice(&plan_bytes).expect("route plan JSON should parse");
@@ -25889,7 +23799,6 @@ mod tests {
             "expected rollback output message"
         );
     }
-
     #[test]
     fn gateway_cache_invalidate_prints_payload_and_curl() {
         let args = GatewayCacheInvalidateArgs {
@@ -25922,7 +23831,6 @@ mod tests {
             "curl snippet should reference the auth env var"
         );
     }
-
     #[test]
     fn gateway_cache_invalidate_writes_payload_file() {
         let temp_payload = NamedTempFile::new().expect("temp payload file");
@@ -25953,7 +23861,6 @@ mod tests {
             "curl snippet should embed the JSON payload"
         );
     }
-
     #[test]
     fn gateway_cache_invalidate_rejects_invalid_alias() {
         let args = GatewayCacheInvalidateArgs {
@@ -25969,7 +23876,6 @@ mod tests {
         let result = args.run(&mut ctx);
         assert!(result.is_err(), "invalid alias should fail");
     }
-
     #[test]
     fn incentives_compute_generates_instruction() {
         let mut config_file = NamedTempFile::new().expect("config file");
@@ -25983,13 +23889,11 @@ mod tests {
         metrics_file
             .write_all(&to_bytes(&metrics).expect("encode metrics"))
             .expect("write metrics");
-
         let bond = sample_bond_entry(2_000);
         let mut bond_file = NamedTempFile::new().expect("bond file");
         bond_file
             .write_all(&to_bytes(&bond).expect("encode bond"))
             .expect("write bond");
-
         let instruction_file = NamedTempFile::new().expect("instruction file");
         let instruction_path = instruction_file.path().to_path_buf();
         let args = IncentivesComputeArgs {
@@ -26000,25 +23904,21 @@ mod tests {
             norito_out: Some(instruction_path.clone()),
             pretty: true,
         };
-
         let mut ctx = TestContext::new();
         args.run(&mut ctx).expect("compute command runs");
         assert_eq!(ctx.outputs().len(), 1, "expected JSON output");
-
         let value: norito::json::Value =
             norito::json::from_str(&ctx.outputs()[0]).expect("parse instruction JSON");
         assert!(
             value.get("relay_id").is_some(),
             "relay id missing in output"
         );
-
         let bytes = std::fs::read(&instruction_path).expect("read instruction");
         let decoded: RelayRewardInstructionV1 =
             decode_from_bytes(&bytes).expect("decode instruction");
         assert_eq!(decoded.beneficiary, sample_account_id("beneficiary"));
         assert!(decoded.payout_amount > Quantity::zero());
     }
-
     #[test]
     fn incentives_open_dispute_produces_payload() {
         let instruction = sample_reward_instruction();
@@ -26027,7 +23927,6 @@ mod tests {
         instruction_file
             .write_all(&instruction_bytes)
             .expect("write instruction");
-
         let dispute_file = NamedTempFile::new().expect("dispute file");
         let dispute_path = dispute_file.path().to_path_buf();
         let args = IncentivesOpenDisputeArgs {
@@ -26040,21 +23939,17 @@ mod tests {
             norito_out: Some(dispute_path.clone()),
             pretty: false,
         };
-
         let mut ctx = TestContext::new();
         args.run(&mut ctx).expect("open dispute runs");
         assert_eq!(ctx.outputs().len(), 1, "expected JSON output");
-
         let value: norito::json::Value =
             norito::json::from_str(&ctx.outputs()[0]).expect("parse dispute JSON");
         assert_eq!(value["reason"].as_str(), Some("calibration"));
-
         let bytes = std::fs::read(&dispute_path).expect("read dispute");
         let dispute: RelayRewardDisputeV1 = decode_from_bytes(&bytes).expect("decode dispute");
         assert_eq!(dispute.submitted_at_unix, 1_234);
         assert_eq!(dispute.submitted_by, sample_account_id("operator"));
     }
-
     #[test]
     fn incentives_dashboard_summarises_rewards() {
         let mut inst1 = sample_reward_instruction();
@@ -26062,25 +23957,21 @@ mod tests {
         let mut inst1_file = NamedTempFile::new().expect("inst1");
         let inst1_bytes = to_bytes(&inst1).expect("encode inst1");
         inst1_file.write_all(&inst1_bytes).expect("write inst1");
-
         let mut inst2 = sample_reward_instruction();
         inst2.epoch = inst1.epoch + 1;
         inst2.payout_amount = Quantity::from(10_u32);
         let mut inst2_file = NamedTempFile::new().expect("inst2");
         let inst2_bytes = to_bytes(&inst2).expect("encode inst2");
         inst2_file.write_all(&inst2_bytes).expect("write inst2");
-
         let args = IncentivesDashboardArgs {
             instructions: vec![
                 inst1_file.path().to_path_buf(),
                 inst2_file.path().to_path_buf(),
             ],
         };
-
         let mut ctx = TestContext::new();
         args.run(&mut ctx).expect("dashboard runs");
         assert_eq!(ctx.outputs().len(), 1, "expected JSON output");
-
         let summary: norito::json::Value =
             norito::json::from_str(&ctx.outputs()[0]).expect("parse summary");
         assert_eq!(summary["total_relays"].as_u64(), Some(1));
@@ -26090,7 +23981,6 @@ mod tests {
         assert_eq!(rows[0]["payout_count"].as_u64(), Some(2));
         assert_eq!(rows[0]["payout_amount"].as_str(), Some("50"));
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn incentives_service_shadow_run_generates_summary() {
@@ -26115,11 +24005,9 @@ mod tests {
                 metadata: Metadata::default(),
             }
         }
-
         let config_file = write_sample_reward_config_file();
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
-
         let init_args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
@@ -26128,10 +24016,8 @@ mod tests {
         };
         let mut init_ctx = TestContext::new();
         init_args.run(&mut init_ctx).expect("init command runs");
-
         let metrics_dir = tmp_dir.path().join("metrics");
         fs::create_dir_all(&metrics_dir).expect("create metrics dir");
-
         let relay_a = [0x21_u8; 32];
         let relay_b = [0x43_u8; 32];
         let relay_primary_bond = RelayBondLedgerEntryV1 {
@@ -26150,7 +24036,6 @@ mod tests {
         };
         let relay_primary_bond_file = write_bond_file(&relay_primary_bond);
         let relay_secondary_bond_file = write_bond_file(&relay_secondary_bond);
-
         let write_metrics_file = |relay: RelayId, epoch: u32, metrics: RelayEpochMetricsV1| {
             let relay_hex = relay_id_to_hex(relay);
             let file_path = metrics_dir.join(format!("relay-{relay_hex}-epoch-{epoch}.to"));
@@ -26160,7 +24045,6 @@ mod tests {
             )
             .expect("write metrics snapshot");
         };
-
         write_metrics_file(
             relay_a,
             1,
@@ -26197,7 +24081,6 @@ mod tests {
                 RelayComplianceStatusV1::Clean,
             ),
         );
-
         let mut relay_entries = Vec::new();
         let mut primary_relay_entry = Map::new();
         primary_relay_entry.insert(
@@ -26213,7 +24096,6 @@ mod tests {
             Value::String(relay_primary_bond_file.path().display().to_string()),
         );
         relay_entries.push(Value::Object(primary_relay_entry));
-
         let mut secondary_relay_entry = Map::new();
         secondary_relay_entry.insert(
             "relay_id".to_string(),
@@ -26228,7 +24110,6 @@ mod tests {
             Value::String(relay_secondary_bond_file.path().display().to_string()),
         );
         relay_entries.push(Value::Object(secondary_relay_entry));
-
         let mut root = Map::new();
         root.insert("relays".to_string(), Value::Array(relay_entries));
         let config_json = Value::Object(root);
@@ -26238,7 +24119,6 @@ mod tests {
             norito::json::to_vec_pretty(&config_json).expect("encode config"),
         )
         .expect("write config");
-
         let args = IncentivesServiceShadowRunArgs {
             state: state_path.clone(),
             config: config_path,
@@ -26246,11 +24126,9 @@ mod tests {
             report_out: None,
             pretty: true,
         };
-
         let mut ctx = TestContext::new();
         args.run(&mut ctx).expect("shadow run executes");
         assert_eq!(ctx.outputs().len(), 1, "expected JSON summary output");
-
         let summary: norito::json::Value =
             norito::json::from_str(&ctx.outputs()[0]).expect("parse summary json");
         assert_eq!(summary["processed_payouts"].as_u64(), Some(3));
@@ -26272,18 +24150,15 @@ mod tests {
                 .any(|relay| relay["warning_epochs"].as_u64() == Some(1))
         );
     }
-
     #[test]
     fn incentives_service_shadow_run_rejects_state_without_budget_id() {
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
         write_state_without_budget(&state_path);
-
         let metrics_dir = tmp_dir.path().join("metrics");
         fs::create_dir_all(&metrics_dir).expect("create metrics dir");
         let config_path = tmp_dir.path().join("shadow_config.json");
         fs::write(&config_path, r#"{"relays": []}"#).expect("write config");
-
         let args = IncentivesServiceShadowRunArgs {
             state: state_path,
             config: config_path,
@@ -26291,7 +24166,6 @@ mod tests {
             report_out: None,
             pretty: true,
         };
-
         let mut ctx = TestContext::new();
         let err = args
             .run(&mut ctx)
@@ -26302,7 +24176,6 @@ mod tests {
         );
         assert!(ctx.outputs().is_empty());
     }
-
     #[test]
     fn incentives_shadow_run_summary_reports_unconvertible_payout_amount() {
         let relay_id_hex = relay_id_to_hex([0x5A; 32]);
@@ -26328,9 +24201,7 @@ mod tests {
             }],
             ..DaemonIterationSummary::default()
         };
-
         let shadow = build_shadow_run_summary(&summary);
-
         assert_eq!(shadow.processed_payouts, 1);
         assert_eq!(shadow.total_payout_nanos, 0);
         assert_eq!(shadow.payout_amount_conversion_errors.len(), 1);
@@ -26343,7 +24214,6 @@ mod tests {
         assert_eq!(shadow.relays[0].amount_conversion_errors, 1);
         assert_eq!(shadow.relays[0].payout_nanos, 0);
     }
-
     #[test]
     fn incentives_state_roundtrip_serializes() {
         let policy = RelayBondPolicyV1 {
@@ -26366,7 +24236,6 @@ mod tests {
         let treasury_account = sample_account_id("treasury");
         let mut state = IncentivesState::new(&reward_config, treasury_account.clone());
         state.payouts.push(sample_reward_instruction());
-
         let bytes = to_bytes(&state).expect("encode incentives state");
         let decoded: IncentivesState = decode_from_bytes(&bytes).expect("decode incentives state");
         decoded.ensure_current().expect("state version matches");
@@ -26377,13 +24246,11 @@ mod tests {
             state.reward_config.base_reward
         );
     }
-
     #[test]
     fn incentives_service_init_rejects_missing_budget_id() {
         let config_file = write_reward_config_with_budget(None);
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
-
         let args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
@@ -26403,16 +24270,13 @@ mod tests {
             "init must not write state without budget approval"
         );
     }
-
     #[test]
     fn incentives_service_process_rejects_state_without_budget_id() {
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
         write_state_without_budget(&state_path);
-
         let metrics_file = write_metrics_file(&sample_metrics());
         let bond_file = write_bond_file(&sample_bond_entry(2_000));
-
         let args = IncentivesServiceProcessArgs {
             state: state_path,
             metrics: vec![metrics_file.path().to_path_buf()],
@@ -26423,7 +24287,6 @@ mod tests {
             submit_transfer: false,
             pretty: false,
         };
-
         let mut ctx = TestContext::new();
         let err = args
             .run(&mut ctx)
@@ -26433,13 +24296,11 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn incentives_service_audit_flags_underbonded_relay() {
         let config_file = write_sample_reward_config_file();
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
-
         let init_args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
@@ -26448,10 +24309,8 @@ mod tests {
         };
         let mut init_ctx = TestContext::new();
         init_args.run(&mut init_ctx).expect("init command runs");
-
         let underbonded = sample_bond_entry(500);
         let bond_file = write_bond_file(&underbonded);
-
         let mut relay_entry = Map::new();
         relay_entry.insert(
             "relay_id".to_string(),
@@ -26465,7 +24324,6 @@ mod tests {
             "bond_path".to_string(),
             Value::String(bond_file.path().display().to_string()),
         );
-
         let mut root = Map::new();
         root.insert(
             "relays".to_string(),
@@ -26477,14 +24335,12 @@ mod tests {
             norito::json::to_vec_pretty(&root).expect("encode daemon config"),
         )
         .expect("write daemon config");
-
         let args = IncentivesServiceAuditArgs {
             state: state_path,
             config: daemon_config,
             scopes: vec![IncentiveAuditScope::Bond],
             pretty: true,
         };
-
         let mut ctx = TestContext::new();
         let err = args
             .run(&mut ctx)
@@ -26498,14 +24354,12 @@ mod tests {
             "underbonded relay should be reported"
         );
     }
-
     #[test]
     fn incentives_service_audit_flags_budget_mismatch_and_missing() {
         let config_file = write_sample_reward_config_file();
         let reward_config = read_reward_config(config_file.path()).expect("reward config");
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
-
         let mut state =
             IncentivesState::new(&reward_config, sample_account_id("treasury-budget-audit"));
         let mut mismatched = sample_reward_instruction();
@@ -26516,17 +24370,14 @@ mod tests {
         missing.budget_approval_id = None;
         state.payouts = vec![mismatched, missing];
         save_incentives_state(&state_path, &state).expect("write incentives state");
-
         let daemon_config = tmp_dir.path().join("daemon_config.json");
         fs::write(&daemon_config, r#"{"relays": []}"#).expect("write daemon config");
-
         let args = IncentivesServiceAuditArgs {
             state: state_path,
             config: daemon_config,
             scopes: vec![IncentiveAuditScope::Budget],
             pretty: true,
         };
-
         let mut ctx = TestContext::new();
         let err = args.run(&mut ctx).expect_err("budget audit should fail");
         assert!(err.to_string().contains("issue"), "unexpected error: {err}");
@@ -26553,24 +24404,20 @@ mod tests {
             Some(1)
         );
     }
-
     #[test]
     fn incentives_service_init_writes_state() {
         let config_file = write_sample_reward_config_file();
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
-
         let args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
             treasury_account: sample_account_literal("treasury"),
             force: false,
         };
-
         let mut ctx = TestContext::new();
         args.run(&mut ctx).expect("init command runs");
         assert!(state_path.exists());
-
         let state = read_state(&state_path);
         assert_eq!(state.version, IncentivesState::VERSION);
         assert_eq!(state.treasury_account, sample_account_id("treasury"));
@@ -26581,13 +24428,11 @@ mod tests {
             xor_asset_id().to_string()
         );
     }
-
     #[test]
     fn incentives_service_process_records_reward() {
         let config_file = write_sample_reward_config_file();
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
-
         let init_args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
@@ -26596,12 +24441,10 @@ mod tests {
         };
         let mut init_ctx = TestContext::new();
         init_args.run(&mut init_ctx).expect("init command runs");
-
         let metrics = sample_metrics();
         let metrics_file = write_metrics_file(&metrics);
         let bond_file = write_bond_file(&sample_bond_entry(2_000));
         let instruction_out = NamedTempFile::new().expect("instruction file");
-
         let args = IncentivesServiceProcessArgs {
             state: state_path.clone(),
             metrics: vec![metrics_file.path().to_path_buf()],
@@ -26612,16 +24455,13 @@ mod tests {
             submit_transfer: false,
             pretty: true,
         };
-
         let mut process_ctx = TestContext::new();
         args.run(&mut process_ctx).expect("process command runs");
         assert_eq!(process_ctx.outputs().len(), 1);
-
         let summary: norito::json::Value =
             norito::json::from_str(&process_ctx.outputs()[0]).expect("parse summary");
         assert_eq!(summary["epoch"].as_u64(), Some(u64::from(metrics.epoch)));
         assert_eq!(summary["ledger"]["total_paid"].as_str(), Some("100"));
-
         let state = read_state(&state_path);
         assert_eq!(state.payouts.len(), 1);
         assert_eq!(state.payouts[0].epoch, metrics.epoch);
@@ -26629,26 +24469,21 @@ mod tests {
             state.payouts[0].beneficiary,
             sample_account_id("beneficiary")
         );
-
         let instruction_bytes = fs::read(instruction_out.path()).expect("read instruction");
         let instruction: RelayRewardInstructionV1 =
             decode_from_bytes(&instruction_bytes).expect("decode instruction");
         assert_eq!(instruction.epoch, metrics.epoch);
     }
-
     #[test]
     fn incentives_daemon_rejects_state_without_budget_id() {
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
         write_state_without_budget(&state_path);
-
         let metrics_dir = tmp_dir.path().join("metrics");
         fs::create_dir_all(&metrics_dir).expect("create metrics dir");
-
         let bond_entry = sample_bond_entry(2_000);
         let relay_hex = relay_id_to_hex(bond_entry.relay_id);
         let bond_file = write_bond_file(&bond_entry);
-
         let mut relay_entry = Map::new();
         relay_entry.insert("relay_id".to_string(), Value::String(relay_hex));
         relay_entry.insert(
@@ -26659,7 +24494,6 @@ mod tests {
             "bond_path".to_string(),
             Value::String(bond_file.path().display().to_string()),
         );
-
         let mut root = Map::new();
         root.insert(
             "relays".to_string(),
@@ -26671,7 +24505,6 @@ mod tests {
             norito::json::to_vec_pretty(&root).expect("encode config"),
         )
         .expect("write config");
-
         let daemon_args = IncentivesServiceDaemonArgs {
             state: state_path,
             config: config_path,
@@ -26683,7 +24516,6 @@ mod tests {
             once: true,
             pretty: true,
         };
-
         let mut ctx = TestContext::new();
         let result = daemon_args.run(&mut ctx);
         assert!(result.is_err());
@@ -26693,13 +24525,11 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn incentives_daemon_reports_budget_hash() {
         let config_file = write_sample_reward_config_file();
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
-
         let init_args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
@@ -26708,10 +24538,8 @@ mod tests {
         };
         let mut init_ctx = TestContext::new();
         init_args.run(&mut init_ctx).expect("init command runs");
-
         let metrics_dir = tmp_dir.path().join("metrics");
         fs::create_dir_all(&metrics_dir).expect("create metrics dir");
-
         let metrics = sample_metrics();
         let relay_hex = relay_id_to_hex(metrics.relay_id);
         let metrics_path =
@@ -26721,10 +24549,8 @@ mod tests {
             to_bytes(&metrics).expect("encode metrics snapshot"),
         )
         .expect("write metrics");
-
         let bond_entry = sample_bond_entry(2_000);
         let bond_file = write_bond_file(&bond_entry);
-
         let mut relay_entry = Map::new();
         relay_entry.insert("relay_id".to_string(), Value::String(relay_hex));
         relay_entry.insert(
@@ -26735,7 +24561,6 @@ mod tests {
             "bond_path".to_string(),
             Value::String(bond_file.path().display().to_string()),
         );
-
         let mut root = Map::new();
         root.insert(
             "relays".to_string(),
@@ -26747,7 +24572,6 @@ mod tests {
             norito::json::to_vec_pretty(&root).expect("encode config"),
         )
         .expect("write config");
-
         let daemon_args = IncentivesServiceDaemonArgs {
             state: state_path,
             config: config_path,
@@ -26759,11 +24583,9 @@ mod tests {
             once: true,
             pretty: true,
         };
-
         let mut ctx = TestContext::new();
         daemon_args.run(&mut ctx).expect("daemon run succeeds");
         assert_eq!(ctx.outputs().len(), 1);
-
         let summary: norito::json::Value =
             norito::json::from_str(&ctx.outputs()[0]).expect("parse daemon summary");
         assert_eq!(summary["processed"].as_array().map(Vec::len), Some(1));
@@ -26775,14 +24597,12 @@ mod tests {
             Some(expected_budget_hex.as_str())
         );
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn incentives_service_dispute_flow_updates_state() {
         let config_file = write_sample_reward_config_file();
         let tmp_dir = tempfile::tempdir().expect("temp dir");
         let state_path = tmp_dir.path().join("payout_state.json");
-
         let init_args = IncentivesServiceInitArgs {
             state: state_path.clone(),
             config: config_file.path().to_path_buf(),
@@ -26791,7 +24611,6 @@ mod tests {
         };
         let mut init_ctx = TestContext::new();
         init_args.run(&mut init_ctx).expect("init command runs");
-
         let metrics_file = write_metrics_file(&sample_metrics());
         let bond_file = write_bond_file(&sample_bond_entry(2_000));
         let process_args = IncentivesServiceProcessArgs {
@@ -26808,10 +24627,8 @@ mod tests {
         process_args
             .run(&mut process_ctx)
             .expect("process command runs");
-
         let state = read_state(&state_path);
         let instruction = state.payouts[0].clone();
-
         let file_args = IncentivesServiceDisputeFileArgs {
             state: state_path.clone(),
             relay_id: hex::encode(instruction.relay_id),
@@ -26828,7 +24645,6 @@ mod tests {
         let mut dispute_ctx = TestContext::new();
         file_args.run(&mut dispute_ctx).expect("file dispute runs");
         assert_eq!(dispute_ctx.outputs().len(), 1);
-
         let state = read_state(&state_path);
         assert_eq!(state.disputes.len(), 1);
         let stored = &state.disputes[0];
@@ -26844,7 +24660,6 @@ mod tests {
                 .amount,
             Quantity::from_str("25").expect("quantity literal")
         );
-
         let transfer_file = NamedTempFile::new().expect("transfer file");
         let resolve_args = IncentivesServiceDisputeResolveArgs {
             state: state_path.clone(),
@@ -26861,7 +24676,6 @@ mod tests {
             .run(&mut resolve_ctx)
             .expect("resolve dispute runs");
         assert_eq!(resolve_ctx.outputs().len(), 1);
-
         let state = read_state(&state_path);
         assert_eq!(state.disputes.len(), 1);
         match &state.disputes[0].status {
@@ -26874,7 +24688,6 @@ mod tests {
             }
             other => panic!("unexpected dispute status: {other:?}"),
         }
-
         let transfer_bytes = fs::read(transfer_file.path()).expect("read transfer");
         let transfer: InstructionBox = decode_from_bytes(&transfer_bytes).expect("decode transfer");
         let transfer_box = transfer

@@ -89,6 +89,13 @@ fn write_plan_for_payload_with_profile(
     path
 }
 
+fn planned_chunk_count(payload: &[u8]) -> u64 {
+    CarBuildPlan::single_file_with_profile(payload, ChunkProfile::DEFAULT)
+        .expect("plan")
+        .chunks
+        .len() as u64
+}
+
 fn write_plan_for_payload(tempdir: &TempDir, payload: &[u8]) -> PathBuf {
     write_plan_for_payload_with_profile(tempdir, payload, ChunkProfile::DEFAULT)
 }
@@ -157,6 +164,7 @@ fn fetch_cli_recovers_payload_from_multiple_providers() {
     let payload = write_payload(&payload_path, 32 * 1024);
 
     let plan_path = write_plan_for_payload(&tempdir, &payload);
+    let expected_chunk_count = planned_chunk_count(&payload);
 
     let provider_a_path = tempdir.path().join("provider_a.bin");
     let provider_b_path = tempdir.path().join("provider_b.bin");
@@ -191,7 +199,7 @@ fn fetch_cli_recovers_payload_from_multiple_providers() {
         .get("chunk_count")
         .and_then(Value::as_u64)
         .expect("chunk_count");
-    assert_eq!(chunk_count, plan.chunks.len() as u64);
+    assert_eq!(chunk_count, expected_chunk_count);
     assert_eq!(
         report
             .get("chunk_retry_total")
@@ -917,6 +925,7 @@ fn fetch_cli_writes_report_to_stdout_when_json_out_dash() {
     let payload = write_payload(&payload_path, 8 * 1024);
 
     let plan_path = write_plan_for_payload(&tempdir, &payload);
+    let expected_chunk_count = planned_chunk_count(&payload);
 
     let output_path = tempdir.path().join("assembled.bin");
     let assert = sorafs_fetch_cmd()
@@ -934,7 +943,7 @@ fn fetch_cli_writes_report_to_stdout_when_json_out_dash() {
             .get("chunk_count")
             .and_then(Value::as_u64)
             .expect("chunk_count"),
-        fetch_specs.len() as u64
+        expected_chunk_count
     );
 }
 

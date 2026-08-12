@@ -1481,8 +1481,7 @@ fn exact_transaction_details_query_hash(
     request: &iroha_data_model::query::QueryRequestWithAuthority,
 ) -> Result<HashOf<TransactionEntrypoint>, Error> {
     use iroha_data_model::query::{
-        CommittedTxFilters, QueryItemKind, QueryRequest, iter_query_inner,
-        transaction::prelude::FindTransactions,
+        CommittedTxFilters, QueryItemKind, QueryRequest, transaction::prelude::FindTransactions,
     };
 
     fn exact_hash_from_predicate(
@@ -1509,57 +1508,29 @@ fn exact_transaction_details_query_hash(
         ));
     }
 
-    let hash = if let Some(query_box) = query.query_box() {
-        let erased = iter_query_inner::<CommittedTransaction>(query_box).ok_or_else(|| {
-            conversion_error(
-                "transaction details requires the committed-transaction query type".to_owned(),
-            )
-        })?;
-        if !payload_matches_query::<FindTransactions>(erased.payload())
-            || erased.selector()
-                != &iroha_data_model::query::dsl::SelectorTuple::<CommittedTransaction>::default()
-        {
-            return Err(conversion_error(
-                "transaction details requires canonical FindTransactions without projection"
-                    .to_owned(),
-            ));
-        }
-        exact_hash_from_predicate(erased.predicate())
-    } else {
-        let Some((item_kind, predicate_bytes, selector_bytes, payload)) = query.fast_dsl_parts()
-        else {
-            return Err(conversion_error(
-                "transaction details query has no executable payload".to_owned(),
-            ));
-        };
-        if item_kind != QueryItemKind::CommittedTransaction
-            || !payload_matches_query::<FindTransactions>(payload)
-        {
-            return Err(conversion_error(
-                "transaction details requires canonical FindTransactions".to_owned(),
-            ));
-        }
-        let predicate = decode_query_payload::<
-            iroha_data_model::query::dsl::CompoundPredicate<CommittedTransaction>,
-        >(predicate_bytes)
-        .ok_or_else(|| {
-            conversion_error("transaction details predicate is not canonical".to_owned())
-        })?;
-        let selector = decode_query_payload::<
-            iroha_data_model::query::dsl::SelectorTuple<CommittedTransaction>,
-        >(selector_bytes)
-        .ok_or_else(|| {
-            conversion_error("transaction details selector is not canonical".to_owned())
-        })?;
-        if selector
-            != iroha_data_model::query::dsl::SelectorTuple::<CommittedTransaction>::default()
-        {
-            return Err(conversion_error(
-                "transaction details query does not accept a projection".to_owned(),
-            ));
-        }
-        exact_hash_from_predicate(&predicate)
-    };
+    let (item_kind, predicate_bytes, selector_bytes, payload) =
+        canonical_iterable_query_parts(query);
+    if item_kind != QueryItemKind::CommittedTransaction
+        || !payload_matches_query::<FindTransactions>(payload)
+    {
+        return Err(conversion_error(
+            "transaction details requires canonical FindTransactions".to_owned(),
+        ));
+    }
+    let predicate = decode_query_payload::<
+        iroha_data_model::query::dsl::CompoundPredicate<CommittedTransaction>,
+    >(predicate_bytes)
+    .ok_or_else(|| conversion_error("transaction details predicate is not canonical".to_owned()))?;
+    let selector = decode_query_payload::<
+        iroha_data_model::query::dsl::SelectorTuple<CommittedTransaction>,
+    >(selector_bytes)
+    .ok_or_else(|| conversion_error("transaction details selector is not canonical".to_owned()))?;
+    if selector != iroha_data_model::query::dsl::SelectorTuple::<CommittedTransaction>::default() {
+        return Err(conversion_error(
+            "transaction details query does not accept a projection".to_owned(),
+        ));
+    }
+    let hash = exact_hash_from_predicate(&predicate);
 
     hash.ok_or_else(|| {
         conversion_error(

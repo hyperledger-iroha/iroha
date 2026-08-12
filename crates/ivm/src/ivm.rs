@@ -59,11 +59,9 @@ use crate::{
     vector::SimdChoice,
     zk::{self, Constraint, DeltaTraceLog, MemEvent, MemLog, RegisterState},
 };
-
 static SUPPRESS_BANNER: AtomicBool = AtomicBool::new(false);
 static WORKER_CACHE_ID: AtomicU64 = AtomicU64::new(1);
 static HARDWARE_CAPABILITIES: OnceLock<HardwareCapabilities> = OnceLock::new();
-
 /// Upper bound on logical vector length supported by the VM.
 const LOGICAL_VECTOR_MAX: usize = crate::metadata::VECTOR_LENGTH_MAX as usize;
 /// Default logical vector length when not specified by metadata.
@@ -76,7 +74,6 @@ const ILP_MIN_PARALLEL_BLOCK_LEN: usize = 16;
 const PREPARED_PROGRAM_CACHE_CAPACITY: usize = 128;
 /// Approximate byte budget for cached prepared instruction streams.
 const PREPARED_PROGRAM_CACHE_MAX_BYTES: usize = 64 * 1024 * 1024;
-
 #[cfg(feature = "beep")]
 fn with_audio_mixer(
     open_stream: impl FnOnce() -> Result<OutputStream, StreamError>,
@@ -86,14 +83,12 @@ fn with_audio_mixer(
         play(stream.mixer());
     }
 }
-
 fn require_registered_syscall_metering(
     number: u32,
     metering: Option<SyscallMetering>,
 ) -> Result<SyscallMetering, VMError> {
     metering.ok_or(VMError::UnknownSyscall(number))
 }
-
 fn resolve_syscall_metering(
     host: &dyn IVMHost,
     policy: SyscallPolicy,
@@ -103,7 +98,6 @@ fn resolve_syscall_metering(
     if registered.is_some() || crate::syscalls::is_syscall_allowed(policy, number) {
         return require_registered_syscall_metering(number, registered);
     }
-
     // Tooling hosts may explicitly opt in to host-private syscalls without
     // publishing them in the consensus ABI registry. Keep those calls on the
     // reserved path so the host must provide a deterministic quote before it
@@ -119,7 +113,6 @@ fn resolve_syscall_metering(
 /// this bound. The cap makes malicious cyclic call graphs fail deterministically
 /// without allowing an unbounded host-side shadow stack.
 const MAX_CONTRACT_CALL_DEPTH: usize = 1024;
-
 /// Canonical disjoint half-open ranges containing private guest-memory bytes.
 ///
 /// Range lookup and updates depend only on address ordering. They never scan a
@@ -129,16 +122,13 @@ const MAX_CONTRACT_CALL_DEPTH: usize = 1024;
 struct PrivateMemoryRanges {
     ranges: BTreeMap<u64, u64>,
 }
-
 impl PrivateMemoryRanges {
     fn is_empty(&self) -> bool {
         self.ranges.is_empty()
     }
-
     fn clear(&mut self) {
         self.ranges.clear();
     }
-
     fn insert(&mut self, range: std::ops::Range<u64>) {
         if range.start >= range.end {
             return;
@@ -166,7 +156,6 @@ impl PrivateMemoryRanges {
         }
         self.ranges.insert(start, end);
     }
-
     fn remove(&mut self, range: std::ops::Range<u64>) {
         if range.start >= range.end || self.ranges.is_empty() {
             return;
@@ -191,7 +180,6 @@ impl PrivateMemoryRanges {
             }
         }
     }
-
     fn intersection_len(&self, range: std::ops::Range<u64>) -> u64 {
         if range.start >= range.end || self.ranges.is_empty() {
             return 0;
@@ -206,7 +194,6 @@ impl PrivateMemoryRanges {
             .map(|(&start, &end)| end.min(range.end).saturating_sub(start.max(range.start)))
             .fold(0_u64, u64::saturating_add)
     }
-
     fn intersects(&self, range: std::ops::Range<u64>) -> bool {
         if range.start >= range.end || self.ranges.is_empty() {
             return false;
@@ -220,19 +207,16 @@ impl PrivateMemoryRanges {
             .range(scan_start..range.end)
             .any(|(&start, &end)| end > range.start && start < range.end)
     }
-
     fn take(&mut self) -> BTreeMap<u64, u64> {
         std::mem::take(&mut self.ranges)
     }
 }
-
 const SYSCALL_ARGS_0: &[usize] = &[];
 const SYSCALL_ARGS_1: &[usize] = &[10];
 const SYSCALL_ARGS_2: &[usize] = &[10, 11];
 const SYSCALL_ARGS_3: &[usize] = &[10, 11, 12];
 const SYSCALL_ARGS_4: &[usize] = &[10, 11, 12, 13];
 const SYSCALL_ARGS_5: &[usize] = &[10, 11, 12, 13, 14];
-
 #[derive(Clone, Copy, Debug, Default)]
 struct SavedSyscallOutputRegisters {
     registers: [usize; 5],
@@ -240,13 +224,10 @@ struct SavedSyscallOutputRegisters {
     private: [bool; 5],
     len: usize,
 }
-
 include!(concat!(env!("OUT_DIR"), "/syscall_signatures.rs"));
-
 fn default_vector_length() -> usize {
     DEFAULT_VECTOR_LENGTH.clamp(1, LOGICAL_VECTOR_MAX)
 }
-
 /// One admission-validated value in an indexed literal table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DecodedLiteral {
@@ -255,14 +236,12 @@ pub(crate) enum DecodedLiteral {
     /// Public signed scalar, retained in its exact two's-complement bit pattern.
     I64(u64),
 }
-
 /// Immutable indexed literal values and the pointer-only provenance index.
 #[derive(Clone, Debug)]
 pub(crate) struct DecodedLiteralTable {
     entries: Arc<[DecodedLiteral]>,
     pointer_starts: Arc<[u64]>,
 }
-
 impl DecodedLiteralTable {
     fn empty() -> Self {
         Self {
@@ -270,17 +249,14 @@ impl DecodedLiteralTable {
             pointer_starts: Arc::from(Vec::<u64>::new().into_boxed_slice()),
         }
     }
-
     /// Return values in their authenticated table-index order.
     pub(crate) fn entries(&self) -> &[DecodedLiteral] {
         &self.entries
     }
-
     fn pointer_starts(&self) -> &[u64] {
         &self.pointer_starts
     }
 }
-
 /// Decode and fully validate an ABI-v1 indexed literal table.
 pub(crate) fn decode_literal_table(
     program: &[u8],
@@ -294,7 +270,6 @@ pub(crate) fn decode_literal_table(
     if section.count > usize::from(u16::MAX) + 1 {
         return Err(VMError::InvalidMetadata);
     }
-
     let mut descriptors = Vec::with_capacity(section.count);
     let mut previous_target = None;
     for index in 0..section.count {
@@ -324,7 +299,6 @@ pub(crate) fn decode_literal_table(
         previous_target = Some(target);
         descriptors.push((kind, target));
     }
-
     if descriptors.is_empty() {
         if section.data_start != section.data_end {
             return Err(VMError::InvalidMetadata);
@@ -334,7 +308,6 @@ pub(crate) fn decode_literal_table(
     if descriptors.first().map(|(_, target)| *target) != Some(section.data_start) {
         return Err(VMError::InvalidMetadata);
     }
-
     // Descriptor order defines exact payload ranges. This makes every byte in
     // the authenticated literal data have exactly one interpretation and lets
     // admission reject pointer/scalar type confusion before execution.
@@ -381,7 +354,6 @@ pub(crate) fn decode_literal_table(
         pointer_starts: Arc::from(pointer_starts.into_boxed_slice()),
     })
 }
-
 fn setvl_length(raw: usize) -> Result<usize, VMError> {
     let vl = if raw == 0 { 1 } else { raw };
     if vl > LOGICAL_VECTOR_MAX {
@@ -389,14 +361,12 @@ fn setvl_length(raw: usize) -> Result<usize, VMError> {
     }
     Ok(vl)
 }
-
 fn validate_vadd64_length(vl: usize) -> Result<(), VMError> {
     if vl == 0 || !vl.is_multiple_of(2) {
         return Err(VMError::InvalidVectorLength { vector_length: vl });
     }
     Ok(())
 }
-
 fn isqrt_u64(mut n: u64) -> u64 {
     // Shift to the highest power-of-four <= n.
     let mut bit = 1u64 << 62;
@@ -415,19 +385,15 @@ fn isqrt_u64(mut n: u64) -> u64 {
     }
     res
 }
-
 fn checked_div_i64(num: i64, denom: i64) -> Result<i64, VMError> {
     num.checked_div(denom).ok_or(VMError::AssertionFailed)
 }
-
 fn checked_rem_i64(num: i64, denom: i64) -> Result<i64, VMError> {
     num.checked_rem(denom).ok_or(VMError::AssertionFailed)
 }
-
 fn checked_abs_i64(value: i64) -> Result<i64, VMError> {
     value.checked_abs().ok_or(VMError::AssertionFailed)
 }
-
 fn div_ceil_i64(num: i64, denom: i64) -> Result<i64, VMError> {
     let q = checked_div_i64(num, denom)?;
     let r = checked_rem_i64(num, denom)?;
@@ -439,11 +405,9 @@ fn div_ceil_i64(num: i64, denom: i64) -> Result<i64, VMError> {
         Ok(q)
     }
 }
-
 fn abs_i64_to_u64(value: i64) -> u64 {
     value.unsigned_abs()
 }
-
 fn gcd_i64(a: i64, b: i64) -> u64 {
     let mut a = abs_i64_to_u64(a);
     let mut b = abs_i64_to_u64(b);
@@ -460,14 +424,12 @@ fn gcd_i64(a: i64, b: i64) -> u64 {
     }
     a
 }
-
 /// Snapshot of hardware accelerators detected on the current host.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HardwareCapabilities {
     cuda_available: bool,
     metal_available: bool,
 }
-
 impl HardwareCapabilities {
     /// Construct a capability snapshot with explicit CUDA/Metal availability.
     pub const fn new(cuda_available: bool, metal_available: bool) -> Self {
@@ -476,32 +438,26 @@ impl HardwareCapabilities {
             metal_available,
         }
     }
-
     /// Capability snapshot representing no optional accelerators.
     pub const fn none() -> Self {
         Self::new(false, false)
     }
-
     /// Indicates whether CUDA devices are available.
     pub const fn cuda_available(self) -> bool {
         self.cuda_available
     }
-
     /// Indicates whether Metal is available (macOS/iOS GPU backend).
     pub const fn metal_available(self) -> bool {
         self.metal_available
     }
 }
-
 thread_local! {
     static WORKER_CACHE: RefCell<Option<WorkerCache>> = const { RefCell::new(None) };
 }
-
 struct WorkerCache {
     id: u64,
     resources: WorkerResources,
 }
-
 struct WorkerResources {
     vm: IVM,
     ctx: ExecutionContext,
@@ -509,7 +465,6 @@ struct WorkerResources {
     template_private_memory_bytes: PrivateMemoryRanges,
     template_input_bump: u64,
 }
-
 impl WorkerResources {
     fn new(
         template: &Arc<Mutex<IVM>>,
@@ -537,7 +492,6 @@ impl WorkerResources {
             template_input_bump,
         }
     }
-
     fn execute(&mut self, tx: Transaction) -> TxResult {
         self.vm.private_memory_bytes.clear();
         self.vm
@@ -556,20 +510,17 @@ impl WorkerResources {
         result
     }
 }
-
 /// Control whether the VM prints the ASCII banner and hardware feature summary
 /// at construction time. Benches can call this to disable noisy output.
 #[allow(dead_code)]
 pub fn set_banner_enabled(enabled: bool) {
     SUPPRESS_BANNER.store(!enabled, Ordering::Relaxed);
 }
-
 pub(crate) fn rtm_available() -> bool {
     #[cfg(all(feature = "htm", target_arch = "x86_64"))]
     {
         use std::arch::x86_64::{__cpuid_count, __get_cpuid_max};
         const RTM_FLAG: u32 = 1 << 11;
-
         // RTM detection is not available on stable via `is_x86_feature_detected!`, so use CPUID
         // leaf 7 (EBX bit 11) which is supported on all processors implementing RTM.
         unsafe {
@@ -584,7 +535,6 @@ pub(crate) fn rtm_available() -> bool {
     {
         use std::arch::x86::{__cpuid_count, __get_cpuid_max};
         const RTM_FLAG: u32 = 1 << 11;
-
         unsafe {
             let (max_leaf, _) = __get_cpuid_max(0);
             if max_leaf < 7 {
@@ -598,16 +548,13 @@ pub(crate) fn rtm_available() -> bool {
         false
     }
 }
-
 fn hardware_capabilities_snapshot() -> &'static HardwareCapabilities {
     HARDWARE_CAPABILITIES.get_or_init(|| {
         HardwareCapabilities::new(crate::cuda::cuda_available(), vector::metal_available())
     })
 }
-
 // Integration with the parallel execution module providing a persistent
 // scheduler and deterministic commit of transaction results.
-
 /// Hardware-acceleration policy applied when constructing an [`IVM`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AccelerationPolicy {
@@ -615,7 +562,6 @@ pub struct AccelerationPolicy {
     allow_metal: bool,
     forced_simd: Option<SimdChoice>,
 }
-
 impl AccelerationPolicy {
     /// Construct a policy with explicit toggles.
     pub const fn new(allow_cuda: bool, allow_metal: bool) -> Self {
@@ -625,60 +571,49 @@ impl AccelerationPolicy {
             forced_simd: None,
         }
     }
-
     /// Deterministic policy that disables all optional accelerators.
     pub const fn deterministic() -> Self {
         Self::new(false, false)
     }
-
     fn env_disables(name: &str) -> bool {
         crate::dev_env::dev_env_flag(name)
     }
-
     /// Default policy honouring the environment toggles (`IVM_DISABLE_*`).
     pub fn adaptive() -> Self {
         let allow_cuda = !Self::env_disables("IVM_DISABLE_CUDA");
         let allow_metal = !Self::env_disables("IVM_DISABLE_METAL");
         Self::new(allow_cuda, allow_metal)
     }
-
     /// Enable or disable CUDA.
     pub const fn with_cuda(mut self, allow: bool) -> Self {
         self.allow_cuda = allow;
         self
     }
-
     /// Enable or disable Metal.
     pub const fn with_metal(mut self, allow: bool) -> Self {
         self.allow_metal = allow;
         self
     }
-
     /// Override SIMD backend selection. Unsupported choices fall back to scalar.
     pub const fn with_forced_simd(mut self, choice: Option<SimdChoice>) -> Self {
         self.forced_simd = choice;
         self
     }
-
     pub(crate) const fn allow_cuda(&self) -> bool {
         self.allow_cuda
     }
-
     pub(crate) const fn allow_metal(&self) -> bool {
         self.allow_metal
     }
-
     pub(crate) const fn forced_simd(&self) -> Option<SimdChoice> {
         self.forced_simd
     }
 }
-
 impl Default for AccelerationPolicy {
     fn default() -> Self {
         Self::adaptive()
     }
 }
-
 /// Configuration describing how a new [`IVM`] should be initialised.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IvmConfig {
@@ -687,7 +622,6 @@ pub struct IvmConfig {
     capabilities: HardwareCapabilities,
     stack_policy: IvmStackPolicy,
 }
-
 impl IvmConfig {
     /// Create a configuration with the provided gas limit and adaptive acceleration policy.
     #[must_use]
@@ -699,75 +633,63 @@ impl IvmConfig {
             stack_policy: IvmStackPolicy::V1,
         }
     }
-
     /// Deterministic configuration disabling accelerator usage.
     #[must_use]
     pub fn deterministic(gas_limit: u64) -> Self {
         Self::new(gas_limit).with_acceleration(AccelerationPolicy::deterministic())
     }
-
     /// Adaptive configuration honouring environment toggles for accelerators.
     #[must_use]
     pub fn adaptive(gas_limit: u64) -> Self {
         Self::new(gas_limit)
     }
-
     /// Override the acceleration policy.
     #[must_use]
     pub fn with_acceleration(mut self, policy: AccelerationPolicy) -> Self {
         self.acceleration = policy;
         self
     }
-
     /// Override the SIMD backend used by this configuration.
     #[must_use]
     pub fn with_forced_simd(self, choice: Option<SimdChoice>) -> Self {
         self.with_acceleration(self.acceleration().with_forced_simd(choice))
     }
-
     /// Override the detected hardware capabilities.
     #[must_use]
     pub fn with_capabilities(mut self, capabilities: HardwareCapabilities) -> Self {
         self.capabilities = capabilities;
         self
     }
-
     /// Gas limit to enforce for the VM.
     #[must_use]
     pub const fn gas_limit(&self) -> u64 {
         self.gas_limit
     }
-
     /// Acceleration policy to apply after construction.
     #[must_use]
     pub const fn acceleration(&self) -> AccelerationPolicy {
         self.acceleration
     }
-
     /// Hardware capabilities the VM should expose.
     #[must_use]
     pub const fn capabilities(&self) -> HardwareCapabilities {
         self.capabilities
     }
-
     /// Immutable ABI policy used to derive the VM's guest stack.
     #[must_use]
     pub const fn stack_policy(&self) -> IvmStackPolicy {
         self.stack_policy
     }
-
     /// Derive the ABI-defined stack limit for this configuration's gas limit.
     #[must_use]
     pub const fn stack_limit_for_gas(&self) -> u64 {
         self.stack_policy.stack_limit_for_gas(self.gas_limit)
     }
-
     /// Create a builder seeded with this configuration's values.
     #[must_use]
     pub fn builder(self) -> IvmConfigBuilder {
         IvmConfigBuilder::from_config(self)
     }
-
     /// Produce a modified copy of this configuration.
     #[must_use]
     pub fn map<F>(self, mut f: F) -> Self
@@ -776,13 +698,11 @@ impl IvmConfig {
     {
         f(self.builder()).build()
     }
-
     /// Convert this configuration into an [`IvmConfigBuilder`] for further tweaks.
     #[must_use]
     pub fn to_builder(self) -> IvmConfigBuilder {
         self.builder()
     }
-
     /// Return a copy with capabilities transformed by `f`.
     #[must_use]
     pub fn map_capabilities<F>(self, f: F) -> Self
@@ -795,7 +715,6 @@ impl IvmConfig {
         }
     }
 }
-
 /// Builder for `IvmConfig` allowing ergonomic incremental construction.
 #[derive(Debug)]
 pub struct IvmConfigBuilder {
@@ -804,7 +723,6 @@ pub struct IvmConfigBuilder {
     capabilities: HardwareCapabilities,
     stack_policy: IvmStackPolicy,
 }
-
 impl IvmConfigBuilder {
     /// Begin building a configuration with the provided gas limit.
     #[must_use]
@@ -816,7 +734,6 @@ impl IvmConfigBuilder {
             stack_policy: IvmStackPolicy::V1,
         }
     }
-
     /// Create a builder initialised from an existing configuration.
     #[must_use]
     pub fn from_config(config: IvmConfig) -> Self {
@@ -827,47 +744,40 @@ impl IvmConfigBuilder {
             stack_policy: config.stack_policy(),
         }
     }
-
     /// Configuration enabling deterministic execution (no accelerators).
     #[must_use]
     pub fn deterministic(gas_limit: u64) -> Self {
         Self::new(gas_limit).with_acceleration(AccelerationPolicy::deterministic())
     }
-
     /// Configuration using the adaptive acceleration policy.
     #[must_use]
     pub fn adaptive(gas_limit: u64) -> Self {
         Self::new(gas_limit)
     }
-
     /// Override the gas limit.
     #[must_use]
     pub fn with_gas_limit(mut self, gas: u64) -> Self {
         self.gas_limit = gas;
         self
     }
-
     /// Override the acceleration policy.
     #[must_use]
     pub fn with_acceleration(mut self, policy: AccelerationPolicy) -> Self {
         self.acceleration = policy;
         self
     }
-
     /// Override SIMD backend selection for this configuration.
     #[must_use]
     pub fn with_forced_simd(mut self, choice: Option<SimdChoice>) -> Self {
         self.acceleration = self.acceleration.with_forced_simd(choice);
         self
     }
-
     /// Override hardware capabilities.
     #[must_use]
     pub fn with_capabilities(mut self, capabilities: HardwareCapabilities) -> Self {
         self.capabilities = capabilities;
         self
     }
-
     /// Finalise the builder and produce a configuration.
     #[must_use]
     pub fn build(self) -> IvmConfig {
@@ -878,37 +788,31 @@ impl IvmConfigBuilder {
             stack_policy: self.stack_policy,
         }
     }
-
     /// Convert the builder into a configuration without consuming further state.
     #[must_use]
     pub fn into_config(self) -> IvmConfig {
         self.build()
     }
 }
-
 /// Builder for configuring [`IVM`] construction.
 pub struct IvmBuilder {
     config: IvmConfig,
     suppress_banner: bool,
     host_config: Option<Box<dyn FnOnce(&mut IVM)>>,
 }
-
 impl IvmBuilder {
     /// Start building an [`IVM`] with the provided gas limit.
     pub fn new(gas_limit: u64) -> Self {
         Self::from_config(IvmConfig::adaptive(gas_limit))
     }
-
     /// Builder preset disabling accelerators.
     pub fn deterministic(gas_limit: u64) -> Self {
         Self::from_config(IvmConfig::deterministic(gas_limit))
     }
-
     /// Builder preset using the adaptive accelerator detection.
     pub fn adaptive(gas_limit: u64) -> Self {
         Self::from_config(IvmConfig::adaptive(gas_limit))
     }
-
     /// Builder preset returning both configuration and builder for deterministic runs.
     /// The returned builder does not suppress the startup banner; callers who
     /// want a quiet VM should call [`suppress_startup_banner`](IvmBuilder::suppress_startup_banner).
@@ -917,14 +821,12 @@ impl IvmBuilder {
         let builder = IvmBuilder::with_config(config);
         (builder.config(), builder)
     }
-
     /// Builder preset returning both configuration and builder for deterministic runs with banner suppressed.
     #[must_use]
     pub fn deterministic_config_suppressed(gas_limit: u64) -> (IvmConfig, IvmBuilder) {
         let (cfg, builder) = Self::deterministic_config(gas_limit);
         (cfg, builder.suppress_startup_banner())
     }
-
     /// Builder preset returning both configuration and builder for adaptive runs.
     /// The builder leaves the startup banner enabled by default.
     pub fn adaptive_config(gas_limit: u64) -> (IvmConfig, IvmBuilder) {
@@ -932,14 +834,12 @@ impl IvmBuilder {
         let builder = IvmBuilder::with_config(config);
         (builder.config(), builder)
     }
-
     /// Builder preset returning both configuration and banner-suppressed builder for adaptive runs.
     #[must_use]
     pub fn adaptive_config_suppressed(gas_limit: u64) -> (IvmConfig, IvmBuilder) {
         let (cfg, builder) = Self::adaptive_config(gas_limit);
         (cfg, builder.suppress_startup_banner())
     }
-
     /// Construct a builder from an existing configuration.
     pub fn from_config(config: IvmConfig) -> Self {
         Self {
@@ -948,18 +848,15 @@ impl IvmBuilder {
             host_config: None,
         }
     }
-
     /// Construct a builder from an `IvmConfigBuilder`.
     pub fn from_config_builder(builder: IvmConfigBuilder) -> Self {
         Self::from_config(builder.build())
     }
-
     /// Create a new builder with the provided configuration, leaving the original untouched.
     #[must_use]
     pub fn with_config(config: IvmConfig) -> Self {
         Self::from_config(config)
     }
-
     /// Create a new builder using an `IvmConfigBuilder`.
     #[must_use]
     pub fn with_config_builder(builder: IvmConfigBuilder) -> Self {
@@ -970,52 +867,44 @@ impl IvmBuilder {
         self.config.acceleration = policy;
         self
     }
-
     /// Override SIMD backend selection for subsequent builds.
     pub fn with_forced_simd(mut self, choice: Option<SimdChoice>) -> Self {
         self.config.acceleration = self.config.acceleration.with_forced_simd(choice);
         self
     }
-
     /// Return a new builder with an updated gas limit.
     #[must_use]
     pub fn with_gas_limit(mut self, gas_limit: u64) -> Self {
         self.config.gas_limit = gas_limit;
         self
     }
-
     /// Update the acceleration policy without consuming the builder.
     pub fn set_acceleration(&mut self, policy: AccelerationPolicy) -> &mut Self {
         self.config.acceleration = policy;
         self
     }
-
     /// Update SIMD backend selection without consuming the builder.
     pub fn set_forced_simd(&mut self, choice: Option<SimdChoice>) -> &mut Self {
         let policy = self.config.acceleration.with_forced_simd(choice);
         self.config.acceleration = policy;
         self
     }
-
     /// Override the gas limit for subsequent builds.
     pub fn set_gas_limit(&mut self, gas_limit: u64) -> &mut Self {
         self.config.gas_limit = gas_limit;
         self
     }
-
     /// Provide a custom host implementation.
     pub fn with_host<H: IVMHost + Send + Sync + 'static>(mut self, host: H) -> Self {
         self.host_config = Some(Box::new(move |vm| vm.set_host(host)));
         self
     }
-
     /// Override the hardware capabilities seen by the constructed VM.
     /// Useful for deterministic tests that need to force accelerator availability.
     pub fn with_capabilities(mut self, capabilities: HardwareCapabilities) -> Self {
         self.config.capabilities = capabilities;
         self
     }
-
     /// Return a builder with capabilities transformed by `f`.
     #[must_use]
     pub fn map_capabilities_builder<F>(mut self, f: F) -> Self
@@ -1025,49 +914,41 @@ impl IvmBuilder {
         self.config = self.config.map_capabilities(f);
         self
     }
-
     /// Update the capabilities override without consuming the builder.
     pub fn set_capabilities(&mut self, capabilities: HardwareCapabilities) -> &mut Self {
         self.config.capabilities = capabilities;
         self
     }
-
     /// Skip the startup banner regardless of global flags.
     pub fn suppress_startup_banner(mut self) -> Self {
         self.suppress_banner = true;
         self
     }
-
     /// Access the current configuration snapshot.
     #[must_use]
     pub fn config(&self) -> IvmConfig {
         self.config
     }
-
     /// Consume the builder and return its configuration.
     #[must_use]
     pub fn into_config(self) -> IvmConfig {
         self.config
     }
-
     /// Produce a configuration builder seeded from the current builder state.
     #[must_use]
     pub fn config_builder(&self) -> IvmConfigBuilder {
         self.config.builder()
     }
-
     /// Consume the builder and return a configuration builder for further edits.
     #[must_use]
     pub fn into_config_builder(self) -> IvmConfigBuilder {
         self.config.builder()
     }
-
     /// Retrieve the current configuration without consuming the builder.
     #[must_use]
     pub fn build_config(&self) -> IvmConfig {
         self.config
     }
-
     /// Apply a transformation to the underlying configuration.
     pub fn map_config<F>(&mut self, mut f: F) -> &mut Self
     where
@@ -1076,7 +957,6 @@ impl IvmBuilder {
         self.config = f(self.config);
         self
     }
-
     /// Try to update the configuration, propagating an error from the closure if any.
     pub fn try_map_config<F, E>(&mut self, mut f: F) -> Result<&mut Self, E>
     where
@@ -1085,13 +965,11 @@ impl IvmBuilder {
         self.config = f(self.config)?;
         Ok(self)
     }
-
     /// Current gas limit that will be applied when building.
     #[must_use]
     pub fn gas_limit(&self) -> u64 {
         self.config.gas_limit()
     }
-
     /// Consume the builder and create an [`IVM`].
     ///
     /// This respects the banner suppression flag and leaves the configuration
@@ -1115,7 +993,6 @@ impl IvmBuilder {
         );
         vm
     }
-
     /// Consume the builder and return both the final configuration and VM.
     ///
     /// The returned configuration is the exact snapshot applied to the VM and
@@ -1127,19 +1004,16 @@ impl IvmBuilder {
         (cfg, vm)
     }
 }
-
 impl From<IvmConfig> for IvmBuilder {
     fn from(config: IvmConfig) -> Self {
         IvmBuilder::from_config(config)
     }
 }
-
 impl From<IvmConfigBuilder> for IvmBuilder {
     fn from(builder: IvmConfigBuilder) -> Self {
         IvmBuilder::from_config_builder(builder)
     }
 }
-
 #[derive(Clone)]
 struct PreparedOp {
     inst: u32,
@@ -1148,7 +1022,6 @@ struct PreparedOp {
     base_gas: Option<u64>,
     simple: Option<SimpleInstruction>,
 }
-
 impl PreparedOp {
     fn from_decoded(op: &crate::ivm_cache::DecodedOp) -> Result<Self, VMError> {
         if op.len as u64 != WIDE_INSTRUCTION_LEN || !op.pc.is_multiple_of(WIDE_INSTRUCTION_LEN) {
@@ -1166,7 +1039,6 @@ impl PreparedOp {
             simple: to_simple(op.inst),
         })
     }
-
     fn fetched(&self) -> FetchedOp {
         FetchedOp {
             inst: self.inst,
@@ -1177,14 +1049,12 @@ impl PreparedOp {
         }
     }
 }
-
 #[derive(Clone)]
 pub(crate) struct PreparedProgram {
     first_pc: u64,
     end_pc: u64,
     ops: Arc<[PreparedOp]>,
 }
-
 impl PreparedProgram {
     fn prepare_ops(
         decoded: &[crate::ivm_cache::DecodedOp],
@@ -1203,7 +1073,6 @@ impl PreparedProgram {
         }
         Ok(Arc::from(ops.into_boxed_slice()))
     }
-
     fn from_prepared_ops(
         ops: Arc<[PreparedOp]>,
         first_pc: u64,
@@ -1222,7 +1091,6 @@ impl PreparedProgram {
             ops,
         })
     }
-
     fn op_at(&self, pc: u64) -> Option<&PreparedOp> {
         if pc < self.first_pc || pc >= self.end_pc {
             return None;
@@ -1234,26 +1102,22 @@ impl PreparedProgram {
         let idx = (offset / WIDE_INSTRUCTION_LEN) as usize;
         self.ops.get(idx)
     }
-
     fn contains_pc(&self, pc: u64) -> bool {
         self.op_at(pc).is_some()
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct PreparedProgramCacheKey {
     hash: [u8; 32],
     version_major: u8,
     version_minor: u8,
 }
-
 struct PreparedProgramCache {
     map: HashMap<PreparedProgramCacheKey, Arc<[PreparedOp]>>,
     sizes: HashMap<PreparedProgramCacheKey, usize>,
     order: VecDeque<PreparedProgramCacheKey>,
     bytes: usize,
 }
-
 impl PreparedProgramCache {
     fn new() -> Self {
         Self {
@@ -1263,7 +1127,6 @@ impl PreparedProgramCache {
             bytes: 0,
         }
     }
-
     fn key_for(code: &[u8], metadata: &ProgramMetadata) -> PreparedProgramCacheKey {
         let mut hasher = Sha256::new();
         hasher.update(code);
@@ -1276,7 +1139,6 @@ impl PreparedProgramCache {
             version_minor: metadata.version_minor,
         }
     }
-
     fn get_or_prepare(
         &mut self,
         code: &[u8],
@@ -1288,7 +1150,6 @@ impl PreparedProgramCache {
             self.touch(key);
             return Ok(hit);
         }
-
         let prepared = PreparedProgram::prepare_ops(decoded, code.len())?;
         let size = Self::entry_size(&prepared);
         if size <= PREPARED_PROGRAM_CACHE_MAX_BYTES {
@@ -1300,18 +1161,15 @@ impl PreparedProgramCache {
         }
         Ok(prepared)
     }
-
     fn entry_size(prepared: &Arc<[PreparedOp]>) -> usize {
         core::mem::size_of::<PreparedOp>() * prepared.len()
     }
-
     fn touch(&mut self, key: PreparedProgramCacheKey) {
         if let Some(pos) = self.order.iter().position(|candidate| *candidate == key) {
             self.order.remove(pos);
         }
         self.order.push_back(key);
     }
-
     fn enforce_capacity(&mut self) {
         while self.order.len() > PREPARED_PROGRAM_CACHE_CAPACITY
             || self.bytes > PREPARED_PROGRAM_CACHE_MAX_BYTES
@@ -1323,7 +1181,6 @@ impl PreparedProgramCache {
             }
         }
     }
-
     fn remove_entry(&mut self, key: PreparedProgramCacheKey) {
         if self.map.remove(&key).is_some() {
             let size = self.sizes.remove(&key).unwrap_or(0);
@@ -1331,12 +1188,10 @@ impl PreparedProgramCache {
         }
     }
 }
-
 fn prepared_program_cache() -> &'static Mutex<PreparedProgramCache> {
     static CACHE: OnceLock<Mutex<PreparedProgramCache>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(PreparedProgramCache::new()))
 }
-
 /// Validate that indexed literal instructions reference an entry of the exact required kind.
 pub(crate) fn validate_indexed_literal_instructions(
     decoded: &[crate::ivm_cache::DecodedOp],
@@ -1359,7 +1214,6 @@ pub(crate) fn validate_indexed_literal_instructions(
     }
     Ok(())
 }
-
 fn validate_generic_program_syscalls(
     decoded: &[crate::ivm_cache::DecodedOp],
 ) -> Result<(), VMError> {
@@ -1378,7 +1232,6 @@ fn validate_generic_program_syscalls(
     }
     Ok(())
 }
-
 pub(crate) fn prepare_instruction_stream(
     code: &[u8],
     metadata: &ProgramMetadata,
@@ -1395,7 +1248,6 @@ pub(crate) fn prepare_instruction_stream(
     };
     PreparedProgram::from_prepared_ops(prepared_ops, first_pc, code.len())
 }
-
 struct ProgramLoadImage<'a> {
     code_region: &'a [u8],
     metadata: ProgramMetadata,
@@ -1409,7 +1261,6 @@ struct ProgramLoadImage<'a> {
     strict_return_integrity: bool,
     allow_koto_test_syscalls: bool,
 }
-
 #[derive(Clone, Copy)]
 struct FetchedOp {
     inst: u32,
@@ -1418,14 +1269,12 @@ struct FetchedOp {
     base_gas: Option<u64>,
     simple: Option<SimpleInstruction>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TraceMode {
     Off,
     PcOnly,
     DeltaRegisters,
 }
-
 /// Immutable baseline used to return a warmed VM to its post-load state.
 ///
 /// The baseline owns one pristine memory image. Resetting from it copies only
@@ -1443,7 +1292,6 @@ pub struct RuntimeTemplate {
     entrypoint_pc: Option<u64>,
     input_bump_next: u64,
 }
-
 /// A warmed VM cannot be reset from a baseline with different memory geometry.
 ///
 /// Runtime pools must discard the mismatched VM instead of replacing its full
@@ -1461,7 +1309,6 @@ pub struct RuntimeTemplateResetError {
     current_merkle_leaves: usize,
     template_merkle_leaves: usize,
 }
-
 impl RuntimeTemplateResetError {
     fn from_memory(error: MemoryTemplateMismatch) -> Self {
         Self {
@@ -1478,7 +1325,6 @@ impl RuntimeTemplateResetError {
         }
     }
 }
-
 impl std::fmt::Display for RuntimeTemplateResetError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -1497,9 +1343,7 @@ impl std::fmt::Display for RuntimeTemplateResetError {
         )
     }
 }
-
 impl std::error::Error for RuntimeTemplateResetError {}
-
 pub struct IVM {
     pub registers: Registers,
     // The vector register file has been folded into `registers`. Vector
@@ -1607,7 +1451,6 @@ pub struct IVM {
     acceleration_policy: AccelerationPolicy,
     hardware_capabilities: HardwareCapabilities,
 }
-
 impl Clone for IVM {
     fn clone(&self) -> Self {
         Self {
@@ -1682,46 +1525,38 @@ impl Clone for IVM {
         }
     }
 }
-
 impl IVM {
     /// Construct a builder for configuring VM creation.
     #[must_use]
     pub fn builder(gas_limit: u64) -> IvmBuilder {
         IvmBuilder::new(gas_limit)
     }
-
     /// Construct a builder preset that disables accelerator usage.
     #[must_use]
     pub fn deterministic_builder(gas_limit: u64) -> IvmBuilder {
         IvmBuilder::deterministic(gas_limit)
     }
-
     /// Construct a builder preset that applies the adaptive acceleration policy.
     #[must_use]
     pub fn adaptive_builder(gas_limit: u64) -> IvmBuilder {
         IvmBuilder::adaptive(gas_limit)
     }
-
     /// Construct a new VM directly from a configuration.
     pub fn with_config(config: IvmConfig) -> IvmBuilder {
         IvmBuilder::from_config(config)
     }
-
     /// Construct a builder from an `IvmConfigBuilder`.
     pub fn with_config_builder(builder: IvmConfigBuilder) -> IvmBuilder {
         IvmBuilder::from_config_builder(builder)
     }
-
     /// Create a new VM using the default adaptive acceleration policy.
     pub fn new(gas_limit: u64) -> Self {
         IvmBuilder::new(gas_limit).suppress_startup_banner().build()
     }
-
     /// Create a new VM using the provided configuration.
     pub fn new_with_config(config: IvmConfig) -> Self {
         IVM::new_from_config(config)
     }
-
     /// First general register index used to hold vector register data.
     const VECTOR_BASE: usize = 32;
     /// Gas costs for the simple interpreter.
@@ -1733,7 +1568,6 @@ impl IVM {
     const GAS_ED25519_VERIFY: u64 = 1000;
     #[allow(dead_code)]
     const GAS_DILITHIUM_VERIFY: u64 = 5000;
-
     /// Play a short tune on the default audio device.
     ///
     /// This function is only available when built with the `beep` feature.
@@ -1741,7 +1575,6 @@ impl IVM {
     pub fn beep_music() {
         const BPM: u64 = 120;
         const BEAT_MS: u64 = 60_000 / BPM;
-
         #[derive(Clone, Copy)]
         enum Note {
             A4,
@@ -1750,7 +1583,6 @@ impl IVM {
             E4,
             Rest,
         }
-
         impl Note {
             fn freq(self) -> Option<u32> {
                 match self {
@@ -1762,7 +1594,6 @@ impl IVM {
                 }
             }
         }
-
         fn play_element(mixer: &Mixer, note: Note, beats: f32) {
             let dur_ms = (BEAT_MS as f32 * beats) as u64;
             if let Some(f) = note.freq() {
@@ -1776,7 +1607,6 @@ impl IVM {
                 std::thread::sleep(Duration::from_millis(dur_ms));
             }
         }
-
         // Japanese song, Kagome-Kagome
         fn play_kagome(mixer: &Mixer) {
             let score = vec![
@@ -1836,15 +1666,12 @@ impl IVM {
                 (Note::A4, 1.0),
                 (Note::Rest, 1.0),
             ];
-
             for (n, b) in score {
                 play_element(mixer, n, b);
             }
         }
-
         with_audio_mixer(OutputStreamBuilder::open_default_stream, play_kagome);
     }
-
     fn startup_banner(
         core_count: usize,
         max_vector: usize,
@@ -1933,13 +1760,10 @@ impl IVM {
                 1
             }
         };
-
         // Global Rayon pool initialization is handled by the host (e.g., irohad)
         // based on configuration. Avoid initializing a large global pool here to
         // reduce oversubscription when multiple thread pools coexist.
-
         let htm_supported = cfg!(all(feature = "htm", target_arch = "x86_64")) && rtm_available();
-
         let mut vm = IVM {
             registers: Registers::new(),
             memory: mem,
@@ -2023,7 +1847,6 @@ impl IVM {
         vm.core_count = vm.scheduler.thread_count();
         vm
     }
-
     fn apply_acceleration_policy(&mut self, policy: AccelerationPolicy) {
         let caps = self.hardware_capabilities;
         self.acceleration_policy = policy;
@@ -2032,7 +1855,6 @@ impl IVM {
         self.use_metal = policy.allow_metal() && caps.metal_available();
         self.use_cuda = policy.allow_cuda() && caps.cuda_available();
     }
-
     /// Decode the next instruction from code memory and advance the program counter.
     ///
     /// The simple decoder understands a compact 16-bit encoding for basic
@@ -2045,7 +1867,6 @@ impl IVM {
             .memory
             .fetch_u16(self.pc)
             .map_err(|_| VMError::DecodeError)?;
-
         // Check for 32-bit jump prefix 0b11111xxxx_xxxxxxxx
         if (half >> 11) == 0x1F {
             let next = self
@@ -2056,7 +1877,6 @@ impl IVM {
             let target = ((hi << 16) | next as u32) as u64;
             return Ok((Instruction::Jump { target }, 4));
         }
-
         let op = (half >> 12) & 0xF;
         let f1 = (half >> 8) & 0xF;
         let f2 = (half >> 4) & 0xF;
@@ -2106,7 +1926,6 @@ impl IVM {
         };
         Ok((instr, 2))
     }
-
     /// Execute a single simple instruction.
     pub fn execute_instruction(&mut self, instr: SimpleInstruction) -> Result<(), VMError> {
         // Determine gas cost for this instruction
@@ -2138,7 +1957,6 @@ impl IVM {
             return Err(VMError::OutOfGas);
         }
         self.gas_remaining -= cost;
-
         match instr {
             SimpleInstruction::Add { rd, rs, rt } => {
                 let a = self.registers.get(rs as usize);
@@ -2575,7 +2393,6 @@ impl IVM {
         }
         Ok(())
     }
-
     /// Execute a program made of `SimpleInstruction`s.
     pub fn run_simple(&mut self) -> Result<(), VMError> {
         const MAX_STEPS: u64 = 1_000_000;
@@ -2586,10 +2403,8 @@ impl IVM {
             if steps >= MAX_STEPS {
                 return Err(VMError::ExceededMaxCycles);
             }
-
             let mut block = Vec::new();
             let mut terminal = None;
-
             loop {
                 let (instr, len) = self.decode_next()?;
                 self.pc = self.pc.wrapping_add(len as u64);
@@ -2609,11 +2424,9 @@ impl IVM {
                     }
                 }
             }
-
             if !block.is_empty() {
                 self.execute_block_parallel(&block)?;
             }
-
             if let Some(term) = terminal {
                 if matches!(term, SimpleInstruction::Halt) {
                     // In the simple pipeline, require at least one unit of gas to
@@ -2634,13 +2447,11 @@ impl IVM {
         self.commit_memory_after_run_if_needed();
         Ok(())
     }
-
     /// Create a new IVM with custom state and optional core count.
     pub fn new_with_options(core_count: Option<usize>, state: State, gas_limit: u64) -> Self {
         let config = IvmConfig::new(gas_limit);
         IVM::new_with_options_and_config(core_count, state, config)
     }
-
     /// Create a new IVM with custom state using the provided configuration.
     pub fn new_with_options_and_config(
         core_count: Option<usize>,
@@ -2669,7 +2480,6 @@ impl IVM {
         );
         vm
     }
-
     /// Enable or disable zero-knowledge features.
     ///
     /// When enabled and no explicit cycle limit has been set, the default
@@ -2687,7 +2497,6 @@ impl IVM {
             self.max_cycles = 0;
         }
     }
-
     /// Enable or disable formal ZK trace collection.
     ///
     /// This does not change ZK-mode execution semantics: ZK opcodes, privacy
@@ -2699,18 +2508,15 @@ impl IVM {
             self.clear_zk_trace_logs();
         }
     }
-
     /// Returns `true` when formal ZK trace collection is enabled.
     #[inline]
     pub fn zk_trace_enabled(&self) -> bool {
         self.zk_trace_enabled
     }
-
     /// Set the maximum cycle count used for zero-knowledge padding and enforcement.
     pub fn set_max_cycles(&mut self, max: u64) {
         self.max_cycles = max;
     }
-
     /// Load raw code bytes into memory without parsing metadata.
     pub fn load_code(&mut self, code: &[u8]) -> Result<(), VMError> {
         if code.len() > Memory::HEAP_START as usize {
@@ -2741,7 +2547,6 @@ impl IVM {
         self.memory.mark_template_clean();
         Ok(())
     }
-
     /// Load a program (bytecode) into the VM's code memory.
     pub fn load_program(&mut self, program: &[u8]) -> Result<(), VMError> {
         #[cfg(test)]
@@ -2805,7 +2610,6 @@ impl IVM {
             allow_koto_test_syscalls: false,
         })
     }
-
     /// Load an already validated and prepared contract without reparsing or redecoding it.
     ///
     /// The immutable artifact, metadata, literal index, decoded stream, and
@@ -2814,7 +2618,6 @@ impl IVM {
     pub fn load_prepared(&mut self, contract: &PreparedContract) -> Result<(), VMError> {
         self.load_prepared_with_koto_test_capability(contract, false)
     }
-
     /// Load a fully validated local Kotodama test-suite artifact.
     ///
     /// The method is crate-private so public raw/program/prepared loaders cannot
@@ -2825,7 +2628,6 @@ impl IVM {
     ) -> Result<(), VMError> {
         self.load_prepared_with_koto_test_capability(contract, true)
     }
-
     fn load_prepared_with_koto_test_capability(
         &mut self,
         contract: &PreparedContract,
@@ -2849,7 +2651,6 @@ impl IVM {
             allow_koto_test_syscalls,
         })
     }
-
     fn install_program(&mut self, image: ProgramLoadImage<'_>) -> Result<(), VMError> {
         let code_len =
             u64::try_from(image.code_region.len()).map_err(|_| VMError::InvalidMetadata)?;
@@ -2916,7 +2717,6 @@ impl IVM {
         self.memory.mark_template_clean();
         Ok(())
     }
-
     /// Set the gas limit for execution.
     pub fn set_gas_limit(&mut self, limit: u64) {
         self.gas_limit = limit;
@@ -2926,7 +2726,6 @@ impl IVM {
         self.last_staged_syscall = None;
         self.argument_decode_prepaid_gas = None;
     }
-
     pub(crate) fn prepay_argument_decode(&mut self, gas: u64) -> Result<(), VMError> {
         if self.argument_decode_prepaid_gas.is_some() {
             return Err(VMError::DecodeError);
@@ -2935,11 +2734,9 @@ impl IVM {
         self.argument_decode_prepaid_gas = Some(gas);
         Ok(())
     }
-
     pub(crate) fn argument_decode_is_prepaid(&self, gas: u64) -> bool {
         self.argument_decode_prepaid_gas == Some(gas)
     }
-
     pub(crate) fn consume_prepaid_argument_decode(&mut self, gas: u64) -> Result<(), VMError> {
         if !self.argument_decode_is_prepaid(gas) {
             return Err(VMError::DecodeError);
@@ -2947,12 +2744,10 @@ impl IVM {
         self.argument_decode_prepaid_gas = None;
         Ok(())
     }
-
     /// Structured trap diagnostic captured during the last failed execution, if any.
     pub fn last_diagnostic(&self) -> Option<&VmExecutionDiagnostic> {
         self.last_diagnostic.as_ref()
     }
-
     fn current_source_location(&self) -> Option<VmSourceLocation> {
         let relative_pc = self.pc.saturating_sub(self.program_prefix_len);
         let entry = self
@@ -2968,20 +2763,17 @@ impl IVM {
             column: Some(entry.source.column),
         })
     }
-
     fn prepared_contains_pc(&self, pc: u64) -> bool {
         self.prepared
             .as_ref()
             .is_some_and(|prepared| prepared.contains_pc(pc))
     }
-
     fn prepared_pc_is_halt(&self, pc: u64) -> bool {
         self.prepared
             .as_ref()
             .and_then(|prepared| prepared.op_at(pc))
             .is_some_and(|op| op.wide_op == instruction::wide::control::HALT)
     }
-
     fn push_contract_return(&mut self, return_pc: u64) -> Result<(), VMError> {
         if !self.strict_return_integrity {
             return Ok(());
@@ -2992,7 +2784,6 @@ impl IVM {
         self.contract_return_stack.push(return_pc);
         Ok(())
     }
-
     fn fetch_instruction(&mut self) -> Result<FetchedOp, VMError> {
         if let Some(op) = self
             .prepared
@@ -3001,7 +2792,6 @@ impl IVM {
         {
             return Ok(op.fetched());
         }
-
         #[cfg(test)]
         {
             self.predecoded_misses += 1;
@@ -3013,14 +2803,12 @@ impl IVM {
             self.prepared_contains_pc(self.pc),
             pc = self.pc
         );
-
         if self.prepared_required {
             return Err(VMError::MemoryAccessViolation {
                 addr: self.pc as u32,
                 perm: Perm::EXECUTE,
             });
         }
-
         let (inst, len) = decoder::decode(&self.memory, self.pc)?;
         let wide_op = instruction::wide::opcode(inst);
         Ok(FetchedOp {
@@ -3031,7 +2819,6 @@ impl IVM {
             simple: to_simple(inst),
         })
     }
-
     fn classify_trap(err: &VMError) -> VmTrapKind {
         match err.as_unmetered() {
             VMError::OutOfGas | VMError::SyscallOutOfGas { .. } => VmTrapKind::OutOfGas,
@@ -3080,7 +2867,6 @@ impl IVM {
             VMError::Metered { .. } => unreachable!("as_unmetered peels metered wrappers"),
         }
     }
-
     fn build_execution_diagnostic(&self, err: &VMError) -> VmExecutionDiagnostic {
         let predecoded_loaded = self.prepared.is_some();
         let predecoded_hit = if predecoded_loaded {
@@ -3131,12 +2917,10 @@ impl IVM {
             },
         }
     }
-
     /// Access the parsed program metadata for the currently loaded program.
     pub fn metadata(&self) -> &ProgramMetadata {
         &self.metadata
     }
-
     /// Return the self-describing contract interface retained for the loaded image.
     ///
     /// Compiler-internal host helpers use the declared durable-state schema to
@@ -3146,18 +2930,15 @@ impl IVM {
     pub fn contract_interface(&self) -> Option<&crate::metadata::EmbeddedContractInterfaceV1> {
         self.contract_interface.as_deref()
     }
-
     /// Returns `true` when the VM is executing in zero-knowledge mode.
     #[inline]
     pub fn zk_mode_enabled(&self) -> bool {
         self.zk_mode
     }
-
     #[inline]
     fn zk_trace_collection_enabled(&self) -> bool {
         self.zk_mode && self.zk_trace_enabled
     }
-
     fn clear_zk_trace_logs(&mut self) {
         self.constraints = zk::ConstraintLog::default();
         self.mem_log = MemLog::default();
@@ -3165,7 +2946,6 @@ impl IVM {
         self.trace_log = DeltaTraceLog::default();
         self.step_log = zk::StepLog::default();
     }
-
     #[inline]
     fn zk_match_tags(&self, rs1: usize, rs2: usize) -> Result<Option<bool>, VMError> {
         if self.zk_mode {
@@ -3179,7 +2959,6 @@ impl IVM {
             Ok(None)
         }
     }
-
     /// Reject private operands before an operation whose trap behavior depends
     /// on their values. A private divide-by-zero, failed assertion, or inverse
     /// failure would otherwise reveal a witness predicate through the public
@@ -3195,7 +2974,6 @@ impl IVM {
         }
         Ok(())
     }
-
     #[inline]
     fn zk_unary_tag(&self, rs: usize) -> Option<bool> {
         if self.zk_mode {
@@ -3204,19 +2982,16 @@ impl IVM {
             None
         }
     }
-
     #[inline]
     fn zk_apply_tag(&mut self, rd: usize, tag: Option<bool>) {
         if let Some(tag) = tag {
             self.registers.set_tag(rd, tag);
         }
     }
-
     fn memory_privacy_range(addr: u64, len: u64) -> Result<std::ops::Range<u64>, VMError> {
         let end = addr.checked_add(len).ok_or(VMError::PrivacyViolation)?;
         Ok(addr..end)
     }
-
     /// Return the privacy tag for a scalar memory load.
     ///
     /// A partially overwritten private word is rejected rather than silently
@@ -3242,7 +3017,6 @@ impl IVM {
             _ => Err(VMError::PrivacyViolation),
         }
     }
-
     /// Reject any non-tag-propagating operation that reads private stack data.
     pub(crate) fn ensure_public_memory(&self, addr: u64, len: u64) -> Result<(), VMError> {
         if !self.zk_mode || self.private_memory_bytes.is_empty() {
@@ -3256,7 +3030,6 @@ impl IVM {
         }
         Ok(())
     }
-
     /// Validate that a private value can be spilled without crossing a public
     /// host boundary. Compiler-generated private spills are stack-only.
     fn validate_memory_store_privacy(
@@ -3274,7 +3047,6 @@ impl IVM {
         }
         Ok(())
     }
-
     fn record_memory_store_privacy(&mut self, addr: u64, len: u64, private: bool) {
         let Ok(range) = Self::memory_privacy_range(addr, len) else {
             return;
@@ -3285,7 +3057,6 @@ impl IVM {
             self.private_memory_bytes.remove(range);
         }
     }
-
     /// Zero private stack bytes before a reset or program replacement.
     fn scrub_private_memory(&mut self) -> bool {
         for (start, end) in self.private_memory_bytes.take() {
@@ -3300,7 +3071,6 @@ impl IVM {
         }
         self.private_memory_bytes.is_empty()
     }
-
     /// Detect a direct value or complete owned TLV that overlaps private bytes.
     ///
     /// Register tags catch scalar arguments. This additional check prevents a
@@ -3309,14 +3079,12 @@ impl IVM {
         if self.private_memory_bytes.is_empty() {
             return false;
         }
-
         let direct_len = 8;
         if self.memory.inspect_region(value, direct_len).is_ok()
             && self.ensure_public_memory(value, direct_len).is_err()
         {
             return true;
         }
-
         let Ok(header) = self.memory.inspect_region(value, 7) else {
             return false;
         };
@@ -3330,63 +3098,51 @@ impl IVM {
         self.memory.inspect_region(value, total).is_ok()
             && self.ensure_public_memory(value, total).is_err()
     }
-
     #[cfg(test)]
     pub(crate) fn reset_predecode_misses(&mut self) {
         self.predecoded_misses = 0;
     }
-
     #[cfg(test)]
     pub(crate) fn predecode_misses(&self) -> u64 {
         self.predecoded_misses
     }
-
     #[cfg(test)]
     pub(crate) fn program_parse_attempts(&self) -> u64 {
         self.program_parse_attempts
     }
-
     #[cfg(test)]
     pub(crate) fn prepared_loads(&self) -> u64 {
         self.prepared_loads
     }
-
     /// Returns `true` when CUDA acceleration is enabled for this VM instance.
     pub fn uses_cuda(&self) -> bool {
         self.use_cuda
     }
-
     /// Returns the acceleration policy currently applied to this VM.
     pub fn acceleration_policy(&self) -> AccelerationPolicy {
         self.acceleration_policy
     }
-
     /// Returns the hardware accelerators detected on this host.
     pub fn hardware_capabilities(&self) -> HardwareCapabilities {
         self.hardware_capabilities
     }
-
     /// Override the hardware capabilities snapshot for this VM instance.
     pub fn set_hardware_capabilities(&mut self, capabilities: HardwareCapabilities) {
         self.hardware_capabilities = capabilities;
         self.apply_acceleration_policy(self.acceleration_policy);
     }
-
     /// Update the acceleration policy and recompute hardware usage flags.
     pub fn set_acceleration_policy(&mut self, policy: AccelerationPolicy) {
         self.apply_acceleration_policy(policy);
     }
-
     /// Returns `true` when Metal acceleration is enabled for this VM instance.
     pub fn uses_metal(&self) -> bool {
         self.use_metal
     }
-
     /// Current program counter (byte offset into code region).
     pub fn pc(&self) -> u64 {
         self.pc
     }
-
     /// Set the current program counter to a decoded instruction boundary.
     ///
     /// # Errors
@@ -3403,7 +3159,6 @@ impl IVM {
             Err(VMError::DecodeError)
         }
     }
-
     /// Allocate space in the INPUT region and write the provided TLV bytes.
     /// Returns the absolute pointer to the start of the TLV.
     pub fn alloc_input_tlv(&mut self, tlv: &[u8]) -> Result<u64, VMError> {
@@ -3424,7 +3179,6 @@ impl IVM {
         self.input_bump_next = end;
         Ok(Memory::INPUT_START + off)
     }
-
     /// Allocate a host-produced TLV, preferring INPUT and spilling to HEAP when the
     /// INPUT bump allocator is exhausted.
     ///
@@ -3442,7 +3196,6 @@ impl IVM {
             Err(err) => Err(err),
         }
     }
-
     /// Allocate an opaque host-produced private TLV in owned HEAP memory.
     ///
     /// INPUT is intentionally not used: private ranges must be writable so the
@@ -3457,7 +3210,6 @@ impl IVM {
         self.record_memory_store_privacy(address, len, true);
         Ok(address)
     }
-
     fn preflight_host_tlv_allocations_from(
         mut input_cursor: u64,
         mut heap_allocated: u64,
@@ -3478,7 +3230,6 @@ impl IVM {
                 input_cursor = input_end;
                 continue;
             }
-
             let heap_length = length
                 .checked_add(ALIGN - 1)
                 .map(|value| value & !(ALIGN - 1))
@@ -3492,7 +3243,6 @@ impl IVM {
         }
         Ok(())
     }
-
     /// Prove that a sequence of host TLV allocations can complete atomically
     /// with the VM's current INPUT cursor and HEAP ownership.
     ///
@@ -3504,7 +3254,6 @@ impl IVM {
     ) -> Result<(), VMError> {
         self.preflight_host_tlv_allocations_with_reserved_heap(tlv_lengths, 0)
     }
-
     /// Prove that host TLVs and a separate compiler-owned HEAP reservation fit
     /// together before either allocation class mutates the VM.
     pub(crate) fn preflight_host_tlv_allocations_with_reserved_heap(
@@ -3527,7 +3276,6 @@ impl IVM {
             tlv_lengths,
         )
     }
-
     /// Prove that host TLVs and compiler-owned HEAP allocations fit a clean V1
     /// VM before admitting an invocation.
     pub(crate) fn preflight_fresh_host_tlv_allocations_with_reserved_heap(
@@ -3539,7 +3287,6 @@ impl IVM {
             .ok_or(VMError::OutOfMemory)?;
         Self::preflight_host_tlv_allocations_from(0, 0, available_heap_limit, tlv_lengths)
     }
-
     /// Require a prospective pointer-ABI envelope range to have public,
     /// VM-owned provenance.
     ///
@@ -3555,7 +3302,6 @@ impl IVM {
         self.ensure_public_memory(address, len)?;
         self.ensure_owned_tlv_range(address, len)
     }
-
     /// Require a prospective pointer-ABI envelope range to have VM-owned
     /// provenance without scanning its complete payload.
     ///
@@ -3582,7 +3328,6 @@ impl IVM {
             Err(VMError::NoritoInvalid)
         }
     }
-
     /// Snapshot one complete opaque private TLV after reserved syscall gas was debited.
     pub(crate) fn snapshot_private_tlv(
         &self,
@@ -3617,7 +3362,6 @@ impl IVM {
             .map(<[u8]>::to_vec)
             .map_err(|_| VMError::NoritoInvalid)
     }
-
     /// Require a raw compiler-owned object to fit wholly within allocated HEAP.
     ///
     /// Unlike pointer-ABI envelopes, compiler-owned Lists may never alias code
@@ -3635,7 +3379,6 @@ impl IVM {
             Err(VMError::DecodeError)
         }
     }
-
     /// Return whether `address` is an exact loader-validated literal envelope start.
     pub(crate) fn is_validated_literal_pointer(&self, address: u64) -> bool {
         self.literal_table
@@ -3643,7 +3386,6 @@ impl IVM {
             .binary_search(&address)
             .is_ok()
     }
-
     fn inspect_owned_public_tlv_payload_len(&self, ptr: u64) -> Result<usize, VMError> {
         self.ensure_public_memory(ptr, 7)?;
         let hdr = self
@@ -3664,7 +3406,6 @@ impl IVM {
         self.ensure_owned_tlv_range(ptr, total)?;
         Ok(len)
     }
-
     /// Validate a pointer-ABI TLV in any owned public region and return its decoded view.
     pub fn validate_tlv(&self, ptr: u64) -> Result<crate::pointer_abi::Tlv<'_>, VMError> {
         let len = self.inspect_owned_public_tlv_payload_len(ptr)?;
@@ -3677,7 +3418,6 @@ impl IVM {
             .memory
             .load_region(ptr, total)
             .map_err(|_| VMError::NoritoInvalid)?;
-
         match crate::pointer_abi::validate_tlv_bytes(envelope) {
             Ok(tlv) => {
                 let (policy, abi_version) = crate::pointer_abi::current_policy()
@@ -3696,7 +3436,6 @@ impl IVM {
             Err(err) => Err(err),
         }
     }
-
     /// Validate a public cryptographic operand without changing the legacy
     /// boolean-result behavior for malformed public TLVs. Privacy violations
     /// are never converted into a public verification failure.
@@ -3710,7 +3449,6 @@ impl IVM {
             Err(_) => Ok(None),
         }
     }
-
     /// Validate a pointer-ABI TLV in the INPUT region and return its decoded view.
     pub fn validate_input_tlv(&self, ptr: u64) -> Result<crate::pointer_abi::Tlv<'_>, VMError> {
         let input_end = Memory::INPUT_START
@@ -3721,7 +3459,6 @@ impl IVM {
         }
         self.validate_tlv(ptr)
     }
-
     /// Clone a validated TLV from any readable region into an owned buffer.
     pub fn clone_tlv(&self, ptr: u64) -> Result<Vec<u8>, VMError> {
         let tlv = self.validate_tlv(ptr)?;
@@ -3734,7 +3471,6 @@ impl IVM {
         out.extend_from_slice(&hash);
         Ok(out)
     }
-
     /// Clone a validated INPUT TLV into an owned buffer.
     pub fn clone_input_tlv(&self, ptr: u64) -> Result<Vec<u8>, VMError> {
         let tlv = self.validate_input_tlv(ptr)?;
@@ -3747,7 +3483,6 @@ impl IVM {
         out.extend_from_slice(&hash);
         Ok(out)
     }
-
     /// Recompute the simple INPUT bump pointer based on existing TLVs.
     ///
     /// Scans the INPUT region from the start and advances `input_bump_next`
@@ -3801,12 +3536,10 @@ impl IVM {
         }
         self.input_bump_next = off;
     }
-
     /// ABI version extracted from the program header.
     pub fn abi_version(&self) -> u8 {
         self.metadata.abi_version
     }
-
     /// Effective syscall policy for the currently loaded program.
     ///
     /// The first release only accepts ABI v1 programs, so loaded programs
@@ -3815,7 +3548,6 @@ impl IVM {
         debug_assert_eq!(self.metadata.abi_version, 1);
         SyscallPolicy::AbiV1
     }
-
     /// Execute a full block of transactions using the parallel scheduler.
     ///
     /// Each transaction is run on a cloned instance of the VM so worker
@@ -3832,7 +3564,6 @@ impl IVM {
         if !allow_parallel {
             return self.execute_block_sequential(block);
         }
-
         // Capture the current host (if any) so worker clones can access it via
         // a thread-safe wrapper. The original host is restored before returning
         // to preserve downcast behaviour for the caller.
@@ -3841,14 +3572,12 @@ impl IVM {
             .take()
             .map(|host| Arc::new(Mutex::new(Some(host))));
         let host_for_workers = AssertUnwindSafe(shared_host.as_ref().map(Arc::clone));
-
         // Clone self once as a template for worker threads. The `State` inside
         // the clone is an `Arc` so all threads operate on the same underlying
         // data.
         let template = Arc::new(Mutex::new(self.clone()));
         let template_ref = &template;
         let host_for_workers_ref = &host_for_workers;
-
         let cache_id = WORKER_CACHE_ID.fetch_add(1, Ordering::Relaxed);
         let scheduled = std::panic::catch_unwind(AssertUnwindSafe(|| {
             parallel::execute_block_predicted(&self.scheduler, block, |tx| {
@@ -3867,18 +3596,15 @@ impl IVM {
                 })
             })
         }));
-
         if let Some(shared_host) = shared_host {
             let mut guard = shared_host.lock().unwrap_or_else(|err| err.into_inner());
             self.host = guard.take();
         }
-
         match scheduled {
             Ok(result) => result,
             Err(payload) => std::panic::resume_unwind(payload),
         }
     }
-
     /// Sequential block execution path used when the host is not concurrency-safe.
     fn execute_block_sequential(&mut self, block: Block) -> BlockResult {
         let template_memory = self.memory.clone();
@@ -3886,7 +3612,6 @@ impl IVM {
         let template_input_bump = self.input_bump_next;
         let mut ctx = ExecutionContext::new();
         let mut tx_results = Vec::with_capacity(block.transactions.len());
-
         for tx in block.transactions {
             self.private_memory_bytes.clear();
             self.memory
@@ -3905,10 +3630,8 @@ impl IVM {
             }
             tx_results.push(result);
         }
-
         BlockResult { tx_results }
     }
-
     /// Execute a single transaction using this VM instance.
     fn execute_transaction(&mut self, tx: &Transaction, _ctx: &mut ExecutionContext) -> TxResult {
         let logging_supported = self
@@ -3925,7 +3648,6 @@ impl IVM {
                 gas_used: 0,
             };
         }
-
         if let Some(host) = self.host.as_deref_mut()
             && host.begin_tx(&tx.access).is_err()
         {
@@ -3934,7 +3656,6 @@ impl IVM {
                 gas_used: 0,
             };
         }
-
         if self.load_program(&tx.code).is_err() {
             if let Some(host) = self.host.as_deref_mut() {
                 let _ = host.finish_tx();
@@ -3979,19 +3700,16 @@ impl IVM {
             gas_used: tx.gas_limit.saturating_sub(self.gas_remaining),
         }
     }
-
     /// Reset an execution context for reuse.
     #[allow(dead_code)]
     fn reset_context(&mut self, ctx: &mut ExecutionContext) {
         ctx.reset();
     }
-
     /// Commit a transaction's state updates to the shared state.
     fn commit_transaction(&mut self, ctx: &ExecutionContext, tags: &HashSet<usize>) {
         self.state
             .apply_atomic(&ctx.write_set, tags, self.htm_supported);
     }
-
     /// Reset the VM state (registers, PC, cycles) but preserve loaded program and host.
     pub fn reset(&mut self) {
         let _ = self.scrub_private_memory();
@@ -4031,7 +3749,6 @@ impl IVM {
         let sz = self.branch_predictor.size();
         self.branch_predictor = crate::branch_predictor::BranchPredictor::new(sz);
     }
-
     /// Capture the current post-load state as a reusable execution baseline.
     ///
     /// Hosts should call this after loading and configuring an immutable
@@ -4051,7 +3768,6 @@ impl IVM {
             input_bump_next: self.input_bump_next,
         }
     }
-
     /// Restore a warmed VM to a previously captured post-load baseline.
     ///
     /// Program metadata and predecoded code are immutable and remain in place.
@@ -4091,12 +3807,10 @@ impl IVM {
         self.last_diagnostic = None;
         Ok(())
     }
-
     /// Get the value of a general-purpose register.
     pub fn register(&self, idx: usize) -> u64 {
         self.registers.get(idx)
     }
-
     /// Reject a private-tagged register before its value crosses a public host
     /// boundary.
     ///
@@ -4113,7 +3827,6 @@ impl IVM {
         }
         Ok(())
     }
-
     /// Reject a private-tagged pointer or a TLV envelope overlapping private
     /// guest memory before the envelope crosses a public host boundary.
     ///
@@ -4128,31 +3841,26 @@ impl IVM {
         self.ensure_public_register(idx)?;
         self.validate_tlv(self.registers.get(idx)).map(|_| ())
     }
-
     /// Set the value of a general-purpose register.
     pub fn set_register(&mut self, idx: usize, value: u64) {
         self.registers.set(idx, value);
     }
-
     /// Request a graceful halt after the current instruction.
     pub fn request_exit(&mut self) {
         self.halted = true;
     }
-
     /// Request an abort and mark the run as failed.
     pub fn request_abort(&mut self) {
         self.halted = true;
         self.constraint_failed = true;
         self.contract_abort_code = None;
     }
-
     /// Request an application-level abort with a declared contract error code.
     pub fn request_contract_abort(&mut self, code: u64) {
         self.halted = true;
         self.constraint_failed = true;
         self.contract_abort_code = Some(code);
     }
-
     /// Get a copy of a vector register (128-bit value as four 32-bit lanes).
     pub fn vector_register(&self, idx: usize) -> [u32; 4] {
         let stride = self.vector_length.max(1);
@@ -4167,7 +3875,6 @@ impl IVM {
         }
         out
     }
-
     /// Set the contents of a vector register.
     pub fn set_vector_register(&mut self, idx: usize, values: [u32; 4]) {
         let stride = self.vector_length.max(1);
@@ -4180,53 +3887,44 @@ impl IVM {
             self.registers.set(start + lane, u64::from(*value));
         }
     }
-
     /// Maximum vector lanes supported by hardware.
     pub fn max_vector_lanes(&self) -> usize {
         self.max_vector_lanes
     }
-
     /// Current logical vector length.
     pub fn vector_length(&self) -> usize {
         self.vector_length
     }
-
     /// Replace the host environment used for syscalls.
     pub fn set_host<H: IVMHost + Send + Sync + 'static>(&mut self, host: H) {
         self.host = Some(Box::new(crate::runtime::SyscallDispatcher::new(host)));
     }
-
     /// Get the remaining gas after execution.
     pub fn remaining_gas(&self) -> u64 {
         self.gas_remaining
             .saturating_add(self.syscall_gas_reserve)
             .min(self.gas_limit)
     }
-
     /// Gas available to nested execution while the current syscall quote is reserved.
     #[must_use]
     pub fn syscall_spendable_gas(&self) -> u64 {
         self.gas_remaining
     }
-
     /// Gas currently reserved for a prepared syscall, or zero for direct host calls.
     #[must_use]
     pub fn syscall_reserved_gas(&self) -> u64 {
         self.syscall_gas_reserve
     }
-
     /// Return the active staged-syscall accounting context, if any.
     #[must_use]
     pub const fn staged_syscall_context(&self) -> Option<&StagedSyscallContext> {
         self.staged_syscall.as_ref()
     }
-
     /// Return the most recently completed staged-syscall accounting context.
     #[must_use]
     pub const fn last_staged_syscall_context(&self) -> Option<&StagedSyscallContext> {
         self.last_staged_syscall.as_ref()
     }
-
     /// Debit one staged syscall phase immediately before the corresponding
     /// work begins.
     ///
@@ -4262,7 +3960,6 @@ impl IVM {
         self.gas_remaining -= gas;
         Ok(())
     }
-
     /// Mark the active staged call as a recoverable failure.
     ///
     /// Handlers call this before returning `Ok(0)` with a stable failure code in
@@ -4285,19 +3982,16 @@ impl IVM {
         context.finish(SyscallCompletion::RecoverableFailure);
         Ok(())
     }
-
     /// Replace the gas available to nested execution without releasing the
     /// current syscall's pre-debited reserve.
     pub fn set_syscall_spendable_gas(&mut self, remaining: u64) {
         let spendable_cap = self.gas_limit.saturating_sub(self.syscall_gas_reserve);
         self.gas_remaining = remaining.min(spendable_cap);
     }
-
     /// Access the underlying host as a type-erased value to support downcasting.
     pub fn host_mut_any(&mut self) -> Option<&mut dyn std::any::Any> {
         self.host.as_deref_mut().map(|h| h.as_any())
     }
-
     /// Get the canonical hash of the loaded program image.
     ///
     /// Self-describing contract programs use the domain-separated full-artifact
@@ -4306,21 +4000,17 @@ impl IVM {
     pub fn code_hash(&self) -> [u8; 32] {
         self.code_hash
     }
-
     /// Access the log of memory events collected during the last run.
     pub fn memory_log(&self) -> &[MemEvent] {
         &self.mem_log.events
     }
-
     /// Access the log of register events collected during the last run.
     pub fn register_log(&self) -> &[zk::RegEvent] {
         &self.reg_log.events
     }
-
     fn finish_digest(hasher: Sha256) -> [u8; 32] {
         hasher.finalize().into()
     }
-
     fn hash_pc_trace(entries: &[u64]) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(b"ivm-proof:pc-trace:v1");
@@ -4330,7 +4020,6 @@ impl IVM {
         }
         Self::finish_digest(hasher)
     }
-
     fn hash_delta_trace(entries: &[zk::DeltaEntry]) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(b"ivm-proof:delta-trace:v1");
@@ -4346,7 +4035,6 @@ impl IVM {
         }
         Self::finish_digest(hasher)
     }
-
     fn hash_constraints(constraints: &[Constraint]) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(b"ivm-proof:constraints:v1");
@@ -4374,14 +4062,12 @@ impl IVM {
         }
         Self::finish_digest(hasher)
     }
-
     fn update_path_digest(hasher: &mut Sha256, path: &[[u8; 32]]) {
         hasher.update((path.len() as u64).to_le_bytes());
         for sibling in path {
             hasher.update(sibling);
         }
     }
-
     fn hash_memory_log(events: &[MemEvent]) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(b"ivm-proof:memory-log:v1");
@@ -4420,7 +4106,6 @@ impl IVM {
         }
         Self::finish_digest(hasher)
     }
-
     fn hash_register_log(events: &[zk::RegEvent]) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(b"ivm-proof:register-log:v1");
@@ -4459,7 +4144,6 @@ impl IVM {
         }
         Self::finish_digest(hasher)
     }
-
     fn hash_step_log(steps: &[zk::StepEntry]) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(b"ivm-proof:step-log:v1");
@@ -4471,7 +4155,6 @@ impl IVM {
         }
         Self::finish_digest(hasher)
     }
-
     /// Count trace/log events priced by the execution-proof syscall without
     /// materializing or hashing the proof summary.
     pub(crate) fn execution_proof_event_count(&self) -> u64 {
@@ -4484,7 +4167,6 @@ impl IVM {
             .saturating_add(u64::try_from(self.reg_log.events.len()).unwrap_or(u64::MAX))
             .saturating_add(u64::try_from(self.step_log.steps.len()).unwrap_or(u64::MAX))
     }
-
     /// Build a deterministic proof summary for the current execution state.
     pub fn execution_proof(&mut self) -> ExecutionProof {
         let output = self.memory.read_output();
@@ -4493,7 +4175,6 @@ impl IVM {
         output_hasher.update((output.len() as u64).to_le_bytes());
         output_hasher.update(output);
         let gas_remaining = self.remaining_gas();
-
         ExecutionProof {
             version: EXECUTION_PROOF_VERSION_V1,
             code_hash: self.code_hash,
@@ -4523,12 +4204,10 @@ impl IVM {
             constraint_failed: self.constraint_failed,
         }
     }
-
     /// Get the Merkle root of the register file.
     pub fn register_root(&self) -> [u8; 32] {
         *self.registers.merkle_root().as_ref()
     }
-
     /// Fraction of correctly predicted branches during last run.
     pub fn branch_prediction_accuracy(&self) -> f64 {
         if self.branch_predictions == 0 {
@@ -4537,40 +4216,32 @@ impl IVM {
             self.branch_correct as f64 / self.branch_predictions as f64
         }
     }
-
     pub fn trace_mode(&self) -> TraceMode {
         self.trace_mode
     }
-
     pub fn set_trace_mode(&mut self, mode: TraceMode) {
         self.trace_mode = mode;
         self.pc_trace.clear();
         self.delta_trace = zk::DeltaTraceLog::default();
     }
-
     pub fn trace_pcs(&self) -> &[u64] {
         &self.pc_trace
     }
-
     pub fn delta_register_trace(&self) -> &[zk::DeltaEntry] {
         &self.delta_trace.entries
     }
-
     /// Access the register trace collected during the last run when zero-knowledge padding was enabled.
     pub fn register_trace(&self) -> Vec<RegisterState> {
         self.trace_log.expand()
     }
-
     /// Access per-cycle Merkle roots collected during the last run.
     pub fn step_log(&self) -> &[zk::StepEntry] {
         &self.step_log.steps
     }
-
     /// Access constraints logged during execution.
     pub fn constraints(&self) -> &[Constraint] {
         &self.constraints.list
     }
-
     #[inline]
     fn flush_cycle_logs(&mut self, last_logged_cycle: &mut u64) {
         // Cycle-by-cycle trace logging is only required for ZK proof/telemetry
@@ -4596,7 +4267,6 @@ impl IVM {
             *last_logged_cycle += 1;
         }
     }
-
     #[inline]
     fn record_runtime_trace(&mut self) {
         match self.trace_mode {
@@ -4611,7 +4281,6 @@ impl IVM {
             }
         }
     }
-
     #[inline]
     fn debit_gas(&mut self, gas: u64) -> Result<(), VMError> {
         if unlikely(self.gas_remaining < gas) {
@@ -4620,7 +4289,6 @@ impl IVM {
         self.gas_remaining -= gas;
         Ok(())
     }
-
     #[inline]
     fn validate_syscall_privacy(&self, number: u32) -> Result<(), VMError> {
         if matches!(
@@ -4651,7 +4319,6 @@ impl IVM {
         }
         Ok(())
     }
-
     /// Snapshot and clear output-only registers before entering the host. Registers that
     /// overlap the declared input window are already proven public by
     /// `validate_syscall_privacy` and must remain intact for the host call.
@@ -4677,7 +4344,6 @@ impl IVM {
         }
         saved
     }
-
     #[inline]
     fn restore_syscall_output_privacy(&mut self, saved: SavedSyscallOutputRegisters) {
         for index in 0..saved.len {
@@ -4686,7 +4352,6 @@ impl IVM {
             self.registers.set_tag(register, saved.private[index]);
         }
     }
-
     #[inline]
     fn finalize_syscall_output_privacy(&mut self, number: u32) -> Result<(), VMError> {
         if !self.zk_mode {
@@ -4703,7 +4368,6 @@ impl IVM {
             self.registers.set_tag(10, false);
             return Ok(());
         }
-
         for &register in syscall_public_output_registers(number) {
             if self.registers.tag(register) {
                 return Err(VMError::PrivacyViolation);
@@ -4711,7 +4375,6 @@ impl IVM {
         }
         Ok(())
     }
-
     #[inline]
     fn execute_syscall(&mut self, host: &mut dyn IVMHost, number: u32) -> Result<(), VMError> {
         if crate::syscalls::is_koto_test_syscall(number) && !self.allow_koto_test_syscalls {
@@ -4731,7 +4394,6 @@ impl IVM {
             SyscallMetering::Staged => self.execute_staged_syscall(host, number),
         }
     }
-
     #[inline]
     fn execute_reserved_syscall(
         &mut self,
@@ -4758,7 +4420,6 @@ impl IVM {
             return Err(error);
         }
         self.syscall_gas_reserve = quoted;
-
         let (actual, outcome) = match host.syscall(number, self) {
             Ok(actual) => (actual, Ok(())),
             Err(error) => {
@@ -4785,7 +4446,6 @@ impl IVM {
         }
         outcome
     }
-
     #[inline]
     fn execute_staged_syscall(
         &mut self,
@@ -4797,14 +4457,12 @@ impl IVM {
             return Err(VMError::SyscallMeteringModeMismatch { syscall: number });
         }
         self.staged_syscall = Some(StagedSyscallContext::new(number));
-
         if let Err(error) =
             self.charge_syscall_stage(SyscallMeteringPhase::Entry, STAGED_SYSCALL_ENTRY_GAS)
         {
             self.finish_staged_syscall(SyscallCompletion::Trap);
             return Err(error);
         }
-
         // Privacy validation is bounded syscall-entry work. Debit the entry
         // phase first so a private or stack-backed pointer cannot trigger even
         // that validation for free or take precedence over entry-phase OOG.
@@ -4812,9 +4470,7 @@ impl IVM {
             self.finish_staged_syscall(SyscallCompletion::Trap);
             return Err(error);
         }
-
         self.sanitize_syscall_output_privacy(number);
-
         let host_result = host.syscall(number, self);
         match host_result {
             Ok(0) => {
@@ -4846,7 +4502,6 @@ impl IVM {
             }
         }
     }
-
     fn finish_staged_syscall(&mut self, completion: SyscallCompletion) {
         if let Some(mut context) = self.staged_syscall.take() {
             if context.completion().is_none() || completion == SyscallCompletion::Trap {
@@ -4855,7 +4510,6 @@ impl IVM {
             self.last_staged_syscall = Some(context);
         }
     }
-
     pub(crate) fn execute_metered_syscall_with_host(
         &mut self,
         host: &mut dyn IVMHost,
@@ -4866,7 +4520,6 @@ impl IVM {
         }
         self.execute_syscall(host, number)
     }
-
     /// Execute the loaded program starting at the current `pc`.
     ///
     /// This is the heart of the VM: a classic fetch‑decode‑execute loop.  For
@@ -4884,19 +4537,16 @@ impl IVM {
         self.host = Some(host);
         result
     }
-
     /// Execute the loaded program using a borrowed host without storing it in the VM.
     pub fn run_with_host(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
         self.run_with_host_ref(host)
     }
-
     #[inline]
     fn commit_memory_after_run_if_needed(&mut self) {
         if self.zk_trace_collection_enabled() {
             self.memory.commit();
         }
     }
-
     fn run_with_host_ref(&mut self, host: &mut dyn IVMHost) -> Result<(), VMError> {
         self.last_diagnostic = None;
         self.halted = false;
@@ -4930,7 +4580,6 @@ impl IVM {
             }
             self.pc_trace.clear();
             self.delta_trace = zk::DeltaTraceLog::default();
-
             let mut last_logged_cycle = 0;
             // Fetch-Decode-Execute loop
             loop {
@@ -4960,7 +4609,6 @@ impl IVM {
                         len = length
                     );
                 }
-
                 // Keep contract execution sequential until the ILP path is covered by
                 // canonical ordering/gas proofs for all host-observable effects.
                 if enable_ilp && self.max_cycles == 0 {
@@ -4975,12 +4623,10 @@ impl IVM {
                         ilp_block.clear();
                     }
                 }
-
                 let opcode_hi = (instr >> 24) as u8;
                 if !instruction::wide::is_valid_opcode(wide_op) {
                     return Err(VMError::InvalidOpcode((instr & 0xFFFF) as u16));
                 }
-
                 // Determine the gas cost for this operation and deduct it.
                 // Scale vector op costs by the current logical vector length.
                 // Future: include HTM retry penalties if enabled.
@@ -4995,7 +4641,6 @@ impl IVM {
                 if crate::dev_env::decode_trace_enabled() {
                     eprintln!("[IVM] opcode_lo=0x{opcode:02x} opcode_hi=0x{opcode_hi:02x}");
                 }
-
                 // Dispatch via the canonical wide (8-bit opcode) instruction table. Classic
                 // encodings are no longer executable; unknown opcodes trap with `InvalidOpcode`.
                 match wide_op {
@@ -5770,7 +5415,6 @@ impl IVM {
                                     a[offset] = self.registers.get(rs + idx) as u32;
                                     b[offset] = self.registers.get(rt + idx) as u32;
                                 }
-
                                 // Enforce pair tag alignment for zk mode (lo/hi halves must share a tag).
                                 if self.zk_mode {
                                     for pair in 0..2 {
@@ -5783,7 +5427,6 @@ impl IVM {
                                         }
                                     }
                                 }
-
                                 let sum = vector::vadd64(a, b);
                                 for (offset, value) in sum.iter().enumerate() {
                                     let idx = lane + offset;
@@ -5791,7 +5434,6 @@ impl IVM {
                                 }
                                 lane += 4;
                             }
-
                             // Handle any remaining pairs with the scalar fallback.
                             let pairs = (vl - lane) / 2;
                             for pair in 0..pairs {
@@ -6706,7 +6348,6 @@ impl IVM {
                                     payload_len,
                                     0,
                                 ))?;
-
                                 let request = self
                                     .validate_public_crypto_tlv(request_ptr)?
                                     .and_then(|tlv_req| {
@@ -6723,7 +6364,6 @@ impl IVM {
                                             })
                                             .flatten()
                                     });
-
                                 if let Some(request) = request {
                                     if request.entries.is_empty() {
                                         false
@@ -7078,7 +6718,6 @@ impl IVM {
                     }
                 }
             }
-
             if !ilp_block.is_empty() {
                 self.execute_block_parallel(&ilp_block)?;
                 self.cycles += ilp_block.len() as u64;
@@ -7112,19 +6751,16 @@ impl IVM {
         }
         result
     }
-
     /// Get the number of cycles executed in the last `run()`.
     #[inline]
     pub fn get_cycle_count(&self) -> u64 {
         self.cycles
     }
-
     /// Test‑oriented helper: set a GPR directly.
     #[inline]
     pub fn set_reg(&mut self, idx: usize, value: u64) {
         self.registers.set(idx, value);
     }
-
     /// Convenience wrapper that forwards to the memory subsystem.
     #[inline]
     pub fn store_u8(&mut self, addr: u64, byte: u8) -> Result<(), VMError> {
@@ -7132,41 +6768,35 @@ impl IVM {
         self.record_memory_store_privacy(addr, 1, false);
         Ok(())
     }
-
     #[inline]
     pub fn store_u32(&mut self, addr: u64, value: u32) -> Result<(), VMError> {
         self.memory.store_u32(addr, value)?;
         self.record_memory_store_privacy(addr, 4, false);
         Ok(())
     }
-
     #[inline]
     pub fn store_u64(&mut self, addr: u64, value: u64) -> Result<(), VMError> {
         self.memory.store_u64(addr, value)?;
         self.record_memory_store_privacy(addr, 8, false);
         Ok(())
     }
-
     #[inline]
     pub fn store_u128(&mut self, addr: u64, value: u128) -> Result<(), VMError> {
         self.memory.store_u128(addr, value)?;
         self.record_memory_store_privacy(addr, 16, false);
         Ok(())
     }
-
     #[inline]
     pub fn store_bytes(&mut self, addr: u64, bytes: &[u8]) -> Result<(), VMError> {
         self.memory.store_bytes(addr, bytes)?;
         self.record_memory_store_privacy(addr, bytes.len() as u64, false);
         Ok(())
     }
-
     #[inline]
     pub fn load_u32(&self, addr: u64) -> Result<u32, VMError> {
         self.ensure_public_memory(addr, 4)?;
         self.memory.load_u32(addr)
     }
-
     #[inline]
     /// Load a 64-bit value from memory.
     ///
@@ -7177,53 +6807,44 @@ impl IVM {
         self.ensure_public_memory(addr, 8)?;
         self.memory.load_u64(addr)
     }
-
     #[inline]
     pub fn load_u128(&self, addr: u64) -> Result<u128, VMError> {
         self.ensure_public_memory(addr, 16)?;
         self.memory.load_u128(addr)
     }
-
     #[inline]
     pub fn load_bytes(&self, addr: u64, out: &mut [u8]) -> Result<(), VMError> {
         self.ensure_public_memory(addr, out.len() as u64)?;
         self.memory.load_bytes(addr, out)
     }
-
     #[inline]
     pub fn preload_input(&mut self, offset: u64, data: &[u8]) -> Result<(), VMError> {
         self.memory.preload_input(offset, data)
     }
-
     #[inline]
     pub fn alloc_heap(&mut self, size: u64) -> Result<u64, VMError> {
         self.memory.alloc(size)
     }
-
     #[inline]
     pub fn grow_heap(&mut self, additional: u64) -> Result<u64, VMError> {
         self.memory.grow_heap(additional)
     }
-
     /// Retrieve a copy of the output region. Intended for use by hosts after
     /// `SYSCALL_COMMIT_OUTPUT`.
     #[inline]
     pub fn read_output(&self) -> &[u8] {
         self.memory.read_output()
     }
-
     /// Return the length of the append-only output prefix written by the guest.
     #[inline]
     pub fn output_used_len(&self) -> u64 {
         self.memory.output_used_len()
     }
-
     /// Borrow only the append-only output prefix written by the guest.
     #[inline]
     pub fn read_output_used(&self) -> &[u8] {
         self.memory.read_output_used()
     }
-
     /// Produce a CompactProofBundle for the memory chunk containing `addr` by
     /// invoking the metered GET_MERKLE_COMPACT host path. This helper writes
     /// temporary data into the OUTPUT region.
@@ -7273,7 +6894,6 @@ impl IVM {
             root,
         })
     }
-
     /// Produce a CompactProofBundle for the register leaf at `idx` by invoking
     /// the metered GET_REGISTER_MERKLE_COMPACT host path. This helper writes
     /// temporary data into the OUTPUT region.
@@ -7324,7 +6944,6 @@ impl IVM {
         })
     }
 }
-
 #[cfg(test)]
 mod ivm_sched_tests {
     use super::*;
@@ -7340,7 +6959,6 @@ mod ivm_sched_tests {
         crate::parallel::set_default_scheduler_limits(None, None);
     }
 }
-
 /// Try to translate a full 32-bit instruction into a [`SimpleInstruction`].
 ///
 /// Only a subset of arithmetic operations are supported for use with the
@@ -7455,10 +7073,8 @@ fn to_simple(instr: u32) -> Option<SimpleInstruction> {
             _ => {}
         }
     }
-
     None
 }
-
 /// Metadata describing register and memory accesses of an instruction
 #[derive(Default, Clone)]
 struct InstrMeta {
@@ -7467,7 +7083,6 @@ struct InstrMeta {
     mem_read: bool,
     mem_write: bool,
 }
-
 /// Result of executing a single instruction in parallel
 #[derive(Clone, Debug)]
 enum ResultUpdate {
@@ -7475,7 +7090,6 @@ enum ResultUpdate {
     Mem { addr: u64, value: u64 },
     Vl { value: usize },
 }
-
 fn analyse_instruction(
     instr: &SimpleInstruction,
     vl: usize,
@@ -7555,7 +7169,6 @@ fn analyse_instruction(
     }
     (meta, next_vl)
 }
-
 fn cost_of(instr: &SimpleInstruction, vl: usize) -> u64 {
     match instr {
         SimpleInstruction::Add { .. }
@@ -7580,7 +7193,6 @@ fn cost_of(instr: &SimpleInstruction, vl: usize) -> u64 {
         SimpleInstruction::Halt => 0,
     }
 }
-
 fn compute_instruction(
     instr: SimpleInstruction,
     regs: &[u64; 256],
@@ -7605,7 +7217,6 @@ fn compute_instruction(
                 tag,
             });
         }
-
         Sub { rd, rs, rt } => {
             if zk && tags[rs as usize] != tags[rt as usize] {
                 return Err(VMError::PrivacyViolation);
@@ -8020,7 +7631,6 @@ fn compute_instruction(
     }
     Ok(res)
 }
-
 fn conflict(a: &InstrMeta, b: &InstrMeta) -> bool {
     if !a.writes.is_disjoint(&b.reads) {
         return true;
@@ -8037,7 +7647,6 @@ fn conflict(a: &InstrMeta, b: &InstrMeta) -> bool {
     }
     false
 }
-
 fn schedule_batches(metas: &[InstrMeta]) -> Vec<Vec<usize>> {
     let mut batches: Vec<Vec<usize>> = Vec::new();
     for (idx, meta) in metas.iter().enumerate() {
@@ -8054,7 +7663,6 @@ fn schedule_batches(metas: &[InstrMeta]) -> Vec<Vec<usize>> {
     }
     batches
 }
-
 impl IVM {
     /// Execute a slice of instructions using simple ILP scheduling.
     ///
@@ -8079,7 +7687,6 @@ impl IVM {
             }
             return Ok(());
         }
-
         let mut vl = self.vector_length;
         let mut metas = Vec::with_capacity(block.len());
         let mut vls = Vec::with_capacity(block.len());
@@ -8090,7 +7697,6 @@ impl IVM {
             vl = next_vl;
         }
         let batches = schedule_batches(&metas);
-
         for batch in batches {
             let batch_gas = batch.iter().try_fold(0_u64, |total, &idx| {
                 total
@@ -8101,13 +7707,10 @@ impl IVM {
                 return Err(VMError::OutOfGas);
             }
             self.gas_remaining -= batch_gas;
-
             let regs_snapshot = self.registers.snapshot();
             let tags_snapshot = self.registers.snapshot_tags();
             let vector_enabled = self.vector_enabled;
-
             let results_lock = Mutex::new(Vec::new());
-
             rayon::scope(|s| {
                 for &idx in &batch {
                     let instr = block[idx];
@@ -8127,9 +7730,7 @@ impl IVM {
                     });
                 }
             });
-
             let mut results = results_lock.into_inner().expect("results mutex poisoned");
-
             results.sort_by_key(|(i, _)| *i);
             for (_, result) in results {
                 let updates = result?;
@@ -8156,7 +7757,6 @@ impl IVM {
         Ok(())
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -8173,14 +7773,12 @@ mod tests {
     #[test]
     fn unavailable_audio_output_is_safe() {
         let played = Cell::new(false);
-
         with_audio_mixer(
             || Err(StreamError::NoDevice),
             |_| {
                 played.set(true);
             },
         );
-
         assert!(!played.get());
     }
     #[test]
@@ -8190,14 +7788,12 @@ mod tests {
         ranges.insert(20..24);
         ranges.insert(4..10);
         assert_eq!(ranges.ranges, BTreeMap::from([(4, 24)]));
-
         assert!(!ranges.intersects(0..4));
         assert!(!ranges.intersects(24..40));
         assert!(!ranges.intersects(12..12));
         assert!(ranges.intersects(3..5));
         assert!(ranges.intersects(23..24));
         assert_eq!(ranges.intersection_len(0..40), 20);
-
         ranges.remove(8..20);
         assert_eq!(ranges.ranges, BTreeMap::from([(4, 8), (20, 24)]));
         assert_eq!(ranges.intersection_len(4..24), 8);
@@ -8265,24 +7861,20 @@ mod tests {
             prepared: Cell<bool>,
             dispatched: bool,
         }
-
         impl IVMHost for ToolingHost {
             fn prepare_syscall(&self, number: u32, _vm: &IVM) -> Result<u64, VMError> {
                 assert_eq!(number, 0x00FD_0001);
                 self.prepared.set(true);
                 Ok(0)
             }
-
             fn syscall(&mut self, number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
                 assert_eq!(number, 0x00FD_0001);
                 self.dispatched = true;
                 Ok(0)
             }
-
             fn allows_syscall(&self, policy: SyscallPolicy, number: u32) -> bool {
                 number == 0x00FD_0001 || crate::syscalls::is_syscall_allowed(policy, number)
             }
-
             fn as_any(&mut self) -> &mut dyn Any
             where
                 Self: 'static,
@@ -8290,7 +7882,6 @@ mod tests {
                 self
             }
         }
-
         let number = 0x00FD_0001;
         assert!(!crate::syscalls::is_syscall_allowed(
             SyscallPolicy::AbiV1,
@@ -8298,7 +7889,6 @@ mod tests {
         ));
         assert!(!crate::syscalls::is_koto_test_syscall(number));
         assert!(host_syscall_metering_spec(SyscallPolicy::AbiV1, number).is_none());
-
         let mut code = Vec::new();
         code.extend_from_slice(&crate::encoding::wide::encode_syscallx(number).to_le_bytes());
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
@@ -8309,7 +7899,6 @@ mod tests {
             prepared: Cell::new(false),
             dispatched: false,
         };
-
         vm.run_with_host(&mut host)
             .expect("explicitly allowed host-private syscall must run");
         assert!(host.prepared.get());
@@ -8354,7 +7943,6 @@ mod tests {
             admitted.load_program(&program),
             Err(VMError::UnknownSyscall(syscall))
         );
-
         let mut code = Vec::new();
         code.extend_from_slice(&crate::encoding::wide::encode_syscallx(syscall).to_le_bytes());
         code.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
@@ -8368,18 +7956,15 @@ mod tests {
             prepared: Cell<bool>,
             dispatched: bool,
         }
-
         impl IVMHost for DispatchSpy {
             fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
                 self.prepared.set(true);
                 Ok(0)
             }
-
             fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
                 self.dispatched = true;
                 Ok(0)
             }
-
             fn as_any(&mut self) -> &mut dyn Any
             where
                 Self: 'static,
@@ -8387,7 +7972,6 @@ mod tests {
                 self
             }
         }
-
         for syscall in [
             crate::syscalls::SYSCALL_STATE_GET,
             crate::syscalls::SYSCALL_STATE_SET,
@@ -8408,7 +7992,6 @@ mod tests {
                 prepared: Cell::new(false),
                 dispatched: false,
             };
-
             assert_eq!(
                 vm.run_with_host(&mut host),
                 Err(VMError::GenericSyscallNotAllowed { syscall })
@@ -8427,23 +8010,19 @@ mod tests {
             prepared: Cell<bool>,
             dispatched: bool,
         }
-
         impl IVMHost for ToolingHost {
             fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
                 self.prepared.set(true);
                 Ok(0)
             }
-
             fn syscall(&mut self, _number: u32, _vm: &mut IVM) -> Result<u64, VMError> {
                 self.dispatched = true;
                 Ok(0)
             }
-
             fn allows_syscall(&self, policy: SyscallPolicy, number: u32) -> bool {
                 crate::syscalls::is_koto_test_syscall(number)
                     || crate::syscalls::is_syscall_allowed(policy, number)
             }
-
             fn as_any(&mut self) -> &mut dyn Any
             where
                 Self: 'static,
@@ -8451,7 +8030,6 @@ mod tests {
                 self
             }
         }
-
         let number = crate::syscalls::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS;
         let mut code = Vec::new();
         code.extend_from_slice(&crate::encoding::wide::encode_syscallx(number).to_le_bytes());
@@ -8463,7 +8041,6 @@ mod tests {
             prepared: Cell::new(false),
             dispatched: false,
         };
-
         assert_eq!(
             vm.run_with_host(&mut host),
             Err(VMError::UnknownSyscall(number))
@@ -8485,7 +8062,6 @@ mod tests {
                 explicit
             }
         }
-
         let mut documented_inputs = BTreeMap::new();
         let mut documented_outputs = BTreeMap::new();
         let mut current_number = None;
@@ -8521,7 +8097,6 @@ mod tests {
                 );
             }
         }
-
         for &number in crate::syscalls::abi_syscall_list() {
             let documented_input = *documented_inputs
                 .get(&number)
@@ -8568,7 +8143,6 @@ mod tests {
         for register in 10..=12 {
             vm.registers.set_tag(register, true);
         }
-
         assert_eq!(
             vm.finalize_syscall_output_privacy(crate::syscalls::SYSCALL_STATE_KEYS),
             Err(VMError::PrivacyViolation)
@@ -8579,7 +8153,6 @@ mod tests {
                 "privacy finalization laundered a secret host output in r{register}"
             );
         }
-
         for register in 10..=14 {
             vm.registers.set_tag(register, true);
         }
@@ -8591,38 +8164,31 @@ mod tests {
                 "unknown syscall declassified undocumented r{register}"
             );
         }
-
         vm.registers.set_tag(10, false);
         vm.finalize_syscall_output_privacy(crate::syscalls::SYSCALL_GET_PRIVATE_INPUT)
             .expect("private-input syscall explicitly classifies its result");
         assert!(vm.registers.tag(10));
     }
-
     #[test]
     fn ivm_is_send_sync_for_state_sharing() {
         fn assert_send<T: Send>() {}
         fn assert_sync<T: Sync>() {}
-
         assert_send::<IVM>();
         assert_sync::<IVM>();
     }
-
     #[test]
     fn run_with_host_accepts_non_sync_host() {
         struct NonSyncHost(Cell<u64>);
-
         impl IVMHost for NonSyncHost {
             fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
                 Ok(0)
             }
-
             fn syscall(&mut self, _number: u32, vm: &mut IVM) -> Result<u64, VMError> {
                 let next = self.0.get().saturating_add(1);
                 self.0.set(next);
                 vm.set_register(10, next);
                 Ok(0)
             }
-
             fn as_any(&mut self) -> &mut dyn Any
             where
                 Self: 'static,
@@ -8630,14 +8196,12 @@ mod tests {
                 self
             }
         }
-
         let mut vm = IVM::new(u64::MAX);
         let mut host = NonSyncHost(Cell::new(0));
         let code = crate::encoding::wide::encode_halt().to_le_bytes();
         vm.load_code(&code).expect("load halt");
         vm.run_with_host(&mut host).expect("borrowed host runs");
     }
-
     #[test]
     fn builder_respects_deterministic_policy() {
         set_banner_enabled(false);
@@ -8651,19 +8215,16 @@ mod tests {
             AccelerationPolicy::deterministic()
         );
     }
-
     #[test]
     fn rtm_detection_does_not_panic() {
         let _ = std::panic::catch_unwind(rtm_available);
     }
-
     #[test]
     fn deterministic_policy_disables_acceleration() {
         let policy = AccelerationPolicy::deterministic();
         assert!(!policy.allow_cuda());
         assert!(!policy.allow_metal());
     }
-
     fn program_with_imm(imm: i16) -> Vec<u8> {
         let mut bytes = ProgramMetadata::default().encode();
         let imm8 = imm.clamp(-128, 127) as i8;
@@ -8672,14 +8233,12 @@ mod tests {
         bytes.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         bytes
     }
-
     fn unique_program() -> Vec<u8> {
         static COUNTER: AtomicU32 = AtomicU32::new(1);
         let next = COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
         let imm = ((next % 2047) + 1) as i16;
         program_with_imm(imm)
     }
-
     #[test]
     fn execution_proof_summary_is_stable_for_same_program() {
         set_banner_enabled(false);
@@ -8691,18 +8250,14 @@ mod tests {
         second.host = Some(Box::new(crate::runtime::SyscallDispatcher::new(
             DefaultHost::new(),
         )));
-
         first.run().expect("first program runs");
         let first_proof = first.execution_proof();
-
         second.run().expect("second program runs");
         let second_proof = second.execution_proof();
-
         assert_eq!(first_proof, second_proof);
         assert_eq!(first_proof.version, EXECUTION_PROOF_VERSION_V1);
         assert_eq!(first_proof.code_hash, first.code_hash());
     }
-
     fn store_program_with_mode(mode: u8, max_cycles: u64) -> Vec<u8> {
         let metadata = ProgramMetadata {
             mode,
@@ -8717,7 +8272,6 @@ mod tests {
         program.extend_from_slice(&crate::encoding::wide::encode_halt().to_le_bytes());
         program
     }
-
     #[test]
     fn non_zk_run_defers_memory_merkle_commit_until_root_is_requested() {
         set_banner_enabled(false);
@@ -8726,11 +8280,9 @@ mod tests {
             .expect("program loads");
         let before = vm.memory.current_root();
         assert!(!vm.memory.dirty_for_testing());
-
         vm.set_register(1, Memory::HEAP_START);
         vm.set_register(2, 0xCAFE_BABE_DEAD_BEEFu64);
         vm.run().expect("program runs");
-
         assert!(
             vm.memory.dirty_for_testing(),
             "non-ZK execution should not rebuild the full memory Merkle tree eagerly"
@@ -8739,7 +8291,6 @@ mod tests {
         assert!(!vm.memory.dirty_for_testing());
         assert_ne!(proof.final_memory_root, *before.as_ref());
     }
-
     #[test]
     fn zk_run_with_trace_collection_disabled_defers_memory_merkle_commit() {
         set_banner_enabled(false);
@@ -8749,11 +8300,9 @@ mod tests {
         vm.set_zk_trace_enabled(false);
         let before = vm.memory.current_root();
         assert!(!vm.memory.dirty_for_testing());
-
         vm.set_register(1, Memory::HEAP_START);
         vm.set_register(2, 0xABCD_EF01_2345_6789u64);
         vm.run().expect("program runs");
-
         assert!(
             vm.memory.dirty_for_testing(),
             "ZK semantic execution without trace collection should not rebuild the full memory Merkle tree eagerly"
@@ -8762,7 +8311,6 @@ mod tests {
         assert!(!vm.memory.dirty_for_testing());
         assert_ne!(proof.final_memory_root, *before.as_ref());
     }
-
     #[test]
     fn zk_trace_collection_still_commits_memory_merkle_root_before_returning() {
         set_banner_enabled(false);
@@ -8771,18 +8319,15 @@ mod tests {
             .expect("program loads");
         let before = vm.memory.current_root();
         assert!(!vm.memory.dirty_for_testing());
-
         vm.set_register(1, Memory::HEAP_START);
         vm.set_register(2, 0xABCD_EF01_2345_6789u64);
         vm.run().expect("program runs");
-
         assert!(
             !vm.memory.dirty_for_testing(),
             "ZK trace collection must keep the final memory root committed"
         );
         assert_ne!(*vm.memory.current_root().as_ref(), *before.as_ref());
     }
-
     fn empty_blob_tlv() -> Vec<u8> {
         use crate::pointer_abi::PointerType;
         let mut tlv = Vec::with_capacity(7 + iroha_crypto::Hash::LENGTH);
@@ -8793,7 +8338,6 @@ mod tests {
         tlv.extend_from_slice(&hash);
         tlv
     }
-
     fn program_with_literal_prefix() -> (Vec<u8>, usize) {
         let mut bytes = ProgramMetadata::default().encode();
         let header_len = bytes.len();
@@ -8811,7 +8355,6 @@ mod tests {
         bytes.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
         (bytes, literal_prefix)
     }
-
     fn program_with_indexed_literal(index: u16) -> (Vec<u8>, u64) {
         let mut bytes = ProgramMetadata::default().encode();
         let literal = empty_blob_tlv();
@@ -8828,7 +8371,6 @@ mod tests {
         bytes.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
         (bytes, 24)
     }
-
     fn program_with_indexed_i64(value: i64, index: u16) -> Vec<u8> {
         let mut bytes = ProgramMetadata::default().encode();
         bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
@@ -8846,7 +8388,6 @@ mod tests {
         bytes.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
         bytes
     }
-
     fn program_with_two_indexed_literals() -> (Vec<u8>, usize, [u64; 2]) {
         let mut bytes = ProgramMetadata::default().encode();
         let metadata_len = bytes.len();
@@ -8859,7 +8400,6 @@ mod tests {
             (16 + offsets_len) as u64,
             (16 + offsets_len + first.len()) as u64,
         ];
-
         bytes.extend_from_slice(&LITERAL_SECTION_MAGIC);
         bytes.extend_from_slice(&2_u32.to_le_bytes());
         bytes.extend_from_slice(&(post_pad as u32).to_le_bytes());
@@ -8874,7 +8414,6 @@ mod tests {
         bytes.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
         (bytes, entries_start, offsets)
     }
-
     fn program_with_unaligned_contract_prefix() -> (Vec<u8>, usize) {
         let interface = crate::metadata::EmbeddedContractInterfaceV1 {
             seiyaku_name: "TestContract".to_owned(),
@@ -8910,14 +8449,12 @@ mod tests {
             .map(|interface| interface.encode_section())
             .find(|section| !section.len().is_multiple_of(WIDE_INSTRUCTION_LEN as usize))
             .expect("CNTR section can produce an unaligned code prefix");
-
         let mut bytes = ProgramMetadata::default().encode();
         let prefix_len = prefix.len();
         bytes.extend_from_slice(&prefix);
         bytes.extend_from_slice(&crate::encoding::encode_halt().to_le_bytes());
         (bytes, prefix_len)
     }
-
     #[test]
     fn load_program_predecodes_instructions() {
         set_banner_enabled(false);
@@ -8939,7 +8476,6 @@ mod tests {
             .unwrap_or_default();
         assert_eq!(prepared_len, decoded_len);
     }
-
     #[test]
     fn indexed_literal_load_returns_prevalidated_tlv_pointer() {
         set_banner_enabled(false);
@@ -8948,7 +8484,6 @@ mod tests {
         vm.load_program(&program)
             .expect("indexed literal program loads");
         vm.run().expect("indexed literal program runs");
-
         assert_eq!(vm.register(5), expected_pointer);
         let literal = vm
             .memory
@@ -8959,7 +8494,6 @@ mod tests {
         assert_eq!(tlv.type_id, crate::pointer_abi::PointerType::Blob);
         assert_eq!(vm.remaining_gas(), 0, "LDLIT has a one-gas base cost");
     }
-
     #[test]
     fn indexed_i64_load_executes_signed_boundaries() {
         set_banner_enabled(false);
@@ -8973,7 +8507,6 @@ mod tests {
             assert_eq!(vm.remaining_gas(), 0, "LDI64 has one-gas base cost");
         }
     }
-
     #[test]
     fn indexed_i64_never_grants_pointer_provenance() {
         set_banner_enabled(false);
@@ -8986,7 +8519,6 @@ mod tests {
         vm.run().expect("indexed i64 program runs");
         assert_eq!(vm.register(5), 24);
     }
-
     #[test]
     fn code_hash_binds_indexed_i64_kind_and_payload() {
         let original = program_with_indexed_i64(7, 0);
@@ -8995,7 +8527,6 @@ mod tests {
         kind_mutation[metadata_len + 16 + 7] = 0;
         let mut payload_mutation = original.clone();
         payload_mutation[metadata_len + 16 + 8] ^= 1;
-
         let original_hash = crate::metadata::contract_code_hash(&original);
         assert_ne!(
             crate::metadata::contract_code_hash(&kind_mutation),
@@ -9006,7 +8537,6 @@ mod tests {
             original_hash
         );
     }
-
     #[test]
     fn indexed_i64_out_of_range_is_rejected_at_load() {
         set_banner_enabled(false);
@@ -9017,21 +8547,17 @@ mod tests {
             Err(VMError::InvalidMetadata)
         ));
     }
-
     #[test]
     fn indexed_literal_opcode_kind_mismatch_is_rejected_at_load() {
         set_banner_enabled(false);
-
         let (mut pointer_program, _) = program_with_indexed_literal(0);
         let pointer_code = pointer_program.len() - 8;
         let ldi64 = crate::encoding::wide::encode_literal(instruction::wide::memory::LDI64, 5, 0);
         pointer_program[pointer_code..pointer_code + 4].copy_from_slice(&ldi64.to_le_bytes());
-
         let mut scalar_program = program_with_indexed_i64(7, 0);
         let scalar_code = scalar_program.len() - 8;
         let ldlit = crate::encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 5, 0);
         scalar_program[scalar_code..scalar_code + 4].copy_from_slice(&ldlit.to_le_bytes());
-
         for program in [pointer_program, scalar_program] {
             let mut vm = IVM::new(u64::MAX);
             assert!(matches!(
@@ -9040,16 +8566,13 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn indexed_i64_rejects_unknown_kind_and_wrong_length() {
         set_banner_enabled(false);
         let metadata_len = ProgramMetadata::default().encode().len();
-
         let mut unknown_kind = program_with_indexed_i64(7, 0);
         let descriptor = metadata_len + 16;
         unknown_kind[descriptor + 7] = 0xff;
-
         let canonical = program_with_indexed_i64(7, 0);
         let mut short = canonical.clone();
         short[metadata_len + 8..metadata_len + 12].copy_from_slice(&1u32.to_le_bytes());
@@ -9059,7 +8582,6 @@ mod tests {
         long[metadata_len + 8..metadata_len + 12].copy_from_slice(&3u32.to_le_bytes());
         let data_end = metadata_len + 16 + 8 + 8;
         long.splice(data_end..data_end, [0; 4]);
-
         for program in [unknown_kind, short, long] {
             let mut vm = IVM::new(u64::MAX);
             assert!(matches!(
@@ -9068,7 +8590,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn indexed_literal_out_of_range_is_rejected_at_load() {
         set_banner_enabled(false);
@@ -9079,7 +8600,6 @@ mod tests {
             Err(VMError::InvalidMetadata)
         ));
     }
-
     #[test]
     fn indexed_literal_table_target_must_point_into_typed_data() {
         set_banner_enabled(false);
@@ -9092,7 +8612,6 @@ mod tests {
             Err(VMError::InvalidMetadata)
         ));
     }
-
     #[test]
     fn indexed_literal_table_rejects_duplicate_and_reordered_targets() {
         set_banner_enabled(false);
@@ -9109,24 +8628,19 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn indexed_literal_table_rejects_gaps_interior_targets_and_bad_pointer_hashes() {
         set_banner_enabled(false);
         let (canonical, entries_start, offsets) = program_with_two_indexed_literals();
-
         let mut leading_gap = canonical.clone();
         leading_gap[entries_start..entries_start + 8]
             .copy_from_slice(&(offsets[0] + 1).to_le_bytes());
-
         let mut interior_target = canonical.clone();
         interior_target[entries_start + 8..entries_start + 16]
             .copy_from_slice(&(offsets[0] + 1).to_le_bytes());
-
         let (mut bad_hash, _) = program_with_indexed_literal(0);
         let hash_byte = ProgramMetadata::default().encode().len() + 16 + 8 + 7;
         bad_hash[hash_byte] ^= 1;
-
         for program in [leading_gap, interior_target, bad_hash] {
             let mut vm = IVM::new(u64::MAX);
             assert!(matches!(
@@ -9135,14 +8649,12 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn pointer_validation_rejects_nonliteral_code_addresses() {
         set_banner_enabled(false);
         let (program, literal_pointer) = program_with_indexed_literal(0);
         let mut vm = IVM::new(u64::MAX);
         vm.load_program(&program).expect("literal program loads");
-
         vm.validate_tlv(literal_pointer)
             .expect("indexed literal start is owned program data");
         assert!(matches!(
@@ -9154,7 +8666,6 @@ mod tests {
             Err(VMError::NoritoInvalid)
         ));
     }
-
     #[test]
     fn signed24_call_transfer_uses_implicit_link_register() {
         set_banner_enabled(false);
@@ -9169,11 +8680,9 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         vm.load_code(&code).expect("compact call code loads");
         vm.run().expect("compact call returns to halt");
-
         assert_eq!(vm.register(1), 4);
         assert_eq!(vm.register(7), 9);
     }
-
     #[test]
     fn signed24_jump_sign_extends_negative_offset() {
         set_banner_enabled(false);
@@ -9188,31 +8697,25 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         vm.load_code(&code).expect("compact jump code loads");
         vm.run().expect("negative compact jump reaches halt");
-
         assert_eq!(vm.register(7), 9);
     }
-
     #[test]
     fn load_program_reuses_cached_prepared_ops() {
         set_banner_enabled(false);
         ivm_cache::init_global_with_capacity(64);
         let program = program_with_imm(7);
-
         let mut first_vm = IVM::new(u64::MAX);
         first_vm
             .load_program(&program)
             .expect("first load succeeds");
         let first_ops = first_vm.prepared.as_ref().expect("prepared").ops.clone();
-
         let mut second_vm = IVM::new(u64::MAX);
         second_vm
             .load_program(&program)
             .expect("second load succeeds");
         let second_ops = second_vm.prepared.as_ref().expect("prepared").ops.clone();
-
         assert!(Arc::ptr_eq(&first_ops, &second_ops));
     }
-
     #[test]
     fn warm_runtime_template_reset_does_not_clone_reload_or_reparse() {
         set_banner_enabled(false);
@@ -9226,17 +8729,14 @@ mod tests {
             .as_ptr();
         let parse_attempts = vm.program_parse_attempts();
         let prepared_loads = vm.prepared_loads();
-
         // Building the immutable template is the one cold full-memory clone.
         let template = vm.runtime_template();
         crate::memory::reset_memory_clone_count();
-
         vm.set_register(7, 99);
         vm.preload_input(0, &[0xA5])
             .expect("invocation input is writable before execution");
         vm.reset_from_runtime_template(&template)
             .expect("warm VM retains its runtime-template geometry");
-
         assert_eq!(crate::memory::memory_clone_count(), 0);
         assert!(
             std::ptr::eq(
@@ -9258,7 +8758,6 @@ mod tests {
             [0]
         );
     }
-
     #[test]
     fn runtime_template_geometry_mismatch_never_replaces_the_memory_image() {
         set_banner_enabled(false);
@@ -9266,7 +8765,6 @@ mod tests {
         vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes())
             .expect("template program loads");
         let template = vm.runtime_template();
-
         vm.memory = Memory::new_with_stack_limit(0, Memory::STACK_ALIGNMENT);
         vm.set_register(7, 99);
         let mismatched_allocation = vm
@@ -9275,11 +8773,9 @@ mod tests {
             .expect("mismatched memory is readable")
             .as_ptr();
         crate::memory::reset_memory_clone_count();
-
         let error = vm
             .reset_from_runtime_template(&template)
             .expect_err("different memory geometry must reject warm reset");
-
         assert!(error.to_string().contains("memory geometry mismatch"));
         assert_eq!(crate::memory::memory_clone_count(), 0);
         assert_eq!(vm.register(7), 99, "failed reset must not touch VM state");
@@ -9292,7 +8788,6 @@ mod tests {
             mismatched_allocation
         ));
     }
-
     #[test]
     fn runtime_template_rejects_a_different_heap_authority() {
         set_banner_enabled(false);
@@ -9300,7 +8795,6 @@ mod tests {
         vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes())
             .expect("template program loads");
         let template = vm.runtime_template();
-
         vm.memory
             .set_heap_max_limit(Memory::HEAP_MAX_SIZE - Memory::STACK_ALIGNMENT)
             .expect("smaller heap authority is valid");
@@ -9308,7 +8802,6 @@ mod tests {
         let error = vm
             .reset_from_runtime_template(&template)
             .expect_err("different heap authority must reject warm reset");
-
         assert!(error.to_string().contains("heap-ceiling bytes"));
         assert_eq!(vm.register(7), 99, "failed reset must not touch VM state");
         assert_eq!(
@@ -9316,23 +8809,19 @@ mod tests {
             Memory::HEAP_MAX_SIZE - Memory::STACK_ALIGNMENT,
         );
     }
-
     #[test]
     fn load_program_runs_unaligned_contract_prefix_from_prepared_ops() {
         set_banner_enabled(false);
         let (program, prefix_len) = program_with_unaligned_contract_prefix();
         assert_ne!(prefix_len as u64 & 0b11, 0);
-
         let mut vm = IVM::new(u64::MAX);
         vm.load_program(&program).expect("program loads");
         assert_eq!(vm.pc(), prefix_len as u64);
         assert!(vm.prepared_contains_pc(vm.pc()));
-
         vm.reset_predecode_misses();
         vm.run().expect("unaligned prefix program runs");
         assert_eq!(vm.predecode_misses(), 0);
     }
-
     #[test]
     fn contract_return_integrity_is_cloned_and_cleared_at_reuse_boundaries() {
         set_banner_enabled(false);
@@ -9340,14 +8829,12 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         vm.load_program(&program).expect("contract program loads");
         assert!(vm.strict_return_integrity);
-
         vm.contract_return_stack.extend([4, 8]);
         vm.contract_outer_return_pc = Some(12);
         let cloned = vm.clone();
         assert!(cloned.strict_return_integrity);
         assert_eq!(cloned.contract_return_stack, [4, 8]);
         assert_eq!(cloned.contract_outer_return_pc, Some(12));
-
         vm.reset();
         assert!(vm.contract_return_stack.is_empty());
         assert_eq!(vm.contract_outer_return_pc, None);
@@ -9359,7 +8846,6 @@ mod tests {
         assert!(vm.strict_return_integrity);
         assert!(vm.contract_return_stack.is_empty());
         assert_eq!(vm.contract_outer_return_pc, None);
-
         vm.contract_return_stack.push(16);
         vm.contract_outer_return_pc = Some(20);
         vm.load_code(&crate::encoding::wide::encode_halt().to_le_bytes())
@@ -9368,7 +8854,6 @@ mod tests {
         assert!(vm.contract_return_stack.is_empty());
         assert_eq!(vm.contract_outer_return_pc, None);
     }
-
     #[test]
     fn deployable_contract_rejects_noncanonical_indirect_control_flow_at_admission() {
         set_banner_enabled(false);
@@ -9376,7 +8861,6 @@ mod tests {
         let indirect = crate::encoding::wide::encode_rr(instruction::wide::control::JALR, 0, 2, 0);
         let instruction_start = program.len() - WIDE_INSTRUCTION_LEN as usize;
         program[instruction_start..].copy_from_slice(&indirect.to_le_bytes());
-
         let mut vm = IVM::new(u64::MAX);
         assert_eq!(
             vm.load_program(&program),
@@ -9384,7 +8868,6 @@ mod tests {
             "unverifiable indirect control flow must fail before execution"
         );
     }
-
     #[test]
     fn loaded_program_prefix_is_not_executable() {
         set_banner_enabled(false);
@@ -9393,7 +8876,6 @@ mod tests {
         vm.load_program(&program)
             .expect("program with literals loads");
         assert!(literal_prefix > 0);
-
         vm.pc = 0;
         let err = vm.run().expect_err("literal prefix must not execute");
         assert!(matches!(
@@ -9404,35 +8886,29 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn fallthrough_without_explicit_termination_is_error() {
         set_banner_enabled(false);
         let addi = crate::encoding::wide::encode_ri(instruction::wide::arithmetic::ADDI, 1, 0, 7);
         let mut vm = IVM::new(u64::MAX);
         vm.load_code(&addi.to_le_bytes()).expect("load raw code");
-
         let err = vm.run().expect_err("fallthrough must trap");
         assert!(matches!(err, VMError::MissingHalt));
     }
-
     #[test]
     fn scallx_dispatches_extended_syscall_id() {
         struct RecordingHost {
             seen: Option<u32>,
         }
-
         impl IVMHost for RecordingHost {
             fn prepare_syscall(&self, _number: u32, _vm: &IVM) -> Result<u64, VMError> {
                 Ok(0)
             }
-
             fn syscall(&mut self, number: u32, vm: &mut IVM) -> Result<u64, VMError> {
                 self.seen = Some(number);
                 vm.set_register(10, u64::from(number));
                 Ok(0)
             }
-
             fn as_any(&mut self) -> &mut dyn std::any::Any
             where
                 Self: 'static,
@@ -9440,7 +8916,6 @@ mod tests {
                 self
             }
         }
-
         set_banner_enabled(false);
         let syscall = crate::syscalls::SYSCALL_SYSVAR_BLOCK_TIME_MS;
         let mut code = Vec::new();
@@ -9449,12 +8924,10 @@ mod tests {
         let mut vm = IVM::new(u64::MAX);
         vm.load_code(&code).expect("load raw code");
         let mut host = RecordingHost { seen: None };
-
         vm.run_with_host(&mut host).expect("SCALLX program runs");
         assert_eq!(host.seen, Some(syscall));
         assert_eq!(vm.register(10), u64::from(syscall));
     }
-
     #[test]
     fn load_program_rejects_non_v1_abi_version() {
         set_banner_enabled(false);
@@ -9468,7 +8941,6 @@ mod tests {
             Err(VMError::UnsupportedProgramAbiVersion { version: 2 })
         );
     }
-
     #[test]
     fn recompute_input_bump_handles_empty_tlv() {
         set_banner_enabled(false);
@@ -9488,14 +8960,12 @@ mod tests {
             .expect("read first TLV");
         assert_eq!(buf, tlv);
     }
-
     #[test]
     fn alloc_host_tlv_prefers_input_when_space_is_available() {
         set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         let tlv = empty_blob_tlv();
         let ptr = vm.alloc_host_tlv(&tlv).expect("allocate host TLV");
-
         assert!(
             (Memory::INPUT_START..Memory::INPUT_START + Memory::INPUT_SIZE).contains(&ptr),
             "host TLV should stay in input while space remains"
@@ -9507,7 +8977,6 @@ mod tests {
             .expect("read input TLV");
         assert_eq!(loaded, tlv);
     }
-
     #[test]
     fn alloc_host_tlv_spills_to_heap_after_input_fills() {
         set_banner_enabled(false);
@@ -9515,10 +8984,8 @@ mod tests {
         let filler = vec![0u8; Memory::INPUT_SIZE as usize];
         vm.alloc_input_tlv(&filler)
             .expect("fill the input allocator exactly");
-
         let tlv = empty_blob_tlv();
         let ptr = vm.alloc_host_tlv(&tlv).expect("spill host TLV to heap");
-
         assert!(
             (Memory::HEAP_START..Memory::INPUT_START).contains(&ptr),
             "host spill pointer should land in heap"
@@ -9527,7 +8994,6 @@ mod tests {
         assert_eq!(spilled.type_id, crate::pointer_abi::PointerType::Blob);
         assert!(spilled.payload.is_empty());
     }
-
     #[test]
     fn alloc_host_tlv_spills_when_input_tail_cannot_fit_next_tlv() {
         set_banner_enabled(false);
@@ -9536,11 +9002,9 @@ mod tests {
         let filler = vec![0u8; Memory::INPUT_SIZE as usize - (tlv.len() - 1)];
         vm.alloc_input_tlv(&filler)
             .expect("leave a too-small tail in the input allocator");
-
         let ptr = vm
             .alloc_host_tlv(&tlv)
             .expect("spill host TLV when the remaining input tail is too small");
-
         assert!(
             (Memory::HEAP_START..Memory::INPUT_START).contains(&ptr),
             "host spill pointer should land in heap when only an undersized input tail remains"
@@ -9549,7 +9013,6 @@ mod tests {
         assert_eq!(spilled.type_id, crate::pointer_abi::PointerType::Blob);
         assert!(spilled.payload.is_empty());
     }
-
     #[test]
     fn alloc_host_tlv_propagates_out_of_memory_when_heap_spill_cannot_fit() {
         set_banner_enabled(false);
@@ -9560,13 +9023,11 @@ mod tests {
         vm.memory
             .set_heap_limit(0)
             .expect("shrink heap limit to zero");
-
         let err = vm
             .alloc_host_tlv(&empty_blob_tlv())
             .expect_err("host TLV spill should fail without heap space");
         assert!(matches!(err, VMError::OutOfMemory));
     }
-
     #[test]
     fn host_tlv_preflight_honors_exact_heap_reservation_without_partial_state() {
         set_banner_enabled(false);
@@ -9583,7 +9044,6 @@ mod tests {
             ),
             Err(VMError::OutOfMemory)
         ));
-
         let vm = IVM::new(u64::MAX);
         let input_before = vm.input_bump_next;
         let heap_before = vm.memory.heap_allocated_len();
@@ -9597,7 +9057,6 @@ mod tests {
         assert_eq!(vm.input_bump_next, input_before);
         assert_eq!(vm.memory.heap_allocated_len(), heap_before);
     }
-
     #[test]
     fn owned_tlv_validation_rejects_unallocated_heap_bytes() {
         set_banner_enabled(false);
@@ -9605,12 +9064,10 @@ mod tests {
         let tlv = empty_blob_tlv();
         vm.store_bytes(Memory::HEAP_START, &tlv)
             .expect("write well-formed bytes into unallocated heap capacity");
-
         assert!(matches!(
             vm.validate_tlv(Memory::HEAP_START),
             Err(VMError::NoritoInvalid)
         ));
-
         let ptr = vm
             .alloc_heap(u64::try_from(tlv.len()).expect("TLV length fits u64"))
             .expect("claim the heap prefix containing the envelope");
@@ -9618,7 +9075,6 @@ mod tests {
         vm.validate_tlv(ptr)
             .expect("the same envelope is valid after its heap range is owned");
     }
-
     #[test]
     fn input_tlv_validation_is_provenance_strict_and_region_specific() {
         set_banner_enabled(false);
@@ -9627,7 +9083,6 @@ mod tests {
         let input = vm.alloc_input_tlv(&tlv).expect("allocate INPUT envelope");
         vm.validate_input_tlv(input)
             .expect("accept an owned INPUT envelope");
-
         let heap = vm
             .alloc_heap(u64::try_from(tlv.len()).expect("TLV length fits u64"))
             .expect("allocate HEAP envelope");
@@ -9638,7 +9093,6 @@ mod tests {
             vm.validate_input_tlv(heap),
             Err(VMError::NoritoInvalid)
         ));
-
         vm.store_bytes(Memory::OUTPUT_START, &tlv)
             .expect("store adversarial OUTPUT envelope");
         assert!(matches!(
@@ -9646,14 +9100,12 @@ mod tests {
             Err(VMError::NoritoInvalid)
         ));
     }
-
     #[test]
     fn argument_decode_escrow_requires_the_exact_prepaid_cost() {
         set_banner_enabled(false);
         let mut vm = IVM::new(100);
         vm.prepay_argument_decode(40)
             .expect("escrow argument decode gas");
-
         assert_eq!(vm.remaining_gas(), 60);
         assert!(vm.argument_decode_is_prepaid(40));
         assert!(!vm.argument_decode_is_prepaid(41));
@@ -9669,7 +9121,6 @@ mod tests {
             .expect("consume matching argument decode escrow");
         assert!(!vm.argument_decode_is_prepaid(40));
     }
-
     #[test]
     fn run_prefers_predecoded_instructions() {
         set_banner_enabled(false);
@@ -9680,13 +9131,11 @@ mod tests {
         vm.reset_predecode_misses();
         vm.run().expect("run succeeds");
         assert_eq!(vm.predecode_misses(), 0);
-
         vm.load_program(&program).expect("reload succeeds");
         vm.reset_predecode_misses();
         vm.run().expect("second run succeeds");
         assert_eq!(vm.predecode_misses(), 0);
     }
-
     #[test]
     fn runtime_trap_populates_last_diagnostic() {
         set_banner_enabled(false);
@@ -9742,7 +9191,6 @@ seiyaku Demo {
             "deployable artifacts exclude source maps; tooling resolves the hash-keyed sidecar"
         );
     }
-
     #[test]
     fn missing_halt_classifies_as_missing_halt_trap() {
         assert_eq!(
@@ -9750,7 +9198,6 @@ seiyaku Demo {
             VmTrapKind::MissingHalt
         );
     }
-
     #[test]
     fn host_output_budget_error_has_a_distinct_trap_kind() {
         let error = VMError::HostOutputBudgetExceeded {
@@ -9763,7 +9210,6 @@ seiyaku Demo {
             VmTrapKind::HostOutputBudgetExceeded
         );
     }
-
     #[test]
     fn unsupported_program_metadata_errors_preserve_exact_trap_kind() {
         let cases = [
@@ -9787,18 +9233,15 @@ seiyaku Demo {
                 VmTrapKind::ProgramVectorLengthTooLarge,
             ),
         ];
-
         for (error, expected) in cases {
             assert_eq!(IVM::classify_trap(&error), expected);
         }
     }
-
     #[test]
     fn metered_trap_classifies_as_source_error() {
         let err = VMError::metered(17, VMError::PermissionDenied);
         assert_eq!(IVM::classify_trap(&err), VmTrapKind::PermissionDenied);
     }
-
     #[test]
     fn hardware_capabilities_consistent_with_usage() {
         set_banner_enabled(false);
@@ -9811,7 +9254,6 @@ seiyaku Demo {
             assert!(caps.metal_available());
         }
     }
-
     #[test]
     fn builder_can_override_capabilities() {
         set_banner_enabled(false);
@@ -9824,7 +9266,6 @@ seiyaku Demo {
         assert_eq!(vm.hardware_capabilities(), disabled_caps);
         assert!(!vm.uses_cuda());
         assert!(!vm.uses_metal());
-
         let enabled_cuda = HardwareCapabilities::new(true, false);
         let vm = IVM::builder(u64::MAX)
             .with_capabilities(enabled_cuda)
@@ -9835,7 +9276,6 @@ seiyaku Demo {
         assert!(vm.uses_cuda());
         assert!(!vm.uses_metal());
     }
-
     #[test]
     fn builder_config_roundtrip() {
         set_banner_enabled(false);
@@ -9857,7 +9297,6 @@ seiyaku Demo {
             AccelerationPolicy::deterministic()
         );
     }
-
     #[test]
     fn builder_gas_limit_getter_tracks_updates() {
         set_banner_enabled(false);
@@ -9875,7 +9314,6 @@ seiyaku Demo {
         let vm = builder.build();
         assert_eq!(vm.remaining_gas(), 500);
     }
-
     #[test]
     fn config_builder_conversion_allows_roundtrip_editing() {
         set_banner_enabled(false);
@@ -9891,7 +9329,6 @@ seiyaku Demo {
         let vm2 = IVM::with_config(cfg).suppress_startup_banner().build();
         assert_eq!(vm2.remaining_gas(), 350);
     }
-
     #[test]
     fn new_with_config_respects_settings() {
         set_banner_enabled(false);
@@ -9908,7 +9345,6 @@ seiyaku Demo {
         assert!(!vm.uses_cuda());
         assert!(!vm.uses_metal());
     }
-
     #[test]
     fn config_builder_presets() {
         set_banner_enabled(false);
@@ -9918,7 +9354,6 @@ seiyaku Demo {
             deterministic.acceleration(),
             AccelerationPolicy::deterministic()
         );
-
         let adaptive = IvmConfigBuilder::adaptive(400)
             .with_capabilities(HardwareCapabilities::none())
             .build();
@@ -9926,7 +9361,6 @@ seiyaku Demo {
         assert_eq!(adaptive.acceleration(), AccelerationPolicy::adaptive());
         assert_eq!(adaptive.capabilities(), HardwareCapabilities::none());
     }
-
     #[test]
     fn stack_limit_for_gas_uses_immutable_v1_policy() {
         set_banner_enabled(false);
@@ -9942,7 +9376,6 @@ seiyaku Demo {
             IvmStackPolicy::V1.maximum_stack_bytes()
         );
     }
-
     #[test]
     fn config_capability_mapping_helper() {
         set_banner_enabled(false);
@@ -9952,7 +9385,6 @@ seiyaku Demo {
             .suppress_startup_banner();
         assert_eq!(cfg.capabilities(), builder.config().capabilities());
     }
-
     #[test]
     fn config_forced_simd_overrides_detection() {
         set_banner_enabled(false);
@@ -9972,7 +9404,6 @@ seiyaku Demo {
             None => vector::clear_thread_forced_simd(),
         }
     }
-
     #[test]
     fn adaptive_config_suppressed_helpers() {
         set_banner_enabled(false);
@@ -9986,19 +9417,16 @@ seiyaku Demo {
             .build();
         assert_eq!(vm2.remaining_gas(), 700);
     }
-
     #[test]
     fn config_into_builder_conversions() {
         set_banner_enabled(false);
         let cfg = IvmConfig::deterministic(123);
         let builder_from_config = IvmBuilder::from(cfg);
         assert_eq!(builder_from_config.config(), cfg);
-
         let cfg_builder = cfg.builder().with_gas_limit(456);
         let builder_from_builder = IvmBuilder::from(cfg_builder);
         assert_eq!(builder_from_builder.config().gas_limit(), 456);
     }
-
     #[test]
     fn set_acceleration_policy_updates_policy_snapshot() {
         set_banner_enabled(false);
@@ -10014,7 +9442,6 @@ seiyaku Demo {
         vm.set_acceleration_policy(policy);
         assert_eq!(vm.acceleration_policy(), policy);
     }
-
     #[test]
     fn second_load_hits_global_cache() {
         set_banner_enabled(false);
@@ -10028,7 +9455,6 @@ seiyaku Demo {
         let after_first = ivm_cache::global_counters();
         // Other tests may update the shared cache concurrently, so ensure we registered at least one miss.
         assert!(after_first.1 - before.1 >= 1);
-
         let mut second = IVM::new(u64::MAX);
         second
             .load_program(&program)
@@ -10036,7 +9462,6 @@ seiyaku Demo {
         let after_second = ivm_cache::global_counters();
         assert!(after_second.0 - after_first.0 >= 1);
     }
-
     #[test]
     fn reset_preserves_entry_pc_with_literal_prefix() {
         set_banner_enabled(false);
@@ -10050,22 +9475,18 @@ seiyaku Demo {
         assert!(vm.predecoded.is_some());
         assert!(vm.prepared_contains_pc(literal_pc));
         vm.set_register(31, 0);
-
         vm.reset();
         assert_eq!(vm.pc(), literal_pc);
         assert_eq!(vm.register(31), vm.memory.stack_top());
         assert!(vm.prepared_contains_pc(literal_pc));
     }
-
     #[test]
     fn generic_abort_cannot_inherit_a_contract_error_code() {
         set_banner_enabled(false);
         let mut vm = IVM::new(u64::MAX);
         vm.set_register(10, 18);
-
         vm.request_abort();
         assert_eq!(vm.contract_abort_code, None);
-
         vm.request_contract_abort(18);
         assert_eq!(vm.contract_abort_code, Some(18));
     }

@@ -719,6 +719,11 @@ PROOF
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>2l. AsyncCandidateLifecycleSchedulerCoverageInvariant
       BY <1>1 DEF AsyncStrongTypeInvariant
+    <2>2m. /\ AsyncProducerTypeInvariant
+            /\ AsyncServeProducerEpisodeTypeInvariant
+            /\ AsyncServeProducerEpisodeOwnershipInvariant
+            /\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant
+      BY <1>1 DEF AsyncStrongTypeInvariant
     <2>3. StrongInductiveInvariant'
       BY <1>1, <2>1, AsyncNextPreservesStrongInductiveInvariant
     <2>4. AsyncSchedulerTypeInvariant'
@@ -738,6 +743,9 @@ PROOF
     <2>4e. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'
       BY <1>1, <2>2h,
          AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant
+    <2>4f. AsyncProducerTypeInvariant'
+      BY <1>1, <2>2, AsyncProducerProjectionPreservesTypeInvariant
+         DEF AsyncNext
     <2>5. ReceivedTimeoutVotePoolInvariant'
       BY <1>1, <2>2, AsyncNextPreservesTimeoutPoolInvariant
     <2>6. /\ AsyncRecoveryTypeInvariant'
@@ -766,8 +774,9 @@ PROOF
     <2>13. AsyncOrdinaryIngressCarrierOwnershipInvariant'
       BY <1>1, <2>2k,
          AsyncNextPreservesOrdinaryIngressCarrierOwnership
-    <2> QED BY <2>2l, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>4d, <2>4e, <2>5, <2>6, <2>7,
-                <2>8, <2>9, <2>10, <2>11, <2>12, <2>13
+    <2> QED BY <2>2l, <2>2m, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>4d,
+                <2>4e, <2>4f, <2>5, <2>6, <2>7, <2>8, <2>9, <2>10,
+                <2>11, <2>12, <2>13
          DEF AsyncStrongTypeInvariant
   <1> QED BY <1>1
 

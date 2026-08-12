@@ -1,5 +1,6 @@
 [package]
 name = "iroha_ffi"
+autotests = false
 
 edition.workspace = true
 version.workspace = true
@@ -27,3 +28,19 @@ derive_more = { workspace = true, features = ["display", "constructor"] }
 # `webassembly-test` pulled in an incompatible `mv` crate; remove it to
 # resolve compilation failure.
 getset = { workspace = true }
+
+[[test]]
+name = "ffi_exports"
+path = "tests/ffi_exports.rs"
+
+[[test]]
+name = "ffi_imports"
+path = "tests/ffi_imports.rs"
+
+[[test]]
+name = "import_getset"
+path = "tests/import_getset.rs"
+
+[[test]]
+name = "import_shared_fns"
+path = "tests/import_shared_fns.rs"

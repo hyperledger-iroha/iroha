@@ -85,10 +85,8 @@ pub use operator_auth::OperatorSigningContext;
 use operator_auth::build_operator_get_request;
 
 include!("torii/sumeragi_response_bounds.rs");
-
 /// Convenience result alias for Torii client operations.
 pub type ToriiResult<T> = std::result::Result<T, ToriiError>;
-
 /// Errors emitted by the Torii client.
 #[derive(thiserror::Error, Debug)]
 pub enum ToriiError {
@@ -160,7 +158,6 @@ pub enum ToriiError {
     #[error("smoke transaction admission outcome remains unknown for {hash}")]
     SmokeAdmissionOutcomeUnknown { hash: String },
 }
-
 /// High-level classification for [`ToriiError`] variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToriiErrorKind {
@@ -193,7 +190,6 @@ pub enum ToriiErrorKind {
     /// Smoke transaction admission remained ambiguous after exact-hash reconciliation.
     SmokeAdmissionOutcomeUnknown,
 }
-
 /// Summary of a [`ToriiError`] capturing its user-facing message and kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToriiErrorInfo {
@@ -206,7 +202,6 @@ pub struct ToriiErrorInfo {
     /// Optional Torii reject code attached to the response.
     pub reject_code: Option<String>,
 }
-
 impl ToriiErrorInfo {
     /// Construct a summary with no additional detail.
     #[must_use]
@@ -218,7 +213,6 @@ impl ToriiErrorInfo {
             reject_code: None,
         }
     }
-
     /// Construct a summary with an accompanying detail string.
     #[must_use]
     pub fn with_detail(
@@ -234,7 +228,6 @@ impl ToriiErrorInfo {
         }
     }
 }
-
 impl ToriiError {
     /// Produce a classified summary of the error for display or logging purposes.
     #[must_use]
@@ -337,7 +330,6 @@ impl ToriiError {
             ),
         }
     }
-
     fn is_queue_plan_journal_outcome_unknown(&self) -> bool {
         matches!(
             self,
@@ -347,7 +339,6 @@ impl ToriiError {
             } if code == QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN_REJECT_CODE
         )
     }
-
     fn confirms_existing_submission(&self) -> bool {
         matches!(
             self,
@@ -360,7 +351,6 @@ impl ToriiError {
             )
         )
     }
-
     /// Return the server-provided retry delay for a throttled request.
     #[must_use]
     pub const fn retry_after(&self) -> Option<Duration> {
@@ -370,13 +360,11 @@ impl ToriiError {
         }
     }
 }
-
 #[derive(Debug, Clone, norito::NoritoDeserialize, norito::NoritoSerialize)]
 struct ToriiErrorEnvelope {
     code: String,
     message: String,
 }
-
 impl ToriiErrorEnvelope {
     fn summary(&self) -> String {
         if self.code.is_empty() {
@@ -386,9 +374,7 @@ impl ToriiErrorEnvelope {
         }
     }
 }
-
 include!("torii/response_error_headers.rs");
-
 fn response_status_error(response: &reqwest::Response) -> ToriiError {
     if response.status() == StatusCode::TOO_MANY_REQUESTS {
         ToriiError::RateLimited {
@@ -402,7 +388,6 @@ fn response_status_error(response: &reqwest::Response) -> ToriiError {
         }
     }
 }
-
 fn websocket_connect_error(error: WebSocketError) -> ToriiError {
     match error {
         WebSocketError::Http(response) if response.status() == StatusCode::TOO_MANY_REQUESTS => {
@@ -413,12 +398,10 @@ fn websocket_connect_error(error: WebSocketError) -> ToriiError {
         other => ToriiError::WebSocket(other),
     }
 }
-
 fn error_message_from_body(body: &[u8]) -> Option<String> {
     if let Ok(envelope) = decode_norito_with_alignment::<ToriiErrorEnvelope>(body) {
         return Some(envelope.summary());
     }
-
     if let Ok(value) = norito::json::from_slice::<json::Value>(body)
         && let Some(message) = value
             .get("message")
@@ -431,11 +414,9 @@ fn error_message_from_body(body: &[u8]) -> Option<String> {
             _ => message.to_owned(),
         });
     }
-
     let text = String::from_utf8_lossy(body).trim().to_owned();
     if text.is_empty() { None } else { Some(text) }
 }
-
 fn decode_bounded_json_response(bytes: &[u8], context: &'static str) -> ToriiResult<json::Value> {
     const MAX_VALUES: usize = 262_144;
     const MAX_STRING_BYTES: usize = 1024 * 1024;
@@ -461,7 +442,6 @@ fn decode_bounded_json_response(bytes: &[u8], context: &'static str) -> ToriiRes
     json::from_slice(bytes)
         .map_err(|_| ToriiError::Decode(format!("{context} response failed JSON decoding")))
 }
-
 async fn read_bounded_json_response(
     response: Response,
     context: &'static str,
@@ -469,7 +449,6 @@ async fn read_bounded_json_response(
     let bytes = read_bounded_response(response, MAX_JSON_RESPONSE_BYTES, context).await?;
     decode_bounded_json_response(&bytes, context)
 }
-
 fn compose_base_urls(base_url: &str) -> ToriiResult<(Url, Url)> {
     let http_base = Url::parse(base_url).map_err(ToriiError::InvalidBaseUrl)?;
     let scheme = http_base.scheme().to_owned();
@@ -482,17 +461,14 @@ fn compose_base_urls(base_url: &str) -> ToriiResult<(Url, Url)> {
             });
         }
     };
-
     let mut ws_base = http_base.clone();
     ws_base
         .set_scheme(ws_scheme)
         .map_err(|_| ToriiError::UnsupportedScheme {
             scheme: scheme.clone(),
         })?;
-
     Ok((http_base, ws_base))
 }
-
 /// Options for waiting until a peer responds to `/status`.
 #[derive(Debug, Clone, Copy)]
 pub struct ReadinessOptions {
@@ -501,7 +477,6 @@ pub struct ReadinessOptions {
     /// Delay between successive probes while waiting for readiness.
     pub poll_interval: Duration,
 }
-
 /// A managed Torii peer that failed to report a committed genesis block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedPeerGenesisFailure {
@@ -512,7 +487,6 @@ pub struct ManagedPeerGenesisFailure {
     /// Classified failure returned by the peer's readiness probe.
     pub error: ToriiErrorInfo,
 }
-
 /// Failure of the all-managed-peer genesis readiness gate.
 #[derive(Debug, thiserror::Error)]
 pub enum ManagedPeerGenesisReadinessError {
@@ -528,7 +502,6 @@ pub enum ManagedPeerGenesisReadinessError {
         failures: Vec<ManagedPeerGenesisFailure>,
     },
 }
-
 impl ManagedPeerGenesisReadinessError {
     /// Structured per-peer failures, or an empty slice when no peers were supplied.
     #[must_use]
@@ -539,7 +512,6 @@ impl ManagedPeerGenesisReadinessError {
         }
     }
 }
-
 /// Wait concurrently until every managed Torii peer reports at least one committed block.
 ///
 /// Each peer receives the same bounded readiness deadline. Running the probes concurrently keeps
@@ -552,7 +524,6 @@ pub async fn wait_for_all_managed_peers_genesis(
     if peers.is_empty() {
         return Err(ManagedPeerGenesisReadinessError::NoManagedPeers);
     }
-
     let probes = peers.into_iter().map(|(alias, client)| async move {
         let base_url = client.base_url().to_owned();
         let result = client.wait_for_genesis_commit(options).await;
@@ -570,11 +541,9 @@ pub async fn wait_for_all_managed_peers_genesis(
             }),
         }
     }
-
     if failures.is_empty() {
         return Ok(committed);
     }
-
     let diagnostics = failures
         .iter()
         .map(|failure| {
@@ -595,7 +564,6 @@ pub async fn wait_for_all_managed_peers_genesis(
         failures,
     })
 }
-
 impl ReadinessOptions {
     /// Create a readiness configuration with the supplied timeout and a default poll interval.
     #[must_use]
@@ -605,7 +573,6 @@ impl ReadinessOptions {
             poll_interval: Duration::from_millis(250),
         }
     }
-
     /// Override the poll interval used when waiting for readiness.
     #[must_use]
     pub const fn with_poll_interval(mut self, poll_interval: Duration) -> Self {
@@ -613,14 +580,12 @@ impl ReadinessOptions {
         self
     }
 }
-
 /// Options for waiting until a submitted transaction is observed in the committed block stream.
 #[derive(Debug, Clone, Copy)]
 pub struct SmokeCommitOptions {
     /// Maximum duration to wait for the smoke transaction to commit.
     pub timeout: Duration,
 }
-
 impl SmokeCommitOptions {
     /// Create options with the provided timeout.
     #[must_use]
@@ -628,13 +593,11 @@ impl SmokeCommitOptions {
         Self { timeout }
     }
 }
-
 impl Default for SmokeCommitOptions {
     fn default() -> Self {
         Self::new(Duration::from_secs(15))
     }
 }
-
 /// Successful observation of a committed smoke transaction.
 #[derive(Debug, Clone)]
 pub struct SmokeCommitSnapshot {
@@ -645,7 +608,6 @@ pub struct SmokeCommitSnapshot {
     /// Elapsed time between submission and commitment observation.
     pub elapsed: Duration,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SmokeTransactionStatus {
     Queued,
@@ -653,7 +615,6 @@ enum SmokeTransactionStatus {
     Rejected(String),
     Expired,
 }
-
 /// Options governing a full readiness smoke probe (status poll + commit check).
 #[derive(Debug, Clone)]
 pub struct ReadinessSmokePlan {
@@ -671,7 +632,6 @@ pub struct ReadinessSmokePlan {
     /// exact-envelope semantics and are never re-signed.
     factory: Option<ReadinessSmokeFactory>,
 }
-
 #[derive(Debug, Clone)]
 struct ReadinessSmokeFactory {
     network_id: NetworkId,
@@ -679,7 +639,6 @@ struct ReadinessSmokeFactory {
     attempts: usize,
     nonce_offset: usize,
 }
-
 impl ReadinessSmokeFactory {
     fn build_transactions(
         &self,
@@ -699,7 +658,6 @@ impl ReadinessSmokeFactory {
             .collect()
     }
 }
-
 impl ReadinessSmokePlan {
     /// Construct a plan using the provided transactions and default timeouts/backoff.
     #[must_use]
@@ -712,7 +670,6 @@ impl ReadinessSmokePlan {
             factory: None,
         }
     }
-
     /// Build an exact-network plan that updates metadata on the signing account.
     ///
     /// Each attempt carries a unique nonce so retries do not collide.
@@ -723,7 +680,6 @@ impl ReadinessSmokePlan {
     ) -> Result<Self, ReadinessSmokeBuildError> {
         Self::for_signer_with_attempts_and_offset(network_id, signer, attempts, 0)
     }
-
     /// Build an exact-network plan with unique nonces derived from the provided offset.
     pub fn for_signer_with_attempts_and_offset(
         network_id: NetworkId,
@@ -744,7 +700,6 @@ impl ReadinessSmokePlan {
             ..Self::new(transactions)
         })
     }
-
     /// Build a single-attempt exact-network plan using the provided signer.
     pub fn for_signer(
         network_id: NetworkId,
@@ -752,12 +707,10 @@ impl ReadinessSmokePlan {
     ) -> Result<Self, ReadinessSmokeBuildError> {
         Self::for_signer_with_attempts(network_id, signer, 1)
     }
-
     /// Iterator over the hashes of the configured smoke transactions.
     pub fn tx_hashes(&self) -> impl Iterator<Item = HashOf<SignedTransaction>> + '_ {
         self.transactions.iter().map(SignedTransaction::hash)
     }
-
     fn renew_generated_transactions_if_needed(
         &mut self,
         now: Duration,
@@ -765,7 +718,6 @@ impl ReadinessSmokePlan {
         let Some(factory) = &self.factory else {
             return Ok(());
         };
-
         let required_lifetime = self.required_submission_lifetime();
         let required_ttl = required_lifetime.max(SMOKE_TTL);
         let renew_before = now.saturating_add(required_lifetime);
@@ -778,11 +730,9 @@ impl ReadinessSmokePlan {
         if remains_fresh {
             return Ok(());
         }
-
         self.transactions = factory.build_transactions(now, required_ttl)?;
         Ok(())
     }
-
     fn required_submission_lifetime(&self) -> Duration {
         let attempts = u32::try_from(self.transactions.len().max(1)).unwrap_or(u32::MAX);
         let mut lifetime = self.commit_options.timeout.saturating_mul(attempts);
@@ -794,7 +744,6 @@ impl ReadinessSmokePlan {
         lifetime.saturating_add(SMOKE_SUBMISSION_MARGIN)
     }
 }
-
 /// Errors that can occur while constructing a readiness smoke plan.
 #[derive(Debug, thiserror::Error)]
 pub enum ReadinessSmokeBuildError {
@@ -808,7 +757,6 @@ pub enum ReadinessSmokeBuildError {
         reason: String,
     },
 }
-
 /// Result of a readiness smoke probe.
 #[derive(Debug, Clone)]
 pub struct ReadinessSmokeOutcome {
@@ -821,7 +769,6 @@ pub struct ReadinessSmokeOutcome {
     /// Optional status snapshot captured after the commit to surface queue depth.
     pub status: Option<ToriiStatusSnapshot>,
 }
-
 /// Summary of a local Torii MCP probe.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalMcpProbeResult {
@@ -834,7 +781,6 @@ pub struct LocalMcpProbeResult {
     /// Visible tool names returned by `tools/list`.
     pub tool_names: Vec<String>,
 }
-
 impl LocalMcpProbeResult {
     fn from_documents(
         capabilities: &json::Value,
@@ -847,7 +793,6 @@ impl LocalMcpProbeResult {
                 "GET /v1/mcp must return a JSON object",
             ));
         }
-
         let init_result = initialize
             .as_object()
             .and_then(|doc| doc.get("result"))
@@ -855,7 +800,6 @@ impl LocalMcpProbeResult {
             .ok_or_else(|| decode_error("mcp initialize", "missing result object"))?;
         let protocol_version =
             parse_required_string(init_result, &["protocolVersion"], "mcp initialize result")?;
-
         let tools_result = tools_list
             .as_object()
             .and_then(|doc| doc.get("result"))
@@ -879,7 +823,6 @@ impl LocalMcpProbeResult {
                 "mcp tools/list result.tools[].name",
             )?);
         }
-
         if !tool_names.iter().any(|name| name.starts_with("iroha.")) {
             return Err(decode_error(
                 "mcp tools/list result",
@@ -903,20 +846,17 @@ impl LocalMcpProbeResult {
         })
     }
 }
-
 const SMOKE_TTL: Duration = Duration::from_secs(30);
 const SMOKE_SUBMISSION_MARGIN: Duration = Duration::from_secs(5);
 const SMOKE_EXACT_RESUBMIT_DELAY: Duration = Duration::from_millis(250);
 const SMOKE_EXACT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(1);
 const QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN_REJECT_CODE: &str =
     "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN";
-
 fn unix_time_now() -> Duration {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
 }
-
 fn smoke_transaction_result_in_block(
     block: &SignedBlock,
     tx_hash: &HashOf<SignedTransaction>,
@@ -945,18 +885,15 @@ fn smoke_transaction_result_in_block(
             })
         })
 }
-
 #[derive(Debug, Default)]
 struct ReadinessSmokeAttemptCursor {
     next_index: usize,
     pinned_index: Option<usize>,
 }
-
 impl ReadinessSmokeAttemptCursor {
     fn current_index(&self) -> usize {
         self.pinned_index.unwrap_or(self.next_index)
     }
-
     fn record_failure(&mut self, index: usize, error: &ToriiError) {
         if self.pinned_index.is_some() {
             return;
@@ -967,12 +904,10 @@ impl ReadinessSmokeAttemptCursor {
             self.next_index = index.saturating_add(1);
         }
     }
-
     fn is_pinned(&self) -> bool {
         self.pinned_index.is_some()
     }
 }
-
 fn build_lane_lifecycle_transaction(
     network_id: NetworkId,
     signer: &SigningAuthority,
@@ -1009,7 +944,6 @@ fn build_lane_lifecycle_transaction(
             ToriiError::Decode(format!("failed to sign lane lifecycle transaction: {err}"))
         })
 }
-
 fn build_readiness_smoke_transaction_at(
     network_id: NetworkId,
     signer: &SigningAuthority,
@@ -1030,26 +964,22 @@ fn build_readiness_smoke_transaction_at(
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([SetKeyValue::account(authority, key, value)]);
-
     if let Some(nonce) = NonZeroU32::new(quantity) {
         builder.set_nonce(nonce);
     }
     builder.set_creation_time(creation_time);
     builder.set_ttl(ttl);
-
     builder
         .try_sign(signer.key_pair().private_key())
         .map_err(|err| ReadinessSmokeBuildError::Signing {
             reason: err.to_string(),
         })
 }
-
 impl Default for ReadinessOptions {
     fn default() -> Self {
         Self::new(Duration::from_secs(10))
     }
 }
-
 /// Builder for [`ToriiClient`] that allows configuring headers and timeouts.
 #[derive(Clone, Debug)]
 pub struct ToriiClientBuilder {
@@ -1060,7 +990,6 @@ pub struct ToriiClientBuilder {
     default_headers: HeaderMap,
     timeout: Option<Duration>,
 }
-
 impl ToriiClientBuilder {
     /// Create a builder targeting the provided Torii base URL.
     pub fn new(base_url: impl AsRef<str>) -> ToriiResult<Self> {
@@ -1074,7 +1003,6 @@ impl ToriiClientBuilder {
             timeout: None,
         })
     }
-
     /// Attach the `x-api-token` header to every request.
     pub fn with_api_token(mut self, token: impl AsRef<str>) -> ToriiResult<Self> {
         let value =
@@ -1086,13 +1014,11 @@ impl ToriiClientBuilder {
             .insert(HeaderName::from_static("x-api-token"), value);
         Ok(self)
     }
-
     /// Apply a custom header to every HTTP/WebSocket request.
     pub fn with_header(mut self, name: HeaderName, value: HeaderValue) -> Self {
         self.default_headers.insert(name, value);
         self
     }
-
     /// Attach HTTP basic authentication credentials to every request.
     pub fn with_basic_auth(
         mut self,
@@ -1111,26 +1037,22 @@ impl ToriiClientBuilder {
             .insert(HeaderName::from_static("authorization"), value);
         Ok(self)
     }
-
     /// Set the HTTP client timeout.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = Some(timeout);
         self
     }
-
     /// Bind all signed queries produced by this client to one exact genesis lineage.
     pub fn with_network_id(mut self, network_id: NetworkId) -> Self {
         self.network_id = Some(network_id);
         self
     }
-
     /// Install immutable operator signing material bound to one exact network.
     #[must_use]
     pub fn with_operator_signing_context(mut self, context: OperatorSigningContext) -> Self {
         self.operator_signing_context = Some(context);
         self
     }
-
     /// Consume the builder and construct a [`ToriiClient`].
     pub fn build(self) -> ToriiResult<ToriiClient> {
         let network_id = match (self.network_id, self.operator_signing_context.as_ref()) {
@@ -1156,7 +1078,6 @@ impl ToriiClientBuilder {
             client_builder = client_builder.default_headers(self.default_headers.clone());
         }
         let http = client_builder.build()?;
-
         Ok(ToriiClient {
             http_base: self.http_base,
             ws_base: self.ws_base,
@@ -1168,10 +1089,8 @@ impl ToriiClientBuilder {
         })
     }
 }
-
 /// WebSocket stream type alias used by Torii.
 pub type ToriiWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
-
 /// Simplified representation of frames received from a Torii WebSocket.
 #[derive(Debug, Clone)]
 pub enum WsFrame {
@@ -1184,7 +1103,6 @@ pub enum WsFrame {
     /// The subscription reported an error.
     Error(String),
 }
-
 /// Metrics derived from consecutive Torii status samples.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StatusMetrics {
@@ -1209,7 +1127,6 @@ pub struct StatusMetrics {
     /// Milliseconds elapsed between this snapshot and the previous sample.
     pub sample_interval_ms: u64,
 }
-
 impl StatusMetrics {
     /// Compute derived metrics using the previous and current telemetry snapshots.
     #[must_use]
@@ -1256,7 +1173,6 @@ impl StatusMetrics {
             sample_interval_ms: 0,
         }
     }
-
     /// Whether any notable activity occurred between the last two samples.
     #[must_use]
     pub fn has_activity(&self) -> bool {
@@ -1269,7 +1185,6 @@ impl StatusMetrics {
             || self.view_change_delta > 0
     }
 }
-
 /// Telemetry snapshot enriched with derived metrics.
 #[derive(Debug, Clone)]
 pub struct ToriiStatusSnapshot {
@@ -1280,7 +1195,6 @@ pub struct ToriiStatusSnapshot {
     /// Derived metrics computed from the last two samples.
     pub metrics: StatusMetrics,
 }
-
 impl ToriiStatusSnapshot {
     fn new(timestamp: Instant, status: TelemetryStatus, metrics: StatusMetrics) -> Self {
         Self {
@@ -1290,12 +1204,10 @@ impl ToriiStatusSnapshot {
         }
     }
 }
-
 #[derive(Debug, Default)]
 struct StatusState {
     previous: Option<StatusSample>,
 }
-
 impl StatusState {
     fn record(&mut self, timestamp: Instant, status: &TelemetryStatus) -> StatusMetrics {
         let mut metrics = StatusMetrics::from_samples(
@@ -1315,17 +1227,14 @@ impl StatusState {
         metrics
     }
 }
-
 #[derive(Debug, Clone)]
 struct StatusSample {
     timestamp: Instant,
     status: TelemetryStatus,
 }
-
 fn duration_to_millis(duration: Duration) -> u64 {
     duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
-
 /// Selected gauges sampled from the `/metrics` Prometheus endpoint.
 #[derive(Debug, Clone)]
 pub struct ToriiMetricsSnapshot {
@@ -1350,7 +1259,6 @@ pub struct ToriiMetricsSnapshot {
     /// Milliseconds elapsed since genesis according to telemetry.
     pub uptime_since_genesis_ms: Option<f64>,
 }
-
 /// Pagination metadata returned by Explorer APIs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExplorerPaginationMeta {
@@ -1363,7 +1271,6 @@ pub struct ExplorerPaginationMeta {
     /// Total number of items available on the backend.
     pub total_items: u64,
 }
-
 impl ExplorerPaginationMeta {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value
@@ -1401,10 +1308,8 @@ impl ExplorerPaginationMeta {
         })
     }
 }
-
 const EXPLORER_CURSOR_MAX_LENGTH: usize = 1_424;
 const EXPLORER_CURSOR_MAX_LIMIT: u32 = 100;
-
 fn require_exact_explorer_fields(
     record: &json::Map,
     expected: &[&str],
@@ -1418,7 +1323,6 @@ fn require_exact_explorer_fields(
     }
     Ok(())
 }
-
 fn validate_explorer_items_len(
     items_len: usize,
     pagination: &ExplorerCursorMeta,
@@ -1435,7 +1339,6 @@ fn validate_explorer_items_len(
     }
     Ok(())
 }
-
 /// Seek-pagination metadata returned by Explorer world-collection APIs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerCursorMeta {
@@ -1446,7 +1349,6 @@ pub struct ExplorerCursorMeta {
     /// Whether another page exists for the same collection and filters.
     pub has_more: bool,
 }
-
 impl ExplorerCursorMeta {
     fn from_json(value: &json::Value, context: &str) -> ToriiResult<Self> {
         let record = value
@@ -1502,7 +1404,6 @@ impl ExplorerCursorMeta {
         })
     }
 }
-
 fn validate_explorer_cursor<'a>(cursor: &'a str, context: &str) -> ToriiResult<&'a str> {
     let canonical = !cursor.is_empty()
         && cursor.len() <= EXPLORER_CURSOR_MAX_LENGTH
@@ -1520,7 +1421,6 @@ fn validate_explorer_cursor<'a>(cursor: &'a str, context: &str) -> ToriiResult<&
     }
     Ok(cursor)
 }
-
 fn append_explorer_cursor_params(
     params: &mut Vec<(&'static str, String)>,
     cursor: Option<String>,
@@ -1542,7 +1442,6 @@ fn append_explorer_cursor_params(
     }
     Ok(())
 }
-
 /// Explorer block summary returned by `/v1/blocks` endpoints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerBlockRecord {
@@ -1561,7 +1460,6 @@ pub struct ExplorerBlockRecord {
     /// Count of transactions included in the block.
     pub transactions_total: u64,
 }
-
 impl ExplorerBlockRecord {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value
@@ -1614,7 +1512,6 @@ impl ExplorerBlockRecord {
         })
     }
 }
-
 /// Explorer `/v1/blocks` response model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerBlocksPage {
@@ -1623,7 +1520,6 @@ pub struct ExplorerBlocksPage {
     /// Block entries included in this page.
     pub items: Vec<ExplorerBlockRecord>,
 }
-
 impl ExplorerBlocksPage {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value
@@ -1652,7 +1548,6 @@ impl ExplorerBlocksPage {
         Ok(Self { pagination, items })
     }
 }
-
 /// Query parameters accepted by `/v1/blocks`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ExplorerBlocksQuery {
@@ -1661,7 +1556,6 @@ pub struct ExplorerBlocksQuery {
     /// Maximum number of items to return.
     pub limit: Option<u32>,
 }
-
 /// Explorer account entry returned by `/v1/explorer/accounts`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAccountRecord {
@@ -1680,7 +1574,6 @@ pub struct ExplorerAccountRecord {
     /// Number of NFTs owned by the account.
     pub owned_nfts: u64,
 }
-
 impl ExplorerAccountRecord {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value
@@ -1741,7 +1634,6 @@ impl ExplorerAccountRecord {
         })
     }
 }
-
 /// Explorer `/v1/explorer/accounts` response model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAccountsPage {
@@ -1750,7 +1642,6 @@ pub struct ExplorerAccountsPage {
     /// Account entries in the requested page.
     pub items: Vec<ExplorerAccountRecord>,
 }
-
 impl ExplorerAccountsPage {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let doc = value
@@ -1786,7 +1677,6 @@ impl ExplorerAccountsPage {
         })
     }
 }
-
 /// Parameters accepted by `/v1/explorer/accounts`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerAccountsQuery {
@@ -1799,7 +1689,6 @@ pub struct ExplorerAccountsQuery {
     /// Optional asset definition filter (`definition#domain` literal).
     pub with_asset: Option<String>,
 }
-
 /// Explorer domain entry returned by `/v1/explorer/domains`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerDomainRecord {
@@ -1818,7 +1707,6 @@ pub struct ExplorerDomainRecord {
     /// Number of NFTs registered under the domain.
     pub nfts: u64,
 }
-
 impl ExplorerDomainRecord {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value
@@ -1862,7 +1750,6 @@ impl ExplorerDomainRecord {
         })
     }
 }
-
 /// Explorer `/v1/explorer/domains` response model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerDomainsPage {
@@ -1871,7 +1758,6 @@ pub struct ExplorerDomainsPage {
     /// Domain entries contained in the page.
     pub items: Vec<ExplorerDomainRecord>,
 }
-
 impl ExplorerDomainsPage {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value
@@ -1912,7 +1798,6 @@ impl ExplorerDomainsPage {
         Ok(Self { pagination, items })
     }
 }
-
 /// Parameters accepted by `/v1/explorer/domains`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerDomainsQuery {
@@ -1923,7 +1808,6 @@ pub struct ExplorerDomainsQuery {
     /// Optional filter restricting the owning account.
     pub owned_by: Option<String>,
 }
-
 /// Explorer asset definition entry returned by `/v1/explorer/asset-definitions`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAssetDefinitionRecord {
@@ -1940,7 +1824,6 @@ pub struct ExplorerAssetDefinitionRecord {
     /// Number of asset instances registered for the definition.
     pub assets: u64,
 }
-
 impl ExplorerAssetDefinitionRecord {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value.as_object().ok_or_else(|| {
@@ -1983,7 +1866,6 @@ impl ExplorerAssetDefinitionRecord {
         })
     }
 }
-
 /// Explorer `/v1/explorer/asset-definitions` response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAssetDefinitionsPage {
@@ -1992,7 +1874,6 @@ pub struct ExplorerAssetDefinitionsPage {
     /// Asset definition entries contained in the page.
     pub items: Vec<ExplorerAssetDefinitionRecord>,
 }
-
 impl ExplorerAssetDefinitionsPage {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value.as_object().ok_or_else(|| {
@@ -2047,7 +1928,6 @@ impl ExplorerAssetDefinitionsPage {
         Ok(Self { pagination, items })
     }
 }
-
 /// Parameters accepted by `/v1/explorer/asset-definitions`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerAssetDefinitionsQuery {
@@ -2060,7 +1940,6 @@ pub struct ExplorerAssetDefinitionsQuery {
     /// Optional owning account filter.
     pub owned_by: Option<String>,
 }
-
 /// Explorer asset entry returned by `/v1/explorer/assets`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAssetRecord {
@@ -2073,7 +1952,6 @@ pub struct ExplorerAssetRecord {
     /// Value rendered as a string (mirrors Explorer payload).
     pub value: String,
 }
-
 impl ExplorerAssetRecord {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value
@@ -2096,7 +1974,6 @@ impl ExplorerAssetRecord {
         })
     }
 }
-
 /// Explorer `/v1/explorer/assets` response model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerAssetsPage {
@@ -2105,7 +1982,6 @@ pub struct ExplorerAssetsPage {
     /// Asset entries in the page.
     pub items: Vec<ExplorerAssetRecord>,
 }
-
 impl ExplorerAssetsPage {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value
@@ -2146,7 +2022,6 @@ impl ExplorerAssetsPage {
         Ok(Self { pagination, items })
     }
 }
-
 /// Parameters accepted by `/v1/explorer/assets`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerAssetsQuery {
@@ -2159,7 +2034,6 @@ pub struct ExplorerAssetsQuery {
     /// Optional definition filter (`definition#domain` literal).
     pub definition: Option<String>,
 }
-
 /// Explorer NFT entry returned by `/v1/explorer/nfts`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerNftRecord {
@@ -2170,7 +2044,6 @@ pub struct ExplorerNftRecord {
     /// Metadata payload describing the NFT.
     pub metadata: json::Value,
 }
-
 impl ExplorerNftRecord {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value
@@ -2190,7 +2063,6 @@ impl ExplorerNftRecord {
         })
     }
 }
-
 /// Explorer `/v1/explorer/nfts` response model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerNftsPage {
@@ -2199,7 +2071,6 @@ pub struct ExplorerNftsPage {
     /// NFT entries included in the page.
     pub items: Vec<ExplorerNftRecord>,
 }
-
 impl ExplorerNftsPage {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value
@@ -2236,7 +2107,6 @@ impl ExplorerNftsPage {
         Ok(Self { pagination, items })
     }
 }
-
 /// Parameters accepted by `/v1/explorer/nfts`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerNftsQuery {
@@ -2249,7 +2119,6 @@ pub struct ExplorerNftsQuery {
     /// Optional domain filter restricting NFT IDs.
     pub domain: Option<String>,
 }
-
 /// Parent-lot quantity returned with an Explorer RWA record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerRwaParentRecord {
@@ -2258,7 +2127,6 @@ pub struct ExplorerRwaParentRecord {
     /// Quantity inherited from the parent lot.
     pub quantity: String,
 }
-
 impl ExplorerRwaParentRecord {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value
@@ -2270,7 +2138,6 @@ impl ExplorerRwaParentRecord {
         })
     }
 }
-
 /// Explorer RWA entry returned by `/v1/explorer/rwas`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerRwaRecord {
@@ -2293,7 +2160,6 @@ pub struct ExplorerRwaRecord {
     /// Parent-lot relationships.
     pub parents: Vec<ExplorerRwaParentRecord>,
 }
-
 impl ExplorerRwaRecord {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value
@@ -2359,7 +2225,6 @@ impl ExplorerRwaRecord {
         })
     }
 }
-
 /// Explorer `/v1/explorer/rwas` response model.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplorerRwasPage {
@@ -2368,7 +2233,6 @@ pub struct ExplorerRwasPage {
     /// RWA entries included in the page.
     pub items: Vec<ExplorerRwaRecord>,
 }
-
 impl ExplorerRwasPage {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value
@@ -2405,7 +2269,6 @@ impl ExplorerRwasPage {
         Ok(Self { pagination, items })
     }
 }
-
 /// Parameters accepted by `/v1/explorer/rwas`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExplorerRwasQuery {
@@ -2418,7 +2281,6 @@ pub struct ExplorerRwasQuery {
     /// Optional domain filter restricting RWA IDs.
     pub domain: Option<String>,
 }
-
 /// Trigger definition returned by Torii trigger endpoints.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TriggerRecord {
@@ -2431,7 +2293,6 @@ pub struct TriggerRecord {
     /// Raw JSON payload returned by Torii.
     pub raw: json::Value,
 }
-
 impl TriggerRecord {
     fn from_json(value: &json::Value, context: &str) -> ToriiResult<Self> {
         let record = value
@@ -2466,7 +2327,6 @@ impl TriggerRecord {
         })
     }
 }
-
 /// Paginated trigger listing returned from `/v1/triggers`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TriggerListPage {
@@ -2475,7 +2335,6 @@ pub struct TriggerListPage {
     /// Total number of triggers reported by the endpoint.
     pub total: u64,
 }
-
 impl TriggerListPage {
     fn from_json(value: &json::Value) -> ToriiResult<Self> {
         let record = value
@@ -2499,7 +2358,6 @@ impl TriggerListPage {
         Ok(Self { items, total })
     }
 }
-
 /// Query parameters accepted by `/v1/triggers`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TriggerListQuery {
@@ -2512,11 +2370,9 @@ pub struct TriggerListQuery {
     /// Offset applied to the listing.
     pub offset: Option<u32>,
 }
-
 fn decode_error(context: &str, message: impl Into<String>) -> ToriiError {
     ToriiError::Decode(format!("{context}: {}", message.into()))
 }
-
 fn parse_required_string(record: &json::Map, keys: &[&str], context: &str) -> ToriiResult<String> {
     let value = pick_value(record, keys)
         .and_then(json::Value::as_str)
@@ -2527,7 +2383,6 @@ fn parse_required_string(record: &json::Map, keys: &[&str], context: &str) -> To
     }
     Ok(trimmed.to_owned())
 }
-
 fn parse_hex_field(record: &json::Map, keys: &[&str], context: &str) -> ToriiResult<String> {
     let value = parse_required_string(record, keys, context)?;
     if !is_hex(&value) {
@@ -2535,7 +2390,6 @@ fn parse_hex_field(record: &json::Map, keys: &[&str], context: &str) -> ToriiRes
     }
     Ok(value)
 }
-
 fn parse_optional_hex_field(
     record: &json::Map,
     keys: &[&str],
@@ -2559,7 +2413,6 @@ fn parse_optional_hex_field(
     }
     Ok(Some(string_value.to_owned()))
 }
-
 fn parse_u64_field(
     record: &json::Map,
     keys: &[&str],
@@ -2572,7 +2425,6 @@ fn parse_u64_field(
         None => Ok(default),
     }
 }
-
 fn parse_u64_value(value: &json::Value, allow_zero: bool, context: &str) -> ToriiResult<u64> {
     let parsed = match value {
         json::Value::Number(number) => number.as_u64(),
@@ -2585,7 +2437,6 @@ fn parse_u64_value(value: &json::Value, allow_zero: bool, context: &str) -> Tori
     }
     Ok(parsed)
 }
-
 fn parse_optional_u64_field(
     record: &json::Map,
     keys: &[&str],
@@ -2595,7 +2446,6 @@ fn parse_optional_u64_field(
         .map(|value| parse_u64_value(value, true, context))
         .transpose()
 }
-
 fn parse_pipeline_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeTransactionStatus>> {
     let record = value
         .as_object()
@@ -2615,7 +2465,6 @@ fn parse_pipeline_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeT
         &["block_height", "blockHeight"],
         "pipeline transaction status.block_height",
     )?;
-
     match kind.as_str() {
         "Committed" | "Applied" => Ok(Some(SmokeTransactionStatus::Committed(
             height.unwrap_or_default(),
@@ -2629,7 +2478,6 @@ fn parse_pipeline_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeT
         _ => Ok(None),
     }
 }
-
 fn parse_explorer_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeTransactionStatus>> {
     let record = value
         .as_object()
@@ -2653,7 +2501,6 @@ fn parse_explorer_smoke_status(value: &json::Value) -> ToriiResult<Option<SmokeT
         _ => Ok(None),
     }
 }
-
 fn smoke_rejection_reason(record: &json::Map) -> String {
     pick_value(record, &["rejection_reason", "rejectionReason", "reason"])
         .map(|value| {
@@ -2665,17 +2512,14 @@ fn smoke_rejection_reason(record: &json::Map) -> String {
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "rejected".to_owned())
 }
-
 fn pick_value<'a>(record: &'a json::Map, keys: &[&str]) -> Option<&'a json::Value> {
     keys.iter().find_map(|key| record.get(*key))
 }
-
 fn is_hex(value: &str) -> bool {
     !value.is_empty()
         && value.as_bytes().iter().all(|byte| byte.is_ascii_hexdigit())
         && value.len().is_multiple_of(2)
 }
-
 impl ToriiMetricsSnapshot {
     /// Parse a Prometheus plaintext payload into a structured snapshot.
     #[must_use]
@@ -2692,7 +2536,6 @@ impl ToriiMetricsSnapshot {
             state_tiered_cold_bytes: None,
             uptime_since_genesis_ms: None,
         };
-
         for line in body.lines() {
             if let Some((name, value)) = parse_scalar_metric(line) {
                 match name {
@@ -2713,10 +2556,8 @@ impl ToriiMetricsSnapshot {
                 }
             }
         }
-
         snapshot
     }
-
     /// Ratio (0–1) representing how full the consensus queue is.
     ///
     /// Returns `None` when either the depth or capacity gauges were missing or
@@ -2731,7 +2572,6 @@ impl ToriiMetricsSnapshot {
         }
         Some((depth / capacity).clamp(0.0, 1.0))
     }
-
     /// Boolean saturation flag derived from the exporter gauge.
     ///
     /// Returns `None` when the exporter did not emit the flag or reported an
@@ -2748,7 +2588,6 @@ impl ToriiMetricsSnapshot {
             None
         }
     }
-
     /// Percentage of entries that spilled into the cold tier (0–1).
     ///
     /// Returns `None` when the exporter lacks hot/cold counters or when the
@@ -2764,20 +2603,17 @@ impl ToriiMetricsSnapshot {
         Some((cold / total).clamp(0.0, 1.0))
     }
 }
-
 fn parse_scalar_metric(line: &str) -> Option<(&str, f64)> {
     let trimmed = line.trim();
     if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.contains('{') {
         return None;
     }
-
     let mut parts = trimmed.split_whitespace();
     let name = parts.next()?;
     let value = parts.next()?;
     let parsed = value.parse::<f64>().ok()?;
     Some((name, parsed))
 }
-
 /// Shared state published by [`ToriiStatusMonitor`].
 #[derive(Debug, Clone, Default)]
 pub struct StatusMonitorState {
@@ -2790,21 +2626,18 @@ pub struct StatusMonitorState {
     /// Number of consecutive failures observed since the last successful poll.
     pub consecutive_failures: u32,
 }
-
 impl StatusMonitorState {
     /// Whether the monitor produced at least one snapshot.
     #[must_use]
     pub fn has_snapshot(&self) -> bool {
         self.last_snapshot.is_some()
     }
-
     /// Compute how stale the last successful poll is relative to the current instant.
     #[must_use]
     pub fn last_success_age(&self) -> Option<Duration> {
         self.last_success_at.map(|instant| instant.elapsed())
     }
 }
-
 /// Shared state published by [`ToriiMetricsMonitor`].
 #[derive(Debug, Clone, Default)]
 pub struct MetricsMonitorState {
@@ -2817,21 +2650,18 @@ pub struct MetricsMonitorState {
     /// Number of consecutive failures observed since the last successful poll.
     pub consecutive_failures: u32,
 }
-
 impl MetricsMonitorState {
     /// Whether the monitor produced at least one snapshot.
     #[must_use]
     pub fn has_snapshot(&self) -> bool {
         self.last_snapshot.is_some()
     }
-
     /// Compute how stale the last successful poll is relative to the current instant.
     #[must_use]
     pub fn last_success_age(&self) -> Option<Duration> {
         self.last_success_at.map(|instant| instant.elapsed())
     }
 }
-
 /// Background task that polls Torii status on an interval and publishes snapshots via a watch channel.
 ///
 /// This fulfils the roadmap requirement for the MOCHI supervisor to stream `/status`
@@ -2842,7 +2672,6 @@ pub struct ToriiStatusMonitor {
     receiver: watch::Receiver<StatusMonitorState>,
     handle: JoinHandle<()>,
 }
-
 impl ToriiStatusMonitor {
     /// Spawn a monitor that polls the supplied fetcher at the configured interval.
     ///
@@ -2886,21 +2715,17 @@ impl ToriiStatusMonitor {
                 }
             }
         });
-
         Self { receiver, handle }
     }
-
     /// Subscribe to status monitor updates.
     pub fn subscribe(&self) -> watch::Receiver<StatusMonitorState> {
         self.receiver.clone()
     }
-
     /// Retrieve the latest published state without waiting for an update.
     #[must_use]
     pub fn latest(&self) -> StatusMonitorState {
         self.receiver.borrow().clone()
     }
-
     /// Stop the background polling task.
     pub fn stop(&self) {
         if !self.handle.is_finished() {
@@ -2908,13 +2733,11 @@ impl ToriiStatusMonitor {
         }
     }
 }
-
 impl Drop for ToriiStatusMonitor {
     fn drop(&mut self) {
         self.stop();
     }
 }
-
 /// Background task that polls Prometheus metrics on an interval and publishes structured snapshots.
 ///
 /// This extends the real-time visibility roadmap goal by wiring `/metrics` polling
@@ -2924,7 +2747,6 @@ pub struct ToriiMetricsMonitor {
     receiver: watch::Receiver<MetricsMonitorState>,
     handle: JoinHandle<()>,
 }
-
 impl ToriiMetricsMonitor {
     /// Spawn a monitor that polls the supplied fetcher at the configured interval.
     ///
@@ -2967,21 +2789,17 @@ impl ToriiMetricsMonitor {
                 }
             }
         });
-
         Self { receiver, handle }
     }
-
     /// Subscribe to metrics monitor updates.
     pub fn subscribe(&self) -> watch::Receiver<MetricsMonitorState> {
         self.receiver.clone()
     }
-
     /// Retrieve the latest published state without waiting for an update.
     #[must_use]
     pub fn latest(&self) -> MetricsMonitorState {
         self.receiver.borrow().clone()
     }
-
     /// Stop the background polling task.
     pub fn stop(&self) {
         if !self.handle.is_finished() {
@@ -2989,17 +2807,14 @@ impl ToriiMetricsMonitor {
         }
     }
 }
-
 impl Drop for ToriiMetricsMonitor {
     fn drop(&mut self) {
         self.stop();
     }
 }
-
 fn lag_to_usize(skipped: u64) -> usize {
     usize::try_from(skipped).unwrap_or(usize::MAX)
 }
-
 /// Decode a Norito payload, retrying with an aligned copy if the caller hands us
 /// misaligned bytes (a common artefact of mock HTTP servers and FFI bindings).
 ///
@@ -3014,7 +2829,6 @@ where
     T: for<'de> norito::core::NoritoDeserialize<'de>,
 {
     const MAX_PAD: usize = 64;
-
     let attempt = |slice: &[u8]| {
         catch_unwind(AssertUnwindSafe(|| {
             norito::decode_from_reader_with_limits(
@@ -3023,7 +2837,6 @@ where
             )
         }))
     };
-
     match attempt(bytes) {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(err)) => Err(ToriiError::Decode(err.to_string())),
@@ -3038,21 +2851,18 @@ where
                 })?;
                 buffer.resize(pad, 0);
                 buffer.extend_from_slice(bytes);
-
                 match attempt(&buffer[pad..]) {
                     Ok(Ok(value)) => return Ok(value),
                     Ok(Err(err)) => return Err(ToriiError::Decode(err.to_string())),
                     Err(_) => continue,
                 }
             }
-
             Err(ToriiError::Decode(
                 "Norito decode panicked on payload".into(),
             ))
         }
     }
 }
-
 /// Minimal Torii client supporting REST calls and WebSocket subscriptions.
 #[derive(Clone, Debug)]
 pub struct ToriiClient {
@@ -3064,14 +2874,12 @@ pub struct ToriiClient {
     status_state: Arc<Mutex<StatusState>>,
     default_headers: HeaderMap,
 }
-
 #[cfg(test)]
 pub(crate) fn test_network_id() -> NetworkId {
     "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0"
         .parse()
         .expect("test network id")
 }
-
 fn canonical_event_filters() -> Vec<EventFilterBox> {
     vec![
         EventFilterBox::Pipeline(TransactionEventFilter::default().into()),
@@ -3084,33 +2892,27 @@ fn canonical_event_filters() -> Vec<EventFilterBox> {
         EventFilterBox::TriggerCompleted(TriggerCompletedEventFilter::new()),
     ]
 }
-
 impl ToriiClient {
     /// Construct a client pointing at the supplied Torii HTTP base URL.
     pub fn new(base_url: impl AsRef<str>) -> ToriiResult<Self> {
         Self::builder(base_url)?.build()
     }
-
     /// Construct a client whose signed-query context is bound to one exact genesis lineage.
     pub fn new_for_network(base_url: impl AsRef<str>, network_id: NetworkId) -> ToriiResult<Self> {
         Self::builder(base_url)?.with_network_id(network_id).build()
     }
-
     /// Start constructing a [`ToriiClient`] with custom options.
     pub fn builder(base_url: impl AsRef<str>) -> ToriiResult<ToriiClientBuilder> {
         ToriiClientBuilder::new(base_url)
     }
-
     /// HTTP base URL used for REST calls (e.g., `http://127.0.0.1:8080`).
     pub fn base_url(&self) -> &str {
         self.http_base.as_str()
     }
-
     /// Return the immutable genesis lineage configured for signed queries.
     pub fn network_id(&self) -> Option<NetworkId> {
         self.network_id
     }
-
     fn require_network_id(&self) -> ToriiResult<NetworkId> {
         self.network_id.ok_or_else(|| {
             ToriiError::SignedQueryContext(
@@ -3118,7 +2920,6 @@ impl ToriiClient {
             )
         })
     }
-
     /// Build and sign a fresh one-shot query request for this client's network.
     pub fn sign_query(
         &self,
@@ -3127,7 +2928,6 @@ impl ToriiClient {
         key_pair: &KeyPair,
     ) -> ToriiResult<SignedQuery> {
         const QUERY_TTL_MS: u64 = 100_000;
-
         let network_id = self.require_network_id()?;
         let creation_time_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -3159,112 +2959,90 @@ impl ToriiClient {
             "OS RNG repeatedly returned an all-zero query nonce".to_owned(),
         ))
     }
-
     /// URL of the canonical `/v1/pipeline/transactions` endpoint.
     pub fn transaction_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint(torii_uri::TRANSACTION)
     }
-
     /// URL of the canonical `/v1/query` endpoint.
     pub fn query_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint(torii_uri::QUERY)
     }
-
     /// URL of the canonical `/v1/blocks/stream` WebSocket endpoint.
     pub fn block_stream_endpoint(&self) -> ToriiResult<Url> {
         self.ws_endpoint(torii_uri::BLOCKS_STREAM)
     }
-
     /// URL of the canonical `/v1/events/ws` WebSocket endpoint.
     pub fn events_stream_endpoint(&self) -> ToriiResult<Url> {
         self.ws_endpoint(torii_uri::SUBSCRIPTION)
     }
-
     /// URL of the `/status` endpoint.
     pub fn status_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("status")
     }
-
     /// URL of the `/v1/sumeragi/status` endpoint.
     pub fn sumeragi_status_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/sumeragi/status")
     }
-
     /// URL of the `/v1/sumeragi/diagnostics` endpoint.
     pub fn sumeragi_diagnostics_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/sumeragi/diagnostics")
     }
-
     /// URL of the `/metrics` endpoint.
     pub fn metrics_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("metrics")
     }
-
     /// URL of the native `/v1/mcp` endpoint.
     pub fn mcp_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/mcp")
     }
-
     /// URL of the `/v1/blocks` Explorer endpoint.
     pub fn blocks_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/blocks")
     }
-
     /// URL of the `/v1/blocks/{height}` Explorer endpoint.
     pub fn block_by_height_endpoint(&self, height: u64) -> ToriiResult<Url> {
         self.http_endpoint(&format!("v1/blocks/{height}"))
     }
-
     /// URL of the `/v1/explorer/accounts` endpoint.
     pub fn explorer_accounts_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/explorer/accounts")
     }
-
     /// URL of the `/v1/explorer/domains` endpoint.
     pub fn explorer_domains_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/explorer/domains")
     }
-
     /// URL of the `/v1/explorer/asset-definitions` endpoint.
     pub fn explorer_asset_definitions_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/explorer/asset-definitions")
     }
-
     /// URL of the `/v1/explorer/assets` endpoint.
     pub fn explorer_assets_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/explorer/assets")
     }
-
     /// URL of the `/v1/explorer/nfts` endpoint.
     pub fn explorer_nfts_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/explorer/nfts")
     }
-
     /// URL of the `/v1/explorer/rwas` endpoint.
     pub fn explorer_rwas_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/explorer/rwas")
     }
-
     /// URL of the `/v1/explorer/transactions/{hash}` endpoint.
     pub fn explorer_transaction_endpoint(&self, hash: &str) -> ToriiResult<Url> {
         self.http_endpoint(&format!("v1/explorer/transactions/{hash}"))
     }
-
     /// URL of the `/v1/pipeline/transactions/status` endpoint.
     pub fn pipeline_transaction_status_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint(torii_routes::pipeline::TRANSACTION_STATUS.path())
     }
-
     /// URL of the `/v1/triggers` endpoint.
     pub fn triggers_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/triggers")
     }
-
     /// URL of the `/v1/triggers/{id}` endpoint.
     pub fn trigger_record_endpoint(&self, trigger_id: &str) -> ToriiResult<Url> {
         self.http_endpoint(&format!("v1/triggers/{trigger_id}"))
     }
-
     /// Spawn a background task that polls `/status` on the supplied interval and publishes snapshots.
     pub fn spawn_status_monitor(&self, interval: Duration) -> ToriiStatusMonitor {
         let client = self.clone();
@@ -3273,7 +3051,6 @@ impl ToriiClient {
             async move { client.fetch_status_snapshot().await }
         })
     }
-
     /// Spawn a background task that polls `/metrics` on the supplied interval and publishes snapshots.
     pub fn spawn_metrics_monitor(&self, interval: Duration) -> ToriiMetricsMonitor {
         let client = self.clone();
@@ -3282,7 +3059,6 @@ impl ToriiClient {
             async move { client.fetch_metrics_snapshot().await }
         })
     }
-
     /// Probe `/status` until the peer responds or the timeout elapses.
     pub async fn wait_for_ready(
         &self,
@@ -3296,7 +3072,6 @@ impl ToriiClient {
         let deadline = start
             .checked_add(options.timeout)
             .unwrap_or_else(|| start + options.timeout);
-
         loop {
             match self.fetch_status_snapshot().await {
                 Ok(snapshot) => return Ok(snapshot),
@@ -3305,7 +3080,6 @@ impl ToriiClient {
                     if now >= deadline {
                         return Err(err);
                     }
-
                     let remaining = deadline.saturating_duration_since(now);
                     sleep(backoff.min(remaining)).await;
                     backoff = (backoff.saturating_mul(2)).min(MAX_BACKOFF);
@@ -3313,7 +3087,6 @@ impl ToriiClient {
             }
         }
     }
-
     /// Probe `/status` until the chain has committed its genesis block.
     ///
     /// A responsive height-zero peer is still bootstrapping and cannot yet
@@ -3332,14 +3105,12 @@ impl ToriiClient {
         let deadline = start
             .checked_add(options.timeout)
             .unwrap_or_else(|| start + options.timeout);
-
         loop {
             let poll_error = match self.fetch_status_snapshot().await {
                 Ok(snapshot) if snapshot.status.blocks > 0 => return Ok(snapshot),
                 Ok(_) => None,
                 Err(err) => Some(err),
             };
-
             let now = Instant::now();
             if now >= deadline {
                 return match poll_error {
@@ -3350,13 +3121,11 @@ impl ToriiClient {
                     }),
                 };
             }
-
             let remaining = deadline.saturating_duration_since(now);
             sleep(backoff.min(remaining)).await;
             backoff = (backoff.saturating_mul(2)).min(MAX_BACKOFF);
         }
     }
-
     /// Run a readiness smoke probe that waits for `/status`, submits a smoke transaction,
     /// and observes its commitment with retries/backoff.
     pub async fn wait_for_readiness_smoke(
@@ -3368,7 +3137,6 @@ impl ToriiClient {
                 "readiness smoke plan must include at least one transaction".to_owned(),
             ));
         }
-
         self.wait_for_genesis_commit(plan.status_options).await?;
         plan.renew_generated_transactions_if_needed(unix_time_now())
             .map_err(|err| {
@@ -3376,11 +3144,9 @@ impl ToriiClient {
                     "failed to renew readiness smoke transactions after genesis commitment: {err}"
                 ))
             })?;
-
         let attempts = plan.transactions.len();
         let started = Instant::now();
         let mut backoff = plan.backoff.max(Duration::from_millis(50)).min(MAX_BACKOFF);
-
         let mut cursor = ReadinessSmokeAttemptCursor::default();
         for attempt in 1..=attempts {
             let transaction_index = cursor.current_index();
@@ -3409,22 +3175,18 @@ impl ToriiClient {
                 Err(err) => return Err(err),
             }
         }
-
         Err(ToriiError::Timeout {
             context: format!("smoke readiness attempts exhausted ({attempts})"),
         })
     }
-
     /// URL of the canonical `/v1/configuration` endpoint.
     pub fn configuration_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint(torii_uri::CONFIGURATION)
     }
-
     /// URL of the read-only `/v1/nexus/lifecycle` status endpoint.
     pub fn nexus_lifecycle_endpoint(&self) -> ToriiResult<Url> {
         self.http_endpoint("v1/nexus/lifecycle")
     }
-
     /// Submit a Norito-encoded transaction to Torii.
     pub async fn submit_transaction(&self, payload: &[u8]) -> ToriiResult<()> {
         let url = self.transaction_endpoint()?;
@@ -3435,7 +3197,6 @@ impl ToriiClient {
             .body(payload.to_vec())
             .send()
             .await?;
-
         if !response.status().is_success() {
             let status = response.status();
             let reject_code = reject_code_from_headers(response.headers());
@@ -3449,10 +3210,8 @@ impl ToriiClient {
                 message,
             });
         }
-
         Ok(())
     }
-
     /// Submit a Norito-encoded query to Torii and return the raw response body.
     pub async fn submit_query(&self, payload: &[u8]) -> ToriiResult<Vec<u8>> {
         let url = self.query_endpoint()?;
@@ -3463,7 +3222,6 @@ impl ToriiClient {
             .body(payload.to_vec())
             .send()
             .await?;
-
         if response.status().is_success() {
             return read_bounded_response(response, MAX_QUERY_RESPONSE_BYTES, "query").await;
         }
@@ -3477,7 +3235,6 @@ impl ToriiClient {
             message,
         })
     }
-
     /// Submit a signed transaction using its canonical versioned Norito encoding.
     pub async fn submit_signed_transaction(
         &self,
@@ -3486,7 +3243,6 @@ impl ToriiClient {
         let bytes = transaction.encode_versioned();
         self.submit_transaction(&bytes).await
     }
-
     /// Submit a signed transaction and wait until local Torii reports it as committed.
     ///
     /// This helper is primarily intended for readiness smoke checks in local tooling.
@@ -3498,7 +3254,6 @@ impl ToriiClient {
         let tx_hash = transaction.hash();
         let tx_hash_str = tx_hash.to_string();
         let started = Instant::now();
-
         // Stream notifications are latency optimizations for this exact-hash
         // readiness check. Torii may temporarily throttle WebSocket handshakes
         // while all peers start; keep the canonical HTTP status reconciliation
@@ -3516,14 +3271,12 @@ impl ToriiClient {
         let mut block_rx = block_stream.as_ref().map(BlockStream::subscribe);
         let mut event_rx = events_stream.as_ref().map(EventStream::subscribe);
         let signed_bytes = transaction.encode_versioned();
-
         let mut admission_outcome_unknown = match self.submit_transaction(&signed_bytes).await {
             Ok(()) => false,
             Err(err) if err.confirms_existing_submission() => false,
             Err(err) if err.is_queue_plan_journal_outcome_unknown() => true,
             Err(err) => return Err(err),
         };
-
         let wait = async {
             let mut status_poll = tokio::time::interval(Duration::from_millis(250));
             let retry_start = tokio::time::Instant::now() + SMOKE_EXACT_RESUBMIT_DELAY;
@@ -3643,7 +3396,6 @@ impl ToriiClient {
                 }
             }
         };
-
         let result = match tokio::time::timeout(options.timeout, wait).await {
             Ok(result) => result,
             Err(_) if admission_outcome_unknown => Err(ToriiError::SmokeAdmissionOutcomeUnknown {
@@ -3653,10 +3405,8 @@ impl ToriiClient {
                 context: format!("smoke commit {tx_hash_str}"),
             }),
         };
-
         drop(block_stream);
         drop(events_stream);
-
         match result {
             Ok(height) => Ok(SmokeCommitSnapshot {
                 tx_hash,
@@ -3671,7 +3421,6 @@ impl ToriiClient {
             }),
         }
     }
-
     async fn fetch_smoke_transaction_status(
         &self,
         tx_hash: &str,
@@ -3681,7 +3430,6 @@ impl ToriiClient {
         }
         self.fetch_explorer_transaction_status(tx_hash).await
     }
-
     async fn fetch_pipeline_transaction_status(
         &self,
         tx_hash: &str,
@@ -3709,7 +3457,6 @@ impl ToriiClient {
         let value = decode_bounded_json_response(&bytes, "pipeline status")?;
         parse_pipeline_smoke_status(&value)
     }
-
     async fn fetch_explorer_transaction_status(
         &self,
         tx_hash: &str,
@@ -3736,13 +3483,11 @@ impl ToriiClient {
         let value = decode_bounded_json_response(&bytes, "Explorer status")?;
         parse_explorer_smoke_status(&value)
     }
-
     /// Submit a signed query and decode the response into a typed [`QueryOutput`].
     pub async fn execute_query(&self, query: &SignedQuery) -> ToriiResult<QueryOutput> {
         let response = self.submit_query(&query.encode_versioned()).await?;
         decode_norito_with_alignment(&response)
     }
-
     /// Fetch the Torii status snapshot.
     pub async fn fetch_status(&self) -> ToriiResult<TelemetryStatus> {
         let url = self.status_endpoint()?;
@@ -3752,7 +3497,6 @@ impl ToriiClient {
             .header(reqwest::header::ACCEPT, NORITO_MIME_TYPE)
             .send()
             .await?;
-
         if !response.status().is_success() {
             return Err(ToriiError::UnexpectedStatus {
                 status: response.status(),
@@ -3760,7 +3504,6 @@ impl ToriiClient {
                 message: None,
             });
         }
-
         let body = read_bounded_response(response, MAX_STATUS_RESPONSE_BYTES, "status").await?;
         decode_norito_with_alignment(body.as_ref()).or_else(|_| {
             norito::with_decode_limits(norito::canonical_decode_limits(body.len()), || {
@@ -3769,7 +3512,6 @@ impl ToriiClient {
             .map_err(|err| ToriiError::Decode(err.to_string()))
         })
     }
-
     /// Fetch a telemetry snapshot together with derived metrics.
     pub async fn fetch_status_snapshot(&self) -> ToriiResult<ToriiStatusSnapshot> {
         let status = self.fetch_status().await?;
@@ -3780,7 +3522,6 @@ impl ToriiClient {
         };
         Ok(ToriiStatusSnapshot::new(timestamp, status, metrics))
     }
-
     /// Fetch the exact reducer-owned Sumeragi v2 status snapshot.
     pub async fn fetch_sumeragi_status(&self) -> ToriiResult<SumeragiV2Status> {
         let url = self.sumeragi_status_endpoint()?;
@@ -3792,7 +3533,6 @@ impl ToriiClient {
             url,
         )?;
         let response = self.http.execute(request).await?;
-
         if !response.status().is_success() {
             return Err(ToriiError::UnexpectedStatus {
                 status: response.status(),
@@ -3800,7 +3540,6 @@ impl ToriiClient {
                 message: None,
             });
         }
-
         let body = read_bounded_sumeragi_response(response).await?;
         let status: SumeragiV2Status = decode_norito_with_alignment(&body)?;
         status
@@ -3808,7 +3547,6 @@ impl ToriiClient {
             .map_err(|error| ToriiError::Decode(error.to_string()))?;
         Ok(status)
     }
-
     /// Fetch non-authoritative Sumeragi pipeline, queue, election, and lane diagnostics.
     pub async fn fetch_sumeragi_diagnostics(&self) -> ToriiResult<SumeragiDiagnosticsStatus> {
         let url = self.sumeragi_diagnostics_endpoint()?;
@@ -3820,7 +3558,6 @@ impl ToriiClient {
             url,
         )?;
         let response = self.http.execute(request).await?;
-
         if !response.status().is_success() {
             return Err(ToriiError::UnexpectedStatus {
                 status: response.status(),
@@ -3828,7 +3565,6 @@ impl ToriiClient {
                 message: None,
             });
         }
-
         let body = read_bounded_sumeragi_response(response).await?;
         let diagnostics: SumeragiDiagnosticsStatus = decode_norito_with_alignment(&body)?;
         if let Some(npos) = diagnostics.npos {
@@ -3842,19 +3578,16 @@ impl ToriiClient {
         }
         Ok(diagnostics)
     }
-
     /// Fetch the Torii node configuration as a Norito JSON value.
     pub async fn fetch_configuration(&self) -> ToriiResult<json::Value> {
         let url = self.configuration_endpoint()?;
         self.fetch_json(url).await
     }
-
     /// Fetch the native MCP capabilities payload.
     pub async fn fetch_mcp_capabilities(&self) -> ToriiResult<json::Value> {
         let url = self.mcp_endpoint()?;
         self.fetch_json(url).await
     }
-
     /// Run the local Mochi MCP smoke sequence against `/v1/mcp`.
     pub async fn validate_local_mcp(&self) -> ToriiResult<LocalMcpProbeResult> {
         let capabilities = self.fetch_mcp_capabilities().await?;
@@ -3863,7 +3596,6 @@ impl ToriiClient {
         let tools = self.mcp_tools_list().await?;
         LocalMcpProbeResult::from_documents(&capabilities, &initialize, &tools)
     }
-
     /// Fetch and validate the exact current Nexus lane catalog commitment.
     pub async fn fetch_lane_lifecycle_status(&self) -> ToriiResult<LaneLifecycleStatusV1> {
         let url = self.nexus_lifecycle_endpoint()?;
@@ -3894,7 +3626,6 @@ impl ToriiClient {
             .map_err(|err| ToriiError::Decode(format!("invalid lane lifecycle status: {err}")))?;
         Ok(status)
     }
-
     /// Submit and wait for a consensus-replayed Nexus lane lifecycle transaction.
     ///
     /// The transaction is bound to the exact network configured on this client.
@@ -3932,7 +3663,6 @@ impl ToriiClient {
         let committed = self
             .submit_and_wait_for_commit(&transaction, options)
             .await?;
-
         // Block persistence precedes WSV publication. Do not report success to
         // storage-reset callers until the committed catalog and its fresh
         // incarnation root are visible through the state-generation snapshot.
@@ -3958,7 +3688,6 @@ impl ToriiClient {
             sleep(Duration::from_millis(100)).await;
         }
     }
-
     /// Fetch the exposed metrics payload as plain text (Prometheus format).
     pub async fn fetch_metrics(&self) -> ToriiResult<String> {
         let url = self.metrics_endpoint()?;
@@ -3974,13 +3703,11 @@ impl ToriiClient {
         String::from_utf8(body)
             .map_err(|_| ToriiError::Decode("metrics response is not UTF-8".to_owned()))
     }
-
     /// Fetch and parse the Prometheus metrics payload into a structured snapshot.
     pub async fn fetch_metrics_snapshot(&self) -> ToriiResult<ToriiMetricsSnapshot> {
         let body = self.fetch_metrics().await?;
         Ok(ToriiMetricsSnapshot::from_prometheus(Instant::now(), &body))
     }
-
     /// Fetch a single block from the Explorer API.
     pub async fn fetch_block(&self, height: u64) -> ToriiResult<Option<ExplorerBlockRecord>> {
         let url = self.block_by_height_endpoint(height)?;
@@ -3998,7 +3725,6 @@ impl ToriiClient {
             }),
         }
     }
-
     /// List blocks from the Explorer API using optional pagination parameters.
     pub async fn fetch_blocks_page(
         &self,
@@ -4027,7 +3753,6 @@ impl ToriiClient {
         let value = read_bounded_json_response(response, "Explorer blocks").await?;
         ExplorerBlocksPage::from_json(&value)
     }
-
     /// Fetch Explorer account summaries from `/v1/explorer/accounts`.
     pub async fn fetch_explorer_accounts_page(
         &self,
@@ -4068,7 +3793,6 @@ impl ToriiClient {
         let value = read_bounded_json_response(response, "Explorer accounts").await?;
         ExplorerAccountsPage::from_json(&value)
     }
-
     /// Fetch Explorer domain summaries from `/v1/explorer/domains`.
     pub async fn fetch_explorer_domains_page(
         &self,
@@ -4105,7 +3829,6 @@ impl ToriiClient {
         let value = read_bounded_json_response(response, "Explorer domains").await?;
         ExplorerDomainsPage::from_json(&value)
     }
-
     /// Fetch Explorer asset definitions from `/v1/explorer/asset-definitions`.
     pub async fn fetch_explorer_asset_definitions_page(
         &self,
@@ -4150,7 +3873,6 @@ impl ToriiClient {
         let value = read_bounded_json_response(response, "Explorer asset definitions").await?;
         ExplorerAssetDefinitionsPage::from_json(&value)
     }
-
     /// Fetch Explorer asset summaries from `/v1/explorer/assets`.
     pub async fn fetch_explorer_assets_page(
         &self,
@@ -4195,7 +3917,6 @@ impl ToriiClient {
         let value = read_bounded_json_response(response, "Explorer assets").await?;
         ExplorerAssetsPage::from_json(&value)
     }
-
     /// Fetch Explorer NFT summaries from `/v1/explorer/nfts`.
     pub async fn fetch_explorer_nfts_page(
         &self,
@@ -4240,7 +3961,6 @@ impl ToriiClient {
         let value = read_bounded_json_response(response, "Explorer NFTs").await?;
         ExplorerNftsPage::from_json(&value)
     }
-
     /// Fetch Explorer RWA summaries from `/v1/explorer/rwas`.
     pub async fn fetch_explorer_rwas_page(
         &self,
@@ -4285,7 +4005,6 @@ impl ToriiClient {
         let value = read_bounded_json_response(response, "Explorer RWAs").await?;
         ExplorerRwasPage::from_json(&value)
     }
-
     /// List triggers exposed by `/v1/triggers`.
     pub async fn list_triggers(&self, query: TriggerListQuery) -> ToriiResult<TriggerListPage> {
         let url = self.triggers_endpoint()?;
@@ -4327,7 +4046,6 @@ impl ToriiClient {
         let value = read_bounded_json_response(response, "trigger list").await?;
         TriggerListPage::from_json(&value)
     }
-
     /// Fetch a single trigger definition.
     pub async fn get_trigger(&self, trigger_id: &str) -> ToriiResult<Option<TriggerRecord>> {
         let url = self.trigger_record_endpoint(trigger_id)?;
@@ -4346,7 +4064,6 @@ impl ToriiClient {
             }),
         }
     }
-
     /// Register or update a trigger definition.
     pub async fn register_trigger(&self, trigger: &json::Value) -> ToriiResult<TriggerRecord> {
         let url = self.triggers_endpoint()?;
@@ -4369,7 +4086,6 @@ impl ToriiClient {
         let value = read_bounded_json_response(response, "trigger registration").await?;
         TriggerRecord::from_json(&value, "trigger registration response")
     }
-
     /// Delete a trigger definition by id.
     pub async fn delete_trigger(&self, trigger_id: &str) -> ToriiResult<bool> {
         let url = self.trigger_record_endpoint(trigger_id)?;
@@ -4384,22 +4100,18 @@ impl ToriiClient {
             }),
         }
     }
-
     /// Establish a canonical WebSocket connection to `/v1/blocks/stream`.
     pub async fn connect_block_stream(&self) -> ToriiResult<ToriiWebSocket> {
         self.connect_ws(self.block_stream_endpoint()?).await
     }
-
     /// Establish a canonical WebSocket connection to `/v1/events/ws`.
     pub async fn connect_events_stream(&self) -> ToriiResult<ToriiWebSocket> {
         self.connect_ws(self.events_stream_endpoint()?).await
     }
-
     /// Subscribe to blocks from height one on `/v1/blocks/stream`.
     pub async fn subscribe_block_stream(&self) -> ToriiResult<WsSubscription> {
         self.subscribe_block_stream_from(NonZeroU64::MIN).await
     }
-
     /// Subscribe to blocks from the requested one-indexed height.
     pub async fn subscribe_block_stream_from(
         &self,
@@ -4411,7 +4123,6 @@ impl ToriiClient {
         self.subscribe_ws(self.block_stream_endpoint()?, first_message)
             .await
     }
-
     /// Subscribe to all Explorer-facing event categories on `/v1/events/ws`.
     pub async fn subscribe_events_stream(&self) -> ToriiResult<WsSubscription> {
         let request = EventSubscriptionRequest::new(canonical_event_filters());
@@ -4420,31 +4131,26 @@ impl ToriiClient {
         self.subscribe_ws(self.events_stream_endpoint()?, first_message)
             .await
     }
-
     /// Subscribe to `/v1/blocks/stream` and publish decoded [`SignedBlock`] events.
     pub async fn block_stream(&self) -> ToriiResult<BlockStream> {
         let subscription = self.subscribe_block_stream().await?;
         Ok(BlockStream::new(subscription))
     }
-
     /// Subscribe to `/v1/events/ws` and publish decoded [`EventBox`] events.
     pub async fn events_stream(&self) -> ToriiResult<EventStream> {
         let subscription = self.subscribe_events_stream().await?;
         Ok(EventStream::new(subscription))
     }
-
     fn http_endpoint(&self, path: &str) -> ToriiResult<Url> {
         self.http_base
             .join(path.trim_start_matches('/'))
             .map_err(ToriiError::InvalidEndpoint)
     }
-
     fn ws_endpoint(&self, path: &str) -> ToriiResult<Url> {
         self.ws_base
             .join(path.trim_start_matches('/'))
             .map_err(ToriiError::InvalidEndpoint)
     }
-
     async fn fetch_json(&self, url: Url) -> ToriiResult<json::Value> {
         let response = self.http.get(url).send().await?;
         if !response.status().is_success() {
@@ -4452,7 +4158,6 @@ impl ToriiClient {
         }
         read_bounded_json_response(response, "JSON API").await
     }
-
     async fn post_json(&self, url: Url, payload: &json::Value) -> ToriiResult<json::Value> {
         let body = json::to_vec(payload).map_err(|err| ToriiError::Decode(err.to_string()))?;
         let response = self
@@ -4467,7 +4172,6 @@ impl ToriiClient {
         }
         read_bounded_json_response(response, "JSON API").await
     }
-
     async fn post_notification(&self, url: Url, payload: &json::Value) -> ToriiResult<()> {
         let body = json::to_vec(payload).map_err(|err| ToriiError::Decode(err.to_string()))?;
         let response = self
@@ -4489,7 +4193,6 @@ impl ToriiClient {
         }
         Ok(())
     }
-
     async fn mcp_initialize(&self) -> ToriiResult<json::Value> {
         let url = self.mcp_endpoint()?;
         let payload = json!({
@@ -4507,7 +4210,6 @@ impl ToriiClient {
         });
         self.post_json(url, &payload).await
     }
-
     async fn mcp_initialized(&self) -> ToriiResult<()> {
         let url = self.mcp_endpoint()?;
         let payload = json!({
@@ -4516,7 +4218,6 @@ impl ToriiClient {
         });
         self.post_notification(url, &payload).await
     }
-
     async fn mcp_tools_list(&self) -> ToriiResult<json::Value> {
         let url = self.mcp_endpoint()?;
         let payload = json!({
@@ -4527,7 +4228,6 @@ impl ToriiClient {
         });
         self.post_json(url, &payload).await
     }
-
     async fn connect_ws(&self, url: Url) -> ToriiResult<ToriiWebSocket> {
         let mut request = url
             .to_string()
@@ -4557,7 +4257,6 @@ impl ToriiClient {
         }
         Ok(stream)
     }
-
     async fn subscribe_ws(
         &self,
         endpoint: Url,
@@ -4567,7 +4266,6 @@ impl ToriiClient {
         stream.send(Message::Binary(first_message.into())).await?;
         let (sender, _receiver) = broadcast::channel(128);
         let forwarder = sender.clone();
-
         let handle: JoinHandle<()> = tokio::spawn(async move {
             let mut closed_emitted = false;
             while let Some(message) = stream.next().await {
@@ -4593,19 +4291,15 @@ impl ToriiClient {
                     }
                 }
             }
-
             if !closed_emitted {
                 let _ = forwarder.send(WsFrame::Closed);
             }
         });
-
         Ok(WsSubscription { sender, handle })
     }
 }
-
 #[cfg(test)]
 include!("torii/commit_wait_test_support.rs");
-
 /// Broadcast-backed WebSocket subscription.
 #[derive(Debug)]
 pub struct WsSubscription {
@@ -4614,32 +4308,27 @@ pub struct WsSubscription {
     /// Join handle for the forwarding task.
     handle: JoinHandle<()>,
 }
-
 impl WsSubscription {
     /// Acquire a receiver that yields binary frames pushed by the subscription.
     pub fn subscribe(&self) -> broadcast::Receiver<WsFrame> {
         self.sender.subscribe()
     }
-
     /// Abort the underlying forwarding task.
     pub fn abort(&self) {
         if !self.handle.is_finished() {
             self.handle.abort();
         }
     }
-
     /// Check if the forwarding task has completed.
     pub fn is_finished(&self) -> bool {
         self.handle.is_finished()
     }
 }
-
 impl Drop for WsSubscription {
     fn drop(&mut self) {
         self.abort();
     }
 }
-
 /// Stage of decoding when a failure occurred.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockDecodeStage {
@@ -4650,7 +4339,6 @@ pub enum BlockDecodeStage {
     /// Underlying WebSocket stream aborted.
     Stream,
 }
-
 /// Details about a block stream decoding failure.
 #[derive(Debug, Clone)]
 pub struct BlockStreamDecodeError {
@@ -4661,7 +4349,6 @@ pub struct BlockStreamDecodeError {
     /// Human-readable error description.
     pub message: String,
 }
-
 impl BlockStreamDecodeError {
     fn new(stage: BlockDecodeStage, raw_len: usize, message: impl Into<String>) -> Self {
         Self {
@@ -4671,7 +4358,6 @@ impl BlockStreamDecodeError {
         }
     }
 }
-
 /// Lightweight view over fields commonly displayed for blocks in the UI.
 #[derive(Debug, Clone)]
 pub struct BlockSummary {
@@ -4694,7 +4380,6 @@ pub struct BlockSummary {
     /// Whether the block is the genesis block.
     pub is_genesis: bool,
 }
-
 impl BlockSummary {
     fn from_block(block: &SignedBlock) -> Self {
         let header = block.header();
@@ -4726,7 +4411,6 @@ impl BlockSummary {
         }
     }
 }
-
 /// Events emitted by the decoded block stream helper.
 #[derive(Debug, Clone)]
 pub enum BlockStreamEvent {
@@ -4748,7 +4432,6 @@ pub enum BlockStreamEvent {
     /// Stream closed cleanly.
     Closed,
 }
-
 /// High-level helper that consumes WebSocket frames and publishes decoded blocks.
 pub struct BlockStream {
     subscription: WsSubscription,
@@ -4756,14 +4439,12 @@ pub struct BlockStream {
     initial_receiver: std::sync::Mutex<Option<broadcast::Receiver<BlockStreamEvent>>>,
     decode_handle: JoinHandle<()>,
 }
-
 impl BlockStream {
     fn new(subscription: WsSubscription) -> Self {
         let mut receiver = subscription.subscribe();
         let (sender, _) = broadcast::channel(128);
         let initial_receiver = sender.subscribe();
         let forwarder = sender.clone();
-
         let decode_handle = tokio::spawn(async move {
             loop {
                 match receiver.recv().await {
@@ -4826,7 +4507,6 @@ impl BlockStream {
                 }
             }
         });
-
         Self {
             subscription,
             sender,
@@ -4834,7 +4514,6 @@ impl BlockStream {
             decode_handle,
         }
     }
-
     /// Acquire a receiver for decoded block events.
     pub fn subscribe(&self) -> broadcast::Receiver<BlockStreamEvent> {
         self.initial_receiver
@@ -4843,7 +4522,6 @@ impl BlockStream {
             .take()
             .unwrap_or_else(|| self.sender.subscribe())
     }
-
     /// Abort both the raw WebSocket subscription and decoder task.
     pub fn abort(&self) {
         self.subscription.abort();
@@ -4851,19 +4529,16 @@ impl BlockStream {
             self.decode_handle.abort();
         }
     }
-
     /// Check whether the underlying tasks finished.
     pub fn is_finished(&self) -> bool {
         self.subscription.is_finished() && self.decode_handle.is_finished()
     }
 }
-
 impl Drop for BlockStream {
     fn drop(&mut self) {
         self.abort();
     }
 }
-
 /// Categories of events emitted by Torii.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventCategory {
@@ -4878,7 +4553,6 @@ pub enum EventCategory {
     /// Trigger completion event.
     TriggerCompleted,
 }
-
 impl EventCategory {
     pub fn label(self) -> &'static str {
         match self {
@@ -4890,7 +4564,6 @@ impl EventCategory {
         }
     }
 }
-
 /// Lightweight summary of a decoded Torii event.
 #[derive(Debug, Clone)]
 pub struct EventSummary {
@@ -4901,7 +4574,6 @@ pub struct EventSummary {
     /// Optional human-readable detail string.
     pub detail: Option<String>,
 }
-
 impl EventSummary {
     fn from_event(event: &EventBox) -> Self {
         match event {
@@ -4953,7 +4625,6 @@ impl EventSummary {
         }
     }
 }
-
 fn pipeline_summary(event: &PipelineEventBox) -> (String, Option<String>) {
     match event {
         PipelineEventBox::Transaction(transaction) => {
@@ -4982,7 +4653,6 @@ fn pipeline_summary(event: &PipelineEventBox) -> (String, Option<String>) {
         PipelineEventBox::Witness(witness) => ("Witness".to_owned(), Some(format!("{witness:?}"))),
     }
 }
-
 #[allow(unreachable_patterns)]
 fn data_summary(event: &DataEvent) -> (String, String) {
     match event {
@@ -5007,14 +4677,12 @@ fn data_summary(event: &DataEvent) -> (String, String) {
         _ => ("Data".to_owned(), format!("{event:?}")),
     }
 }
-
 fn peer_event_summary(event: &PeerEvent) -> (String, String) {
     match event {
         PeerEvent::Added(peer) => ("Peer added".to_owned(), format!("{peer}")),
         PeerEvent::Removed(peer) => ("Peer removed".to_owned(), format!("{peer}")),
     }
 }
-
 fn domain_event_summary(event: &DomainEvent) -> (String, String) {
     match event {
         DomainEvent::Created(domain) => ("Domain created".to_owned(), domain.id().to_string()),
@@ -5039,7 +4707,6 @@ fn domain_event_summary(event: &DomainEvent) -> (String, String) {
         other => ("Domain event".to_owned(), format!("{other:?}")),
     }
 }
-
 fn account_event_summary(event: &AccountEvent) -> (String, String) {
     match event {
         AccountEvent::Created(account) => (
@@ -5083,7 +4750,6 @@ fn account_event_summary(event: &AccountEvent) -> (String, String) {
         AccountEvent::Repo(repo_event) => repo_account_event_summary(repo_event),
     }
 }
-
 fn account_recovery_event_summary(event: &AccountRecoveryEvent) -> (String, String) {
     match event {
         AccountRecoveryEvent::PolicySet(payload) => (
@@ -5149,7 +4815,6 @@ fn account_recovery_event_summary(event: &AccountRecoveryEvent) -> (String, Stri
         ),
     }
 }
-
 fn account_alias_detail(alias: &iroha_data_model::account::AccountAlias) -> String {
     let domain = alias
         .domain
@@ -5161,7 +4826,6 @@ fn account_alias_detail(alias: &iroha_data_model::account::AccountAlias) -> Stri
         alias.label, domain, alias.dataspace
     )
 }
-
 fn repo_account_event_summary(event: &RepoAccountEvent) -> (String, String) {
     match event {
         RepoAccountEvent::Initiated(payload) => (
@@ -5193,7 +4857,6 @@ fn repo_account_event_summary(event: &RepoAccountEvent) -> (String, String) {
         ),
     }
 }
-
 fn asset_event_summary(event: &AssetEvent) -> (String, String) {
     match event {
         AssetEvent::Created(asset) => ("Asset created".to_owned(), asset.id().to_string()),
@@ -5237,7 +4900,6 @@ fn asset_event_summary(event: &AssetEvent) -> (String, String) {
         ),
     }
 }
-
 fn asset_definition_event_summary(event: &AssetDefinitionEvent) -> (String, String) {
     match event {
         AssetDefinitionEvent::Created(definition) => (
@@ -5273,7 +4935,6 @@ fn asset_definition_event_summary(event: &AssetDefinitionEvent) -> (String, Stri
         ),
     }
 }
-
 fn nft_event_summary(event: &NftEvent) -> (String, String) {
     match event {
         NftEvent::Created(nft) => ("NFT created".to_owned(), nft.id().to_string()),
@@ -5289,7 +4950,6 @@ fn nft_event_summary(event: &NftEvent) -> (String, String) {
         NftEvent::OwnerChanged(change) => ("NFT owner changed".to_owned(), format!("{change:?}")),
     }
 }
-
 fn sorafs_event_summary(event: &sorafs::SorafsGatewayEvent) -> (String, String) {
     match event {
         sorafs::SorafsGatewayEvent::GarViolation(payload) => {
@@ -5320,7 +4980,6 @@ fn sorafs_event_summary(event: &sorafs::SorafsGatewayEvent) -> (String, String) 
         ),
     }
 }
-
 /// Stage of decoding when a Torii event failure occurred.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventDecodeStage {
@@ -5331,7 +4990,6 @@ pub enum EventDecodeStage {
     /// Underlying WebSocket stream aborted.
     Stream,
 }
-
 /// Details about a Torii event stream decoding failure.
 #[derive(Debug, Clone)]
 pub struct EventStreamDecodeError {
@@ -5342,7 +5000,6 @@ pub struct EventStreamDecodeError {
     /// Human-readable error description.
     pub message: String,
 }
-
 impl EventStreamDecodeError {
     fn new(stage: EventDecodeStage, raw_len: usize, message: impl Into<String>) -> Self {
         Self {
@@ -5352,7 +5009,6 @@ impl EventStreamDecodeError {
         }
     }
 }
-
 /// Events emitted by the decoded Torii event stream helper.
 #[derive(Debug, Clone)]
 pub enum EventStreamEvent {
@@ -5374,7 +5030,6 @@ pub enum EventStreamEvent {
     /// Stream closed cleanly.
     Closed,
 }
-
 /// High-level helper that consumes WebSocket frames and publishes decoded events.
 pub struct EventStream {
     subscription: WsSubscription,
@@ -5382,11 +5037,8 @@ pub struct EventStream {
     initial_receiver: std::sync::Mutex<Option<broadcast::Receiver<EventStreamEvent>>>,
     decode_handle: JoinHandle<()>,
 }
-
 include!("torii/event_stream_runtime.rs");
-
 include!("torii/managed_streams.rs");
-
 #[cfg(test)]
 mod tests {
     include!("torii/tests_part1.rs");

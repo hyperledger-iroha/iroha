@@ -85,7 +85,6 @@ pub mod json_utils {
     fn log_failed(context: &str, err: &json::Error) {
         iroha_logger::error!(%context, ?err, "Torii JSON serialization failed");
     }
-
     /// Convert any [`JsonSerialize`] value into a [`Value`].
     #[inline]
     #[must_use]
@@ -98,7 +97,6 @@ pub mod json_utils {
             }
         }
     }
-
     /// Build a JSON array from an iterator of serializable values.
     #[inline]
     #[must_use]
@@ -115,13 +113,11 @@ pub mod json_utils {
             }
         }
     }
-
     /// Key/value helper accepted by [`json_object`].
     pub trait JsonPair {
         /// Convert the pair into an owned `(String, Value)` tuple.
         fn into_pair(self) -> (String, Value);
     }
-
     impl<K, V> JsonPair for (K, V)
     where
         K: Into<String>,
@@ -132,7 +128,6 @@ pub mod json_utils {
             (key.into(), json_value(&value))
         }
     }
-
     /// Build a JSON object from key/value pairs.
     #[inline]
     #[must_use]
@@ -150,7 +145,6 @@ pub mod json_utils {
             }
         }
     }
-
     /// Convert a key and serializable value into a `(String, Value)` pair for [`json_object`].
     #[inline]
     #[must_use]
@@ -383,7 +377,6 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use utils::extractors::JsonOrNoritoVersioned;
 
 const TORII_TCP_LISTEN_BACKLOG: i32 = 1024;
-
 fn bind_reusable_tcp_listener(addr: std::net::SocketAddr) -> std::io::Result<TcpListener> {
     use socket2::{Domain, Protocol, Socket, Type};
 
@@ -399,7 +392,6 @@ fn bind_reusable_tcp_listener(addr: std::net::SocketAddr) -> std::io::Result<Tcp
     socket.listen(TORII_TCP_LISTEN_BACKLOG)?;
     TcpListener::from_std(socket.into())
 }
-
 fn bind_reusable_tcp_listener_from_addrs<I>(addrs: I) -> std::io::Result<TcpListener>
 where
     I: IntoIterator<Item = std::net::SocketAddr>,
@@ -411,7 +403,6 @@ where
             Err(err) => last_error = Some(err),
         }
     }
-
     Err(last_error.unwrap_or_else(|| {
         std::io::Error::new(
             std::io::ErrorKind::AddrNotAvailable,
@@ -419,7 +410,6 @@ where
         )
     }))
 }
-
 async fn bind_torii_tcp_listener(address: SocketAddr) -> std::io::Result<TcpListener> {
     match address {
         SocketAddr::Ipv4(v) => bind_reusable_tcp_listener(std::net::SocketAddr::V4(v.into())),
@@ -429,13 +419,11 @@ async fn bind_torii_tcp_listener(address: SocketAddr) -> std::io::Result<TcpList
         }
     }
 }
-
 #[derive(Debug)]
 struct SocketAdmissionState {
     active: usize,
     active_by_ip: HashMap<IpAddr, usize>,
 }
-
 /// Listener-level connection admission enforced before any HTTP parsing.
 #[derive(Debug)]
 struct SocketAdmission {
@@ -443,7 +431,6 @@ struct SocketAdmission {
     max_connections_per_ip: usize,
     state: parking_lot::Mutex<SocketAdmissionState>,
 }
-
 impl SocketAdmission {
     fn new(max_connections: NonZeroUsize, max_connections_per_ip: NonZeroUsize) -> Arc<Self> {
         Arc::new(Self {
@@ -455,7 +442,6 @@ impl SocketAdmission {
             }),
         })
     }
-
     fn try_acquire(self: &Arc<Self>, remote_ip: IpAddr) -> Option<SocketPermit> {
         let remote_ip = canonical_socket_ip(remote_ip);
         let mut state = self.state.lock();
@@ -463,7 +449,6 @@ impl SocketAdmission {
         if state.active >= self.max_connections || active_for_ip >= self.max_connections_per_ip {
             return None;
         }
-
         state.active = state
             .active
             .checked_add(1)
@@ -475,27 +460,23 @@ impl SocketAdmission {
                 .expect("Torii per-IP socket count overflow"),
         );
         drop(state);
-
         Some(SocketPermit {
             admission: Arc::clone(self),
             remote_ip,
         })
     }
 }
-
 fn canonical_socket_ip(ip: IpAddr) -> IpAddr {
     match ip {
         IpAddr::V4(ip) => IpAddr::V4(ip),
         IpAddr::V6(ip) => ip.to_ipv4_mapped().map_or(IpAddr::V6(ip), IpAddr::V4),
     }
 }
-
 #[derive(Debug)]
 struct SocketPermit {
     admission: Arc<SocketAdmission>,
     remote_ip: IpAddr,
 }
-
 impl Drop for SocketPermit {
     fn drop(&mut self) {
         let mut state = self.admission.state.lock();
@@ -515,10 +496,8 @@ impl Drop for SocketPermit {
         }
     }
 }
-
 /// Safe Tokio-to-Hyper I/O adapter used by both accepted and proxied sockets.
 struct HyperTokioIo<T>(T);
-
 impl<T> hyper::rt::Read for HyperTokioIo<T>
 where
     T: AsyncRead + Unpin,
@@ -538,7 +517,6 @@ where
         std::task::Poll::Ready(Ok(()))
     }
 }
-
 impl<T> hyper::rt::Write for HyperTokioIo<T>
 where
     T: AsyncWrite + Unpin,
@@ -550,25 +528,21 @@ where
     ) -> std::task::Poll<std::io::Result<usize>> {
         AsyncWrite::poll_write(std::pin::Pin::new(&mut self.0), cx, buf)
     }
-
     fn poll_flush(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         AsyncWrite::poll_flush(std::pin::Pin::new(&mut self.0), cx)
     }
-
     fn poll_shutdown(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
         AsyncWrite::poll_shutdown(std::pin::Pin::new(&mut self.0), cx)
     }
-
     fn is_write_vectored(&self) -> bool {
         AsyncWrite::is_write_vectored(&self.0)
     }
-
     fn poll_write_vectored(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -577,12 +551,9 @@ where
         AsyncWrite::poll_write_vectored(std::pin::Pin::new(&mut self.0), cx, bufs)
     }
 }
-
 struct ToriiTokioSleep(std::pin::Pin<Box<Sleep>>);
-
 impl core::future::Future for ToriiTokioSleep {
     type Output = ();
-
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -590,28 +561,22 @@ impl core::future::Future for ToriiTokioSleep {
         self.0.as_mut().poll(cx)
     }
 }
-
 impl hyper::rt::Sleep for ToriiTokioSleep {}
-
 #[derive(Clone, Copy, Debug)]
 struct ToriiTokioTimer;
-
 impl hyper::rt::Timer for ToriiTokioTimer {
     fn sleep(&self, duration: Duration) -> std::pin::Pin<Box<dyn hyper::rt::Sleep>> {
         Box::pin(ToriiTokioSleep(Box::pin(tokio::time::sleep(duration))))
     }
-
     fn sleep_until(&self, deadline: Instant) -> std::pin::Pin<Box<dyn hyper::rt::Sleep>> {
         Box::pin(ToriiTokioSleep(Box::pin(tokio::time::sleep_until(
             deadline.into(),
         ))))
     }
-
     fn now(&self) -> Instant {
         tokio::time::Instant::now().into()
     }
 }
-
 /// Tokio I/O wrapper that terminates a connection when socket writes stop making progress.
 struct WriteTimeoutIo<T, L = ()> {
     inner: T,
@@ -619,14 +584,12 @@ struct WriteTimeoutIo<T, L = ()> {
     pending_write_timeout: Option<std::pin::Pin<Box<Sleep>>>,
     _lease: L,
 }
-
 impl<T> WriteTimeoutIo<T> {
     #[cfg(test)]
     fn new(inner: T, write_timeout: Duration) -> Self {
         Self::with_lease(inner, write_timeout, ())
     }
 }
-
 impl<T, L> WriteTimeoutIo<T, L> {
     fn with_lease(inner: T, write_timeout: Duration, lease: L) -> Self {
         Self {
@@ -636,11 +599,9 @@ impl<T, L> WriteTimeoutIo<T, L> {
             _lease: lease,
         }
     }
-
     fn clear_write_timeout(&mut self) {
         self.pending_write_timeout = None;
     }
-
     fn poll_write_timeout(
         &mut self,
         cx: &mut std::task::Context<'_>,
@@ -657,7 +618,6 @@ impl<T, L> WriteTimeoutIo<T, L> {
         std::task::Poll::Pending
     }
 }
-
 impl<T, L> AsyncRead for WriteTimeoutIo<T, L>
 where
     T: AsyncRead + Unpin,
@@ -672,7 +632,6 @@ where
         std::pin::Pin::new(&mut this.inner).poll_read(cx, buf)
     }
 }
-
 impl<T, L> AsyncWrite for WriteTimeoutIo<T, L>
 where
     T: AsyncWrite + Unpin,
@@ -697,7 +656,6 @@ where
             },
         }
     }
-
     fn poll_flush(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -711,7 +669,6 @@ where
             std::task::Poll::Pending => this.poll_write_timeout(cx),
         }
     }
-
     fn poll_shutdown(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -725,11 +682,9 @@ where
             std::task::Poll::Pending => this.poll_write_timeout(cx),
         }
     }
-
     fn is_write_vectored(&self) -> bool {
         self.inner.is_write_vectored()
     }
-
     fn poll_write_vectored(
         self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -750,7 +705,6 @@ where
         }
     }
 }
-
 fn validate_http_transport_config(config: ToriiHttpTransport) -> std::io::Result<usize> {
     if config.max_connections_per_ip > config.max_connections {
         return Err(std::io::Error::new(
@@ -784,7 +738,6 @@ fn validate_http_transport_config(config: ToriiHttpTransport) -> std::io::Result
     }
     Ok(max_header_bytes)
 }
-
 async fn serve_torii_http_connection(
     stream: TcpStream,
     remote: std::net::SocketAddr,
@@ -809,7 +762,6 @@ async fn serve_torii_http_connection(
             router.oneshot(request).await
         }
     });
-
     let mut http = hyper::server::conn::http1::Builder::new();
     http.timer(ToriiTokioTimer)
         .header_read_timeout(config.header_read_timeout)
@@ -817,7 +769,6 @@ async fn serve_torii_http_connection(
         .max_buf_size(max_header_bytes);
     let connection = http.serve_connection(io, service).with_upgrades();
     tokio::pin!(connection);
-
     tokio::select! {
         result = connection.as_mut() => result,
         () = shutdown_signal.receive() => {
@@ -826,7 +777,6 @@ async fn serve_torii_http_connection(
         }
     }
 }
-
 fn observe_torii_connection_completion(
     completion: Result<(std::net::SocketAddr, Result<(), hyper::Error>), JoinError>,
 ) -> std::io::Result<()> {
@@ -846,7 +796,6 @@ fn observe_torii_connection_completion(
         ))),
     }
 }
-
 async fn serve_torii_http(
     listener: TcpListener,
     router: Router,
@@ -856,7 +805,6 @@ async fn serve_torii_http(
     let max_header_bytes = validate_http_transport_config(config)?;
     let admission = SocketAdmission::new(config.max_connections, config.max_connections_per_ip);
     let mut connections = JoinSet::new();
-
     enum ServerEvent {
         Shutdown,
         Accepted(std::io::Result<(TcpStream, std::net::SocketAddr)>),
@@ -864,7 +812,6 @@ async fn serve_torii_http(
             Option<Result<(std::net::SocketAddr, Result<(), hyper::Error>), JoinError>>,
         ),
     }
-
     loop {
         let has_connections = !connections.is_empty();
         let event = tokio::select! {
@@ -875,7 +822,6 @@ async fn serve_torii_http(
             }
             accepted = listener.accept() => ServerEvent::Accepted(accepted),
         };
-
         match event {
             ServerEvent::Shutdown => break,
             ServerEvent::ConnectionFinished(Some(completion)) => {
@@ -913,14 +859,12 @@ async fn serve_torii_http(
             }
         }
     }
-
     drop(listener);
     while let Some(completion) = connections.join_next().await {
         observe_torii_connection_completion(completion)?;
     }
     Ok(())
 }
-
 #[cfg(test)]
 #[path = "tests/lib_tcp_listener_bind.rs"]
 mod tcp_listener_bind_tests;
@@ -934,12 +878,10 @@ use crate::{
     },
     routing::conversion_error,
 };
-
 /// Norito JSON derive macros used across Torii modules.
 pub mod json_macros {
     pub use norito::derive::{JsonDeserialize, JsonSerialize};
 }
-
 #[macro_use]
 pub(crate) mod utils;
 pub use utils::{
@@ -1006,7 +948,6 @@ use soranet_privacy_ingress::{
     test_handler_post_soranet_privacy_event_with_ingress,
     test_handler_post_soranet_privacy_share_with_ingress,
 };
-
 // Re-export selected API for integration tests and external consumers
 // Governance selection
 #[cfg(feature = "app_api")]
@@ -1089,7 +1030,6 @@ pub use runtime::{
     ActivateCancelResponse, handle_runtime_activate_upgrade, handle_runtime_cancel_upgrade,
     handle_runtime_upgrades_list,
 };
-
 // Shared app state for handlers to avoid large inline closures that break axum Handler bounds
 #[derive(Clone)]
 struct GatewayFixtureTelemetry {
@@ -1098,7 +1038,6 @@ struct GatewayFixtureTelemetry {
     fixtures_digest: String,
     released_at_unix: u64,
 }
-
 fn sorafs_gateway_fixture_telemetry() -> GatewayFixtureTelemetry {
     let metadata = sorafs_manifest::gateway_fixture_metadata();
     GatewayFixtureTelemetry {
@@ -1108,7 +1047,6 @@ fn sorafs_gateway_fixture_telemetry() -> GatewayFixtureTelemetry {
         released_at_unix: metadata.released_at_unix,
     }
 }
-
 fn alias_service_from_iso_config(
     config: &iroha_config::parameters::actual::IsoBridge,
     attester: AliasAttester,
@@ -1116,10 +1054,8 @@ fn alias_service_from_iso_config(
     if !config.enabled {
         return None;
     }
-
     let service = AliasService::new(attester);
     let mut inserted = 0usize;
-
     for (index, alias_cfg) in config.account_aliases.iter().enumerate() {
         let canonical = normalise_alias(&alias_cfg.iban);
         if canonical.is_empty() {
@@ -1129,7 +1065,6 @@ fn alias_service_from_iso_config(
             );
             continue;
         }
-
         let alias_name = match Name::from_str(&canonical) {
             Ok(name) => name,
             Err(err) => {
@@ -1141,7 +1076,6 @@ fn alias_service_from_iso_config(
                 continue;
             }
         };
-
         let account_id: AccountId = match AccountId::parse_encoded(&alias_cfg.account_id) {
             Ok(parsed) => parsed.into_account_id(),
             Err(err) => {
@@ -1154,14 +1088,12 @@ fn alias_service_from_iso_config(
                 continue;
             }
         };
-
         let record = AliasRecord::new(
             alias_name.clone(),
             account_id.clone(),
             AliasTarget::Account(account_id),
             AliasIndex(index as u64),
         );
-
         match service.storage().put(record) {
             Ok(_) => inserted += 1,
             Err(err) => {
@@ -1173,19 +1105,16 @@ fn alias_service_from_iso_config(
             }
         }
     }
-
     if inserted == 0 {
         None
     } else {
         Some(Arc::new(service))
     }
 }
-
 const ALIAS_METRIC_LANE: &str = "torii";
 #[cfg(feature = "app_api")]
 const EXACT_ALIAS_READ_MAX_BODY_BYTES: usize = 4 * 1024;
 const EXACT_ALIAS_LOOKUP_MAX_ITEMS: usize = 64;
-
 fn alias_json_response<T>(status: StatusCode, payload: T) -> Result<AxResponse, Error>
 where
     T: JsonSerialize,
@@ -1203,14 +1132,12 @@ where
     );
     Ok(resp)
 }
-
 fn json_ok<T>(payload: T) -> Result<AxResponse, Error>
 where
     T: JsonSerialize,
 {
     alias_json_response(StatusCode::OK, payload)
 }
-
 fn alias_resolve_ok(
     alias: &str,
     account_id: &str,
@@ -1225,7 +1152,6 @@ fn alias_resolve_ok(
     };
     alias_json_response(StatusCode::OK, payload)
 }
-
 fn alias_resolve_index_ok(
     index: u64,
     alias: &str,
@@ -1240,7 +1166,6 @@ fn alias_resolve_index_ok(
     };
     alias_json_response(StatusCode::OK, payload)
 }
-
 fn alias_lookup_by_account_ok(
     account_id: &str,
     mut items: Vec<routing::AliasLookupByAccountItemDto>,
@@ -1271,7 +1196,6 @@ fn alias_lookup_by_account_ok(
     };
     alias_json_response(StatusCode::OK, payload)
 }
-
 fn asset_alias_resolve_ok(
     alias: &str,
     asset_definition_id: &str,
@@ -1292,7 +1216,6 @@ fn asset_alias_resolve_ok(
     };
     alias_json_response(StatusCode::OK, payload)
 }
-
 fn contract_alias_resolve_ok(
     contract_alias: &str,
     contract_address: &str,
@@ -1311,14 +1234,12 @@ fn contract_alias_resolve_ok(
     };
     alias_json_response(StatusCode::OK, payload)
 }
-
 fn alias_error_response(status: StatusCode, message: &str) -> Result<AxResponse, Error> {
     let payload = routing::AliasErrorResponseDto {
         error: message.to_owned(),
     };
     alias_json_response(status, payload)
 }
-
 fn alias_target_kind(target: &AliasTarget) -> &'static str {
     match target {
         AliasTarget::Account(_) => "account",
@@ -1327,7 +1248,6 @@ fn alias_target_kind(target: &AliasTarget) -> &'static str {
         AliasTarget::Custom(_) => "custom",
     }
 }
-
 fn alias_non_account_target_response(target: &AliasTarget) -> Result<AxResponse, Error> {
     let message = format!(
         "alias resolves to `{}` target; account alias resolution only supports account targets",
@@ -1335,13 +1255,11 @@ fn alias_non_account_target_response(target: &AliasTarget) -> Result<AxResponse,
     );
     alias_error_response(StatusCode::CONFLICT, &message)
 }
-
 fn map_alias_error(err: AliasError) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(
         err.to_string(),
     ))
 }
-
 fn resolve_alias_via_service(
     service: &AliasService,
     alias_input: &str,
@@ -1354,13 +1272,11 @@ fn resolve_alias_via_service(
             ),
         )));
     }
-
     let alias_name = Name::from_str(&canonical).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
         ))
     })?;
-
     let storage = service.storage();
     match storage.resolve(&alias_name) {
         Ok(Some(record)) => {
@@ -1382,7 +1298,6 @@ fn resolve_alias_via_service(
         Err(err) => Err(map_alias_error(err)),
     }
 }
-
 fn parse_account_alias_label_with_catalog(
     alias_input: &str,
     catalog: &iroha_data_model::nexus::DataSpaceCatalog,
@@ -1401,7 +1316,6 @@ fn parse_account_alias_label_with_catalog(
     })?;
     Ok((canonical, alias_label))
 }
-
 fn parse_exact_account_alias_label_with_catalog(
     alias_input: &str,
     catalog: &iroha_data_model::nexus::DataSpaceCatalog,
@@ -1423,14 +1337,12 @@ fn parse_exact_account_alias_label_with_catalog(
     }
     Ok((canonical, alias_label))
 }
-
 #[derive(Clone, Debug)]
 struct LiveResolvedAccountAlias {
     canonical: String,
     label: AccountAlias,
     resolved: iroha_data_model::alias_setup::ResolvedAccountAliasV1,
 }
-
 fn live_dataspace_resolution_error(error: iroha_core::sns::SnsError) -> Error {
     match error {
         iroha_core::sns::SnsError::Conflict(message) => Error::AppConflict {
@@ -1448,7 +1360,6 @@ fn live_dataspace_resolution_error(error: iroha_core::sns::SnsError) -> Error {
         }
     }
 }
-
 fn parse_account_alias_label_with_live_state(
     app: &SharedAppState,
     alias_input: &str,
@@ -1483,7 +1394,6 @@ fn parse_account_alias_label_with_live_state(
         resolved,
     })
 }
-
 fn parse_exact_account_alias_label_with_live_state(
     app: &SharedAppState,
     alias_input: &str,
@@ -1498,7 +1408,6 @@ fn parse_exact_account_alias_label_with_live_state(
     }
     Ok(alias)
 }
-
 fn parse_exact_account_id_literal(input: &str) -> Result<(AccountId, String), Error> {
     if input.trim().is_empty() {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -1525,7 +1434,6 @@ fn parse_exact_account_id_literal(input: &str) -> Result<(AccountId, String), Er
     }
     Ok((account_id, canonical))
 }
-
 #[cfg(feature = "app_api")]
 fn parse_exact_entrypoint_hash_literal(
     input: &str,
@@ -1555,14 +1463,12 @@ fn parse_exact_entrypoint_hash_literal(
     }
     Ok(hash)
 }
-
 #[cfg(feature = "app_api")]
 fn trusted_internal_literal_error(message: impl Into<String>) -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::Conversion(message.into()),
     ))
 }
-
 #[cfg(feature = "app_api")]
 fn parse_exact_asset_definition_id_literal(input: &str) -> Result<AssetDefinitionId, Error> {
     if input.is_empty() || input.trim() != input {
@@ -1580,7 +1486,6 @@ fn parse_exact_asset_definition_id_literal(input: &str) -> Result<AssetDefinitio
     }
     Ok(definition)
 }
-
 #[cfg(feature = "app_api")]
 fn parse_exact_asset_balance_scope_literal(input: &str) -> Result<AssetBalanceScope, Error> {
     if input == "global" {
@@ -1606,7 +1511,6 @@ fn parse_exact_asset_balance_scope_literal(input: &str) -> Result<AssetBalanceSc
     }
     Ok(AssetBalanceScope::Dataspace(DataSpaceId::new(dataspace)))
 }
-
 #[cfg(feature = "app_api")]
 fn parse_exact_internal_asset_scope_query(
     raw_query: Option<&str>,
@@ -1643,7 +1547,6 @@ fn parse_exact_internal_asset_scope_query(
     let scope = parse_exact_asset_balance_scope_literal(&canonical)?;
     Ok((scope, canonical))
 }
-
 fn validate_exact_alias_lookup_filters(
     app: &SharedAppState,
     request: &routing::AliasLookupByAccountRequestDto,
@@ -1693,7 +1596,6 @@ fn validate_exact_alias_lookup_filters(
     }
     Ok(dataspace_id)
 }
-
 fn resolve_alias_on_chain(
     app: &SharedAppState,
     alias_input: &str,
@@ -1701,7 +1603,6 @@ fn resolve_alias_on_chain(
     let alias = parse_account_alias_label_with_live_state(app, alias_input)?;
     resolve_alias_label_on_chain(app, alias.canonical, &alias.label)
 }
-
 fn resolve_alias_label_on_chain(
     app: &SharedAppState,
     canonical: String,
@@ -1717,7 +1618,6 @@ fn resolve_alias_label_on_chain(
     )
     .map(|account_id| (canonical, account_id, "active_sns")))
 }
-
 fn resolve_alias_on_route(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -1727,10 +1627,8 @@ fn resolve_alias_on_route(
     if alias.label.dataspace != routing_decision.dataspace_id {
         return Ok(None);
     }
-
     resolve_alias_label_on_chain(app, alias.canonical, &alias.label)
 }
-
 fn resolve_alias_index_on_chain(
     app: &SharedAppState,
     index: u64,
@@ -1772,7 +1670,6 @@ fn resolve_alias_index_on_chain(
     }
     Ok(None)
 }
-
 fn resolve_alias_index_on_route(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -1818,7 +1715,6 @@ fn resolve_alias_index_on_route(
     }
     Ok(None)
 }
-
 #[cfg(feature = "app_api")]
 fn resolve_contract_alias_on_chain(
     app: &SharedAppState,
@@ -1849,7 +1745,6 @@ fn resolve_contract_alias_on_chain(
             ),
         )));
     }
-
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_str(trimmed)
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -1865,7 +1760,6 @@ fn resolve_contract_alias_on_chain(
                 )),
             ))
         })?;
-
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -1907,7 +1801,6 @@ fn resolve_contract_alias_on_chain(
         .by_id(alias_dataspace_id)
         .map(|entry| entry.alias.clone())
         .unwrap_or_else(|| contract_alias.dataspace_segment().to_owned());
-
     Ok(Some((
         contract_alias,
         contract_address,
@@ -1916,7 +1809,6 @@ fn resolve_contract_alias_on_chain(
         dataspace_alias,
     )))
 }
-
 fn lookup_aliases_by_account_on_chain(
     app: &SharedAppState,
     request: &routing::AliasLookupByAccountRequestDto,
@@ -1973,7 +1865,6 @@ fn lookup_aliases_by_account_on_chain(
         .collect();
     Ok(Some((canonical_account_id, items)))
 }
-
 fn lookup_aliases_by_account_on_route(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -1990,7 +1881,6 @@ fn lookup_aliases_by_account_on_route(
         routing::asset_alias_observation_time_ms(&app.state),
     )
     .map_err(live_dataspace_resolution_error)?;
-
     Ok(Some((
         account_id,
         items
@@ -1999,24 +1889,20 @@ fn lookup_aliases_by_account_on_route(
             .collect(),
     )))
 }
-
 fn execute_alias_resolve_local_read(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
     request: &routing::AliasResolveRequestDto,
 ) -> Result<AxResponse, Error> {
     let alias = parse_exact_account_alias_label_with_live_state(app, &request.alias)?;
-
     if let Some((alias, account_id, source)) =
         resolve_alias_on_route(app, routing_decision, &alias.canonical)?
     {
         let account_id_string = account_id.to_string();
         return alias_resolve_ok(&alias, &account_id_string, None, source);
     }
-
     Ok(StatusCode::NOT_FOUND.into_response())
 }
-
 fn execute_alias_resolve_unrouted_local_read(
     app: &SharedAppState,
     canonical: String,
@@ -2028,10 +1914,8 @@ fn execute_alias_resolve_unrouted_local_read(
         let account_id_string = account_id.to_string();
         return alias_resolve_ok(&alias, &account_id_string, None, source);
     }
-
     Ok(StatusCode::NOT_FOUND.into_response())
 }
-
 fn execute_alias_resolve_index_local_read(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -2043,10 +1927,8 @@ fn execute_alias_resolve_index_local_read(
         let account_id_string = account_id.to_string();
         return alias_resolve_index_ok(request.index, &alias, &account_id_string, "active_sns");
     }
-
     Ok(StatusCode::NOT_FOUND.into_response())
 }
-
 fn execute_alias_lookup_by_account_local_read(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
@@ -2054,16 +1936,13 @@ fn execute_alias_lookup_by_account_local_read(
 ) -> Result<AxResponse, Error> {
     let _ = parse_exact_account_id_literal(&request.account_id)?;
     let _ = validate_exact_alias_lookup_filters(app, request)?;
-
     if let Some((account_id, items)) =
         lookup_aliases_by_account_on_route(app, routing_decision, request)?
     {
         return alias_lookup_by_account_ok(&account_id, items, "on_chain");
     }
-
     Ok(StatusCode::NOT_FOUND.into_response())
 }
-
 fn resolve_alias_index_via_service(
     service: &AliasService,
     index: u64,
@@ -2089,14 +1968,12 @@ fn resolve_alias_index_via_service(
         Err(err) => Err(map_alias_error(err)),
     }
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 enum TxHistoryJwtKey {
     Hmac(Vec<u8>),
     Pem(String),
 }
-
 #[cfg(feature = "app_api")]
 impl TxHistoryJwtKey {
     fn decoding_key(&self, alg: JwtAlgorithm) -> Result<DecodingKey, String> {
@@ -2127,7 +2004,6 @@ impl TxHistoryJwtKey {
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct TxHistoryJwtConfig {
@@ -2136,7 +2012,6 @@ struct TxHistoryJwtConfig {
     issuer: Option<String>,
     audience: Option<String>,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone, Default)]
 struct TxHistoryAccessPolicy {
@@ -2144,7 +2019,6 @@ struct TxHistoryAccessPolicy {
     mandatory_aliases: tx_history_alias_policy::MandatoryAliasPolicy,
     allowed_asset_definition_id: Option<String>,
 }
-
 #[cfg(feature = "app_api")]
 impl TxHistoryAccessPolicy {
     fn is_mandatory_alias(&self, dataspace_id: &str, alias: &str) -> bool {
@@ -2154,7 +2028,6 @@ impl TxHistoryAccessPolicy {
             .contains(dataspace.as_str(), canonical_alias.as_str())
     }
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone)]
 struct TxHistoryViewerContext {
@@ -2164,14 +2037,12 @@ struct TxHistoryViewerContext {
     account_ids: Vec<AccountId>,
     is_mandatory_alias: bool,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug)]
 enum TxHistoryAudienceClaim {
     Single(String),
     Multiple(Vec<String>),
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug)]
 struct TxHistoryJwtClaims {
@@ -2182,7 +2053,6 @@ struct TxHistoryJwtClaims {
     iss: Option<String>,
     aud: Option<TxHistoryAudienceClaim>,
 }
-
 #[cfg(feature = "app_api")]
 fn parse_tx_history_jwt_algorithm(value: &str) -> Option<JwtAlgorithm> {
     match value.trim().to_ascii_uppercase().as_str() {
@@ -2201,7 +2071,6 @@ fn parse_tx_history_jwt_algorithm(value: &str) -> Option<JwtAlgorithm> {
         _ => None,
     }
 }
-
 #[cfg(feature = "app_api")]
 fn tx_history_jwt_algorithm_name(algorithm: JwtAlgorithm) -> &'static str {
     match algorithm {
@@ -2219,12 +2088,10 @@ fn tx_history_jwt_algorithm_name(algorithm: JwtAlgorithm) -> &'static str {
         JwtAlgorithm::EdDSA => "EdDSA",
     }
 }
-
 #[cfg(feature = "app_api")]
 fn normalize_tx_history_alias(alias: &str) -> String {
     alias.trim().to_ascii_lowercase()
 }
-
 #[cfg(feature = "app_api")]
 fn canonical_tx_history_subject_alias(
     catalog: &iroha_data_model::nexus::DataSpaceCatalog,
@@ -2234,11 +2101,9 @@ fn canonical_tx_history_subject_alias(
     if normalized_subject.is_empty() || !normalized_subject.contains('@') {
         return Ok(None);
     }
-
     let (canonical, _) = parse_account_alias_label_with_catalog(&normalized_subject, catalog)?;
     Ok(Some(canonical))
 }
-
 #[cfg(feature = "app_api")]
 fn load_tx_history_access_policy(
     config: Option<&iroha_config::parameters::actual::ToriiTxHistory>,
@@ -2296,14 +2161,12 @@ fn load_tx_history_access_policy(
             .unwrap_or_else(|err| panic!("invalid torii.tx_history.jwt config: {err}"));
         cfg
     });
-
     TxHistoryAccessPolicy {
         jwt,
         mandatory_aliases,
         allowed_asset_definition_id: config.allowed_asset_definition_id.clone(),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn parse_public_dataspace_upstream_selector(
     state: &CoreState,
@@ -2326,13 +2189,11 @@ fn parse_public_dataspace_upstream_selector(
         .by_alias(selector)
         .map(|entry| entry.id)
 }
-
 #[cfg(feature = "app_api")]
 fn load_public_dataspace_upstreams(state: &CoreState) -> BTreeMap<DataSpaceId, String> {
     let Ok(raw) = std::env::var("IROHA_TORII_PUBLIC_DATASPACE_UPSTREAMS") else {
         return BTreeMap::new();
     };
-
     let mut upstreams = BTreeMap::new();
     for entry in raw.split([',', ';']) {
         let entry = entry.trim();
@@ -2364,10 +2225,8 @@ fn load_public_dataspace_upstreams(state: &CoreState) -> BTreeMap<DataSpaceId, S
         }
         upstreams.insert(dataspace_id, url);
     }
-
     upstreams
 }
-
 #[cfg(test)]
 pub(crate) fn signed_query_test_network_id() -> NetworkId {
     NetworkId::from_genesis_hash(
@@ -2376,7 +2235,6 @@ pub(crate) fn signed_query_test_network_id() -> NetworkId {
         )),
     )
 }
-
 #[cfg(test)]
 fn signed_query_test_admission() -> Arc<routing::SignedQueryAdmission> {
     Arc::new(
@@ -2389,7 +2247,6 @@ fn signed_query_test_admission() -> Arc<routing::SignedQueryAdmission> {
         .expect("valid signed-query test admission"),
     )
 }
-
 #[cfg(test)]
 pub(crate) fn authorize_query_for_test(
     request: iroha_data_model::query::QueryRequest,
@@ -2414,7 +2271,6 @@ pub(crate) fn authorize_query_for_test(
         nonce,
     )
 }
-
 #[allow(clippy::struct_excessive_bools)]
 struct AppState {
     events: EventsSender,
@@ -2669,37 +2525,31 @@ struct AppState {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     torii_proxy_sequence: std::sync::atomic::AtomicU64,
 }
-
 pub(crate) type SharedAppState = std::sync::Arc<AppState>;
-
 struct DaRuntimeServices {
     replay_cache: Arc<iroha_core::da::ReplayCache>,
     replay_store: Arc<da::ReplayCursorStore>,
     receipt_log: Arc<da::DaReceiptLog>,
     spooler: Option<Arc<da::DaSpooler>>,
 }
-
 #[cfg(feature = "app_api")]
 struct PendingSoracloudProxyRequest {
     sender: tokio::sync::oneshot::Sender<SoracloudLocalReadProxyOutcomeV1>,
     expected_peer_id: iroha_data_model::peer::PeerId,
     request: SoracloudLocalReadRequest,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 struct PendingToriiProxyRequest {
     sender: tokio::sync::oneshot::Sender<ToriiProxyHttpResponseV1>,
     max_body_bytes: usize,
     strict_queue_plan_synced: bool,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 struct CompletedToriiProxyRequest {
     completed_at: Instant,
     late_response_logged: bool,
     generation: u64,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Default)]
 struct CompletedToriiProxyRequests {
@@ -2707,7 +2557,6 @@ struct CompletedToriiProxyRequests {
     insertion_order: VecDeque<(u64, Hash)>,
     next_generation: u64,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 impl CompletedToriiProxyRequests {
     fn next_generation(&mut self) -> u64 {
@@ -2717,7 +2566,6 @@ impl CompletedToriiProxyRequests {
         }
         self.next_generation
     }
-
     fn discard_stale_front(&mut self) {
         while let Some((generation, request_id)) = self.insertion_order.front() {
             if self
@@ -2730,7 +2578,6 @@ impl CompletedToriiProxyRequests {
             self.insertion_order.pop_front();
         }
     }
-
     fn remove_oldest(&mut self) -> bool {
         self.discard_stale_front();
         let Some((generation, request_id)) = self.insertion_order.pop_front() else {
@@ -2745,7 +2592,6 @@ impl CompletedToriiProxyRequests {
         }
         true
     }
-
     fn prune(&mut self, now: Instant) {
         loop {
             self.discard_stale_front();
@@ -2767,7 +2613,6 @@ impl CompletedToriiProxyRequests {
         }
         while self.entries.len() > TORII_PROXY_COMPLETED_CAP && self.remove_oldest() {}
     }
-
     fn record(&mut self, request_id: Hash, completed_at: Instant) {
         self.prune(completed_at);
         while self.entries.len() >= TORII_PROXY_COMPLETED_CAP && self.remove_oldest() {}
@@ -2783,12 +2628,10 @@ impl CompletedToriiProxyRequests {
         self.insertion_order.push_back((generation, request_id));
     }
 }
-
 fn json_string_or_null(opt: Option<String>) -> norito::json::native::Value {
     opt.map(norito::json::native::Value::from)
         .unwrap_or(norito::json::native::Value::Null)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PipelineStatusKind {
     Queued,
@@ -2798,7 +2641,6 @@ enum PipelineStatusKind {
     Rejected,
     Expired,
 }
-
 const PIPELINE_STATUS_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const PIPELINE_STATUS_CACHE_PRUNE_INTERVAL_SECS: u64 = 30;
 const PIPELINE_STATUS_CACHE_INDEX_REBUILD_SLOP: usize = 1_024;
@@ -2807,9 +2649,7 @@ const PIPELINE_STATUS_CACHE_INDEX_REBUILD_MULTIPLIER: usize = 4;
 const TORII_PROXY_COMPLETED_TTL: Duration = Duration::from_secs(30);
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const TORII_PROXY_COMPLETED_CAP: usize = 16_384;
-
 include!("pipeline_status_helpers.rs");
-
 #[derive(Clone, Debug)]
 struct PipelineStatusEntry {
     kind: PipelineStatusKind,
@@ -2822,7 +2662,6 @@ struct PipelineStatusEntry {
     // source of truth after eviction.
     observed_at: Instant,
 }
-
 impl PipelineStatusEntry {
     fn fresh(
         kind: PipelineStatusKind,
@@ -2831,7 +2670,6 @@ impl PipelineStatusEntry {
     ) -> Self {
         Self::at_time(kind, block_height, rejection, Instant::now())
     }
-
     fn at_time(
         kind: PipelineStatusKind,
         block_height: Option<NonZeroU64>,
@@ -2845,7 +2683,6 @@ impl PipelineStatusEntry {
             observed_at,
         }
     }
-
     fn merge_from_event(&mut self, incoming: PipelineStatusEntry) {
         match incoming.kind.rank().cmp(&self.kind.rank()) {
             std::cmp::Ordering::Greater => {
@@ -2866,14 +2703,12 @@ impl PipelineStatusEntry {
         }
     }
 }
-
 #[derive(Clone, Debug)]
 struct PendingBlockStatus {
     kind: PipelineStatusKind,
     block_hash: HashOf<BlockHeader>,
     observed_at: Instant,
 }
-
 #[derive(Debug)]
 struct PipelineStatusCache {
     entries: DashMap<HashOf<SignedTransaction>, PipelineStatusEntry>,
@@ -2890,19 +2725,16 @@ struct PipelineStatusCache {
     pending_order_unsorted: AtomicBool,
     prune_lock: parking_lot::Mutex<()>,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BlockRecordOutcome {
     Recorded,
     MissingBlock,
     HashMismatch,
 }
-
 impl PipelineStatusCache {
     fn new() -> Self {
         Self::with_limits(defaults::queue::CAPACITY.get(), PIPELINE_STATUS_CACHE_TTL)
     }
-
     fn with_limits(capacity: usize, ttl: Duration) -> Self {
         let cap = capacity.max(1);
         Self {
@@ -2921,7 +2753,6 @@ impl PipelineStatusCache {
             prune_lock: parking_lot::Mutex::new(()),
         }
     }
-
     fn record_transaction_event(
         &self,
         event: &iroha_data_model::events::pipeline::TransactionEvent,
@@ -2940,7 +2771,6 @@ impl PipelineStatusCache {
         self.record_entry_inner(*event.hash(), incoming);
         self.prune_if_needed(now);
     }
-
     fn record_block_event(
         &self,
         event: &iroha_data_model::events::pipeline::BlockEvent,
@@ -2973,16 +2803,13 @@ impl PipelineStatusCache {
             BlockRecordOutcome::HashMismatch => {}
         }
     }
-
     fn lookup(&self, hash: &HashOf<SignedTransaction>) -> Option<PipelineStatusEntry> {
         self.entries.get(hash).map(|entry| entry.clone())
     }
-
     fn record_entry(&self, hash: HashOf<SignedTransaction>, entry: PipelineStatusEntry) {
         self.record_entry_inner(hash, entry);
         self.prune_if_needed(Instant::now());
     }
-
     fn record_entry_inner(&self, hash: HashOf<SignedTransaction>, incoming: PipelineStatusEntry) {
         let inserted_at = match self.entries.entry(hash) {
             DashEntry::Occupied(mut entry) => {
@@ -3000,7 +2827,6 @@ impl PipelineStatusCache {
             self.push_entry_order(hash, observed_at);
         }
     }
-
     fn record_pending_block(&self, height: NonZeroU64, mut pending: PendingBlockStatus) {
         let mut inserted_at = None;
         match self.pending_blocks.entry(height) {
@@ -3018,7 +2844,6 @@ impl PipelineStatusCache {
             self.push_pending_order(height, observed_at);
         }
     }
-
     fn push_entry_order(&self, hash: HashOf<SignedTransaction>, observed_at: Instant) {
         let mut order = self.entry_order.lock();
         if order
@@ -3030,7 +2855,6 @@ impl PipelineStatusCache {
         }
         order.push_back((observed_at, hash));
     }
-
     fn push_pending_order(&self, height: NonZeroU64, observed_at: Instant) {
         let mut order = self.pending_order.lock();
         if order
@@ -3042,7 +2866,6 @@ impl PipelineStatusCache {
         }
         order.push_back((observed_at, height));
     }
-
     fn refresh_pending_blocks(&self, kura: &Kura) {
         if self.pending_blocks.is_empty() {
             return;
@@ -3063,7 +2886,6 @@ impl PipelineStatusCache {
         }
         self.prune_if_needed(now);
     }
-
     fn prune_if_needed(&self, now: Instant) {
         let elapsed_secs = now.saturating_duration_since(self.start).as_secs().max(1);
         let last_prune = self
@@ -3076,11 +2898,9 @@ impl PipelineStatusCache {
         if !over_cap && !prune_due {
             return;
         }
-
         let Some(_guard) = self.prune_lock.try_lock() else {
             return;
         };
-
         let last_prune = self
             .last_prune_secs
             .load(std::sync::atomic::Ordering::Relaxed);
@@ -3095,23 +2915,19 @@ impl PipelineStatusCache {
             .store(elapsed_secs, std::sync::atomic::Ordering::Relaxed);
         self.prune(now);
     }
-
     fn prune(&self, now: Instant) {
         self.rebuild_order_indexes_if_needed();
         if !self.ttl.is_zero() {
             self.prune_stale_entries(now);
             self.prune_stale_pending_blocks(now);
         }
-
         self.evict_over_capacity();
         self.compact_order_indexes_if_needed();
     }
-
     fn evict_over_capacity(&self) {
         self.evict_entries_over_capacity();
         self.evict_pending_over_capacity();
     }
-
     fn prune_stale_entries(&self, now: Instant) {
         let ttl = self.ttl;
         let mut order = self.entry_order.lock();
@@ -3129,7 +2945,6 @@ impl PipelineStatusCache {
             }
         }
     }
-
     fn prune_stale_pending_blocks(&self, now: Instant) {
         let ttl = self.ttl;
         let mut order = self.pending_order.lock();
@@ -3147,7 +2962,6 @@ impl PipelineStatusCache {
             }
         }
     }
-
     fn evict_entries_over_capacity(&self) {
         while self.entries.len() > self.capacity {
             if self.remove_oldest_entry() {
@@ -3159,7 +2973,6 @@ impl PipelineStatusCache {
             }
         }
     }
-
     fn evict_pending_over_capacity(&self) {
         while self.pending_blocks.len() > self.capacity {
             if self.remove_oldest_pending_block() {
@@ -3171,7 +2984,6 @@ impl PipelineStatusCache {
             }
         }
     }
-
     fn remove_oldest_entry(&self) -> bool {
         let mut order = self.entry_order.lock();
         while let Some((observed_at, hash)) = order.pop_front() {
@@ -3186,7 +2998,6 @@ impl PipelineStatusCache {
         }
         false
     }
-
     fn remove_oldest_pending_block(&self) -> bool {
         let mut order = self.pending_order.lock();
         while let Some((observed_at, height)) = order.pop_front() {
@@ -3201,7 +3012,6 @@ impl PipelineStatusCache {
         }
         false
     }
-
     fn rebuild_order_indexes_if_needed(&self) {
         if self
             .entry_order_unsorted
@@ -3216,7 +3026,6 @@ impl PipelineStatusCache {
             self.rebuild_pending_order_index();
         }
     }
-
     fn compact_order_indexes_if_needed(&self) {
         if Self::order_index_needs_rebuild(self.entry_order.lock().len(), self.entries.len()) {
             self.rebuild_entry_order_index();
@@ -3228,14 +3037,12 @@ impl PipelineStatusCache {
             self.rebuild_pending_order_index();
         }
     }
-
     fn order_index_needs_rebuild(index_len: usize, live_len: usize) -> bool {
         let live_bound = live_len
             .saturating_mul(PIPELINE_STATUS_CACHE_INDEX_REBUILD_MULTIPLIER)
             .saturating_add(PIPELINE_STATUS_CACHE_INDEX_REBUILD_SLOP);
         index_len > live_bound
     }
-
     fn rebuild_entry_order_index(&self) {
         let mut ordered: Vec<_> = self
             .entries
@@ -3245,7 +3052,6 @@ impl PipelineStatusCache {
         ordered.sort_by_key(|(observed_at, _)| *observed_at);
         *self.entry_order.lock() = ordered.into_iter().collect();
     }
-
     fn rebuild_pending_order_index(&self) {
         let mut ordered: Vec<_> = self
             .pending_blocks
@@ -3255,7 +3061,6 @@ impl PipelineStatusCache {
         ordered.sort_by_key(|(observed_at, _)| *observed_at);
         *self.pending_order.lock() = ordered.into_iter().collect();
     }
-
     fn remove_entry_by_hash(&self, hash: &HashOf<SignedTransaction>) -> bool {
         if self.entries.remove(hash).is_some() {
             Self::decrement_live_count(&self.entry_count);
@@ -3264,7 +3069,6 @@ impl PipelineStatusCache {
             false
         }
     }
-
     fn remove_pending_by_height(&self, height: &NonZeroU64) -> bool {
         if self.pending_blocks.remove(height).is_some() {
             Self::decrement_live_count(&self.pending_count);
@@ -3273,7 +3077,6 @@ impl PipelineStatusCache {
             false
         }
     }
-
     fn decrement_live_count(count: &AtomicUsize) {
         let _ = count.fetch_update(
             AtomicOrdering::Relaxed,
@@ -3281,7 +3084,6 @@ impl PipelineStatusCache {
             |current| Some(current.saturating_sub(1)),
         );
     }
-
     fn record_block_results(
         &self,
         height: NonZeroU64,
@@ -3388,7 +3190,6 @@ impl PipelineStatusCache {
         BlockRecordOutcome::Recorded
     }
 }
-
 fn telemetry_unavailable_response(
     endpoint: &'static str,
     telemetry: &routing::MaybeTelemetry,
@@ -3397,7 +3198,6 @@ fn telemetry_unavailable_response(
     {
         Error::telemetry_profile_forbidden(endpoint, telemetry.profile()).into_response()
     }
-
     #[cfg(not(feature = "telemetry"))]
     {
         let _ = endpoint;
@@ -3405,7 +3205,6 @@ fn telemetry_unavailable_response(
         axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response()
     }
 }
-
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 fn collect_peer_urls(
     _online_peers: &OnlinePeersProvider,
@@ -3416,20 +3215,17 @@ fn collect_peer_urls(
         iroha_logger::debug!("peer telemetry disabled: no peer_telemetry_urls configured");
         return Vec::new();
     }
-
     let mut urls = configured.to_vec();
     urls.sort();
     urls.dedup();
     urls
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ConnScheme {
     Http,
     Ws,
     NoritoRpc,
 }
-
 impl ConnScheme {
     fn from_request<B>(req: &axum::http::Request<B>) -> Self {
         if req
@@ -3453,7 +3249,6 @@ impl ConnScheme {
             Self::Http
         }
     }
-
     fn label(self) -> &'static str {
         match self {
             Self::Http => "http",
@@ -3462,14 +3257,12 @@ impl ConnScheme {
         }
     }
 }
-
 /// Held admission permit and telemetry accounting for one active request or upgraded connection.
 pub(crate) struct PreAuthRequestGuard {
     permit: limits::PreAuthPermit,
     telemetry: routing::MaybeTelemetry,
     scheme: ConnScheme,
 }
-
 impl Drop for PreAuthRequestGuard {
     fn drop(&mut self) {
         let scheme = self.scheme;
@@ -3477,7 +3270,6 @@ impl Drop for PreAuthRequestGuard {
             .with_metrics(|telemetry| telemetry.dec_torii_active_conn(scheme.label()));
     }
 }
-
 /// Single-owner handoff for extending a pre-authentication permit beyond the
 /// HTTP upgrade response and into the upgraded WebSocket task.
 /// The middleware owns the guard initially. Ordinary responses keep it in the
@@ -3486,18 +3278,15 @@ impl Drop for PreAuthRequestGuard {
 /// permit can never be duplicated across response and upgrade lifetimes.
 #[derive(Clone)]
 pub(crate) struct PreAuthGuardHandoff(Arc<parking_lot::Mutex<Option<PreAuthRequestGuard>>>);
-
 impl PreAuthGuardHandoff {
     fn new(guard: PreAuthRequestGuard) -> Self {
         Self(Arc::new(parking_lot::Mutex::new(Some(guard))))
     }
-
     /// Transfer the guard to the caller if no previous owner has taken it.
     pub(crate) fn take(&self) -> Option<PreAuthRequestGuard> {
         self.0.lock().take()
     }
 }
-
 /// Take the request's pre-authentication guard for an upgraded WebSocket task.
 ///
 /// `None` is accepted for direct handler tests that do not install Torii's
@@ -3508,7 +3297,6 @@ pub(crate) fn take_preauth_upgrade_guard(
 ) -> Option<PreAuthRequestGuard> {
     handoff.and_then(|Extension(handoff)| handoff.take())
 }
-
 fn hold_preauth_guard_in_response_body(
     response: axum::response::Response,
     guard: PreAuthRequestGuard,
@@ -3525,7 +3313,6 @@ fn hold_preauth_guard_in_response_body(
     });
     axum::response::Response::from_parts(parts, Body::new(guarded_body))
 }
-
 impl AppState {
     async fn acquire_preauth(
         &self,
@@ -3541,22 +3328,18 @@ impl AppState {
             scheme,
         })
     }
-
     fn record_preauth_reject(&self, reason: limits::RejectReason) {
         self.telemetry
             .with_metrics(|telemetry| telemetry.inc_torii_pre_auth_reject(reason.metric_label()));
     }
-
     fn record_norito_rpc_gate(&self, outcome: &'static str) {
         let stage = self.norito_rpc.stage.label();
         self.telemetry
             .with_metrics(|telemetry| telemetry.inc_torii_norito_rpc_gate(stage, outcome));
     }
-
     fn norito_rpc_config(&self) -> &NoritoRpcTransport {
         &self.norito_rpc
     }
-
     /// Returns whether a validated API token may identify the caller for rate limiting.
     ///
     /// Callers must validate the request with [`validate_api_token`] before
@@ -3564,7 +3347,6 @@ impl AppState {
     fn api_token_enforced(&self) -> bool {
         self.require_api_token && !self.api_tokens_set.is_empty()
     }
-
     fn check_norito_rpc_allowed(
         &self,
         headers: &axum::http::HeaderMap,
@@ -3598,13 +3380,11 @@ impl AppState {
             }
         }
     }
-
     fn rpc_capabilities(&self) -> RpcCapabilitiesResponse {
         RpcCapabilitiesResponse {
             norito_rpc: RpcNoritoRpcCapability::from(self.norito_rpc_config()),
         }
     }
-
     fn rpc_ping(&self) -> RpcPingResponse {
         let timestamp_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -3616,27 +3396,22 @@ impl AppState {
             norito_rpc: RpcNoritoRpcCapability::from(self.norito_rpc_config()),
         }
     }
-
     /// Clone the telemetry handle for downstream helpers.
     pub(crate) fn telemetry_handle(&self) -> routing::MaybeTelemetry {
         self.telemetry.clone()
     }
-
     #[cfg(feature = "app_api")]
     pub(crate) fn sorafs_cache(&self) -> Option<Arc<RwLock<sorafs::ProviderAdvertCache>>> {
         self.sorafs_cache.clone()
     }
-
     #[cfg(feature = "app_api")]
     pub(crate) fn sorafs_node(&self) -> &sorafs_node::NodeHandle {
         &self.sorafs_node
     }
-
     #[cfg(feature = "app_api")]
     fn blinded_resolver(&self) -> Option<&Arc<sorafs::BlindedCidResolver>> {
         self.sorafs_blinded_resolver.as_ref()
     }
-
     #[cfg(feature = "app_api")]
     #[allow(clippy::result_large_err)]
     fn evaluate_gateway_policy(
@@ -3661,7 +3436,6 @@ impl AppState {
             }
         }
     }
-
     #[cfg(feature = "app_api")]
     fn publish_gar_violation_event(
         &self,
@@ -3675,7 +3449,6 @@ impl AppState {
             iroha_logger::warn!(?err, "failed to broadcast SoraFS GAR violation event");
         }
     }
-
     #[cfg(feature = "app_api")]
     fn current_tls_snapshot(&self) -> Option<sorafs::gateway::TlsStateSnapshot> {
         let state = self.sorafs_gateway_tls_state.as_ref()?;
@@ -3685,12 +3458,10 @@ impl AppState {
             .with_metrics(|metrics| snapshot.apply_metrics(metrics, SystemTime::now()));
         Some(snapshot)
     }
-
     #[cfg(feature = "app_api")]
     fn provider_supports_chunk_range(&self, provider_id: &[u8; 32]) -> Option<bool> {
         self.provider_supports_capability(provider_id, CapabilityType::ChunkRangeFetch)
     }
-
     #[cfg(feature = "app_api")]
     fn provider_supports_capability(
         &self,
@@ -3709,14 +3480,12 @@ impl AppState {
         Some(supported)
     }
 }
-
 #[derive(Debug, PartialEq, Eq)]
 enum NoritoRpcGateFailure {
     Disabled,
     CanaryDenied,
     MtlsRequired,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -3732,7 +3501,6 @@ struct RpcCapabilitiesResponse {
     /// Norito-RPC capability advert.
     norito_rpc: RpcNoritoRpcCapability,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -3752,7 +3520,6 @@ struct RpcPingResponse {
     /// Norito-RPC capability advert.
     norito_rpc: RpcNoritoRpcCapability,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -3774,7 +3541,6 @@ struct RpcNoritoRpcCapability {
     /// Size of the canary allowlist.
     canary_allowlist_size: usize,
 }
-
 impl From<&NoritoRpcTransport> for RpcNoritoRpcCapability {
     fn from(value: &NoritoRpcTransport) -> Self {
         Self {
@@ -3785,7 +3551,6 @@ impl From<&NoritoRpcTransport> for RpcNoritoRpcCapability {
         }
     }
 }
-
 fn evaluate_norito_rpc_gate(
     cfg: &NoritoRpcTransport,
     trusted_proxy_nets: &[limits::IpNet],
@@ -3812,14 +3577,12 @@ fn evaluate_norito_rpc_gate(
         }
     }
 }
-
 fn norito_rpc_token_from_headers(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(HEADER_API_TOKEN)
         .and_then(|value| value.to_str().ok())
         .filter(|value| !value.is_empty())
 }
-
 fn norito_rpc_mtls_present(
     headers: &HeaderMap,
     remote: Option<IpAddr>,
@@ -3827,7 +3590,6 @@ fn norito_rpc_mtls_present(
 ) -> bool {
     limits::has_trusted_forwarded_header(headers, remote, trusted_proxies, HEADER_MTLS_FORWARD)
 }
-
 fn norito_rpc_error_response(failure: NoritoRpcGateFailure) -> axum::response::Response {
     match failure {
         NoritoRpcGateFailure::Disabled => norito_rpc_error(
@@ -3847,7 +3609,6 @@ fn norito_rpc_error_response(failure: NoritoRpcGateFailure) -> axum::response::R
         ),
     }
 }
-
 fn norito_rpc_error(
     status: StatusCode,
     code: &str,
@@ -3872,7 +3633,6 @@ fn norito_rpc_error(
         }
     }
 }
-
 async fn inject_remote_addr_header(
     State(app): State<SharedAppState>,
     mut req: axum::http::Request<Body>,
@@ -3892,16 +3652,12 @@ async fn inject_remote_addr_header(
             req.headers_mut().insert(header, value);
         }
     }
-
     Ok(next.run(req).await)
 }
-
 const REQUEST_ID_HEADER: &str = "x-request-id";
 const MAX_REQUEST_ID_LENGTH: usize = 128;
-
 #[derive(Clone, Debug)]
 struct RequestCorrelationId(String);
-
 fn valid_incoming_request_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_REQUEST_ID_LENGTH
@@ -3909,10 +3665,8 @@ fn valid_incoming_request_id(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
 }
-
 fn generate_request_id() -> String {
     static SEQUENCE: AtomicU64 = AtomicU64::new(1);
-
     let timestamp_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -3925,7 +3679,6 @@ fn generate_request_id() -> String {
     material.extend_from_slice(&process_id.to_le_bytes());
     hex::encode(blake3_hash(&material).as_bytes())
 }
-
 fn single_valid_incoming_request_id(headers: &HeaderMap) -> Option<&str> {
     let mut values = headers.get_all(REQUEST_ID_HEADER).iter();
     let value = values.next()?;
@@ -3937,7 +3690,6 @@ fn single_valid_incoming_request_id(headers: &HeaderMap) -> Option<&str> {
         .ok()
         .filter(|value| valid_incoming_request_id(value))
 }
-
 async fn attach_request_id(
     mut req: axum::http::Request<Body>,
     next: Next,
@@ -3947,7 +3699,6 @@ async fn attach_request_id(
         .unwrap_or_else(generate_request_id);
     req.extensions_mut()
         .insert(RequestCorrelationId(request_id.clone()));
-
     let mut response = next.run(req).await;
     if let Ok(value) = HeaderValue::from_str(&request_id) {
         response
@@ -3956,7 +3707,6 @@ async fn attach_request_id(
     }
     Ok(response)
 }
-
 async fn inject_loopback_connect_info_when_missing(
     mut req: axum::http::Request<Body>,
     next: Next,
@@ -3972,10 +3722,8 @@ async fn inject_loopback_connect_info_when_missing(
                 0,
             ))));
     }
-
     Ok(next.run(req).await)
 }
-
 async fn enforce_preauth(
     State(app): State<SharedAppState>,
     mut req: axum::http::Request<Body>,
@@ -4001,7 +3749,6 @@ async fn enforce_preauth(
                     return Ok(*resp);
                 }
             }
-
             let handoff = PreAuthGuardHandoff::new(guard);
             req.extensions_mut().insert(handoff.clone());
             let response = next.run(req).await;
@@ -4057,7 +3804,6 @@ async fn enforce_preauth(
         }
     }
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod preauth_connection_lifetime_tests {
     use std::{collections::HashSet, convert::Infallible, sync::Arc};
@@ -4097,7 +3843,6 @@ mod preauth_connection_lifetime_tests {
         }));
         app
     }
-
     fn app_with_per_ip_cap() -> SharedAppState {
         let mut app = crate::mk_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
@@ -4114,7 +3859,6 @@ mod preauth_connection_lifetime_tests {
         }));
         app
     }
-
     fn per_ip_preauth_router(app: SharedAppState) -> Router {
         Router::new()
             .route("/hold", get(|| async { StatusCode::OK }))
@@ -4127,7 +3871,6 @@ mod preauth_connection_lifetime_tests {
                 inject_remote_addr_header,
             ))
     }
-
     fn request_with_remote(transport_ip: &str, forwarded_ip: &str) -> Request<Body> {
         use axum::extract::ConnectInfo;
 
@@ -4144,18 +3887,15 @@ mod preauth_connection_lifetime_tests {
             )));
         request
     }
-
     #[tokio::test]
     async fn preauth_uses_distinct_client_buckets_behind_trusted_proxy() {
         let router = per_ip_preauth_router(app_with_per_ip_cap());
-
         let first = router
             .clone()
             .oneshot(request_with_remote("127.0.0.1", "203.0.113.10"))
             .await
             .expect("first proxied response");
         assert_eq!(first.status(), StatusCode::OK);
-
         let second = router
             .clone()
             .oneshot(request_with_remote("127.0.0.1", "203.0.113.11"))
@@ -4166,27 +3906,22 @@ mod preauth_connection_lifetime_tests {
             StatusCode::OK,
             "distinct trusted-proxy clients must not share the loopback bucket"
         );
-
         let same_client = router
             .oneshot(request_with_remote("127.0.0.1", "203.0.113.10"))
             .await
             .expect("same-client response");
         assert_eq!(same_client.status(), StatusCode::TOO_MANY_REQUESTS);
-
         drop((first, second, same_client));
     }
-
     #[tokio::test]
     async fn preauth_rejects_untrusted_forwarded_ip_spoofing() {
         let router = per_ip_preauth_router(app_with_per_ip_cap());
-
         let first = router
             .clone()
             .oneshot(request_with_remote("198.51.100.10", "203.0.113.10"))
             .await
             .expect("first untrusted response");
         assert_eq!(first.status(), StatusCode::OK);
-
         let spoofed = router
             .oneshot(request_with_remote("198.51.100.10", "203.0.113.11"))
             .await
@@ -4196,14 +3931,11 @@ mod preauth_connection_lifetime_tests {
             StatusCode::TOO_MANY_REQUESTS,
             "an untrusted peer must not evade its bucket by changing the forwarded IP"
         );
-
         drop((first, spoofed));
     }
-
     const TEST_ONBOARDING_TOKEN: &str = "torii-hbl-onboarding-test-token-32-bytes";
     const TEST_SECOND_HBL_ONBOARDING_TOKEN: &str = "torii-second-hbl-onboarding-token-32-bytes";
     const TEST_UBL_ONBOARDING_TOKEN: &str = "torii-ubl-onboarding-test-token-32-bytes";
-
     fn app_with_onboarding_auth(require_global_token: bool) -> SharedAppState {
         let mut app = crate::mk_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
@@ -4239,12 +3971,10 @@ mod preauth_connection_lifetime_tests {
         });
         app
     }
-
     #[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
     struct OnboardingAuthBoundaryBody {
         value: u32,
     }
-
     async fn onboarding_auth_boundary_handler(
         axum::extract::Extension(_authenticated_domain): axum::extract::Extension<
             AuthenticatedOnboardingDomain,
@@ -4258,7 +3988,6 @@ mod preauth_connection_lifetime_tests {
             StatusCode::OK
         }
     }
-
     fn onboarding_auth_boundary_router(app: SharedAppState) -> Router {
         Router::new()
             .route(
@@ -4282,7 +4011,6 @@ mod preauth_connection_lifetime_tests {
             .layer(axum::middleware::from_fn_with_state(app, enforce_preauth))
             .layer(axum::middleware::from_fn(enforce_typed_error_contract))
     }
-
     fn onboarding_auth_boundary_request(
         descriptor: iroha_torii_shared::route_catalog::RouteDescriptor,
         global_tokens: &[&str],
@@ -4310,7 +4038,6 @@ mod preauth_connection_lifetime_tests {
             .insert(MatchedRouteMetadata::from_descriptor(descriptor));
         request
     }
-
     async fn typed_error_code(response: Response) -> String {
         let body = response
             .into_body()
@@ -4322,7 +4049,6 @@ mod preauth_connection_lifetime_tests {
             norito::json::from_slice(&body).expect("decode typed error response");
         envelope.code().to_owned()
     }
-
     #[tokio::test]
     async fn onboarding_authentication_precedes_media_and_body() {
         let router = onboarding_auth_boundary_router(app_with_onboarding_auth(true));
@@ -4348,7 +4074,6 @@ mod preauth_connection_lifetime_tests {
                 Some(&HeaderValue::from_static("IrohaApiToken realm=\"torii\""))
             );
             assert_eq!(typed_error_code(missing_global).await, "api_token_required");
-
             let missing_onboarding = router
                 .clone()
                 .oneshot(onboarding_auth_boundary_request(
@@ -4370,7 +4095,6 @@ mod preauth_connection_lifetime_tests {
                 typed_error_code(missing_onboarding).await,
                 "onboarding_auth_required"
             );
-
             let unknown_onboarding = router
                 .clone()
                 .oneshot(onboarding_auth_boundary_request(
@@ -4388,7 +4112,6 @@ mod preauth_connection_lifetime_tests {
                 typed_error_code(unknown_onboarding).await,
                 "onboarding_auth_required"
             );
-
             let duplicate_onboarding = router
                 .clone()
                 .oneshot(onboarding_auth_boundary_request(
@@ -4406,7 +4129,6 @@ mod preauth_connection_lifetime_tests {
                 typed_error_code(duplicate_onboarding).await,
                 "onboarding_auth_required"
             );
-
             let invalid_accept = router
                 .clone()
                 .oneshot(onboarding_auth_boundary_request(
@@ -4424,7 +4146,6 @@ mod preauth_connection_lifetime_tests {
                 typed_error_code(invalid_accept).await,
                 "response_not_acceptable"
             );
-
             let norito_media = router
                 .clone()
                 .oneshot(onboarding_auth_boundary_request(
@@ -4442,7 +4163,6 @@ mod preauth_connection_lifetime_tests {
                 typed_error_code(norito_media).await,
                 "request_content_type_unsupported"
             );
-
             let duplicate_content_type = router
                 .clone()
                 .oneshot(onboarding_auth_boundary_request(
@@ -4460,7 +4180,6 @@ mod preauth_connection_lifetime_tests {
                 typed_error_code(duplicate_content_type).await,
                 "request_content_type_invalid"
             );
-
             let accepted = router
                 .clone()
                 .oneshot(onboarding_auth_boundary_request(
@@ -4474,7 +4193,6 @@ mod preauth_connection_lifetime_tests {
                 .await
                 .expect("accepted onboarding boundary response");
             assert_eq!(accepted.status(), StatusCode::OK);
-
             let accepted_ubl = router
                 .clone()
                 .oneshot(onboarding_auth_boundary_request(
@@ -4490,7 +4208,6 @@ mod preauth_connection_lifetime_tests {
             assert_eq!(accepted_ubl.status(), StatusCode::OK);
         }
     }
-
     #[test]
     fn onboarding_alias_token_maps_each_credential_to_its_exact_domain() {
         let app = app_with_onboarding_auth(false);
@@ -4513,7 +4230,6 @@ mod preauth_connection_lifetime_tests {
                 HEADER_ONBOARDING_API_TOKEN,
                 HeaderValue::from_str(token).expect("test onboarding token header"),
             );
-
             let authenticated = authenticate_onboarding_api_token(&app, &headers)
                 .expect("configured onboarding credential must authenticate");
             assert_eq!(
@@ -4522,7 +4238,6 @@ mod preauth_connection_lifetime_tests {
             );
         }
     }
-
     fn request(path: &str, websocket: bool) -> Request<Body> {
         let mut builder = Request::builder().uri(path);
         if websocket {
@@ -4530,7 +4245,6 @@ mod preauth_connection_lifetime_tests {
         }
         builder.body(Body::empty()).expect("request")
     }
-
     #[tokio::test]
     async fn partially_consumed_sse_body_holds_http_capacity_until_drop() {
         let app = app_with_scheme_cap("http");
@@ -4552,7 +4266,6 @@ mod preauth_connection_lifetime_tests {
                 Arc::clone(&app),
                 enforce_preauth,
             ));
-
         let first = router
             .clone()
             .oneshot(request("/stream", false))
@@ -4569,14 +4282,12 @@ mod preauth_connection_lifetime_tests {
             first_frame.into_data().expect("data frame"),
             Bytes::from_static(b": heartbeat\n\n")
         );
-
         let rejected = router
             .clone()
             .oneshot(request("/stream", false))
             .await
             .expect("capacity response");
         assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
-
         drop(first_body);
         let admitted_again = router
             .oneshot(request("/stream", false))
@@ -4584,7 +4295,6 @@ mod preauth_connection_lifetime_tests {
             .expect("response after stream drop");
         assert_eq!(admitted_again.status(), StatusCode::OK);
     }
-
     #[tokio::test]
     async fn websocket_handoff_holds_ws_capacity_for_task_lifetime() {
         let app = app_with_scheme_cap("ws");
@@ -4621,7 +4331,6 @@ mod preauth_connection_lifetime_tests {
                 Arc::clone(&app),
                 enforce_preauth,
             ));
-
         let first = router
             .clone()
             .oneshot(request("/ws", true))
@@ -4629,14 +4338,12 @@ mod preauth_connection_lifetime_tests {
             .expect("first upgrade response");
         assert_eq!(first.status(), StatusCode::SWITCHING_PROTOCOLS);
         started_rx.recv().await.expect("upgrade task started");
-
         let rejected = router
             .clone()
             .oneshot(request("/ws", true))
             .await
             .expect("capacity response");
         assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
-
         release.add_permits(1);
         released_rx.recv().await.expect("first guard released");
         let admitted_again = router
@@ -4651,7 +4358,6 @@ mod preauth_connection_lifetime_tests {
         release.add_permits(1);
         released_rx.recv().await.expect("second guard released");
     }
-
     #[tokio::test]
     async fn aborted_upgrade_task_releases_handoff_capacity() {
         let app = app_with_scheme_cap("ws");
@@ -4666,7 +4372,6 @@ mod preauth_connection_lifetime_tests {
             let _upgrade_guard = upgrade_guard;
             futures::future::pending::<()>().await;
         });
-
         assert_eq!(
             app.preauth_gate
                 .acquire(None, Some("ws"))
@@ -4686,7 +4391,6 @@ mod preauth_connection_lifetime_tests {
             .await
             .expect("cancelled upgrade released capacity");
     }
-
     #[tokio::test]
     async fn guarded_response_preserves_data_and_trailer_frames() {
         let app = app_with_scheme_cap("http");
@@ -4702,7 +4406,6 @@ mod preauth_connection_lifetime_tests {
         ]);
         let response = Response::new(Body::new(http_body_util::StreamBody::new(frames)));
         let response = hold_preauth_guard_in_response_body(response, guard);
-
         assert_eq!(
             app.preauth_gate
                 .acquire(None, Some("http"))
@@ -4728,7 +4431,6 @@ mod preauth_connection_lifetime_tests {
             .await
             .expect("guard released at body EOF");
     }
-
     #[tokio::test]
     async fn preauth_capacity_is_enforced_before_api_token_authentication() {
         let mut app = app_with_scheme_cap("http");
@@ -4749,14 +4451,12 @@ mod preauth_connection_lifetime_tests {
                 Arc::clone(&app),
                 enforce_preauth,
             ));
-
         let capacity_response = router
             .clone()
             .oneshot(request("/protected", false))
             .await
             .expect("capacity response");
         assert_eq!(capacity_response.status(), StatusCode::TOO_MANY_REQUESTS);
-
         drop(occupying_guard);
         let authentication_response = router
             .oneshot(request("/protected", false))
@@ -4764,7 +4464,6 @@ mod preauth_connection_lifetime_tests {
             .expect("authentication response");
         assert_eq!(authentication_response.status(), StatusCode::UNAUTHORIZED);
     }
-
     #[tokio::test]
     async fn missing_required_api_token_configuration_fails_closed_across_router() {
         let mut app = app_with_scheme_cap("http");
@@ -4779,7 +4478,6 @@ mod preauth_connection_lifetime_tests {
                 enforce_api_token,
             ))
             .layer(axum::middleware::from_fn(enforce_typed_error_contract));
-
         for (method, path) in [
             (axum::http::Method::GET, "/protected"),
             (axum::http::Method::POST, "/also-protected"),
@@ -4797,7 +4495,6 @@ mod preauth_connection_lifetime_tests {
                 )
                 .await
                 .expect("authentication response");
-
             assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
             assert_eq!(
                 response.headers().get(header::RETRY_AFTER),
@@ -4821,7 +4518,6 @@ mod preauth_connection_lifetime_tests {
             );
         }
     }
-
     #[tokio::test]
     async fn duplicate_api_token_headers_fail_closed() {
         let mut app = app_with_scheme_cap("http");
@@ -4834,7 +4530,6 @@ mod preauth_connection_lifetime_tests {
                 Arc::clone(&app),
                 enforce_api_token,
             ));
-
         let mut duplicate = request("/protected", false);
         duplicate
             .headers_mut()
@@ -4849,7 +4544,6 @@ mod preauth_connection_lifetime_tests {
             .expect("duplicate-token response");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert!(response.headers().contains_key(header::WWW_AUTHENTICATE));
-
         let mut single = request("/protected", false);
         single
             .headers_mut()
@@ -4857,7 +4551,6 @@ mod preauth_connection_lifetime_tests {
         let response = router.oneshot(single).await.expect("single-token response");
         assert_eq!(response.status(), StatusCode::OK);
     }
-
     #[tokio::test]
     async fn offline_command_authentication_precedes_media_and_idempotency_validation() {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -4873,12 +4566,10 @@ mod preauth_connection_lifetime_tests {
                 norito::json::from_slice(&body).expect("decode typed error response");
             envelope.code().to_owned()
         }
-
         let mut app = app_with_scheme_cap("http");
         let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
         state.require_api_token = true;
         state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
-
         let handler_calls = Arc::new(AtomicUsize::new(0));
         let router = Router::new()
             .route(
@@ -4909,7 +4600,6 @@ mod preauth_connection_lifetime_tests {
                 enforce_preauth,
             ))
             .layer(axum::middleware::from_fn(enforce_typed_error_contract));
-
         let offline_request =
             |token_count: usize, content_type: &'static str, accept: &'static str| {
                 let mut request = Request::builder()
@@ -4931,7 +4621,6 @@ mod preauth_connection_lifetime_tests {
                 }
                 request
             };
-
         let occupying_guard = app
             .acquire_preauth(None, ConnScheme::Http)
             .await
@@ -4948,7 +4637,6 @@ mod preauth_connection_lifetime_tests {
         assert_eq!(at_capacity.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(error_code(at_capacity).await, "preauth_scheme_capacity");
         drop(occupying_guard);
-
         let missing = router
             .clone()
             .oneshot(offline_request(
@@ -4961,7 +4649,6 @@ mod preauth_connection_lifetime_tests {
         assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
         assert!(missing.headers().contains_key(header::WWW_AUTHENTICATE));
         assert_eq!(error_code(missing).await, "api_token_required");
-
         let mut missing_with_duplicate_content_type =
             offline_request(0, "application/json", "application/json");
         missing_with_duplicate_content_type.headers_mut().append(
@@ -4975,7 +4662,6 @@ mod preauth_connection_lifetime_tests {
             .expect("missing-token duplicate-Content-Type response");
         assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(error_code(missing).await, "api_token_required");
-
         let duplicate = router
             .clone()
             .oneshot(offline_request(
@@ -4988,7 +4674,6 @@ mod preauth_connection_lifetime_tests {
         assert_eq!(duplicate.status(), StatusCode::UNAUTHORIZED);
         assert!(duplicate.headers().contains_key(header::WWW_AUTHENTICATE));
         assert_eq!(error_code(duplicate).await, "api_token_required");
-
         let invalid_accept = router
             .clone()
             .oneshot(offline_request(
@@ -5000,7 +4685,6 @@ mod preauth_connection_lifetime_tests {
             .expect("invalid-Accept response");
         assert_eq!(invalid_accept.status(), StatusCode::NOT_ACCEPTABLE);
         assert_eq!(error_code(invalid_accept).await, "response_not_acceptable");
-
         let mut non_ascii_accept = offline_request(1, "application/x-norito", "application/json");
         non_ascii_accept.headers_mut().append(
             header::ACCEPT,
@@ -5013,7 +4697,6 @@ mod preauth_connection_lifetime_tests {
             .expect("non-ASCII Accept response");
         assert_eq!(invalid_accept.status(), StatusCode::NOT_ACCEPTABLE);
         assert_eq!(error_code(invalid_accept).await, "response_not_acceptable");
-
         let mut duplicate_content_type =
             offline_request(1, "application/x-norito", "application/json");
         duplicate_content_type.headers_mut().append(
@@ -5030,7 +4713,6 @@ mod preauth_connection_lifetime_tests {
             error_code(invalid_content_type).await,
             "request_content_type_invalid"
         );
-
         let mut non_ascii_content_type =
             offline_request(1, "application/x-norito", "application/json");
         non_ascii_content_type.headers_mut().insert(
@@ -5047,7 +4729,6 @@ mod preauth_connection_lifetime_tests {
             error_code(invalid_content_type).await,
             "request_content_type_invalid"
         );
-
         let json_content_type = router
             .clone()
             .oneshot(offline_request(1, "application/json", "application/json"))
@@ -5061,7 +4742,6 @@ mod preauth_connection_lifetime_tests {
             error_code(json_content_type).await,
             "request_content_type_unsupported"
         );
-
         let missing_idempotency_key = router
             .oneshot(offline_request(
                 1,
@@ -5082,7 +4762,6 @@ mod preauth_connection_lifetime_tests {
         );
     }
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ApiTokenEvaluation<'headers> {
     Disabled,
@@ -5090,7 +4769,6 @@ enum ApiTokenEvaluation<'headers> {
     Invalid,
     Authenticated(&'headers str),
 }
-
 impl<'headers> ApiTokenEvaluation<'headers> {
     /// Returns a rate-limit principal only after successful authentication.
     ///
@@ -5104,7 +4782,6 @@ impl<'headers> ApiTokenEvaluation<'headers> {
         }
     }
 }
-
 fn evaluate_api_token<'headers>(
     require_api_token: bool,
     configured_tokens: &HashSet<String>,
@@ -5116,7 +4793,6 @@ fn evaluate_api_token<'headers>(
     if configured_tokens.is_empty() {
         return ApiTokenEvaluation::Unavailable;
     }
-
     let mut values = headers.get_all(HEADER_API_TOKEN).iter();
     let Some(value) = values.next() else {
         return ApiTokenEvaluation::Invalid;
@@ -5129,11 +4805,9 @@ fn evaluate_api_token<'headers>(
         _ => ApiTokenEvaluation::Invalid,
     }
 }
-
 fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> {
     api_token_rejection_with_policy(app.require_api_token, app.api_tokens_set.as_ref(), headers)
 }
-
 fn api_token_rejection_with_policy(
     require_api_token: bool,
     configured_tokens: &HashSet<String>,
@@ -5182,7 +4856,6 @@ fn api_token_rejection_with_policy(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 fn authenticate_onboarding_api_token(
     app: &AppState,
@@ -5215,7 +4888,6 @@ fn authenticate_onboarding_api_token(
         append_vary_accept(response.headers_mut());
         return Err(response);
     };
-
     let mut values = headers.get_all(HEADER_ONBOARDING_API_TOKEN).iter();
     let supplied = values.next().and_then(|value| value.to_str().ok());
     let one_value = values.next().is_none();
@@ -5263,7 +4935,6 @@ fn authenticate_onboarding_api_token(
     {
         return Ok(authenticated_scope);
     }
-
     let mut response = utils::respond_with_status_and_format(
         StatusCode::UNAUTHORIZED,
         ErrorEnvelope::new(
@@ -5279,7 +4950,6 @@ fn authenticate_onboarding_api_token(
     append_vary_accept(response.headers_mut());
     Err(response)
 }
-
 #[cfg(feature = "app_api")]
 async fn enforce_onboarding_api_token(
     State(app): State<SharedAppState>,
@@ -5317,7 +4987,6 @@ async fn enforce_onboarding_api_token(
         .insert(AuthenticatedOnboardingDomain(authenticated_scope));
     Ok(next.run(request).await)
 }
-
 async fn enforce_api_token(
     State(app): State<SharedAppState>,
     req: axum::http::Request<Body>,
@@ -5328,19 +4997,16 @@ async fn enforce_api_token(
     }
     Ok(next.run(req).await)
 }
-
 #[cfg(feature = "app_api")]
 const SCCP_SUBMIT_MAX_TRANSACTION_PAYLOAD_BYTES_V1: usize = 16 * 1024 * 1024;
 #[cfg(feature = "app_api")]
 const SCCP_SUBMIT_MAX_DETACHED_SIGNATURE_BYTES_V1: usize = 16 * 1024;
 #[cfg(feature = "app_api")]
 const SCCP_SUBMIT_JSON_ENVELOPE_ALLOWANCE_BYTES_V1: usize = 1024 * 1024;
-
 #[cfg(feature = "app_api")]
 const fn canonical_base64_max_len(decoded_len: usize) -> usize {
     4 * decoded_len.div_ceil(3)
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SccpSubmitIngressPolicy {
@@ -5349,25 +5015,21 @@ struct SccpSubmitIngressPolicy {
     telemetry_label: &'static str,
     max_body_bytes: usize,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct SccpSubmitIngressState {
     app: SharedAppState,
     operator_max_body_bytes: usize,
 }
-
 #[cfg(feature = "app_api")]
 struct SccpSubmitAdmission {
     work: parking_lot::Mutex<Option<SccpSubmitWork>>,
 }
-
 #[cfg(feature = "app_api")]
 struct SccpSubmitWork {
     permit: QueryAdmissionPermit,
     body: axum::body::Bytes,
 }
-
 #[cfg(feature = "app_api")]
 impl SccpSubmitAdmission {
     fn new(permit: QueryAdmissionPermit, body: axum::body::Bytes) -> Self {
@@ -5375,7 +5037,6 @@ impl SccpSubmitAdmission {
             work: parking_lot::Mutex::new(Some(SccpSubmitWork { permit, body })),
         }
     }
-
     fn take(&self) -> Result<SccpSubmitWork, Error> {
         self.work.lock().take().ok_or_else(|| {
             Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -5384,28 +5045,24 @@ impl SccpSubmitAdmission {
         })
     }
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SccpSubmitBodyReadError {
     TooLarge,
     Read,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SccpSubmitContentLengthError {
     TooLarge,
     Invalid,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SccpSubmitContentTypeError {
     Unsupported,
     Invalid,
 }
-
 #[cfg(feature = "app_api")]
 fn sccp_submit_ingress_policy(path: &str) -> Option<SccpSubmitIngressPolicy> {
     let proof_field_max = match path {
@@ -5433,7 +5090,6 @@ fn sccp_submit_ingress_policy(path: &str) -> Option<SccpSubmitIngressPolicy> {
         max_body_bytes,
     })
 }
-
 #[cfg(feature = "app_api")]
 async fn collect_sccp_submit_body(
     body: Body,
@@ -5458,7 +5114,6 @@ async fn collect_sccp_submit_body(
             }
         })
 }
-
 #[cfg(feature = "app_api")]
 fn validate_sccp_submit_content_length(
     headers: &axum::http::HeaderMap,
@@ -5492,7 +5147,6 @@ fn validate_sccp_submit_content_length(
         .map(Some)
         .map_err(|_| SccpSubmitContentLengthError::TooLarge)
 }
-
 #[cfg(feature = "app_api")]
 fn validate_sccp_submit_content_type(
     headers: &axum::http::HeaderMap,
@@ -5519,7 +5173,6 @@ fn validate_sccp_submit_content_type(
     if !media_type.eq_ignore_ascii_case("application/json") {
         return Err(SccpSubmitContentTypeError::Unsupported);
     }
-
     let mut charset_seen = false;
     for parameter in parts {
         let parameter = parameter.trim();
@@ -5548,7 +5201,6 @@ fn validate_sccp_submit_content_type(
     }
     Ok(())
 }
-
 /// Authenticate, rate-limit, and resource-bound SCCP submissions before JSON extraction.
 /// This middleware intentionally owns the sole network-body read for these two proof-bearing
 /// endpoints. The listener credential, exact JSON media type, rate, declared-length, and body-buffer
@@ -5573,13 +5225,11 @@ async fn enforce_sccp_submit_ingress(
         return Ok((StatusCode::NOT_FOUND, "unknown SCCP submission endpoint").into_response());
     };
     let max_body_bytes = policy.max_body_bytes.min(ingress.operator_max_body_bytes);
-
     if let Err(error) = validate_api_token(app.as_ref(), req.headers()) {
         app.telemetry
             .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
         return Ok(error.into_response());
     }
-
     if let Err(error) = validate_sccp_submit_content_type(req.headers()) {
         app.telemetry
             .with_metrics(|metrics| metrics.inc_torii_contract_error(policy.telemetry_label));
@@ -5596,7 +5246,6 @@ async fn enforce_sccp_submit_ingress(
                 .into_response(),
         });
     }
-
     let remote_ip = req
         .extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
@@ -5619,7 +5268,6 @@ async fn enforce_sccp_submit_ingress(
         ))
         .into_response());
     }
-
     let declared_content_length =
         match validate_sccp_submit_content_length(req.headers(), max_body_bytes) {
             Ok(declared) => declared,
@@ -5644,7 +5292,6 @@ async fn enforce_sccp_submit_ingress(
                 });
             }
         };
-
     let body_permit = match app.proof_body_inflight.clone().try_acquire_owned() {
         Ok(permit) => permit,
         Err(_) => {
@@ -5657,7 +5304,6 @@ async fn enforce_sccp_submit_ingress(
             .into_response());
         }
     };
-
     let (mut parts, body) = req.into_parts();
     let body = match tokio::time::timeout(
         app.proof_limits.body_read_timeout,
@@ -5704,7 +5350,6 @@ async fn enforce_sccp_submit_ingress(
         )
             .into_response());
     }
-
     let network_id = app.signed_query_admission.network_id();
     let verified = match crate::app_auth::verify_canonical_network_request(
         &app.state,
@@ -5732,7 +5377,6 @@ async fn enforce_sccp_submit_ingress(
         }
     };
     parts.extensions.insert(verified);
-
     let admission = match acquire_query_admission(app.as_ref(), true).await {
         Ok(admission) => Arc::new(SccpSubmitAdmission::new(
             admission.with_body_permit(body_permit),
@@ -5749,7 +5393,6 @@ async fn enforce_sccp_submit_ingress(
     let request = axum::http::Request::from_parts(parts, Body::from(body));
     Ok(next.run(request).await)
 }
-
 #[cfg(feature = "app_api")]
 async fn enforce_soracloud_signed_mutation_request(
     State(app): State<SharedAppState>,
@@ -5765,7 +5408,6 @@ async fn enforce_soracloud_signed_mutation_request(
                 return Ok(response);
             }
         };
-
     let (mut parts, body) = req.into_parts();
     // These headers are an internal middleware-to-handler channel. Strip all
     // client values before authentication so a future serialization failure
@@ -5808,7 +5450,6 @@ async fn enforce_soracloud_signed_mutation_request(
         }
         Err(error) => return Ok(error.into_response()),
     };
-
     let route_group = soracloud_signed_mutation_route_group(&path);
     let rate_key =
         soracloud_signed_mutation_rate_key(&parts.headers, &verified.account, route_group);
@@ -5824,7 +5465,6 @@ async fn enforce_soracloud_signed_mutation_request(
             ));
         }
     };
-
     if let Ok(value) = HeaderValue::from_bytes(verified.account.to_string().as_bytes()) {
         parts.headers.insert(
             HeaderName::from_static(soracloud::VERIFIED_ACCOUNT_HEADER),
@@ -5846,12 +5486,10 @@ async fn enforce_soracloud_signed_mutation_request(
             value,
         );
     }
-
     Ok(next
         .run(axum::http::Request::from_parts(parts, Body::from(body)))
         .await)
 }
-
 #[cfg(all(test, feature = "app_api"))]
 #[path = "tests/soracloud_signed_mutation_middleware.rs"]
 mod soracloud_signed_mutation_middleware_tests;
@@ -5864,7 +5502,6 @@ fn soracloud_signed_mutation_body_limit(app: &AppState, path: &str) -> usize {
         app.soracloud_mutation_max_body_bytes.max(1)
     }
 }
-
 #[cfg(feature = "app_api")]
 fn soracloud_body_limit_response(
     body_limit: usize,
@@ -5892,7 +5529,6 @@ fn soracloud_body_limit_response(
         format,
     )
 }
-
 #[cfg(feature = "app_api")]
 fn soracloud_signed_mutation_route_group(path: &str) -> &'static str {
     if path.starts_with("/v1/soracloud/model/upload/") {
@@ -5905,7 +5541,6 @@ fn soracloud_signed_mutation_route_group(path: &str) -> &'static str {
         "mutation"
     }
 }
-
 #[cfg(feature = "app_api")]
 fn soracloud_signed_mutation_rate_key(
     headers: &HeaderMap,
@@ -5921,7 +5556,6 @@ fn soracloud_signed_mutation_rate_key(
         .collect::<String>();
     format!("soracloud:{route_group}:account:{account}:origin:{origin}")
 }
-
 #[cfg(feature = "app_api")]
 fn soracloud_rate_limit_response(
     route_group: &str,
@@ -5945,7 +5579,6 @@ fn soracloud_rate_limit_response(
     );
     response
 }
-
 #[cfg(feature = "app_api")]
 fn soracloud_inflight_limit_response(
     route_group: &str,
@@ -5969,7 +5602,6 @@ fn soracloud_inflight_limit_response(
     );
     response
 }
-
 fn is_json_content_type(raw: &str) -> bool {
     let base = raw.split(';').next().map(str::trim).unwrap_or_default();
     if base.is_empty() {
@@ -5981,18 +5613,15 @@ fn is_json_content_type(raw: &str) -> bool {
     let lower = base.to_ascii_lowercase();
     lower.starts_with("application/") && lower.ends_with("+json")
 }
-
 fn normalize_json_content_type(raw: &str) -> Option<String> {
     if !is_json_content_type(raw) {
         return None;
     }
-
     let mut parts = raw.split(';');
     let media_type = parts.next()?.trim();
     if media_type.is_empty() {
         return None;
     }
-
     let mut normalized = String::from(media_type);
     for part in parts {
         let parameter = part.trim();
@@ -6005,15 +5634,12 @@ fn normalize_json_content_type(raw: &str) -> Option<String> {
         if is_charset {
             continue;
         }
-
         normalized.push_str("; ");
         normalized.push_str(parameter);
     }
     normalized.push_str("; charset=utf-8");
-
     Some(normalized)
 }
-
 fn normalize_json_response_content_type(headers: &mut HeaderMap) {
     let raw = headers
         .get(axum::http::header::CONTENT_TYPE)
@@ -6028,7 +5654,6 @@ fn normalize_json_response_content_type(headers: &mut HeaderMap) {
         headers.insert(axum::http::header::CONTENT_TYPE, value);
     }
 }
-
 async fn enforce_json_utf8_charset(
     req: axum::http::Request<Body>,
     next: Next,
@@ -6037,7 +5662,6 @@ async fn enforce_json_utf8_charset(
     normalize_json_response_content_type(response.headers_mut());
     Ok(response)
 }
-
 fn coalesced_accept_header(headers: &HeaderMap) -> Result<Option<HeaderValue>, &'static str> {
     let mut values = headers.get_all(axum::http::header::ACCEPT).iter();
     let Some(first) = values.next() else {
@@ -6060,7 +5684,6 @@ fn coalesced_accept_header(headers: &HeaderMap) -> Result<Option<HeaderValue>, &
         .map(Some)
         .map_err(|_| "The combined Accept header is invalid.")
 }
-
 fn content_type_header_error(headers: &HeaderMap) -> Option<&'static str> {
     let mut values = headers.get_all(axum::http::header::CONTENT_TYPE).iter();
     let first = values.next()?;
@@ -6072,7 +5695,6 @@ fn content_type_header_error(headers: &HeaderMap) -> Option<&'static str> {
         .is_err()
         .then_some("Content-Type is not valid ASCII.")
 }
-
 /// Select the best representation for a rejection which deliberately runs
 /// before strict Accept validation. Authentication and capacity errors take
 /// precedence over malformed or unacceptable media preferences; valid media
@@ -6088,7 +5710,6 @@ fn early_rejection_response_format(headers: &HeaderMap) -> ResponseFormat {
         .or_else(|| headers.get(axum::http::header::ACCEPT));
     utils::negotiate_response_format(accept).unwrap_or(ResponseFormat::Json)
 }
-
 async fn coalesce_accept_headers(
     mut req: axum::http::Request<Body>,
     next: Next,
@@ -6128,7 +5749,6 @@ async fn coalesce_accept_headers(
     }
     Ok(next.run(req).await)
 }
-
 fn has_percent_encoded_separator(path: &str) -> bool {
     path.as_bytes().windows(3).any(|window| {
         window[0] == b'%'
@@ -6136,7 +5756,6 @@ fn has_percent_encoded_separator(path: &str) -> bool {
                 || (window[1] == b'5' && matches!(window[2], b'c' | b'C')))
     })
 }
-
 fn has_dot_segment(path: &str) -> bool {
     path.split('/').any(|segment| {
         segment == "."
@@ -6147,14 +5766,11 @@ fn has_dot_segment(path: &str) -> bool {
             || segment.eq_ignore_ascii_case("%2e%2e")
     })
 }
-
 fn has_percent_encoded_offline_operation_id(path: &str) -> bool {
     const PREFIX: &str = "/v1/offline/operations/";
-
     path.strip_prefix(PREFIX)
         .is_some_and(|operation_id| !operation_id.contains('/') && operation_id.contains('%'))
 }
-
 fn has_percent_encoded_governance_selector(path: &str) -> bool {
     const PREFIXES: [&str; 4] = [
         "/v1/gov/proposals/",
@@ -6162,14 +5778,12 @@ fn has_percent_encoded_governance_selector(path: &str) -> bool {
         "/v1/gov/referenda/",
         "/v1/gov/tally/",
     ];
-
     PREFIXES.iter().any(|prefix| {
         path.strip_prefix(*prefix).is_some_and(|selector| {
             !selector.is_empty() && !selector.contains('/') && selector.contains('%')
         })
     })
 }
-
 async fn enforce_strict_request_target(
     req: axum::http::Request<Body>,
     next: Next,
@@ -6199,7 +5813,6 @@ async fn enforce_strict_request_target(
     let Some((status, code, message)) = violation else {
         return Ok(next.run(req).await);
     };
-
     let format =
         match utils::negotiate_response_format(req.headers().get(axum::http::header::ACCEPT)) {
             Ok(format) => format,
@@ -6213,7 +5826,6 @@ async fn enforce_strict_request_target(
     append_vary_accept(response.headers_mut());
     Ok(response)
 }
-
 async fn enforce_offline_cache_policy(
     req: axum::http::Request<Body>,
     next: Next,
@@ -6223,7 +5835,6 @@ async fn enforce_offline_cache_policy(
     const RECIPIENT_LINEAGE_PATH: &str = "/v1/offline/receiver-lineage";
     const TOP_UP_PATH: &str = "/v1/offline/top-up";
     const REDEEM_PATH: &str = "/v1/offline/redeem";
-
     let route = req.extensions().get::<MatchedRouteMetadata>();
     let operation_status = route.is_some_and(|route| {
         route.stable_route_id() == route_catalog::offline::OPERATION.stable_route_id()
@@ -6260,7 +5871,6 @@ async fn enforce_offline_cache_policy(
     }
     Ok(response)
 }
-
 fn is_cors_preflight(request: &axum::http::Request<Body>) -> bool {
     request.method() == axum::http::Method::OPTIONS
         && request.headers().contains_key(axum::http::header::ORIGIN)
@@ -6268,7 +5878,6 @@ fn is_cors_preflight(request: &axum::http::Request<Body>) -> bool {
             .headers()
             .contains_key(axum::http::header::ACCESS_CONTROL_REQUEST_METHOD)
 }
-
 async fn enforce_cataloged_cors_preflight(
     req: axum::http::Request<Body>,
     next: Next,
@@ -6280,7 +5889,6 @@ async fn enforce_cataloged_cors_preflight(
     if route.is_some_and(|route| route.stable_route_id() == "http.cors_preflight") {
         return Ok(next.run(req).await);
     }
-
     let (status, code, message) =
         if route.is_none_or(|route| route.stable_route_id() == "http.route_not_found") {
             (
@@ -6308,7 +5916,6 @@ async fn enforce_cataloged_cors_preflight(
     append_vary_accept(response.headers_mut());
     Ok(response)
 }
-
 async fn capture_response_format(
     req: axum::http::Request<Body>,
     next: Next,
@@ -6386,9 +5993,7 @@ async fn capture_response_format(
     }
     Ok(response)
 }
-
 const MAX_TYPED_ERROR_BODY_BYTES: usize = 256 * 1024;
-
 fn generic_error_for_status(status: StatusCode) -> (&'static str, &'static str) {
     match status {
         StatusCode::BAD_REQUEST => ("bad_request", "The request is invalid."),
@@ -6438,21 +6043,18 @@ fn generic_error_for_status(status: StatusCode) -> (&'static str, &'static str) 
         _ => ("http_error", "The request did not complete successfully."),
     }
 }
-
 fn decode_error_envelope(bytes: &[u8], format: ResponseFormat) -> Option<ErrorEnvelope> {
     match format {
         ResponseFormat::Json => norito::json::from_slice(bytes).ok(),
         ResponseFormat::Norito => norito::decode_from_bytes(bytes).ok(),
     }
 }
-
 fn encode_error_envelope(envelope: &ErrorEnvelope, format: ResponseFormat) -> Option<Vec<u8>> {
     match format {
         ResponseFormat::Json => norito::json::to_vec(envelope).ok(),
         ResponseFormat::Norito => norito::to_bytes(envelope).ok(),
     }
 }
-
 fn retry_after_seconds(headers: &HeaderMap) -> u64 {
     headers
         .get(axum::http::header::RETRY_AFTER)
@@ -6461,7 +6063,6 @@ fn retry_after_seconds(headers: &HeaderMap) -> u64 {
         .filter(|seconds| *seconds > 0)
         .unwrap_or(1)
 }
-
 fn retain_valid_error_detail(value: &mut Option<String>) {
     if value
         .as_deref()
@@ -6470,7 +6071,6 @@ fn retain_valid_error_detail(value: &mut Option<String>) {
         *value = None;
     }
 }
-
 fn axt_error_details_is_empty(details: &AxtErrorDetails) -> bool {
     details.code.is_none()
         && details.reason.is_none()
@@ -6480,12 +6080,10 @@ fn axt_error_details_is_empty(details: &AxtErrorDetails) -> bool {
         && details.active_handle_era.is_none()
         && details.next_handle_counter.is_none()
 }
-
 fn sanitize_fee_error_details(details: &mut FeeErrorDetails) -> bool {
     if FeeRejectionCode::from_str(&details.code).is_err() {
         return false;
     }
-
     if details.program_id.as_deref().is_some_and(|literal| {
         literal
             .parse::<iroha_data_model::nexus::FeeSponsorProgramId>()
@@ -6524,7 +6122,6 @@ fn sanitize_fee_error_details(details: &mut FeeErrorDetails) -> bool {
     retain_valid_error_detail(&mut details.remediation);
     true
 }
-
 fn sanitize_error_details(details: &mut ErrorDetails) {
     retain_valid_error_detail(&mut details.layer);
     if details
@@ -6576,7 +6173,6 @@ fn sanitize_error_details(details: &mut ErrorDetails) {
         details.fee = None;
     }
 }
-
 fn canonical_error_response(
     mut parts: axum::http::response::Parts,
     mut envelope: ErrorEnvelope,
@@ -6621,7 +6217,6 @@ fn canonical_error_response(
         let (_, message) = generic_error_for_status(parts.status);
         envelope.message = message.to_owned();
     }
-
     if matches!(
         parts.status,
         StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
@@ -6653,7 +6248,6 @@ fn canonical_error_response(
             HeaderValue::from_static("Iroha realm=\"torii\""),
         );
     }
-
     let (bytes, encoded_format) = encode_error_envelope(&envelope, format).map_or_else(
         || {
             let fallback = ErrorEnvelope::new(
@@ -6685,7 +6279,6 @@ fn canonical_error_response(
     parts
         .extensions
         .insert(utils::HttpErrorCode::from_envelope(&envelope));
-
     AxResponse::from_parts(
         parts,
         if head_only {
@@ -6695,7 +6288,6 @@ fn canonical_error_response(
         },
     )
 }
-
 /// Explicit marker for a reviewed protocol-native error response.
 /// Adding a variant requires an exact route, status, media-type, and public
 /// error-header entry in [`reviewed_protocol_native_error_code`]. Unmarked
@@ -6706,7 +6298,6 @@ pub(crate) enum ReviewedProtocolNativeError {
     /// SSE event explaining that this live stream cannot resume from a cursor.
     StreamResumeUnsupported,
 }
-
 fn response_boundary_accept_header(
     headers: &HeaderMap,
 ) -> Result<Option<HeaderValue>, &'static str> {
@@ -6715,7 +6306,6 @@ fn response_boundary_accept_header(
         None => Ok(headers.get(axum::http::header::ACCEPT).cloned()),
     }
 }
-
 fn reviewed_protocol_native_error_code(
     route: Option<&MatchedRouteMetadata>,
     response: &AxResponse,
@@ -6732,7 +6322,6 @@ fn reviewed_protocol_native_error_code(
         .split(';')
         .next()
         .map(str::trim)?;
-
     match marker {
         ReviewedProtocolNativeError::StreamResumeUnsupported
             if response.status() == StatusCode::BAD_REQUEST
@@ -6752,7 +6341,6 @@ fn reviewed_protocol_native_error_code(
         _ => None,
     }
 }
-
 /// Enforce one finite error contract at the HTTP response boundary.
 ///
 /// Ordinary public, operator, diagnostic, router, and middleware failures are
@@ -6774,7 +6362,6 @@ async fn enforce_typed_error_contract(
     if !status.is_client_error() && !status.is_server_error() {
         return Ok(response);
     }
-
     if let Some(code) = reviewed_protocol_native_error_code(route.as_ref(), &response) {
         let content_type = response
             .headers()
@@ -6814,7 +6401,6 @@ async fn enforce_typed_error_contract(
             }
         }
     }
-
     response
         .extensions_mut()
         .remove::<ReviewedProtocolNativeError>();
@@ -6824,7 +6410,6 @@ async fn enforce_typed_error_contract(
         .get(axum::http::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .and_then(utils::typed_response_format_for_content_type);
-
     // Content-Type controls decoding only. The request's Accept negotiation is
     // authoritative for the representation emitted by this boundary. A
     // malformed/coalescing-failed or unsupported Accept value uses JSON for
@@ -6846,7 +6431,6 @@ async fn enforce_typed_error_contract(
             let (code, message) = generic_error_for_status(parts.status);
             ErrorEnvelope::new(code, message)
         });
-
     Ok(canonical_error_response(
         parts,
         envelope,
@@ -6854,7 +6438,6 @@ async fn enforce_typed_error_contract(
         method == axum::http::Method::HEAD,
     ))
 }
-
 fn append_vary_accept(headers: &mut HeaderMap) {
     let already_varies = headers
         .get_all(axum::http::header::VARY)
@@ -6866,7 +6449,6 @@ fn append_vary_accept(headers: &mut HeaderMap) {
         headers.append(axum::http::header::VARY, HeaderValue::from_static("Accept"));
     }
 }
-
 async fn handler_route_not_found() -> Response {
     utils::respond_with_status_and_format(
         StatusCode::NOT_FOUND,
@@ -6874,7 +6456,6 @@ async fn handler_route_not_found() -> Response {
         utils::current_response_format(),
     )
 }
-
 async fn handler_method_not_allowed() -> Response {
     utils::respond_with_status_and_format(
         StatusCode::METHOD_NOT_ALLOWED,
@@ -6885,7 +6466,6 @@ async fn handler_method_not_allowed() -> Response {
         utils::current_response_format(),
     )
 }
-
 fn route_timeout_for_path(path: &str) -> Duration {
     match path {
         "/v1/zk/ivm/derive" | "/v1/zk/ivm/prove" => ZK_IVM_ROUTE_TIMEOUT,
@@ -6895,7 +6475,6 @@ fn route_timeout_for_path(path: &str) -> Duration {
         _ => DEFAULT_ROUTE_TIMEOUT + Duration::from_secs(5),
     }
 }
-
 async fn enforce_route_timeout(
     req: axum::http::Request<Body>,
     next: Next,
@@ -6912,7 +6491,6 @@ async fn enforce_route_timeout(
         )),
     }
 }
-
 async fn catch_handler_panics(
     req: axum::http::Request<Body>,
     next: Next,
@@ -6941,7 +6519,6 @@ async fn catch_handler_panics(
         }
     }
 }
-
 /// Attach catalog metadata after Axum has selected a route template.
 ///
 /// `MatchedPath` is a router template (for example
@@ -6963,7 +6540,6 @@ async fn attach_matched_route_metadata(
     response.extensions_mut().insert(metadata);
     Ok(response)
 }
-
 fn route_surface_label(metadata: &MatchedRouteMetadata) -> &'static str {
     match metadata.surface() {
         Some(iroha_torii_shared::route_catalog::ApiSurface::Public) => "public",
@@ -6974,7 +6550,6 @@ fn route_surface_label(metadata: &MatchedRouteMetadata) -> &'static str {
         None => "unregistered",
     }
 }
-
 fn response_representation_label(response: &Response) -> &'static str {
     if response.status() == StatusCode::SWITCHING_PROTOCOLS {
         return "websocket";
@@ -7021,7 +6596,6 @@ fn response_representation_label(response: &Response) -> &'static str {
         "other"
     }
 }
-
 fn sorafs_gateway_request_metric_labels<'a>(
     metadata: &'a MatchedRouteMetadata,
     method: &'a str,
@@ -7048,7 +6622,6 @@ fn sorafs_gateway_request_metric_labels<'a>(
         profile,
     })
 }
-
 async fn record_http_metrics(
     State(app): State<SharedAppState>,
     req: axum::http::Request<Body>,
@@ -7159,7 +6732,6 @@ async fn record_http_metrics(
             error_code,
         }
     });
-
     telemetry.with_metrics(|tel| {
         if let Some(labels) = gateway_response {
             tel.finish_sorafs_gateway_request(labels, duration);
@@ -7179,10 +6751,8 @@ async fn record_http_metrics(
         );
         tel.observe_torii_request_by_scheme(scheme_label, status, duration);
     });
-
     Ok(response)
 }
-
 #[cfg(test)]
 mod matched_route_metadata_tests {
     use axum::{
@@ -7220,13 +6790,11 @@ mod matched_route_metadata_tests {
     )
     .with_implicit_head(true)
     .with_cors_options(true);
-
     async fn metadata_handler(Extension(metadata): Extension<MatchedRouteMetadata>) -> Response {
         assert_eq!(metadata.stable_route_id(), "test.item.read");
         assert_eq!(metadata.path_template(), "/v1/tests/items/{item_id}");
         StatusCode::NO_CONTENT.into_response()
     }
-
     #[test]
     fn gateway_metrics_use_only_cataloged_bounded_labels() {
         let car = MatchedRouteMetadata::from_descriptor(route_catalog::sorafs::STORAGE_CAR);
@@ -7237,7 +6805,6 @@ mod matched_route_metadata_tests {
         assert_eq!(labels.variant, "car");
         assert_eq!(labels.chunker, "unknown");
         assert_eq!(labels.profile, "unknown");
-
         let proof = MatchedRouteMetadata::from_descriptor(route_catalog::sorafs::PROOF_STREAM);
         let labels =
             sorafs_gateway_request_metric_labels(&proof, "POST").expect("proof metric route");
@@ -7247,11 +6814,9 @@ mod matched_route_metadata_tests {
             labels.profile,
             sorafs_manifest::gateway_fixture::SORAFS_GATEWAY_PROFILE_VERSION
         );
-
         let unrelated = MatchedRouteMetadata::from_descriptor(ITEM);
         assert!(sorafs_gateway_request_metric_labels(&unrelated, "GET").is_none());
     }
-
     #[tokio::test]
     async fn concrete_identifier_and_cursor_never_enter_matched_route_metadata() {
         let mut builder =
@@ -7265,7 +6830,6 @@ mod matched_route_metadata_tests {
                 attach_matched_route_metadata,
             ))
             .with_state(());
-
         let response = router
             .oneshot(
                 Request::builder()
@@ -7285,7 +6849,6 @@ mod matched_route_metadata_tests {
         assert!(!metadata.path_template().contains("customer-secret"));
         assert!(!metadata.path_template().contains("cursor"));
     }
-
     #[test]
     fn uncataloged_resolution_keeps_only_axum_template() {
         let builder = RouterBuilder::new((), RouteCatalog::new(&[ITEM]), EnabledFeatures::none())
@@ -7300,7 +6863,6 @@ mod matched_route_metadata_tests {
             ]
         );
     }
-
     #[tokio::test]
     async fn cors_cannot_create_undeclared_options_routes() {
         use http_body_util::BodyExt as _;
@@ -7328,7 +6890,6 @@ mod matched_route_metadata_tests {
                 attach_matched_route_metadata,
             ))
             .with_state(());
-
         let preflight = |path: &'static str| {
             Request::builder()
                 .method(axum::http::Method::OPTIONS)
@@ -7339,7 +6900,6 @@ mod matched_route_metadata_tests {
                 .body(Body::empty())
                 .expect("preflight")
         };
-
         let response = router
             .clone()
             .oneshot(preflight("/v1/tests/items/secret"))
@@ -7355,7 +6915,6 @@ mod matched_route_metadata_tests {
         let envelope: ErrorEnvelope =
             norito::json::from_slice(&body).expect("typed error envelope");
         assert_eq!(envelope.code(), "method_not_allowed");
-
         let response = router
             .clone()
             .oneshot(preflight("/v1/tests/cors-items/secret"))
@@ -7367,7 +6926,6 @@ mod matched_route_metadata_tests {
                 .headers()
                 .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN)
         );
-
         let response = router
             .oneshot(preflight("/v1/tests/unknown/secret"))
             .await
@@ -7375,12 +6933,10 @@ mod matched_route_metadata_tests {
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
-
 #[cfg(test)]
 mod strict_request_target_tests {
     include!("tests/lib_strict_request_targets.rs");
 }
-
 #[cfg(test)]
 mod offline_cache_policy_tests {
     use axum::{
@@ -7439,7 +6995,6 @@ mod offline_cache_policy_tests {
             )
             .route("/health", get(|| async { StatusCode::NOT_FOUND }))
             .layer(axum::middleware::from_fn(enforce_offline_cache_policy));
-
         for (operation_id, status) in [
             ("known", StatusCode::OK),
             ("invalid", StatusCode::BAD_REQUEST),
@@ -7463,7 +7018,6 @@ mod offline_cache_policy_tests {
                 "operation_id={operation_id}"
             );
         }
-
         let response = router
             .clone()
             .oneshot(
@@ -7481,7 +7035,6 @@ mod offline_cache_policy_tests {
                 "private, max-age=0, must-revalidate"
             ))
         );
-
         let response = router
             .clone()
             .oneshot(
@@ -7499,7 +7052,6 @@ mod offline_cache_policy_tests {
                 "private, max-age=0, must-revalidate"
             ))
         );
-
         for (path, status) in [
             ("/v1/offline/top-up", StatusCode::ACCEPTED),
             ("/v1/offline/redeem", StatusCode::SERVICE_UNAVAILABLE),
@@ -7522,7 +7074,6 @@ mod offline_cache_policy_tests {
                 "path={path}"
             );
         }
-
         let response = router
             .oneshot(
                 Request::builder()
@@ -7535,7 +7086,6 @@ mod offline_cache_policy_tests {
         assert!(response.headers().get(header::CACHE_CONTROL).is_none());
     }
 }
-
 #[cfg(test)]
 mod content_type_utf8_tests {
     use axum::http::{HeaderMap, HeaderValue, header::CONTENT_TYPE};
@@ -7549,7 +7099,6 @@ mod content_type_utf8_tests {
             Some("application/json; charset=utf-8".to_string())
         );
     }
-
     #[test]
     fn keeps_non_charset_parameters_when_normalizing() {
         assert_eq!(
@@ -7559,7 +7108,6 @@ mod content_type_utf8_tests {
             Some("application/problem+json; profile=\"urn:problem\"; charset=utf-8".to_string())
         );
     }
-
     #[test]
     fn leaves_non_json_content_type_untouched() {
         let mut headers = HeaderMap::new();
@@ -7567,15 +7115,12 @@ mod content_type_utf8_tests {
             CONTENT_TYPE,
             HeaderValue::from_static("text/plain; charset=iso-8859-1"),
         );
-
         normalize_json_response_content_type(&mut headers);
-
         assert_eq!(
             headers.get(CONTENT_TYPE),
             Some(&HeaderValue::from_static("text/plain; charset=iso-8859-1"))
         );
     }
-
     #[test]
     fn rewrites_header_in_place_for_json_responses() {
         let mut headers = HeaderMap::new();
@@ -7583,16 +7128,13 @@ mod content_type_utf8_tests {
             CONTENT_TYPE,
             HeaderValue::from_static("application/json; charset=latin1"),
         );
-
         normalize_json_response_content_type(&mut headers);
-
         assert_eq!(
             headers.get(CONTENT_TYPE),
             Some(&HeaderValue::from_static("application/json; charset=utf-8"))
         );
     }
 }
-
 #[cfg(test)]
 mod response_negotiation_middleware_tests {
     use std::sync::{
@@ -7619,14 +7161,12 @@ mod response_negotiation_middleware_tests {
             .body(Body::from("native"))
             .expect("native response")
     }
-
     fn typed_norito_response() -> Response {
         utils::respond_with_format(
             ErrorEnvelope::new("example", "typed"),
             ResponseFormat::Norito,
         )
     }
-
     fn native_request(
         path: &str,
         accept: &str,
@@ -7642,7 +7182,6 @@ mod response_negotiation_middleware_tests {
             .insert(MatchedRouteMetadata::from_descriptor(route));
         request
     }
-
     #[tokio::test]
     async fn safe_protocol_native_media_bypasses_typed_negotiation() {
         let router = Router::new()
@@ -7659,7 +7198,6 @@ mod response_negotiation_middleware_tests {
                 get(|| async { native_response("application/octet-stream") }),
             )
             .layer(axum::middleware::from_fn(capture_response_format));
-
         for (path, accept, expected_content_type, route) in [
             (
                 "/events",
@@ -7718,7 +7256,6 @@ mod response_negotiation_middleware_tests {
             );
         }
     }
-
     #[tokio::test]
     async fn safe_protocol_native_media_rejects_an_explicit_mismatch() {
         let router = Router::new()
@@ -7752,7 +7289,6 @@ mod response_negotiation_middleware_tests {
             assert!(response.headers().get(header::VARY).is_some());
         }
     }
-
     #[tokio::test]
     async fn safe_typed_response_still_rejects_unacceptable_media() {
         let router = Router::new()
@@ -7771,7 +7307,6 @@ mod response_negotiation_middleware_tests {
         assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
         assert!(response.headers().get(header::VARY).is_some());
     }
-
     #[tokio::test]
     async fn public_conditional_get_rejects_unacceptable_media_before_a_304_handler() {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -7799,13 +7334,11 @@ mod response_negotiation_middleware_tests {
             .insert(MatchedRouteMetadata::from_descriptor(
                 route_catalog::offline::READINESS,
             ));
-
         let response = router.oneshot(request).await.expect("response");
         assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
         assert!(response.headers().get(header::VARY).is_some());
     }
-
     #[tokio::test]
     async fn protocol_stream_establishment_errors_remain_typed_json() {
         let router = Router::new()
@@ -7864,7 +7397,6 @@ mod response_negotiation_middleware_tests {
             assert_eq!(envelope.code(), "unauthorized", "{accept}");
         }
     }
-
     #[tokio::test]
     async fn unsafe_command_is_rejected_before_handler_side_effects() {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -7895,7 +7427,6 @@ mod response_negotiation_middleware_tests {
         assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
-
     #[tokio::test]
     async fn repeated_accept_fields_are_combined_before_negotiation() {
         let router = Router::new()
@@ -7923,7 +7454,6 @@ mod response_negotiation_middleware_tests {
             header::ACCEPT,
             HeaderValue::from_static("application/x-norito;q=0.9"),
         );
-
         let response = router.oneshot(request).await.expect("response");
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
@@ -7934,7 +7464,6 @@ mod response_negotiation_middleware_tests {
             Some("application/x-norito")
         );
     }
-
     #[tokio::test]
     async fn non_ascii_repeated_accept_field_fails_closed() {
         let router = Router::new()
@@ -7952,7 +7481,6 @@ mod response_negotiation_middleware_tests {
             header::ACCEPT,
             HeaderValue::from_bytes(&[0xff]).expect("opaque header value"),
         );
-
         let response = router.oneshot(request).await.expect("response");
         assert_eq!(response.status(), StatusCode::NOT_ACCEPTABLE);
         assert_eq!(
@@ -7964,7 +7492,6 @@ mod response_negotiation_middleware_tests {
         );
         assert!(response.headers().get(header::VARY).is_some());
     }
-
     #[tokio::test]
     async fn duplicate_content_type_is_rejected_before_command_handler() {
         let calls = Arc::new(AtomicUsize::new(0));
@@ -7995,7 +7522,6 @@ mod response_negotiation_middleware_tests {
             header::CONTENT_TYPE,
             HeaderValue::from_static("application/x-norito"),
         );
-
         let response = router.oneshot(request).await.expect("response");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -8015,7 +7541,6 @@ mod response_negotiation_middleware_tests {
         let envelope: ErrorEnvelope = norito::decode_from_bytes(&body).expect("decode typed error");
         assert_eq!(envelope.code(), "request_content_type_invalid");
     }
-
     #[tokio::test]
     async fn handler_panic_becomes_typed_internal_error() {
         let router = Router::new()
@@ -8033,7 +7558,6 @@ mod response_negotiation_middleware_tests {
             )
             .layer(axum::middleware::from_fn(catch_handler_panics))
             .layer(axum::middleware::from_fn(capture_response_format));
-
         for (accept, expected_content_type) in [
             ("application/json", "application/json"),
             ("application/x-norito", "application/x-norito"),
@@ -8077,7 +7601,6 @@ mod response_negotiation_middleware_tests {
         }
     }
 }
-
 #[cfg(test)]
 mod typed_error_contract_tests {
     use axum::{
@@ -8095,7 +7618,6 @@ mod typed_error_contract_tests {
     fn with_error_contract(router: Router) -> Router {
         router.layer(axum::middleware::from_fn(enforce_typed_error_contract))
     }
-
     async fn body_bytes(response: AxResponse) -> Bytes {
         response
             .into_body()
@@ -8104,7 +7626,6 @@ mod typed_error_contract_tests {
             .expect("collect response body")
             .to_bytes()
     }
-
     #[tokio::test]
     async fn bare_error_defaults_to_canonical_norito_envelope() {
         let router = with_error_contract(
@@ -8119,7 +7640,6 @@ mod typed_error_contract_tests {
             )
             .await
             .expect("response");
-
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert_eq!(
             response.headers().get(header::CONTENT_TYPE),
@@ -8140,7 +7660,6 @@ mod typed_error_contract_tests {
             norito::decode_from_bytes(&body_bytes(response).await).expect("decode canonical error");
         assert_eq!(envelope.code(), "not_found");
     }
-
     #[tokio::test]
     async fn app_error_reject_codes_survive_json_and_norito_negotiation() {
         let router = Router::new()
@@ -8208,7 +7727,6 @@ mod typed_error_contract_tests {
             .fallback(handler_route_not_found)
             .layer(axum::middleware::from_fn(capture_response_format))
             .layer(axum::middleware::from_fn(enforce_typed_error_contract));
-
         for (accept, expected_content_type) in [
             ("application/json", "application/json; charset=utf-8"),
             (utils::NORITO_MIME_TYPE, utils::NORITO_MIME_TYPE),
@@ -8262,7 +7780,6 @@ mod typed_error_contract_tests {
                     )
                     .await
                     .expect("response");
-
                 assert_eq!(response.status(), expected_status, "path={path}");
                 assert_eq!(
                     response
@@ -8280,7 +7797,6 @@ mod typed_error_contract_tests {
                     Some(expected_code),
                     "the header must carry the app error's exact code; path={path}; accept={accept}"
                 );
-
                 let body = body_bytes(response).await;
                 let envelope: ErrorEnvelope = if accept == "application/json" {
                     norito::json::from_slice(&body).expect("decode negotiated JSON error")
@@ -8290,7 +7806,6 @@ mod typed_error_contract_tests {
                 assert_eq!(envelope.code(), expected_code, "path={path}");
                 assert_eq!(envelope.message(), expected_message, "path={path}");
             }
-
             let response = router
                 .clone()
                 .oneshot(
@@ -8316,7 +7831,6 @@ mod typed_error_contract_tests {
             assert_eq!(envelope.code(), "route_not_found");
         }
     }
-
     #[tokio::test]
     async fn declared_error_format_is_decoded_then_reencoded_to_negotiated_accept() {
         let router = Router::new()
@@ -8342,7 +7856,6 @@ mod typed_error_contract_tests {
             )
             .layer(axum::middleware::from_fn(capture_response_format))
             .layer(axum::middleware::from_fn(enforce_typed_error_contract));
-
         for (path, accept, expected_status, expected_content_type, expected_code) in [
             (
                 "/declared-json",
@@ -8396,7 +7909,6 @@ mod typed_error_contract_tests {
             assert_eq!(envelope.code(), expected_code, "path={path}");
         }
     }
-
     #[tokio::test]
     async fn failed_negotiation_uses_deterministic_json_after_declared_norito_decode() {
         let router = Router::new()
@@ -8425,7 +7937,6 @@ mod typed_error_contract_tests {
             )
             .await
             .expect("response");
-
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             response
@@ -8439,7 +7950,6 @@ mod typed_error_contract_tests {
         assert_eq!(envelope.code(), "declared_norito_error");
         assert_eq!(envelope.message(), "preserved across negotiation failure");
     }
-
     #[tokio::test]
     async fn ad_hoc_json_error_is_replaced_without_leaking_original_body() {
         let router = with_error_contract(Router::new().route(
@@ -8462,7 +7972,6 @@ mod typed_error_contract_tests {
             )
             .await
             .expect("response");
-
         assert_eq!(response.status(), StatusCode::CONFLICT);
         let body = body_bytes(response).await;
         assert!(!String::from_utf8_lossy(&body).contains("internal secret"));
@@ -8470,7 +7979,6 @@ mod typed_error_contract_tests {
             norito::json::from_slice(&body).expect("decode canonical JSON error");
         assert_eq!(envelope.code(), "conflict");
     }
-
     #[tokio::test]
     async fn syntactically_valid_internal_errors_are_redacted_for_every_representation() {
         const MARKER: &str = "private_internal_marker_7f40";
@@ -8506,7 +8014,6 @@ mod typed_error_contract_tests {
                 }),
             )
             .layer(axum::middleware::from_fn(enforce_typed_error_contract));
-
         for (path, accept) in [
             ("/json-internal", "application/json"),
             ("/norito-internal", utils::NORITO_MIME_TYPE),
@@ -8536,7 +8043,6 @@ mod typed_error_contract_tests {
             assert!(envelope.details.is_none());
         }
     }
-
     #[tokio::test]
     async fn unknown_error_members_are_discarded_at_the_response_boundary() {
         let router = with_error_contract(Router::new().route(
@@ -8561,7 +8067,6 @@ mod typed_error_contract_tests {
             )
             .await
             .expect("response");
-
         let body = body_bytes(response).await;
         assert!(!String::from_utf8_lossy(&body).contains("secret"));
         let envelope: ErrorEnvelope =
@@ -8569,7 +8074,6 @@ mod typed_error_contract_tests {
         assert_eq!(envelope.code(), "bad_request");
         assert!(envelope.details.is_none());
     }
-
     #[tokio::test]
     async fn invalid_public_error_code_moves_to_typed_reject_details() {
         let router = with_error_contract(Router::new().route(
@@ -8600,7 +8104,6 @@ mod typed_error_contract_tests {
             Some("PRTRY:BAD".to_owned())
         );
     }
-
     #[test]
     fn fee_error_detail_sanitizer_enforces_public_codes_and_canonical_values() {
         let mut details = FeeErrorDetails {
@@ -8615,7 +8118,6 @@ mod typed_error_contract_tests {
             observation_height: Some(42),
             remediation: Some("fund the program vault".to_owned()),
         };
-
         assert!(sanitize_fee_error_details(&mut details));
         assert!(details.program_id.is_none());
         assert!(details.program_revision.is_none());
@@ -8624,11 +8126,9 @@ mod typed_error_contract_tests {
         assert_eq!(details.available.as_deref(), Some("4"));
         assert!(details.rule_id.is_none());
         assert_eq!(details.observation_height, Some(42));
-
         details.code = "private/reason".to_owned();
         assert!(!sanitize_fee_error_details(&mut details));
     }
-
     #[tokio::test]
     async fn error_boundary_discards_unbounded_or_unsafe_detail_text() {
         let oversized = "x".repeat(utils::MAX_ERROR_DETAIL_CHARACTERS + 1);
@@ -8692,7 +8192,6 @@ mod typed_error_contract_tests {
         assert_eq!(envelope.message(), "The request is invalid.");
         assert!(envelope.details.is_none());
     }
-
     #[tokio::test]
     async fn invalid_public_error_messages_are_replaced_for_json_and_norito() {
         let router = Router::new()
@@ -8717,7 +8216,6 @@ mod typed_error_contract_tests {
                 }),
             )
             .layer(axum::middleware::from_fn(enforce_typed_error_contract));
-
         for (path, accept) in [
             ("/empty-json-message", "application/json"),
             ("/control-norito-message", utils::NORITO_MIME_TYPE),
@@ -8744,7 +8242,6 @@ mod typed_error_contract_tests {
             assert!(utils::is_valid_error_message(envelope.message()));
         }
     }
-
     #[tokio::test]
     async fn retryable_errors_receive_matching_header_and_details() {
         for status in [
@@ -8785,7 +8282,6 @@ mod typed_error_contract_tests {
             );
         }
     }
-
     #[tokio::test]
     async fn unauthorized_error_receives_challenge_header() {
         let router = with_error_contract(
@@ -8806,7 +8302,6 @@ mod typed_error_contract_tests {
             .expect("decode unauthorized envelope");
         assert_eq!(envelope.code(), "unauthorized");
     }
-
     #[tokio::test]
     async fn head_error_advertises_typed_length_without_emitting_a_body() {
         let router = with_error_contract(
@@ -8834,7 +8329,6 @@ mod typed_error_contract_tests {
         );
         assert!(body_bytes(response).await.is_empty());
     }
-
     #[tokio::test]
     async fn oversized_and_malformed_typed_errors_fail_closed() {
         let oversized = vec![b'x'; MAX_TYPED_ERROR_BODY_BYTES + 1];
@@ -8864,7 +8358,6 @@ mod typed_error_contract_tests {
                     }),
                 ),
         );
-
         for (path, status, code) in [
             (
                 "/oversized",
@@ -8890,7 +8383,6 @@ mod typed_error_contract_tests {
             assert_eq!(envelope.code(), code);
         }
     }
-
     fn reviewed_sse_error_response() -> Response {
         let mut response = Response::builder()
             .status(StatusCode::BAD_REQUEST)
@@ -8903,7 +8395,6 @@ mod typed_error_contract_tests {
             .insert(ReviewedProtocolNativeError::StreamResumeUnsupported);
         response
     }
-
     #[tokio::test]
     async fn unmarked_protocol_error_cannot_bypass_typed_boundary() {
         let router = with_error_contract(Router::new().route(
@@ -8934,7 +8425,6 @@ mod typed_error_contract_tests {
             norito::json::from_slice(&body).expect("decode canonical error");
         assert_eq!(envelope.code(), "bad_gateway");
     }
-
     #[tokio::test]
     async fn exact_reviewed_sse_error_is_preserved_and_accept_checked() {
         let router = with_error_contract(
@@ -8953,7 +8443,6 @@ mod typed_error_contract_tests {
                 ));
             request
         };
-
         let response = router
             .clone()
             .oneshot(request("text/event-stream"))
@@ -8977,7 +8466,6 @@ mod typed_error_contract_tests {
             body_bytes(response).await.as_ref(),
             b"reviewed resume rejection"
         );
-
         let response = router
             .oneshot(request("image/png"))
             .await
@@ -8990,7 +8478,6 @@ mod typed_error_contract_tests {
             norito::json::from_slice(&body).expect("decode native negotiation rejection");
         assert_eq!(envelope.code(), "response_not_acceptable");
     }
-
     #[tokio::test]
     async fn reviewed_marker_is_route_bound() {
         let router = with_error_contract(
@@ -9016,7 +8503,6 @@ mod typed_error_contract_tests {
         assert_eq!(envelope.code(), "bad_request");
     }
 }
-
 #[cfg(test)]
 mod request_id_middleware_tests {
     use std::collections::HashSet;
@@ -9038,7 +8524,6 @@ mod request_id_middleware_tests {
             .and_then(|value| value.to_str().ok())
             .expect("response request id")
     }
-
     fn assert_server_generated(request_id: &str) {
         assert_eq!(request_id.len(), 64);
         assert!(
@@ -9047,7 +8532,6 @@ mod request_id_middleware_tests {
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         );
     }
-
     #[tokio::test]
     async fn preserves_valid_client_request_id_on_response() {
         let router = Router::new()
@@ -9065,7 +8549,6 @@ mod request_id_middleware_tests {
             .expect("response");
         assert_eq!(request_id(&response), "client-request_42");
     }
-
     #[tokio::test]
     async fn replaces_combined_control_and_overlength_request_ids() {
         let router = Router::new()
@@ -9092,7 +8575,6 @@ mod request_id_middleware_tests {
         let unique = ids.iter().collect::<HashSet<_>>();
         assert_eq!(unique.len(), ids.len());
     }
-
     #[tokio::test]
     async fn repeated_valid_request_id_fields_are_replaced_not_ambiguously_echoed() {
         let router = Router::new()
@@ -9110,7 +8592,6 @@ mod request_id_middleware_tests {
             REQUEST_ID_HEADER,
             HeaderValue::from_static("second-valid-id"),
         );
-
         let response = router.oneshot(request).await.expect("response");
         let generated = request_id(&response);
         assert_server_generated(generated);
@@ -9118,7 +8599,6 @@ mod request_id_middleware_tests {
         assert_ne!(generated, "second-valid-id");
     }
 }
-
 // Small helper to enforce token + rate limit
 async fn check_access(
     app: &AppState,
@@ -9128,9 +8608,7 @@ async fn check_access(
 ) -> Result<(), Error> {
     check_access_enforced(app, headers, remote, hint, true).await
 }
-
 include!("operator_rate_limit_helpers.rs");
-
 fn validate_api_token<'headers>(
     app: &AppState,
     headers: &'headers axum::http::HeaderMap,
@@ -9151,7 +8629,6 @@ fn validate_api_token<'headers>(
         )),
     }
 }
-
 async fn check_access_enforced(
     app: &AppState,
     headers: &axum::http::HeaderMap,
@@ -9161,7 +8638,6 @@ async fn check_access_enforced(
 ) -> Result<(), Error> {
     check_access_enforced_with_cost(app, headers, remote, hint, enforce_rate, 1).await
 }
-
 async fn check_access_enforced_with_cost(
     app: &AppState,
     headers: &axum::http::HeaderMap,
@@ -9180,14 +8656,12 @@ async fn check_access_enforced_with_cost(
     }
     Ok(())
 }
-
 /// Owned general, optional heavy-query, and optional body permits retained through physical work.
 pub(crate) struct QueryAdmissionPermit {
     _query: tokio::sync::OwnedSemaphorePermit,
     _heavy: Option<tokio::sync::OwnedSemaphorePermit>,
     _body: Option<tokio::sync::OwnedSemaphorePermit>,
 }
-
 impl QueryAdmissionPermit {
     #[cfg(feature = "app_api")]
     fn with_body_permit(mut self, permit: tokio::sync::OwnedSemaphorePermit) -> Self {
@@ -9195,7 +8669,6 @@ impl QueryAdmissionPermit {
         self
     }
 }
-
 async fn acquire_query_admission(
     app: &AppState,
     heavy: bool,
@@ -9205,7 +8678,6 @@ async fn acquire_query_admission(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         ))
     }
-
     if app.query_queue_timeout.is_zero() {
         let heavy = heavy
             .then(|| app.query_heavy_inflight.clone().try_acquire_owned())
@@ -9222,7 +8694,6 @@ async fn acquire_query_admission(
             _body: None,
         });
     }
-
     let acquire = async {
         let heavy = if heavy {
             Some(
@@ -9251,7 +8722,6 @@ async fn acquire_query_admission(
         .await
         .map_err(|_| capacity_limit())?
 }
-
 fn rate_limit_key(
     headers: &axum::http::HeaderMap,
     remote: Option<IpAddr>,
@@ -9260,7 +8730,6 @@ fn rate_limit_key(
 ) -> String {
     limits::key_from_headers(headers, remote, Some(hint), use_api_token)
 }
-
 fn signed_query_preauth_rate_limit_key(
     headers: &axum::http::HeaderMap,
     remote: Option<IpAddr>,
@@ -9278,11 +8747,9 @@ fn signed_query_preauth_rate_limit_key(
     );
     format!("v1/query:preauth:{caller}")
 }
-
 fn signed_query_authority_rate_limit_key(authority: &AccountId) -> String {
     format!("v1/query:authority:{authority}")
 }
-
 async fn consume_signed_query_rate(
     rate_limiter: &limits::RateLimiter,
     key: &str,
@@ -9294,7 +8761,6 @@ async fn consume_signed_query_rate(
         iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
     )))
 }
-
 async fn admit_signed_query_preauth(
     app: &AppState,
     headers: &axum::http::HeaderMap,
@@ -9304,12 +8770,10 @@ async fn admit_signed_query_preauth(
     let key = signed_query_preauth_rate_limit_key(headers, remote, app.api_token_enforced());
     consume_signed_query_rate(&app.query_preauth_rate_limiter, &key).await
 }
-
 async fn admit_signed_query_authority(app: &AppState, authority: &AccountId) -> Result<(), Error> {
     let key = signed_query_authority_rate_limit_key(authority);
     consume_signed_query_rate(&app.query_authority_rate_limiter, &key).await
 }
-
 async fn acquire_signed_query_physical_admission(
     app: &AppState,
     request: &iroha_data_model::query::QueryRequestWithAuthority,
@@ -9323,13 +8787,11 @@ async fn acquire_signed_query_physical_admission(
     )
     .await
 }
-
 struct AdmittedOrdinaryQueryExecution {
     plan: routing::OrdinaryQueryExecutionPlan,
     physical_admission: QueryAdmissionPermit,
     memory_lease: iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryLease,
 }
-
 async fn admit_ordinary_query_execution(
     app: &SharedAppState,
     request: &iroha_data_model::query::QueryRequestWithAuthority,
@@ -9353,7 +8815,6 @@ async fn admit_ordinary_query_execution(
         memory_lease,
     })
 }
-
 async fn execute_prepared_ordinary_query(
     app: &SharedAppState,
     request: iroha_data_model::query::QueryRequestWithAuthority,
@@ -9370,7 +8831,6 @@ async fn execute_prepared_ordinary_query(
     )
     .await
 }
-
 async fn execute_admitted_signed_query_with_opts(
     app: &SharedAppState,
     request: iroha_data_model::query::QueryRequestWithAuthority,
@@ -9379,7 +8839,6 @@ async fn execute_admitted_signed_query_with_opts(
     let admitted = admit_ordinary_query_execution(app, &request, &opts).await?;
     execute_prepared_ordinary_query(app, request, admitted).await
 }
-
 fn encode_server_owned_query_response(
     app: &AppState,
     response: iroha_core::query::snapshot::ServerOwnedQueryResponse,
@@ -9417,7 +8876,6 @@ fn encode_server_owned_query_response(
         ),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn route_scoped_rate_limit_key(
     headers: &axum::http::HeaderMap,
@@ -9428,11 +8886,9 @@ fn route_scoped_rate_limit_key(
     let caller = limits::key_from_headers(headers, remote, None, use_api_token);
     format!("app-read:{endpoint}:{caller}")
 }
-
 async fn rate_limit_requests(app: &SharedAppState, key: &str) -> Result<(), Error> {
     rate_limit_requests_with_cost(app, key, 1).await
 }
-
 async fn rate_limit_requests_with_cost(
     app: &SharedAppState,
     key: &str,
@@ -9449,17 +8905,14 @@ async fn rate_limit_requests_with_cost(
     }
     Ok(())
 }
-
 fn negotiate_heavy_query_response_format(
     headers: &axum::http::HeaderMap,
 ) -> std::result::Result<utils::ResponseFormat, AxResponse> {
     utils::negotiate_response_format(headers.get(axum::http::header::ACCEPT))
 }
-
 const FINALITY_HEAVY_QUERY_RATE_COST: u64 = 8;
 const BRIDGE_FINALITY_CHALLENGE_HEADER: &str = "x-iroha-finality-challenge";
 const SCCP_RECENT_QUERY_RATE_COST: u64 = 4;
-
 fn bridge_finality_challenge(headers: &axum::http::HeaderMap) -> Result<[u8; 32], Error> {
     let all_values = headers.get_all(BRIDGE_FINALITY_CHALLENGE_HEADER);
     let mut values = all_values.iter();
@@ -9495,13 +8948,11 @@ fn bridge_finality_challenge(headers: &axum::http::HeaderMap) -> Result<[u8; 32]
     }
     Ok(challenge)
 }
-
 fn bridge_finality_challenge_error(message: &str) -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::Conversion(message.to_owned()),
     ))
 }
-
 fn protect_bridge_finality_attestation_response(response: &mut AxResponse) {
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
@@ -9512,7 +8963,6 @@ fn protect_bridge_finality_attestation_response(response: &mut AxResponse) {
         axum::http::HeaderValue::from_static("X-Iroha-Finality-Challenge, Accept"),
     );
 }
-
 fn finalize_bridge_finality_attestation_response(result: Result<AxResponse, Error>) -> AxResponse {
     let mut response = match result {
         Ok(response) => response,
@@ -9521,7 +8971,6 @@ fn finalize_bridge_finality_attestation_response(result: Result<AxResponse, Erro
     protect_bridge_finality_attestation_response(&mut response);
     response
 }
-
 #[cfg(test)]
 mod bridge_finality_attestation_route_tests {
     use super::*;
@@ -9536,7 +8985,6 @@ mod bridge_finality_attestation_route_tests {
             axum::http::HeaderValue::from_str(&canonical).expect("canonical header"),
         );
         assert_eq!(bridge_finality_challenge(&headers).expect("challenge"), raw);
-
         for hostile in [
             canonical.to_ascii_uppercase(),
             "00".repeat(32),
@@ -9551,14 +8999,12 @@ mod bridge_finality_attestation_route_tests {
             assert!(bridge_finality_challenge(&headers).is_err(), "{hostile}");
         }
         assert!(bridge_finality_challenge(&axum::http::HeaderMap::new()).is_err());
-
         let mut duplicated = axum::http::HeaderMap::new();
         let value = axum::http::HeaderValue::from_str(&canonical).expect("canonical header");
         duplicated.append(BRIDGE_FINALITY_CHALLENGE_HEADER, value.clone());
         duplicated.append(BRIDGE_FINALITY_CHALLENGE_HEADER, value);
         assert!(bridge_finality_challenge(&duplicated).is_err());
     }
-
     #[test]
     fn attestation_responses_are_never_cacheable_and_vary_by_challenge() {
         let mut response = axum::response::Response::new(axum::body::Body::empty());
@@ -9577,7 +9023,6 @@ mod bridge_finality_attestation_route_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("X-Iroha-Finality-Challenge, Accept")
         );
-
         let propagated_error = bridge_finality_challenge_error("invalid challenge");
         let response = finalize_bridge_finality_attestation_response(Err(propagated_error));
         assert_eq!(
@@ -9596,12 +9041,10 @@ mod bridge_finality_attestation_route_tests {
         );
     }
 }
-
 #[cfg(test)]
 fn loopback_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
     axum::extract::ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 fn push_error_response(
     status: StatusCode,
@@ -9611,7 +9054,6 @@ fn push_error_response(
     let payload = ErrorEnvelope::new(code, message.into());
     (status, utils::NoritoBody(payload)).into_response()
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 async fn handler_push_register_device(
     State(app): State<SharedAppState>,
@@ -9697,7 +9139,6 @@ async fn handler_push_register_device(
         ),
     }
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 async fn handler_push_unregister_device(
     State(app): State<SharedAppState>,
@@ -9763,7 +9204,6 @@ async fn handler_push_unregister_device(
         | Err(push::PushError::InvalidEnvironment(_)) => StatusCode::ACCEPTED.into_response(),
     }
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 fn push_authenticate_device_request(
     app: &SharedAppState,
@@ -9790,7 +9230,6 @@ fn push_authenticate_device_request(
         Err(error) => Err(push_auth_error_response(error)),
     }
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 fn require_push_bridge(app: &SharedAppState) -> Result<(), AxResponse> {
     if app.push.is_none() {
@@ -9802,7 +9241,6 @@ fn require_push_bridge(app: &SharedAppState) -> Result<(), AxResponse> {
     }
     Ok(())
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 fn push_authorize_device_account(
     app: &SharedAppState,
@@ -9834,7 +9272,6 @@ fn push_authorize_device_account(
         ))
     }
 }
-
 #[cfg(all(feature = "app_api", feature = "push"))]
 fn push_auth_error_response(error: Error) -> AxResponse {
     push_error_response(
@@ -9843,7 +9280,6 @@ fn push_auth_error_response(error: Error) -> AxResponse {
         error.to_string(),
     )
 }
-
 async fn check_proof_access(
     app: &AppState,
     headers: &axum::http::HeaderMap,
@@ -9874,11 +9310,9 @@ async fn check_proof_access(
         retry_after_secs,
     })
 }
-
 // The proof API rate configuration is expressed in requests per minute with a
 // request burst. Body bytes are bounded separately by `max_body_bytes`.
 const PROOF_REQUEST_RATE_COST: u64 = 1;
-
 #[derive(Clone, Copy)]
 struct BoundedBodyReadMessages {
     context: &'static str,
@@ -9886,7 +9320,6 @@ struct BoundedBodyReadMessages {
     protocol_error: &'static str,
     timeout: &'static str,
 }
-
 async fn collect_bounded_body_with_deadline(
     request: axum::http::Request<Body>,
     max_bytes: usize,
@@ -9924,7 +9357,6 @@ async fn collect_bounded_body_with_deadline(
     };
     Ok(axum::http::Request::from_parts(parts, Body::from(bytes)))
 }
-
 async fn collect_proof_body_with_deadline(
     request: axum::http::Request<Body>,
     max_bytes: usize,
@@ -9943,7 +9375,6 @@ async fn collect_proof_body_with_deadline(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn collect_verified_source_body_with_deadline(
     request: axum::http::Request<Body>,
@@ -9964,13 +9395,11 @@ async fn collect_verified_source_body_with_deadline(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct VerifiedSourceCompileAdmission {
     permit: Arc<std::sync::Mutex<Option<tokio::sync::OwnedSemaphorePermit>>>,
 }
-
 #[cfg(feature = "app_api")]
 impl VerifiedSourceCompileAdmission {
     fn new(permit: tokio::sync::OwnedSemaphorePermit) -> Self {
@@ -9978,7 +9407,6 @@ impl VerifiedSourceCompileAdmission {
             permit: Arc::new(std::sync::Mutex::new(Some(permit))),
         }
     }
-
     fn take(&self) -> Result<tokio::sync::OwnedSemaphorePermit, Error> {
         self.permit
             .lock()
@@ -9993,13 +9421,11 @@ impl VerifiedSourceCompileAdmission {
             })
     }
 }
-
 #[derive(Clone)]
 struct CanonicalAccountBodyAuthState {
     app: SharedAppState,
     max_body_bytes: usize,
 }
-
 async fn enforce_canonical_account_body_authentication(
     State(state): State<CanonicalAccountBodyAuthState>,
     request: axum::http::Request<Body>,
@@ -10044,7 +9470,6 @@ async fn enforce_canonical_account_body_authentication(
     install_canonical_account_private_cache_headers(&mut response);
     response
 }
-
 async fn proof_body_admission_middleware(
     State(app): State<SharedAppState>,
     request: axum::http::Request<Body>,
@@ -10078,7 +9503,6 @@ async fn proof_body_admission_middleware(
     drop(permit);
     response
 }
-
 #[cfg(feature = "app_api")]
 async fn verified_source_body_admission_middleware(
     State(app): State<SharedAppState>,
@@ -10116,7 +9540,6 @@ async fn verified_source_body_admission_middleware(
     };
     next.run(request).await
 }
-
 fn proof_post_router_with_body_limits(
     router: Router<SharedAppState>,
     state: SharedAppState,
@@ -10129,7 +9552,6 @@ fn proof_post_router_with_body_limits(
     // before Axum buffers/extracts each request body.
     router.layer(body_limit).layer(admission)
 }
-
 fn enforce_proof_body_limit(app: &AppState, len: usize, hint: &'static str) -> Result<(), Error> {
     let max = app.proof_limits.max_body_bytes;
     if (len as u64) <= max {
@@ -10143,7 +9565,6 @@ fn enforce_proof_body_limit(app: &AppState, len: usize, hint: &'static str) -> R
         )),
     )))
 }
-
 fn require_proof_json_content_type(
     headers: &axum::http::HeaderMap,
     hint: &'static str,
@@ -10162,7 +9583,6 @@ fn require_proof_json_content_type(
         )),
     )))
 }
-
 async fn enforce_proof_egress(
     app: &AppState,
     headers: &axum::http::HeaderMap,
@@ -10194,7 +9614,6 @@ async fn enforce_proof_egress(
         retry_after_secs,
     })
 }
-
 /// Charge the exact bytes of an internally buffered proof response before it
 /// is handed to Hyper. Collecting here also makes the accounting invariant
 /// independent of HTTP body size-hint implementations.
@@ -10229,7 +9648,6 @@ async fn proof_response_with_exact_egress(
         axum::body::Body::from(body),
     ))
 }
-
 async fn proof_json_response_with_egress<T>(
     app: &AppState,
     headers: &axum::http::HeaderMap,
@@ -10249,7 +9667,6 @@ where
         ))
     })?;
     enforce_proof_egress(app, headers, remote, hint, body.len() as u64, enforce_rate).await?;
-
     let mut response = axum::response::Response::new(axum::body::Body::from(body));
     response.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -10257,7 +9674,6 @@ where
     );
     Ok(response)
 }
-
 async fn proof_cached_json_response_with_egress(
     app: &AppState,
     headers: &axum::http::HeaderMap,
@@ -10277,7 +9693,6 @@ async fn proof_cached_json_response_with_egress(
     );
     Ok(response)
 }
-
 fn install_canonical_account_private_cache_headers(response: &mut Response) {
     response.headers_mut().insert(
         axum::http::header::CACHE_CONTROL,
@@ -10288,7 +9703,6 @@ fn install_canonical_account_private_cache_headers(response: &mut Response) {
         HeaderValue::from_static(crate::content::CANONICAL_CONTENT_AUTH_VARY),
     );
 }
-
 // -------------- Governance handlers (AppState-based) --------------
 use axum::{extract::Path as AxPath, response::Response as AxResponse};
 
@@ -10313,7 +9727,6 @@ async fn handler_gov_contract_get(
     .await?;
     crate::gov::handle_gov_contract_get(app.state.clone(), contract_address).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_enact(
     State(app): State<SharedAppState>,
@@ -10325,7 +9738,6 @@ async fn handler_gov_enact(
     check_access(&app, &headers, Some(remote_ip), "v1/gov/enact").await?;
     crate::gov::handle_gov_enact(app.state.clone(), body).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_ministry_agenda_proposal_draft(
     State(app): State<SharedAppState>,
@@ -10362,7 +9774,6 @@ async fn handler_ministry_agenda_proposal_draft(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_ministry_agenda_proposal_get(
     State(app): State<SharedAppState>,
@@ -10380,7 +9791,6 @@ async fn handler_ministry_agenda_proposal_get(
     .await?;
     crate::gov::handle_ministry_agenda_proposal_get(app.state.clone(), proposal_id).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_council_current(
     State(app): State<SharedAppState>,
@@ -10391,7 +9801,6 @@ async fn handler_gov_council_current(
     check_access(&app, &headers, Some(remote_ip), "v1/gov/council/current").await?;
     crate::gov::handle_gov_council_current(app.state.clone()).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_citizen_count(
     State(app): State<SharedAppState>,
@@ -10402,14 +9811,12 @@ async fn handler_gov_citizen_count(
     check_access(&app, &headers, Some(remote_ip), "v1/gov/citizens").await?;
     crate::gov::handle_gov_citizen_count(app.state.clone()).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_capabilities(
     State(app): State<SharedAppState>,
 ) -> Result<JsonBody<crate::gov::GovernanceCapabilitiesV1>, Error> {
     crate::gov::handle_gov_capabilities(app.state.clone()).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_citizen_draft(
     State(app): State<SharedAppState>,
@@ -10422,7 +9829,6 @@ async fn handler_gov_citizen_draft(
     require_runtime_governance_account(&body.0.owner, &verified.account, "citizen draft")?;
     crate::gov::handle_gov_citizen_draft(app.state.clone(), body).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_citizen_status(
     State(app): State<SharedAppState>,
@@ -10441,7 +9847,6 @@ async fn handler_gov_citizen_status(
     crate::gov::handle_gov_citizen_status(app.state.clone(), account_id, app.telemetry.clone())
         .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_proposal_get(
     State(app): State<SharedAppState>,
@@ -10453,7 +9858,6 @@ async fn handler_gov_proposal_get(
     check_access(&app, &headers, Some(remote_ip), "v1/gov/proposals/{id}").await?;
     crate::gov::handle_gov_get_proposal(app.state.clone(), id).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_locks_get(
     State(app): State<SharedAppState>,
@@ -10465,7 +9869,6 @@ async fn handler_gov_locks_get(
     check_access(&app, &headers, Some(remote_ip), "v1/gov/locks/{rid}").await?;
     crate::gov::handle_gov_get_locks(app.state.clone(), rid).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_referendum_get(
     State(app): State<SharedAppState>,
@@ -10477,7 +9880,6 @@ async fn handler_gov_referendum_get(
     check_access(&app, &headers, Some(remote_ip), "v1/gov/referenda/{id}").await?;
     crate::gov::handle_gov_get_referendum(app.state.clone(), id).await
 }
-
 // Missing wrappers for governance endpoints that require AppState access/rate limiting
 #[cfg(feature = "app_api")]
 async fn handler_gov_propose_deploy(
@@ -10496,7 +9898,6 @@ async fn handler_gov_propose_deploy(
     .await?;
     crate::gov::handle_gov_propose_deploy(app.state.clone(), body).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_propose_sccp_route_governance(
     State(app): State<SharedAppState>,
@@ -10514,7 +9915,6 @@ async fn handler_gov_propose_sccp_route_governance(
     .await?;
     crate::gov::handle_gov_propose_sccp_route_governance(app.state.clone(), body).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_protected_set(
     State(app): State<SharedAppState>,
@@ -10533,7 +9933,6 @@ async fn handler_gov_protected_set(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_protected_get(
     State(app): State<SharedAppState>,
@@ -10544,7 +9943,6 @@ async fn handler_gov_protected_get(
     check_access(&app, &headers, Some(remote_ip), "v1/gov/protected").await?;
     crate::gov::handle_gov_protected_get(app.state.clone()).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_tally_get(
     State(app): State<SharedAppState>,
@@ -10556,7 +9954,6 @@ async fn handler_gov_tally_get(
     check_access(&app, &headers, Some(remote_ip), "v1/gov/tally/{id}").await?;
     crate::gov::handle_gov_get_tally(app.state.clone(), id).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_unlock_stats(
     State(app): State<SharedAppState>,
@@ -10567,7 +9964,6 @@ async fn handler_gov_unlock_stats(
     check_access(&app, &headers, Some(remote_ip), "v1/gov/unlocks/stats").await?;
     crate::gov::handle_gov_unlock_stats(app.state.clone()).await
 }
-
 #[cfg(feature = "app_api")]
 #[derive(
     Debug,
@@ -10592,14 +9988,12 @@ struct InternalAccountReadResponse {
     #[norito(default)]
     opaque_ids: Vec<iroha_data_model::account::OpaqueAccountId>,
 }
-
 #[cfg(feature = "app_api")]
 fn trusted_internal_read_source(app: &AppState, headers: &HeaderMap, remote_ip: IpAddr) -> bool {
     limits::ingress_remote_ip(headers, Some(remote_ip), &app.trusted_proxy_nets).is_some_and(
         |effective_ip| limits::cidr_contains(&app.internal_api_trusted_nets, effective_ip),
     )
 }
-
 #[cfg(feature = "app_api")]
 fn trusted_internal_read_forbidden_response() -> Response {
     torii_proxy_error_response(
@@ -10608,7 +10002,6 @@ fn trusted_internal_read_forbidden_response() -> Response {
         "this internal read requires an explicitly trusted transport source",
     )
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_internal_account_get(
     State(app): State<SharedAppState>,
@@ -10638,7 +10031,6 @@ async fn handler_internal_account_get(
             .await,
     )
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_internal_account_transaction_get(
     State(app): State<SharedAppState>,
@@ -10676,7 +10068,6 @@ async fn handler_internal_account_transaction_get(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_internal_account_asset_get(
     State(app): State<SharedAppState>,
@@ -10720,7 +10111,6 @@ async fn handler_internal_account_asset_get(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_account_get(
     State(app): State<SharedAppState>,
@@ -10788,7 +10178,6 @@ async fn handler_account_get(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_account_transactions_query(
     State(app): State<SharedAppState>,
@@ -10820,7 +10209,6 @@ async fn handler_account_transactions_query(
         check_access_enforced_with_cost(&app, &headers, Some(remote_ip), &key_hint, enforce, cost)
             .await?;
     }
-
     let (parsed_account_id, canonical_account_id) =
         match routing::parse_account_path_segment_with_state(
             app.state.as_ref(),
@@ -10875,7 +10263,6 @@ async fn handler_account_transactions_query(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_transactions_query(
     State(app): State<SharedAppState>,
@@ -10922,7 +10309,6 @@ async fn handler_transactions_query(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_transactions_visible_query(
     State(app): State<SharedAppState>,
@@ -10975,7 +10361,6 @@ async fn handler_transactions_visible_query(
         allow_dataspace_wide: viewer.is_mandatory_alias,
         asset_definition_domains: asset_definition_domain_snapshot(&app),
     };
-
     routing::handle_v1_transactions_visible_query_with_policy(
         app.state.clone(),
         crate::utils::extractors::NoritoJson(env),
@@ -10986,7 +10371,6 @@ async fn handler_transactions_visible_query(
     .await
     .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_account_assets(
     State(app): State<SharedAppState>,
@@ -11048,7 +10432,6 @@ async fn handler_account_assets(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_account_permissions(
     State(app): State<SharedAppState>,
@@ -11123,7 +10506,6 @@ async fn handler_account_permissions(
     );
     Ok(response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_account_assets_query(
     State(app): State<SharedAppState>,
@@ -11191,7 +10573,6 @@ async fn handler_account_assets_query(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_account_transactions_get(
     State(app): State<SharedAppState>,
@@ -11269,7 +10650,6 @@ async fn handler_account_transactions_get(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_account_history_get(
     State(app): State<SharedAppState>,
@@ -11345,7 +10725,6 @@ async fn handler_account_history_get(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_transactions_history_get(
     State(app): State<SharedAppState>,
@@ -11374,14 +10753,12 @@ async fn handler_transactions_history_get(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-
     let visibility = crate::routing::TxHistoryVisibilityScope {
         viewer_account_ids: viewer.account_ids,
         viewer_dataspace_id: viewer.dataspace_id,
         allow_dataspace_wide: viewer.is_mandatory_alias,
         asset_definition_domains: asset_definition_domain_snapshot(&app),
     };
-
     routing::handle_v1_transactions_history_get(
         app.state.clone(),
         crate::NoritoQuery(params),
@@ -11392,7 +10769,6 @@ async fn handler_transactions_history_get(
     .await
     .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_contracts_activity_get(
     State(app): State<SharedAppState>,
@@ -11429,7 +10805,6 @@ async fn handler_contracts_activity_get(
     .await
     .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_contracts_events_get(
     State(app): State<SharedAppState>,
@@ -11467,7 +10842,6 @@ async fn handler_contracts_events_get(
     .await
     .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_contracts_rollups_swaps_fills_get(
     State(app): State<SharedAppState>,
@@ -11502,7 +10876,6 @@ async fn handler_contracts_rollups_swaps_fills_get(
     .await
     .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_contracts_rollups_swaps_candles_get(
     State(app): State<SharedAppState>,
@@ -11537,7 +10910,6 @@ async fn handler_contracts_rollups_swaps_candles_get(
     .await
     .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_contracts_rollups_uranai_markets_history_get(
     State(app): State<SharedAppState>,
@@ -11572,7 +10944,6 @@ async fn handler_contracts_rollups_uranai_markets_history_get(
     .await
     .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_contracts_rollups_trader_activity_get(
     State(app): State<SharedAppState>,
@@ -11608,7 +10979,6 @@ async fn handler_contracts_rollups_trader_activity_get(
     .await
     .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_contracts_rollups_trader_account_get(
     State(app): State<SharedAppState>,
@@ -11642,7 +11012,6 @@ async fn handler_contracts_rollups_trader_account_get(
     .await
     .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_contracts_rollups_intents_get(
     State(app): State<SharedAppState>,
@@ -11676,7 +11045,6 @@ async fn handler_contracts_rollups_intents_get(
     .await
     .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_contracts_rollups_vault_positions_get(
     State(app): State<SharedAppState>,
@@ -11710,7 +11078,6 @@ async fn handler_contracts_rollups_vault_positions_get(
     .await
     .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_contracts_rollups_operators_status_get(
     State(app): State<SharedAppState>,
@@ -11744,7 +11111,6 @@ async fn handler_contracts_rollups_operators_status_get(
     .await
     .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_contracts_rollups_margin_health_get(
     State(app): State<SharedAppState>,
@@ -11778,7 +11144,6 @@ async fn handler_contracts_rollups_margin_health_get(
     .await
     .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_contracts_rollups_rwa_lots_get(
     State(app): State<SharedAppState>,
@@ -11812,7 +11177,6 @@ async fn handler_contracts_rollups_rwa_lots_get(
     .await
     .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_contracts_rollups_dlmm_hooks_get(
     State(app): State<SharedAppState>,
@@ -11846,10 +11210,8 @@ async fn handler_contracts_rollups_dlmm_hooks_get(
     .await
     .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 include!("proof_query_bounded.rs");
-
 #[cfg(feature = "app_api")]
 async fn handler_proofs_query(
     State(app): State<SharedAppState>,
@@ -11868,10 +11230,8 @@ async fn handler_proofs_query(
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/proofs/query", enforce).await?;
     }
-
     execute_bounded_proof_query(&app, dto, format).await
 }
-
 #[cfg(all(feature = "app_api", feature = "zk-proof-tags"))]
 async fn handler_proof_tags(
     State(app): State<SharedAppState>,
@@ -11883,7 +11243,6 @@ async fn handler_proof_tags(
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_get_proof_tags(app.state.clone(), AxPath((backend, hash))).await;
     }
-
     validate_api_token(app.as_ref(), &headers)?;
     let key = rate_limit_key(
         &headers,
@@ -11896,10 +11255,8 @@ async fn handler_proof_tags(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-
     routing::handle_get_proof_tags(app.state.clone(), AxPath((backend, hash))).await
 }
-
 #[cfg(all(feature = "app_api", not(feature = "zk-proof-tags")))]
 async fn handler_proof_tags(
     State(app): State<SharedAppState>,
@@ -11911,7 +11268,6 @@ async fn handler_proof_tags(
         iroha_data_model::query::error::QueryExecutionFail::NotFound,
     )))
 }
-
 /// Forward `/v1/zk/verify-batch` requests with explicit finite diagnostic limits.
 ///
 /// `max_body_bytes` is enforced before either Norito or JSON decoding. The
@@ -11943,7 +11299,6 @@ pub async fn handle_v1_zk_verify_batch_with_limits(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_accounts_list(
@@ -11958,7 +11313,6 @@ async fn handler_accounts_list(
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/accounts", enforce).await?;
     }
-
     let query_string = encode_torii_proxy_query(&p)?;
     Ok(execute_torii_fanout_list_read(
         &app,
@@ -11969,7 +11323,6 @@ async fn handler_accounts_list(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_accounts_query(
@@ -11998,7 +11351,6 @@ async fn handler_accounts_query(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_accounts_onboard_plan(
@@ -12019,7 +11371,6 @@ async fn handler_accounts_onboard_plan(
         )
         .await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -12030,10 +11381,8 @@ async fn handler_accounts_onboard_plan(
         enforce,
     )
     .await?;
-
     routing::handle_v1_accounts_onboard_plan(app.clone(), authenticated_domain.0, request).await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_accounts_onboard(
@@ -12066,7 +11415,6 @@ async fn handler_accounts_onboard(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_accounts_onboarding_readiness(
@@ -12094,7 +11442,6 @@ async fn handler_accounts_onboarding_readiness(
     );
     Ok(response)
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_accounts_faucet_puzzle(
@@ -12102,7 +11449,6 @@ async fn handler_accounts_faucet_puzzle(
 ) -> Result<impl IntoResponse, Error> {
     routing::handle_v1_accounts_faucet_puzzle(app.clone()).await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_accounts_faucet(
@@ -12116,7 +11462,6 @@ async fn handler_accounts_faucet(
         return routing::handle_v1_accounts_faucet(app.clone(), request, app.telemetry.clone())
             .await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -12127,10 +11472,8 @@ async fn handler_accounts_faucet(
         enforce,
     )
     .await?;
-
     routing::handle_v1_accounts_faucet(app.clone(), request, app.telemetry.clone()).await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_account_aliases(
@@ -12143,7 +11486,6 @@ async fn handler_account_aliases(
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     let caller = require_signed_alias_request(&app, &headers, &method, &uri, &[])?;
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -12154,17 +11496,14 @@ async fn handler_account_aliases(
         enforce,
     )
     .await?;
-
     routing::handle_v1_account_aliases(app.clone(), path, caller).await
 }
-
 #[cfg(feature = "app_api")]
 #[derive(JsonSerialize, JsonDeserialize)]
 struct AccountsPortfolioQuery {
     #[norito(default)]
     asset_id: Option<String>,
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_accounts_portfolio(
@@ -12197,11 +11536,9 @@ async fn handler_accounts_portfolio(
         )
         .await?;
     }
-
     let query_string = encode_torii_proxy_query(&query)?;
     Ok(execute_torii_fanout_portfolio_read(&app, uaid_literal, query_string).await)
 }
-
 pub(crate) fn ensure_nexus_lanes_enabled(
     nexus_enabled: bool,
     endpoint: &'static str,
@@ -12217,7 +11554,6 @@ pub(crate) fn ensure_nexus_lanes_enabled(
         })
     }
 }
-
 #[cfg(feature = "app_api")]
 #[cfg(test)]
 mod nexus_lane_boundary_tests {
@@ -12238,14 +11574,12 @@ mod nexus_lane_boundary_tests {
             other => panic!("unexpected error variant: {other:?}"),
         }
     }
-
     #[test]
     fn gating_allows_when_nexus_enabled() {
         ensure_nexus_lanes_enabled(true, routing::ENDPOINT_NEXUS_PUBLIC_LANE_STAKE)
             .expect("lane endpoints should be available when Nexus is enabled");
     }
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_nexus_public_lane_validators(
@@ -12286,7 +11620,6 @@ async fn handler_nexus_public_lane_validators(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_nexus_public_lane_stake(
@@ -12324,7 +11657,6 @@ async fn handler_nexus_public_lane_stake(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_nexus_public_lane_rewards(
@@ -12362,7 +11694,6 @@ async fn handler_nexus_public_lane_rewards(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_nexus_dataspaces_account_summary(
@@ -12395,7 +11726,6 @@ async fn handler_nexus_dataspaces_account_summary(
     let query_string = encode_torii_proxy_query(&params)?;
     Ok(execute_torii_fanout_dataspace_summary_read(&app, literal, query_string).await)
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_space_directory_bindings(
@@ -12418,11 +11748,9 @@ async fn handler_space_directory_bindings(
         )
         .await?;
     }
-
     let query_string = encode_torii_proxy_query(&query)?;
     Ok(execute_torii_fanout_space_directory_bindings_read(&app, uaid_literal, query_string).await)
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_space_directory_manifests(
@@ -12445,7 +11773,6 @@ async fn handler_space_directory_manifests(
         )
         .await?;
     }
-
     let client_offset = query.offset.unwrap_or(0);
     let client_limit = query.limit.filter(|&value| value > 0);
     if let Some(dataspace_id) = query.dataspace.map(DataSpaceId::new) {
@@ -12484,7 +11811,6 @@ async fn handler_space_directory_manifests(
         )
         .await);
     }
-
     let fanout_query = crate::routing::SpaceDirectoryManifestQuery {
         dataspace: None,
         status: query.status.clone(),
@@ -12502,7 +11828,6 @@ async fn handler_space_directory_manifests(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_space_directory_manifest_publish(
@@ -12521,7 +11846,6 @@ async fn handler_space_directory_manifest_publish(
         .await
         .map(axum::response::IntoResponse::into_response);
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -12532,7 +11856,6 @@ async fn handler_space_directory_manifest_publish(
         enforce,
     )
     .await?;
-
     crate::routing::handle_post_space_directory_manifest_publish(
         app.queue.clone(),
         app.state.clone(),
@@ -12541,7 +11864,6 @@ async fn handler_space_directory_manifest_publish(
     .await
     .map(axum::response::IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_space_directory_manifest_revoke(
@@ -12560,7 +11882,6 @@ async fn handler_space_directory_manifest_revoke(
         .await
         .map(axum::response::IntoResponse::into_response);
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -12571,7 +11892,6 @@ async fn handler_space_directory_manifest_revoke(
         enforce,
     )
     .await?;
-
     crate::routing::handle_post_space_directory_manifest_revoke(
         app.queue.clone(),
         app.state.clone(),
@@ -12580,7 +11900,6 @@ async fn handler_space_directory_manifest_revoke(
     .await
     .map(axum::response::IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_repo_agreements(
@@ -12598,7 +11917,6 @@ async fn handler_repo_agreements(
         )
         .await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -12609,10 +11927,8 @@ async fn handler_repo_agreements(
         enforce,
     )
     .await?;
-
     routing::handle_v1_repo_agreements(app.state.clone(), AxQuery(p), app.telemetry.clone()).await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_repo_agreements_query(
@@ -12632,7 +11948,6 @@ async fn handler_repo_agreements_query(
         )
         .await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -12643,7 +11958,6 @@ async fn handler_repo_agreements_query(
         enforce,
     )
     .await?;
-
     routing::handle_v1_repo_agreements_query(
         app.state.clone(),
         crate::utils::extractors::NoritoJson(env),
@@ -12651,7 +11965,6 @@ async fn handler_repo_agreements_query(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 const fn offline_top_up_body_limit(transaction_max_content_len: usize) -> usize {
     if transaction_max_content_len
@@ -12662,7 +11975,6 @@ const fn offline_top_up_body_limit(transaction_max_content_len: usize) -> usize 
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4
     }
 }
-
 #[cfg(feature = "app_api")]
 const fn offline_redeem_body_limit(transaction_max_content_len: usize) -> usize {
     if transaction_max_content_len
@@ -12673,7 +11985,6 @@ const fn offline_redeem_body_limit(transaction_max_content_len: usize) -> usize 
         iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
     }
 }
-
 #[cfg(feature = "app_api")]
 fn encode_offline_capability_representation(
     payload: &iroha_torii_shared::offline_api::OfflineStatus,
@@ -12694,14 +12005,12 @@ fn encode_offline_capability_representation(
             }),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn strong_etag_for_representation(bytes: &[u8]) -> String {
     use sha2::Digest as _;
 
     format!("\"{}\"", hex::encode(sha2::Sha256::digest(bytes)))
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_offline_readiness(
@@ -12757,7 +12066,6 @@ async fn handler_offline_readiness(
     append_vary_accept(response.headers_mut());
     Ok(response)
 }
-
 #[cfg(feature = "app_api")]
 fn offline_receiver_lineage_inconsistent(message: impl Into<String>) -> Error {
     Error::AppServiceUnavailable {
@@ -12765,7 +12073,6 @@ fn offline_receiver_lineage_inconsistent(message: impl Into<String>) -> Error {
         message: message.into(),
     }
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_offline_recipient_lineage(
@@ -12883,7 +12190,6 @@ async fn handler_offline_recipient_lineage(
     let evaluated_block_hash = evaluated_block.hash();
     drop(evaluated_block);
     drop(state_view);
-
     let active_receiver_witness = app
         .kura
         .kagemusha_active_receiver_witness_proof_v1(evaluated_height)
@@ -12906,7 +12212,6 @@ async fn handler_offline_recipient_lineage(
             "The retained receiver witness commitment differs from the evaluated state snapshot.",
         ));
     }
-
     let proof_count = evaluated_height
         .checked_sub(request.trusted_checkpoint_height)
         .and_then(|gap| gap.checked_add(1))
@@ -12955,7 +12260,6 @@ async fn handler_offline_recipient_lineage(
         .ok_or_else(|| offline_receiver_lineage_inconsistent("The finality chain is empty."))?
         .finality_artifact
         .context_id();
-
     Ok(NoritoBody(
         iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage {
             version: iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_VERSION,
@@ -12970,7 +12274,6 @@ async fn handler_offline_recipient_lineage(
         },
     ))
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod universal_offline_capability_tests {
     use super::{
@@ -12978,7 +12281,6 @@ mod universal_offline_capability_tests {
         offline_redeem_body_limit, offline_top_up_body_limit, strong_etag_for_representation,
         universal_offline_capability_status,
     };
-
     #[test]
     fn universal_capability_is_ready_and_asset_neutral() {
         let capability = universal_offline_capability_status();
@@ -12989,7 +12291,6 @@ mod universal_offline_capability_tests {
         assert!(capability.ready);
         assert!(capability.assets.is_empty());
         assert!(capability.blockers.is_empty());
-
         let (json_content_type, json) = encode_offline_capability_representation(
             &capability,
             crate::utils::ResponseFormat::Json,
@@ -12999,7 +12300,6 @@ mod universal_offline_capability_tests {
         let decoded: iroha_torii_shared::offline_api::OfflineStatus =
             norito::json::from_slice(&json).expect("decode universal capability JSON");
         assert_eq!(decoded, capability);
-
         let (norito_content_type, norito) = encode_offline_capability_representation(
             &capability,
             crate::utils::ResponseFormat::Norito,
@@ -13013,7 +12313,6 @@ mod universal_offline_capability_tests {
             "ETags bind the selected representation"
         );
     }
-
     #[tokio::test]
     async fn node_probes_do_not_depend_on_offline_application_state() {
         let app = super::mk_app_state_for_tests();
@@ -13023,7 +12322,6 @@ mod universal_offline_capability_tests {
             .await
             .expect("readiness body");
         assert_eq!(&body[..], b"Ready");
-
         let liveness = axum::response::IntoResponse::into_response(handler_livez().await);
         assert_eq!(liveness.status(), axum::http::StatusCode::OK);
         let body = axum::body::to_bytes(liveness.into_body(), usize::MAX)
@@ -13031,7 +12329,6 @@ mod universal_offline_capability_tests {
             .expect("liveness body");
         assert_eq!(&body[..], b"Alive");
     }
-
     #[test]
     fn command_body_limits_remain_protocol_specific() {
         let top_up_protocol_max =
@@ -13055,7 +12352,6 @@ async fn handler_offline_redeem(
 ) -> Result<AxResponse, Error> {
     offline_commands::handle_redeem(app, &headers, request).await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_offline_top_up(
@@ -13067,7 +12363,6 @@ async fn handler_offline_top_up(
 ) -> Result<AxResponse, Error> {
     offline_commands::handle_top_up(app, &headers, request).await
 }
-
 #[cfg(feature = "app_api")]
 async fn enforce_offline_command_prebody_admission(
     State(app): State<SharedAppState>,
@@ -13111,7 +12406,6 @@ async fn enforce_offline_command_prebody_admission(
     }
     Ok(next.run(req).await)
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_offline_operation_status(
@@ -13129,7 +12423,6 @@ async fn handler_offline_operation_status(
     .await?;
     offline_commands::handle_operation_status(&app, &operation_id)
 }
-
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -13141,7 +12434,6 @@ struct ExplorerAccountsQuery {
     #[norito(default)]
     with_asset: Option<String>,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -13151,14 +12443,12 @@ struct ExplorerDomainsQuery {
     #[norito(default)]
     owned_by: Option<String>,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
 struct ExplorerPaginationOnly {
     #[norito(flatten)]
     pagination: explorer::ExplorerPaginationQuery,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
 struct DefiOracleAttestationLatestQuery {
@@ -13167,7 +12457,6 @@ struct DefiOracleAttestationLatestQuery {
     #[norito(default)]
     status: Option<u32>,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -13179,7 +12468,6 @@ struct ExplorerAssetDefinitionsQuery {
     #[norito(default)]
     owned_by: Option<String>,
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod explorer_asset_definitions_query_tests {
     use super::ExplorerAssetDefinitionsQuery;
@@ -13191,7 +12479,6 @@ mod explorer_asset_definitions_query_tests {
                 .expect("current ownership filter");
         assert_eq!(query.owning_domain.as_deref(), Some("treasury.universal"));
         assert_eq!(query.pagination.limit, 7);
-
         assert!(
             norito::json::from_str::<ExplorerAssetDefinitionsQuery>(
                 r#"{"domain":"treasury.universal"}"#,
@@ -13201,7 +12488,6 @@ mod explorer_asset_definitions_query_tests {
         );
     }
 }
-
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -13215,7 +12501,6 @@ struct ExplorerAssetsQuery {
     #[norito(default)]
     asset_id: Option<String>,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -13227,7 +12512,6 @@ struct ExplorerNftsQuery {
     #[norito(default)]
     domain: Option<String>,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -13239,7 +12523,6 @@ struct ExplorerRwasQuery {
     #[norito(default)]
     domain: Option<String>,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
 struct ExplorerTransactionsQuery {
@@ -13254,7 +12537,6 @@ struct ExplorerTransactionsQuery {
     #[norito(default)]
     asset_id: Option<String>,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
 struct ExplorerInstructionsQuery {
@@ -13275,7 +12557,6 @@ struct ExplorerInstructionsQuery {
     #[norito(default)]
     asset_id: Option<String>,
 }
-
 #[cfg(feature = "app_api")]
 const CONTEXT_EXPLORER_DOMAINS_OWNED_BY: &str = "/v1/explorer/domains?owned_by";
 #[cfg(feature = "app_api")]
@@ -13298,7 +12579,6 @@ const CONTEXT_EXPLORER_ACCOUNT_DETAIL: &str = "/v1/explorer/accounts/{account_id
 const CONTEXT_EXPLORER_ACCOUNT_QR: &str = "/v1/explorer/accounts/{account_id}/qr";
 #[cfg(feature = "app_api")]
 const CONTEXT_KAIGI_RELAY_EVENTS_QUERY: &str = "/v1/kaigi/relays/events?relay";
-
 #[cfg(feature = "app_api")]
 fn parse_account_id_for_endpoint(
     app: &AppState,
@@ -13313,7 +12593,6 @@ fn parse_account_id_for_endpoint(
     )
     .map(|(account_id, _)| account_id.into())
 }
-
 #[cfg(feature = "app_api")]
 fn normalize_identifier_input(
     policy: &iroha_data_model::identifier::IdentifierPolicy,
@@ -13325,7 +12604,6 @@ fn normalize_identifier_input(
         ))
     })
 }
-
 #[cfg(feature = "app_api")]
 fn identifier_normalization_label(
     normalization: iroha_data_model::identifier::IdentifierNormalization,
@@ -13340,21 +12618,18 @@ fn identifier_normalization_label(
         iroha_data_model::identifier::IdentifierNormalization::AccountNumber => "account_number",
     }
 }
-
 #[cfg(feature = "app_api")]
 fn identifier_conversion_error(message: impl Into<String>) -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::Conversion(message.into()),
     ))
 }
-
 #[cfg(feature = "app_api")]
 fn identifier_internal_error(message: impl Into<String>) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(
         message.into(),
     ))
 }
-
 #[cfg(feature = "app_api")]
 fn parse_encrypted_identifier_ciphertext(
     raw: &str,
@@ -13376,7 +12651,6 @@ fn parse_encrypted_identifier_ciphertext(
         ))
     })
 }
-
 #[cfg(feature = "app_api")]
 fn parse_hex_bytes(raw: &str, field_name: &str) -> Result<Vec<u8>, Error> {
     let literal = raw.trim();
@@ -13388,7 +12662,6 @@ fn parse_hex_bytes(raw: &str, field_name: &str) -> Result<Vec<u8>, Error> {
     hex::decode(literal.trim_start_matches("0x"))
         .map_err(|err| identifier_conversion_error(format!("{field_name} is not valid hex: {err}")))
 }
-
 #[cfg(feature = "app_api")]
 fn ram_lfe_verification_mode_label(mode: iroha_crypto::RamLfeVerificationMode) -> &'static str {
     match mode {
@@ -13396,7 +12669,6 @@ fn ram_lfe_verification_mode_label(mode: iroha_crypto::RamLfeVerificationMode) -
         iroha_crypto::RamLfeVerificationMode::Proof => "proof",
     }
 }
-
 #[cfg(feature = "app_api")]
 fn derive_ram_lfe_request_draft(
     resolver: &identifier_resolution::IdentifierResolutionService,
@@ -13413,7 +12685,6 @@ fn derive_ram_lfe_request_draft(
             _ => identifier_internal_error(err.to_string()),
         })
 }
-
 #[cfg(feature = "app_api")]
 fn derive_identifier_request_draft(
     resolver: &identifier_resolution::IdentifierResolutionService,
@@ -13437,7 +12708,6 @@ fn derive_identifier_request_draft(
         )),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn ram_lfe_proof_verifier_metadata_dto(
     verifier: Option<&iroha_crypto::RamLfeProofVerifierMetadata>,
@@ -13449,7 +12719,6 @@ fn ram_lfe_proof_verifier_metadata_dto(
         verifying_key_bytes_b64: BASE64_STANDARD.encode(&metadata.verifying_key_bytes),
     })
 }
-
 #[cfg(feature = "app_api")]
 fn ram_lfe_execution_receipt_payload_dto(
     payload: &iroha_data_model::ram_lfe::RamLfeExecutionReceiptPayload,
@@ -13469,7 +12738,6 @@ fn ram_lfe_execution_receipt_payload_dto(
         expires_at_ms: payload.expires_at_ms,
     }
 }
-
 #[cfg(feature = "app_api")]
 fn ram_lfe_receipt_attestation_dto(
     attestation: &iroha_data_model::ram_lfe::RamLfeReceiptAttestation,
@@ -13493,7 +12761,6 @@ fn ram_lfe_receipt_attestation_dto(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 fn ram_lfe_execution_receipt_dto(
     receipt: &iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
@@ -13503,7 +12770,6 @@ fn ram_lfe_execution_receipt_dto(
         attestation: ram_lfe_receipt_attestation_dto(&receipt.attestation),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn identifier_resolution_receipt_payload_dto(
     payload: &iroha_data_model::identifier::IdentifierResolutionReceiptPayload,
@@ -13518,7 +12784,6 @@ fn identifier_resolution_receipt_payload_dto(
         account_id: payload.account_id.to_string(),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn ram_lfe_program_policy_summary_dto(
     program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
@@ -13554,7 +12819,6 @@ fn ram_lfe_program_policy_summary_dto(
         note: program_policy.note.clone(),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn identifier_policy_summary_dto(
     policy: &iroha_data_model::identifier::IdentifierPolicy,
@@ -13599,7 +12863,6 @@ fn identifier_policy_summary_dto(
         note: policy.note.clone(),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn ram_lfe_execute_response(
     receipt: &iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
@@ -13621,7 +12884,6 @@ fn ram_lfe_execute_response(
         output_opening,
     }
 }
-
 #[cfg(feature = "app_api")]
 fn ram_lfe_receipt_verify_response(
     receipt: &iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
@@ -13640,7 +12902,6 @@ fn ram_lfe_receipt_verify_response(
         error,
     }
 }
-
 #[cfg(feature = "app_api")]
 fn identifier_receipt_response(
     receipt: &iroha_data_model::identifier::IdentifierResolutionReceipt,
@@ -13651,7 +12912,6 @@ fn identifier_receipt_response(
         attestation: ram_lfe_receipt_attestation_dto(&receipt.attestation),
     })
 }
-
 #[cfg(feature = "app_api")]
 fn identifier_claim_lookup_response(
     claim: &iroha_data_model::identifier::IdentifierClaimRecord,
@@ -13666,13 +12926,11 @@ fn identifier_claim_lookup_response(
         expires_at_ms: claim.expires_at_ms,
     }
 }
-
 #[cfg(feature = "app_api")]
 fn parse_domain_id(raw: &str) -> Result<DomainId, Error> {
     DomainId::parse_fully_qualified(raw)
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
 }
-
 #[cfg(feature = "app_api")]
 fn parse_kaigi_call_id(raw: &str) -> Result<iroha_data_model::kaigi::KaigiId, Error> {
     let trimmed = raw.trim();
@@ -13686,7 +12944,6 @@ fn parse_kaigi_call_id(raw: &str) -> Result<iroha_data_model::kaigi::KaigiId, Er
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
     Ok(iroha_data_model::kaigi::KaigiId::new(domain_id, call_name))
 }
-
 #[cfg(feature = "app_api")]
 fn parse_asset_definition_id_in_world(
     world: &impl WorldReadOnly,
@@ -13704,7 +12961,6 @@ fn parse_asset_definition_id_in_world(
             ))
         });
     }
-
     let alias = AssetDefinitionAlias::from_str(trimmed)
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
     world
@@ -13715,7 +12971,6 @@ fn parse_asset_definition_id_in_world(
             ))
         })
 }
-
 #[cfg(feature = "app_api")]
 fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitionId, Error> {
     let world = app.state.world_view();
@@ -13725,7 +12980,6 @@ fn parse_asset_definition_id(app: &AppState, raw: &str) -> Result<AssetDefinitio
         raw,
     )
 }
-
 #[cfg(feature = "app_api")]
 fn resolve_tx_history_allowed_asset_definition_id(
     app: &AppState,
@@ -13742,32 +12996,27 @@ fn resolve_tx_history_allowed_asset_definition_id(
         })
         .transpose()
 }
-
 #[cfg(feature = "app_api")]
 fn parse_asset_id(raw: &str) -> Result<AssetId, Error> {
     AssetId::parse_literal(raw)
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
 }
-
 #[cfg(feature = "app_api")]
 fn parse_transaction_hash(raw: &str) -> Result<HashOf<TransactionEntrypoint>, Error> {
     raw.trim()
         .parse::<HashOf<TransactionEntrypoint>>()
         .map_err(|_| conversion_error("invalid transaction hash".to_owned()))
 }
-
 #[cfg(feature = "app_api")]
 fn parse_nft_id(raw: &str) -> Result<NftId, Error> {
     raw.parse::<NftId>()
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
 }
-
 #[cfg(feature = "app_api")]
 fn parse_rwa_id(raw: &str) -> Result<RwaId, Error> {
     raw.parse::<RwaId>()
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_accounts_list(
@@ -13797,7 +13046,6 @@ async fn handler_explorer_accounts_list(
     }
     routing::handle_v1_explorer_accounts(app.state.clone(), pagination, domain, asset_filter).await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_domains_list(
@@ -13826,7 +13074,6 @@ async fn handler_explorer_domains_list(
     }
     routing::handle_v1_explorer_domains(app.state.clone(), pagination, owned_by).await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_asset_definitions_list(
@@ -13872,7 +13119,6 @@ async fn handler_explorer_asset_definitions_list(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_assets_list(
@@ -13918,7 +13164,6 @@ async fn handler_explorer_assets_list(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_nfts_list(
@@ -13952,7 +13197,6 @@ async fn handler_explorer_nfts_list(
     }
     routing::handle_v1_explorer_nfts(app.state.clone(), pagination, owned_by, domain).await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_rwas_list(
@@ -13986,7 +13230,6 @@ async fn handler_explorer_rwas_list(
     }
     routing::handle_v1_explorer_rwas(app.state.clone(), pagination, owned_by, domain).await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_blocks_list(
@@ -14004,7 +13247,6 @@ async fn handler_explorer_blocks_list(
     routing::handle_v1_explorer_blocks(app.state.clone(), app.telemetry.clone(), query.pagination)
         .await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_health(
@@ -14021,7 +13263,6 @@ async fn handler_explorer_health(
     routing::handle_v1_explorer_health(app.state.clone(), app.kura.clone(), app.telemetry.clone())
         .await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_transactions_list(
@@ -14078,7 +13319,6 @@ async fn handler_explorer_transactions_list(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_transactions_latest(
@@ -14141,7 +13381,6 @@ async fn handler_explorer_transactions_latest(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_instructions_list(
@@ -14228,7 +13467,6 @@ async fn handler_explorer_instructions_list(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_instructions_latest(
@@ -14321,7 +13559,6 @@ async fn handler_explorer_instructions_latest(
     )
     .await
 }
-
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 #[axum::debug_handler]
 async fn handler_explorer_metrics(
@@ -14338,7 +13575,6 @@ async fn handler_explorer_metrics(
     routing::handle_v1_explorer_metrics(app.state.clone(), app.kura.clone(), app.telemetry.clone())
         .await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_defi_oracle_attestation_latest(
@@ -14391,7 +13627,6 @@ async fn handler_defi_oracle_attestation_latest(
     };
     Ok(JsonBody(attestation).into_response())
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_oracle_feeds(
@@ -14415,7 +13650,6 @@ async fn handler_oracle_feeds(
         .collect::<Vec<_>>();
     Ok(JsonBody(feeds).into_response())
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_oracle_feed_history(
@@ -14449,7 +13683,6 @@ async fn handler_oracle_feed_history(
         .unwrap_or_default();
     Ok(JsonBody(history).into_response())
 }
-
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 #[axum::debug_handler]
 async fn handler_telemetry_peers_info(
@@ -14466,7 +13699,6 @@ async fn handler_telemetry_peers_info(
     let peers = app.peer_telemetry.peers_info().await;
     Ok(JsonBody(peers).into_response())
 }
-
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 #[axum::debug_handler]
 async fn handler_telemetry_propagation(
@@ -14483,7 +13715,6 @@ async fn handler_telemetry_propagation(
     let propagation = app.peer_telemetry.propagation(64).await;
     Ok(JsonBody(propagation).into_response())
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_account_detail(
@@ -14541,7 +13772,6 @@ async fn handler_explorer_account_detail(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_account_qr(
@@ -14567,7 +13797,6 @@ async fn handler_explorer_account_qr(
     routing::handle_v1_explorer_account_qr(app.state.clone(), account_id, app.telemetry.clone())
         .await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_domain_detail(
@@ -14585,7 +13814,6 @@ async fn handler_explorer_domain_detail(
     let domain_id = parse_domain_id(&domain_raw)?;
     routing::handle_v1_explorer_domain_detail(app.state.clone(), domain_id).await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_asset_definition_detail(
@@ -14615,7 +13843,6 @@ async fn handler_explorer_asset_definition_detail(
     .await
     .into_response())
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_asset_definition_econometrics(
@@ -14645,7 +13872,6 @@ async fn handler_explorer_asset_definition_econometrics(
     .await
     .into_response())
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_asset_definition_snapshot(
@@ -14675,7 +13901,6 @@ async fn handler_explorer_asset_definition_snapshot(
     .await
     .into_response())
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_asset_detail(
@@ -14693,7 +13918,6 @@ async fn handler_explorer_asset_detail(
     let asset_id = parse_asset_id(&asset_raw)?;
     routing::handle_v1_explorer_asset_detail(app.state.clone(), asset_id).await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_nft_detail(
@@ -14711,7 +13935,6 @@ async fn handler_explorer_nft_detail(
     let nft_id = parse_nft_id(&nft_raw)?;
     routing::handle_v1_explorer_nft_detail(app.state.clone(), nft_id).await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_rwa_detail(
@@ -14729,7 +13952,6 @@ async fn handler_explorer_rwa_detail(
     let rwa_id = parse_rwa_id(&rwa_raw)?;
     routing::handle_v1_explorer_rwa_detail(app.state.clone(), rwa_id).await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_block_detail(
@@ -14747,7 +13969,6 @@ async fn handler_explorer_block_detail(
     routing::handle_v1_explorer_block_detail(app.state.clone(), app.telemetry.clone(), identifier)
         .await
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_transaction_detail(
@@ -14779,7 +14000,6 @@ async fn handler_explorer_transaction_detail(
         Err(error) => Ok(explorer_json_error_response(error)),
     }
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_instruction_detail(
@@ -14812,7 +14032,6 @@ async fn handler_explorer_instruction_detail(
         Err(error) => Ok(explorer_json_error_response(error)),
     }
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_explorer_instruction_contract_view(
@@ -14844,7 +14063,6 @@ async fn handler_explorer_instruction_contract_view(
         Err(error) => Ok(explorer_json_error_response(error)),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn explorer_json_error_response(error: Error) -> AxResponse {
     let status = error.status_code();
@@ -14858,7 +14076,6 @@ fn explorer_json_error_response(error: Error) -> AxResponse {
     *response.status_mut() = status;
     response
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_assets_definitions_list(
     State(app): State<SharedAppState>,
@@ -14879,7 +14096,6 @@ async fn handler_assets_definitions_list(
         )
         .await?;
     }
-
     let query_string = encode_torii_proxy_query(&p)?;
     Ok(execute_torii_fanout_list_read(
         &app,
@@ -14890,7 +14106,6 @@ async fn handler_assets_definitions_list(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_assets_definitions_query(
     State(app): State<SharedAppState>,
@@ -14925,7 +14140,6 @@ async fn handler_assets_definitions_query(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_asset_definition_get(
     State(app): State<SharedAppState>,
@@ -14955,7 +14169,6 @@ async fn handler_asset_definition_get(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_asset_holders(
     State(app): State<SharedAppState>,
@@ -14970,7 +14183,6 @@ async fn handler_asset_holders(
     let mut p = p;
     p.limit = Some(page_limit);
     let query: AxQuery<routing::AssetHolderGetParams> = AxQuery(p.clone());
-
     let _ = query;
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
@@ -14989,7 +14201,6 @@ async fn handler_asset_holders(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_asset_holders_query(
     State(app): State<SharedAppState>,
@@ -15026,7 +14237,6 @@ async fn handler_asset_holders_query(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_confidential_asset_transitions(
     State(app): State<SharedAppState>,
@@ -15045,7 +14255,6 @@ async fn handler_confidential_asset_transitions(
     check_access(&app, &headers, Some(remote_ip), &def_id).await?;
     routing::handle_v1_confidential_asset_transitions(app.state.clone(), AxPath(def_id)).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_domains_list(
     State(app): State<SharedAppState>,
@@ -15059,7 +14268,6 @@ async fn handler_domains_list(
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/domains", enforce).await?;
     }
-
     let query_string = encode_torii_proxy_query(&p)?;
     Ok(execute_torii_fanout_list_read(
         &app,
@@ -15070,7 +14278,6 @@ async fn handler_domains_list(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_domains_query(
     State(app): State<SharedAppState>,
@@ -15098,7 +14305,6 @@ async fn handler_domains_query(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_nfts_list(
     State(app): State<SharedAppState>,
@@ -15112,7 +14318,6 @@ async fn handler_nfts_list(
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/nfts", enforce).await?;
     }
-
     let query_string = encode_torii_proxy_query(&p)?;
     Ok(execute_torii_fanout_list_read(
         &app,
@@ -15123,7 +14328,6 @@ async fn handler_nfts_list(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_nfts_query(
@@ -15154,7 +14358,6 @@ async fn handler_nfts_query(
         .await,
     )
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_rwas_list(
     State(app): State<SharedAppState>,
@@ -15168,7 +14371,6 @@ async fn handler_rwas_list(
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), "v1/rwas", enforce).await?;
     }
-
     let query_string = encode_torii_proxy_query(&p)?;
     Ok(execute_torii_fanout_list_read(
         &app,
@@ -15179,7 +14381,6 @@ async fn handler_rwas_list(
     )
     .await)
 }
-
 #[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_rwas_query(
@@ -15210,11 +14411,9 @@ async fn handler_rwas_query(
         .await,
     )
 }
-
 #[cfg(feature = "app_api")]
 include!("subscription_auth.rs");
 include!("application_account_auth.rs");
-
 #[cfg(feature = "app_api")]
 async fn handler_subscription_plans_create(
     State(app): State<SharedAppState>,
@@ -15235,7 +14434,6 @@ async fn handler_subscription_plans_create(
         )
         .await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -15246,7 +14444,6 @@ async fn handler_subscription_plans_create(
         enforce,
     )
     .await?;
-
     routing::handle_post_v1_subscription_plan(
         app.queue.clone(),
         app.state.clone(),
@@ -15254,7 +14451,6 @@ async fn handler_subscription_plans_create(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_subscriptions_list(
     State(app): State<SharedAppState>,
@@ -15266,14 +14462,11 @@ async fn handler_subscriptions_list(
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_v1_subscriptions(app.state.clone(), AxQuery(p)).await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/subscriptions", enforce).await?;
-
     routing::handle_v1_subscriptions(app.state.clone(), AxQuery(p)).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_subscriptions_create(
     State(app): State<SharedAppState>,
@@ -15293,18 +14486,15 @@ async fn handler_subscriptions_create(
         )
         .await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/subscriptions", enforce).await?;
-
     routing::handle_post_v1_subscription_create(
         app.state.clone(),
         crate::utils::extractors::NoritoJson(req),
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_subscription_get(
     State(app): State<SharedAppState>,
@@ -15317,7 +14507,6 @@ async fn handler_subscription_get(
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_v1_subscription_get(app.state.clone(), subscription_id).await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -15328,10 +14517,8 @@ async fn handler_subscription_get(
         enforce,
     )
     .await?;
-
     routing::handle_v1_subscription_get(app.state.clone(), subscription_id).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_subscription_pause(
     State(app): State<SharedAppState>,
@@ -15354,7 +14541,6 @@ async fn handler_subscription_pause(
         )
         .await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -15365,7 +14551,6 @@ async fn handler_subscription_pause(
         enforce,
     )
     .await?;
-
     routing::handle_post_v1_subscription_pause(
         app.state.clone(),
         subscription_id,
@@ -15373,7 +14558,6 @@ async fn handler_subscription_pause(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_subscription_resume(
     State(app): State<SharedAppState>,
@@ -15396,7 +14580,6 @@ async fn handler_subscription_resume(
         )
         .await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -15407,7 +14590,6 @@ async fn handler_subscription_resume(
         enforce,
     )
     .await?;
-
     routing::handle_post_v1_subscription_resume(
         app.state.clone(),
         subscription_id,
@@ -15415,7 +14597,6 @@ async fn handler_subscription_resume(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_subscription_cancel(
     State(app): State<SharedAppState>,
@@ -15438,7 +14619,6 @@ async fn handler_subscription_cancel(
         )
         .await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -15449,7 +14629,6 @@ async fn handler_subscription_cancel(
         enforce,
     )
     .await?;
-
     routing::handle_post_v1_subscription_cancel(
         app.state.clone(),
         subscription_id,
@@ -15457,7 +14636,6 @@ async fn handler_subscription_cancel(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_subscription_keep(
     State(app): State<SharedAppState>,
@@ -15480,7 +14658,6 @@ async fn handler_subscription_keep(
         )
         .await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -15491,7 +14668,6 @@ async fn handler_subscription_keep(
         enforce,
     )
     .await?;
-
     routing::handle_post_v1_subscription_keep(
         app.state.clone(),
         subscription_id,
@@ -15499,7 +14675,6 @@ async fn handler_subscription_keep(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_subscription_usage(
     State(app): State<SharedAppState>,
@@ -15523,7 +14698,6 @@ async fn handler_subscription_usage(
         )
         .await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -15534,7 +14708,6 @@ async fn handler_subscription_usage(
         enforce,
     )
     .await?;
-
     routing::handle_post_v1_subscription_usage(
         app.queue.clone(),
         app.state.clone(),
@@ -15543,7 +14716,6 @@ async fn handler_subscription_usage(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_subscription_charge_now(
     State(app): State<SharedAppState>,
@@ -15566,7 +14738,6 @@ async fn handler_subscription_charge_now(
         )
         .await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(
@@ -15577,7 +14748,6 @@ async fn handler_subscription_charge_now(
         enforce,
     )
     .await?;
-
     routing::handle_post_v1_subscription_charge_now(
         app.state.clone(),
         subscription_id,
@@ -15585,7 +14755,6 @@ async fn handler_subscription_charge_now(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_parameters(
     State(app): State<SharedAppState>,
@@ -15596,16 +14765,12 @@ async fn handler_parameters(
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return routing::handle_v1_parameters(app.state.clone()).await;
     }
-
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/parameters", enforce).await?;
-
     routing::handle_v1_parameters(app.state.clone()).await
 }
-
 include!("webhook_routes.rs");
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_ballot_zk_v1(
     State(app): State<SharedAppState>,
@@ -15650,7 +14815,6 @@ async fn handler_gov_ballot_zk_v1(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_ballot_zk_v1_ballot_proof(
     State(app): State<SharedAppState>,
@@ -15696,7 +14860,6 @@ async fn handler_gov_ballot_zk_v1_ballot_proof(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_ballot_plain(
     State(app): State<SharedAppState>,
@@ -15722,7 +14885,6 @@ async fn handler_gov_ballot_plain(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_parliament_ballot(
     State(app): State<SharedAppState>,
@@ -15748,7 +14910,6 @@ async fn handler_gov_parliament_ballot(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_finalize(
     State(app): State<SharedAppState>,
@@ -15760,7 +14921,6 @@ async fn handler_gov_finalize(
     check_access_enforced(&app, &headers, Some(remote_ip), "v1/gov/finalize", true).await?;
     crate::gov::handle_gov_finalize(body).await
 }
-
 #[cfg(feature = "app_api")]
 #[allow(dead_code)]
 fn _assert_finalize_send_bounds() {
@@ -15769,16 +14929,13 @@ fn _assert_finalize_send_bounds() {
     assert_send::<crate::gov::FinalizeResponse>();
     assert_send::<crate::gov::FinalizeDto>();
 }
-
 #[allow(dead_code)]
 fn _assert_app_state_sync() {
     fn assert_sync<T: Sync>() {}
     assert_sync::<AppState>();
     assert_sync::<SharedAppState>();
 }
-
 // -------------- Runtime (AppState-based) --------------
-
 /// GET /v1/runtime/abi/active — wrapper that enforces Torii access policy, then delegates.
 async fn handler_runtime_abi_active(
     State(app): State<SharedAppState>,
@@ -15795,7 +14952,6 @@ async fn handler_runtime_abi_active(
     let payload = crate::runtime::handle_runtime_abi_active(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
-
 /// GET /v1/runtime/abi/hash — wrapper that enforces Torii access policy, then delegates.
 async fn handler_runtime_abi_hash(
     State(app): State<SharedAppState>,
@@ -15812,9 +14968,7 @@ async fn handler_runtime_abi_hash(
     let payload = crate::runtime::handle_runtime_abi_hash(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
-
 // -------------- Core info (AppState-based) --------------
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_authenticated_peer_is_trusted(app: &AppState, peer_id: &PeerId) -> bool {
     app.local_peer_id.as_ref() == Some(peer_id)
@@ -15838,7 +14992,6 @@ fn torii_proxy_authenticated_peer_is_trusted(app: &AppState, peer_id: &PeerId) -
             .iter()
             .any(|validator| validator == peer_id)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn handler_internal_torii_proxy_request(
     State(app): State<SharedAppState>,
@@ -15883,7 +15036,6 @@ async fn handler_internal_torii_proxy_request(
     )
     .await
 }
-
 /// GET /v1/configuration — wrapper that enforces Torii access policy, then delegates.
 async fn handler_get_configuration(
     State(app): State<SharedAppState>,
@@ -15894,7 +15046,6 @@ async fn handler_get_configuration(
     check_operator_rate_limit(&app, &headers, Some(remote_ip), "v1/configuration", true).await?;
     routing::handle_get_configuration(app.kiso.clone()).await
 }
-
 /// GET /v1/vpn/profile — public Sora VPN profile snapshot for wallet clients.
 async fn handler_get_vpn_profile(
     State(app): State<SharedAppState>,
@@ -15905,7 +15056,6 @@ async fn handler_get_vpn_profile(
     check_access(&app, &headers, Some(remote_ip), "v1/vpn/profile").await?;
     vpn::handle_get_vpn_profile(app).await
 }
-
 /// POST /v1/vpn/sessions — create a signed Sora VPN session for the active wallet account.
 async fn handler_create_vpn_quote(
     State(app): State<SharedAppState>,
@@ -15919,7 +15069,6 @@ async fn handler_create_vpn_quote(
     check_access(&app, &headers, Some(remote_ip), "v1/vpn/quotes").await?;
     vpn::handle_create_vpn_quote(app, &method, &uri, &headers, body.as_ref()).await
 }
-
 /// POST /v1/vpn/sessions — create a signed Sora VPN session for the active wallet account.
 async fn handler_create_vpn_session(
     State(app): State<SharedAppState>,
@@ -15933,7 +15082,6 @@ async fn handler_create_vpn_session(
     check_access(&app, &headers, Some(remote_ip), "v1/vpn/sessions").await?;
     vpn::handle_create_vpn_session(app, &method, &uri, &headers, body.as_ref()).await
 }
-
 /// DELETE /v1/vpn/sessions/{session_id} — signed session teardown for the wallet account.
 async fn handler_delete_vpn_session(
     State(app): State<SharedAppState>,
@@ -15953,7 +15101,6 @@ async fn handler_delete_vpn_session(
     .await?;
     vpn::handle_delete_vpn_session(app, &method, &uri, &headers, &session_id).await
 }
-
 /// GET /v1/vpn/sessions/{session_id} — signed active-session status for the wallet account.
 async fn handler_get_vpn_session(
     State(app): State<SharedAppState>,
@@ -15973,7 +15120,6 @@ async fn handler_get_vpn_session(
     .await?;
     vpn::handle_get_vpn_session(app, &method, &uri, &headers, &session_id).await
 }
-
 /// GET /v1/vpn/receipts — signed canonical VPN receipt history for the wallet account.
 async fn handler_list_vpn_receipts(
     State(app): State<SharedAppState>,
@@ -15986,7 +15132,6 @@ async fn handler_list_vpn_receipts(
     check_access(&app, &headers, Some(remote_ip), "v1/vpn/receipts").await?;
     vpn::handle_list_vpn_receipts(app, &method, &uri, &headers).await
 }
-
 /// POST /v1/vpn/receipts — settle an active VPN session from relay/client evidence.
 async fn handler_submit_vpn_receipt(
     State(app): State<SharedAppState>,
@@ -16000,7 +15145,6 @@ async fn handler_submit_vpn_receipt(
     check_access(&app, &headers, Some(remote_ip), "v1/vpn/receipts").await?;
     vpn::handle_submit_vpn_receipt(app, &method, &uri, &headers, body.as_ref()).await
 }
-
 /// POST /v1/configuration — wrapper that enforces Torii access policy, then delegates.
 async fn handler_post_configuration(
     State(app): State<SharedAppState>,
@@ -16012,7 +15156,6 @@ async fn handler_post_configuration(
     check_access(&app, &headers, Some(remote_ip), "v1/configuration").await?;
     routing::handle_post_configuration(app.kiso.clone(), dto).await
 }
-
 /// GET /v1/nexus/lifecycle — return the exact current catalog and lifecycle commitment.
 async fn handler_get_nexus_lane_lifecycle(
     State(app): State<SharedAppState>,
@@ -16029,7 +15172,6 @@ async fn handler_get_nexus_lane_lifecycle(
     let status = routing::handle_get_nexus_lane_lifecycle(&app.state)?;
     Ok(crate::utils::respond_with_format(status, format))
 }
-
 /// GET /v1/peers — wrapper that enforces Torii access policy, then delegates.
 async fn handler_peers(
     State(app): State<SharedAppState>,
@@ -16045,7 +15187,6 @@ async fn handler_peers(
     };
     Ok(routing::handle_peers(&app.online_peers, format))
 }
-
 #[cfg(feature = "app_api")]
 fn universal_offline_capability_status() -> iroha_torii_shared::offline_api::OfflineStatus {
     iroha_torii_shared::offline_api::OfflineStatus {
@@ -16060,7 +15201,6 @@ fn universal_offline_capability_status() -> iroha_torii_shared::offline_api::Off
         blockers: Vec::new(),
     }
 }
-
 /// GET `/health` — ordinary Torii health, independent of wallet UI features.
 async fn handler_health(
     State(app): State<SharedAppState>,
@@ -16070,7 +15210,6 @@ async fn handler_health(
     check_access(&app, &headers, Some(remote.ip()), "v1/health").await?;
     Ok(routing::handle_health().await.into_response())
 }
-
 /// GET `/readyz` — ordinary node admission readiness.
 ///
 /// Offline wallet UI capability is universal and never participates in this
@@ -16078,16 +15217,13 @@ async fn handler_health(
 async fn handler_readyz(State(_app): State<SharedAppState>) -> AxResponse {
     (StatusCode::OK, "Ready").into_response()
 }
-
 /// GET `/livez` — process-only liveness; never claims protocol readiness.
 async fn handler_livez() -> impl IntoResponse {
     (StatusCode::OK, "Alive")
 }
-
 async fn handler_version(State(app): State<SharedAppState>) -> impl IntoResponse {
     routing::handle_version(app.state.clone()).await
 }
-
 /// GET /v1/time/now — wrapper that enforces Torii access policy, then delegates.
 async fn handler_time_now(
     State(app): State<SharedAppState>,
@@ -16098,7 +15234,6 @@ async fn handler_time_now(
     check_access(&app, &headers, Some(remote_ip), "v1/time/now").await?;
     Ok(routing::handle_time_now().await.into_response())
 }
-
 /// GET /v1/time/status — wrapper that enforces Torii access policy, then delegates.
 async fn handler_time_status(
     State(app): State<SharedAppState>,
@@ -16109,9 +15244,7 @@ async fn handler_time_status(
     check_operator_rate_limit(&app, &headers, Some(remote_ip), "v1/time/status", true).await?;
     Ok(routing::handle_time_status().await.into_response())
 }
-
 // -------------- Schema & Profiling (AppState-based) --------------
-
 #[cfg(feature = "schema")]
 async fn handler_schema(
     State(app): State<SharedAppState>,
@@ -16135,11 +15268,9 @@ async fn handler_schema(
     }
     Ok(routing::handle_schema().await)
 }
-
 #[cfg(feature = "profiling")]
 static PROFILING_LOCK: std::sync::OnceLock<std::sync::Arc<tokio::sync::Mutex<()>>> =
     std::sync::OnceLock::new();
-
 #[cfg(feature = "profiling")]
 async fn handler_profile(
     State(app): State<SharedAppState>,
@@ -16156,7 +15287,6 @@ async fn handler_profile(
         .clone();
     routing::profiling::handle_profile(params, lock).await
 }
-
 /// GET /v1/runtime/metrics — wrapper enforcing access policy.
 async fn handler_runtime_metrics(
     State(app): State<SharedAppState>,
@@ -16173,7 +15303,6 @@ async fn handler_runtime_metrics(
     let payload = crate::runtime::handle_runtime_metrics(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
-
 /// GET /v1/node/capabilities — wrapper enforcing access policy.
 async fn handler_node_capabilities(
     State(app): State<SharedAppState>,
@@ -16190,7 +15319,6 @@ async fn handler_node_capabilities(
     let payload = crate::runtime::handle_node_capabilities(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
-
 /// GET /v1/privacy/capabilities — authoritative committed privacy snapshot.
 async fn handler_privacy_capabilities(
     State(app): State<SharedAppState>,
@@ -16207,7 +15335,6 @@ async fn handler_privacy_capabilities(
     let payload = crate::runtime::handle_privacy_capabilities(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
-
 /// POST /v1/privacy/bootle-lantern/issuance/authorize — exact native ILA1 issuance.
 async fn handler_post_bootle_lantern_issuance_authorize(
     State(app): State<SharedAppState>,
@@ -16219,7 +15346,6 @@ async fn handler_post_bootle_lantern_issuance_authorize(
     privacy_issuance_api::handle_post_bootle_lantern_issuance_authorize(State(runtime), request)
         .await
 }
-
 /// POST /v1/privacy/bootle-lantern/issuance/issue — exact native ILA1 || ILQ1 issuance.
 async fn handler_post_bootle_lantern_issuance_issue(
     State(app): State<SharedAppState>,
@@ -16230,7 +15356,6 @@ async fn handler_post_bootle_lantern_issuance_issue(
     };
     privacy_issuance_api::handle_post_bootle_lantern_issuance_issue(State(runtime), request).await
 }
-
 /// GET /v1/node/query/projection/checkpoint — wrapper enforcing access policy.
 async fn handler_node_query_projection_checkpoint(
     State(app): State<SharedAppState>,
@@ -16257,7 +15382,6 @@ async fn handler_node_query_projection_checkpoint(
     };
     Ok(crate::utils::respond_with_format(payload, format))
 }
-
 /// POST /v1/node/query/projection/checkpoint/plan — validate and preview a rebuilt projection checkpoint.
 #[cfg(feature = "app_api")]
 async fn handler_node_query_projection_checkpoint_plan(
@@ -16287,7 +15411,6 @@ async fn handler_node_query_projection_checkpoint_plan(
             .await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
-
 /// POST /v1/node/query/projection/checkpoint/publish — rebuild uploaded shard refs and persist the checkpoint.
 #[cfg(feature = "app_api")]
 async fn handler_node_query_projection_checkpoint_publish(
@@ -16320,7 +15443,6 @@ async fn handler_node_query_projection_checkpoint_publish(
     .await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
-
 /// GET /v1/node/query/projection/catalog/{resource} — enumerate the canonical live shard set.
 #[cfg(feature = "app_api")]
 async fn handler_node_query_projection_shard_catalog(
@@ -16351,7 +15473,6 @@ async fn handler_node_query_projection_shard_catalog(
     .await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
-
 /// GET /v1/node/query/projection/shards/{resource}/{partition_id} — export one canonical shard archive.
 #[cfg(feature = "app_api")]
 async fn handler_node_query_projection_shard_export(
@@ -16390,7 +15511,6 @@ async fn handler_node_query_projection_shard_export(
     );
     Ok(response)
 }
-
 async fn handler_runtime_upgrades_list(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -16406,7 +15526,6 @@ async fn handler_runtime_upgrades_list(
     let payload = crate::runtime::handle_runtime_upgrades_list(app.state.clone()).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
-
 async fn handler_runtime_propose_upgrade(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -16430,7 +15549,6 @@ async fn handler_runtime_propose_upgrade(
     let payload = crate::runtime::handle_runtime_propose_upgrade(body).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
-
 async fn handler_runtime_activate_upgrade(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -16454,7 +15572,6 @@ async fn handler_runtime_activate_upgrade(
     let payload = crate::runtime::handle_runtime_activate_upgrade(id).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
-
 async fn handler_runtime_cancel_upgrade(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -16478,7 +15595,6 @@ async fn handler_runtime_cancel_upgrade(
     let payload = crate::runtime::handle_runtime_cancel_upgrade(id).await?;
     Ok(crate::utils::respond_with_format(payload, format))
 }
-
 async fn handler_zk_roots(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -16499,7 +15615,6 @@ async fn handler_zk_roots(
     )
     .await
 }
-
 async fn handler_zk_merkle_path(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -16520,7 +15635,6 @@ async fn handler_zk_merkle_path(
     )
     .await
 }
-
 #[cfg(feature = "zk-verify-batch")]
 async fn handler_zk_verify_batch(
     State(app): State<SharedAppState>,
@@ -16539,7 +15653,6 @@ async fn handler_zk_verify_batch(
         true,
     )
     .await?;
-
     let format = match crate::utils::typed_request_content_format(&headers) {
         Ok(format) => format,
         Err(response) => return Ok(response),
@@ -16560,10 +15673,8 @@ async fn handler_zk_verify_batch(
         enforce_transcript_label_ascii: halo2.enforce_transcript_label_ascii,
     };
     let admission = acquire_query_admission(app.as_ref(), true).await?;
-
     routing::handle_v1_zk_verify_batch_admitted(format, body, limits, admission).await
 }
-
 #[derive(
     Debug,
     Clone,
@@ -16589,7 +15700,6 @@ pub struct ZkIvmDeriveRequestDto {
     /// IVM bytecode to execute.
     pub bytecode: iroha_data_model::transaction::IvmBytecode,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -16607,7 +15717,6 @@ pub struct ZkIvmDeriveResponseDto {
     /// Proved executable payload derived from local IVM execution.
     pub proved: iroha_data_model::transaction::IvmProved,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -16640,7 +15749,6 @@ pub struct ZkIvmProveRequestDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub proved: Option<iroha_data_model::transaction::IvmProved>,
 }
-
 #[cfg(test)]
 mod zk_ivm_request_dto_json_tests {
     use super::*;
@@ -16660,7 +15768,6 @@ mod zk_ivm_request_dto_json_tests {
         }
     }
 }
-
 #[derive(
     Debug,
     Clone,
@@ -16676,7 +15783,6 @@ pub struct ZkIvmProveJobCreatedDto {
     /// Stable job identifier.
     pub job_id: String,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -16708,7 +15814,6 @@ pub struct ZkIvmProveJobDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub attachment: Option<iroha_data_model::proof::ProofAttachment>,
 }
-
 const ZK_IVM_MAX_PROOF_BYTES: usize = 8 * 1024 * 1024;
 const ZK_IVM_MAX_BYTECODE_BYTES: usize = 4 * 1024 * 1024;
 const ZK_IVM_MAX_VERIFYING_KEY_BYTES: usize = 64 * 1024 * 1024;
@@ -16716,13 +15821,11 @@ const ZK_IVM_MAX_PROVED_JSON_BYTES: usize = 16 * 1024 * 1024;
 const ZK_IVM_MAX_JOB_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const ZK_IVM_PROVE_JOB_MIN_PENDING_RESERVATION_BYTES: usize = 1024;
 const ZK_IVM_PROVE_JOB_MAX_ERROR_BYTES: usize = 1024;
-
 #[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
 struct ZkIvmProofBoxJsonDto {
     backend: String,
     bytes_b64: String,
 }
-
 #[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
 struct ZkIvmProofAttachmentJsonDto {
     backend: String,
@@ -16735,10 +15838,8 @@ struct ZkIvmProofAttachmentJsonDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     lane_privacy: Option<iroha_data_model::nexus::LanePrivacyProof>,
 }
-
 impl TryFrom<iroha_data_model::proof::ProofAttachment> for ZkIvmProofAttachmentJsonDto {
     type Error = String;
-
     fn try_from(value: iroha_data_model::proof::ProofAttachment) -> Result<Self, Self::Error> {
         if value.proof.bytes.is_empty() {
             return Err("generated IVM proof must not be empty".to_owned());
@@ -16761,7 +15862,6 @@ impl TryFrom<iroha_data_model::proof::ProofAttachment> for ZkIvmProofAttachmentJ
         })
     }
 }
-
 #[derive(Debug, Clone, crate::json_macros::JsonSerialize)]
 struct ZkIvmProveJobJsonDto {
     job_id: String,
@@ -16773,7 +15873,6 @@ struct ZkIvmProveJobJsonDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     attachment: Option<ZkIvmProofAttachmentJsonDto>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ZkIvmProveJobStatus {
     Pending,
@@ -16781,14 +15880,12 @@ enum ZkIvmProveJobStatus {
     Done,
     Error,
 }
-
 #[derive(Debug)]
 struct ZkIvmProveJobBudget {
     max_bytes: usize,
     used_bytes: AtomicUsize,
     admission: std::sync::Mutex<()>,
 }
-
 impl ZkIvmProveJobBudget {
     fn new(max_bytes: usize) -> Self {
         Self {
@@ -16797,16 +15894,13 @@ impl ZkIvmProveJobBudget {
             admission: std::sync::Mutex::new(()),
         }
     }
-
     fn used_bytes(&self) -> usize {
         self.used_bytes.load(AtomicOrdering::Acquire)
     }
-
     fn try_reserve(self: &Arc<Self>, bytes: usize) -> Option<Arc<ZkIvmProveJobReservation>> {
         self.try_reserve_bytes(bytes)
             .then(|| Arc::new(ZkIvmProveJobReservation::new(Arc::clone(self), bytes)))
     }
-
     fn try_reserve_bytes(&self, bytes: usize) -> bool {
         if bytes > self.max_bytes {
             return false;
@@ -16818,7 +15912,6 @@ impl ZkIvmProveJobBudget {
             })
             .is_ok()
     }
-
     fn release_bytes(&self, bytes: usize) {
         if bytes == 0 {
             return;
@@ -16834,13 +15927,11 @@ impl ZkIvmProveJobBudget {
         }
     }
 }
-
 #[derive(Debug)]
 struct ZkIvmProveJobReservation {
     budget: Arc<ZkIvmProveJobBudget>,
     bytes: AtomicUsize,
 }
-
 impl ZkIvmProveJobReservation {
     fn new(budget: Arc<ZkIvmProveJobBudget>, bytes: usize) -> Self {
         Self {
@@ -16848,11 +15939,9 @@ impl ZkIvmProveJobReservation {
             bytes: AtomicUsize::new(bytes),
         }
     }
-
     fn retained_bytes(&self) -> usize {
         self.bytes.load(AtomicOrdering::Acquire)
     }
-
     fn try_resize(&self, new_bytes: usize) -> bool {
         loop {
             let old_bytes = self.bytes.load(AtomicOrdering::Acquire);
@@ -16889,14 +15978,12 @@ impl ZkIvmProveJobReservation {
         }
     }
 }
-
 impl Drop for ZkIvmProveJobReservation {
     fn drop(&mut self) {
         let bytes = self.bytes.swap(0, AtomicOrdering::AcqRel);
         self.budget.release_bytes(bytes);
     }
 }
-
 #[derive(Clone)]
 struct ZkIvmProveJobState {
     owner: AccountId,
@@ -16907,18 +15994,15 @@ struct ZkIvmProveJobState {
     retention: Arc<ZkIvmProveJobReservation>,
     cancel: tokio::sync::watch::Sender<bool>,
 }
-
 fn zk_ivm_prove_now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64
 }
-
 fn zk_ivm_prove_job_id() -> Result<String, Error> {
     zk_ivm_prove_job_id_with_rng(&mut rand::rngs::OsRng)
 }
-
 fn zk_ivm_prove_job_id_with_rng<R: rand::rand_core::TryCryptoRng>(
     rng: &mut R,
 ) -> Result<String, Error> {
@@ -16930,14 +16014,12 @@ fn zk_ivm_prove_job_id_with_rng<R: rand::rand_core::TryCryptoRng>(
     })?;
     Ok(hex::encode(job_id_bytes))
 }
-
 fn zk_ivm_synthetic_signer() -> Result<iroha_crypto::KeyPair, String> {
     // Local proof derivation replaces the signed authority before use; this
     // signer only satisfies transaction construction for non-broadcast payloads.
     iroha_crypto::KeyPair::try_from_seed(vec![0x5d; 32], iroha_crypto::Algorithm::Ed25519)
         .map_err(|err| format!("failed to derive synthetic IVM transaction signer: {err}"))
 }
-
 fn zk_ivm_prove_gc_jobs_at(
     jobs: &DashMap<String, ZkIvmProveJobState>,
     now_ms: u64,
@@ -16964,12 +16046,10 @@ fn zk_ivm_prove_gc_jobs_at(
             }
         }
     }
-
     // Count and memory admission are enforced synchronously when an owner creates a job.
     // GC only expires entries by policy; it must never choose another tenant's completed result
     // merely because a global count was crossed concurrently.
 }
-
 fn zk_ivm_prove_evict_terminal_lru(
     jobs: &DashMap<String, ZkIvmProveJobState>,
     owner: &AccountId,
@@ -17006,7 +16086,6 @@ fn zk_ivm_prove_evict_terminal_lru(
         })
         .is_some()
 }
-
 fn zk_ivm_prove_owner_usage(
     jobs: &DashMap<String, ZkIvmProveJobState>,
     owner: &AccountId,
@@ -17020,7 +16099,6 @@ fn zk_ivm_prove_owner_usage(
             )
         })
 }
-
 fn zk_ivm_prove_owner_bytes_admit(
     current_bytes: usize,
     additional_bytes: usize,
@@ -17031,7 +16109,6 @@ fn zk_ivm_prove_owner_bytes_admit(
             .checked_add(additional_bytes)
             .is_some_and(|next| next <= max_bytes)
 }
-
 fn zk_ivm_prove_insert_pending(
     app: &AppState,
     owner: AccountId,
@@ -17093,7 +16170,6 @@ fn zk_ivm_prove_insert_pending(
         }
     }
 }
-
 fn zk_ivm_prove_gc_jobs(app: &AppState) {
     zk_ivm_prove_gc_jobs_at(
         app.zk_ivm_prove_jobs.as_ref(),
@@ -17102,7 +16178,6 @@ fn zk_ivm_prove_gc_jobs(app: &AppState) {
         app.zk_ivm_prove_job_max_entries,
     );
 }
-
 fn zk_ivm_prove_observe_queue_metrics(
     telemetry: &crate::routing::MaybeTelemetry,
     slots: &tokio::sync::Semaphore,
@@ -17118,7 +16193,6 @@ fn zk_ivm_prove_observe_queue_metrics(
         tel.set_torii_zk_ivm_prove_queued(queued as u64);
     });
 }
-
 fn zk_ivm_prove_status_label(status: ZkIvmProveJobStatus) -> &'static str {
     match status {
         ZkIvmProveJobStatus::Pending => "pending",
@@ -17127,7 +16201,6 @@ fn zk_ivm_prove_status_label(status: ZkIvmProveJobStatus) -> &'static str {
         ZkIvmProveJobStatus::Error => "error",
     }
 }
-
 fn encode_zk_ivm_proved_json_bounded(
     proved: &iroha_data_model::transaction::IvmProved,
 ) -> Result<Vec<u8>, String> {
@@ -17140,7 +16213,6 @@ fn encode_zk_ivm_proved_json_bounded(
     }
     Ok(encoded)
 }
-
 fn encode_zk_ivm_derive_response_bounded(
     proved: &iroha_data_model::transaction::IvmProved,
 ) -> Result<Bytes, String> {
@@ -17158,7 +16230,6 @@ fn encode_zk_ivm_derive_response_bounded(
     body.extend_from_slice(SUFFIX);
     Ok(Bytes::from(body))
 }
-
 fn zk_ivm_prove_job_json_dto(
     job_id: String,
     status: ZkIvmProveJobStatus,
@@ -17225,7 +16296,6 @@ fn zk_ivm_prove_job_json_dto(
         }
     }
 }
-
 fn zk_ivm_prove_bounded_error(mut error: String) -> String {
     if error.len() <= ZK_IVM_PROVE_JOB_MAX_ERROR_BYTES {
         return error;
@@ -17238,7 +16308,6 @@ fn zk_ivm_prove_bounded_error(mut error: String) -> String {
     error.push_str(" [truncated]");
     error
 }
-
 fn zk_ivm_prove_public_error(error: String) -> String {
     iroha_logger::warn!(internal_error = %error, "IVM prove job failed");
     let filesystem_failure = [
@@ -17282,7 +16351,6 @@ fn zk_ivm_prove_public_error(error: String) -> String {
     };
     zk_ivm_prove_bounded_error(safe)
 }
-
 fn zk_ivm_prove_job_response_body(
     job_id: String,
     status: ZkIvmProveJobStatus,
@@ -17346,7 +16414,6 @@ fn zk_ivm_prove_job_response_body(
         body.extend_from_slice(SUFFIX);
         return Ok(Bytes::from(body));
     }
-
     let payload = zk_ivm_prove_job_json_dto(job_id, status, error, proved, attachment)?;
     let body = norito::json::to_vec(&payload).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -17362,7 +16429,6 @@ fn zk_ivm_prove_job_response_body(
     }
     Ok(Bytes::from(body))
 }
-
 fn zk_ivm_prove_terminal_body(
     job_id: String,
     outcome: Result<
@@ -17404,7 +16470,6 @@ fn zk_ivm_prove_terminal_body(
         (ZkIvmProveJobStatus::Error, fallback)
     })
 }
-
 fn zk_ivm_prove_store_terminal(
     jobs: &DashMap<String, ZkIvmProveJobState>,
     budget: &ZkIvmProveJobBudget,
@@ -17423,7 +16488,6 @@ fn zk_ivm_prove_store_terminal(
     }) else {
         return;
     };
-
     loop {
         let (_, owner_bytes) = zk_ivm_prove_owner_usage(jobs, &owner);
         let Some(mut entry) = jobs.get_mut(job_id) else {
@@ -17445,7 +16509,6 @@ fn zk_ivm_prove_store_terminal(
         if zk_ivm_prove_evict_terminal_lru(jobs, &owner, Some(job_id)) {
             continue;
         }
-
         let discarded = zk_ivm_prove_job_response_body(
             job_id.to_owned(),
             ZkIvmProveJobStatus::Error,
@@ -17469,7 +16532,6 @@ fn zk_ivm_prove_store_terminal(
         return;
     }
 }
-
 type ZkIvmProveOutcome = Result<
     (
         iroha_data_model::transaction::IvmProved,
@@ -17477,7 +16539,6 @@ type ZkIvmProveOutcome = Result<
     ),
     String,
 >;
-
 async fn zk_ivm_await_started_prove_job<T>(
     mut prove_job: tokio::task::JoinHandle<Result<T, String>>,
     cancel_rx: &mut tokio::sync::watch::Receiver<bool>,
@@ -17498,7 +16559,6 @@ async fn zk_ivm_await_started_prove_job<T>(
         }
     }
 }
-
 fn normalize_halo2_ipa_circuit_id(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -17523,7 +16583,6 @@ fn normalize_halo2_ipa_circuit_id(raw: &str) -> Option<String> {
     }
     Some(format!("halo2/pasta/ipa-v1/{trimmed}"))
 }
-
 fn halo2_ipa_circuit_id_matches(record_id: &str, env_id: &str) -> bool {
     match (
         normalize_halo2_ipa_circuit_id(record_id),
@@ -17533,7 +16592,6 @@ fn halo2_ipa_circuit_id_matches(record_id: &str, env_id: &str) -> bool {
         _ => record_id == env_id,
     }
 }
-
 fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed == backend {
@@ -17549,11 +16607,9 @@ fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
     }
     Some(format!("{backend}:{trimmed}"))
 }
-
 fn is_stark_fri_v1_backend(backend: &str) -> bool {
     iroha_data_model::zk::is_stark_fri_v1_backend_label(backend)
 }
-
 fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
     if backend == iroha_core::zk::ZK_BACKEND_HALO2_IPA {
         halo2_ipa_circuit_id_matches(record_id, env_id)
@@ -17569,7 +16625,6 @@ fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
         record_id == env_id
     }
 }
-
 fn sanitize_zk_key_component(component: &str) -> String {
     let mut out = String::with_capacity(component.len());
     for ch in component.chars() {
@@ -17581,19 +16636,16 @@ fn sanitize_zk_key_component(component: &str) -> String {
     }
     if out.is_empty() { "_".to_string() } else { out }
 }
-
 fn zk_vk_store_path(keys_dir: &Path, id: &iroha_data_model::proof::VerifyingKeyId) -> PathBuf {
     let backend = sanitize_zk_key_component(id.backend.as_ref());
     let name = sanitize_zk_key_component(&id.name);
     keys_dir.join(format!("{backend}__{name}.vk"))
 }
-
 fn zk_pk_store_path(keys_dir: &Path, id: &iroha_data_model::proof::VerifyingKeyId) -> PathBuf {
     let backend = sanitize_zk_key_component(id.backend.as_ref());
     let name = sanitize_zk_key_component(&id.name);
     keys_dir.join(format!("{backend}__{name}.pk"))
 }
-
 #[cfg(feature = "app_api")]
 fn read_zk_key_file_bounded(path: &Path, label: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
     use std::io::Read as _;
@@ -17616,7 +16668,6 @@ fn read_zk_key_file_bounded(path: &Path, label: &str, max_bytes: usize) -> Resul
             "{label} file exceeds the {max_bytes}-byte tooling limit before read"
         ));
     }
-
     let file = std::fs::File::open(path)
         .map_err(|err| format!("failed to open {label} bytes at {}: {err}", path.display()))?;
     let file_metadata = file.metadata().map_err(|err| {
@@ -17648,7 +16699,6 @@ fn read_zk_key_file_bounded(path: &Path, label: &str, max_bytes: usize) -> Resul
             "opened {label} file exceeds the {max_bytes}-byte tooling limit before read"
         ));
     }
-
     // Metadata can race with file growth. A bounded reader is the actual
     // allocation boundary and reads one sentinel byte to detect overflow.
     let sentinel_limit = u64::try_from(max_bytes)
@@ -17665,7 +16715,6 @@ fn read_zk_key_file_bounded(path: &Path, label: &str, max_bytes: usize) -> Resul
     }
     Ok(bytes)
 }
-
 #[cfg(feature = "app_api")]
 fn validate_zk_ivm_fee_payment(
     fee_payment: &iroha_data_model::transaction::FeePaymentIntent,
@@ -17693,7 +16742,6 @@ fn validate_zk_ivm_fee_payment(
     }
     Ok(())
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_zk_ivm_derive(
     State(app): State<SharedAppState>,
@@ -17714,7 +16762,6 @@ async fn handler_zk_ivm_derive(
     )
     .await?;
     require_proof_json_content_type(&headers, "v1/zk/ivm/derive")?;
-
     let mut req: ZkIvmDeriveRequestDto =
         norito::json::from_slice(body.as_ref()).map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -17725,7 +16772,6 @@ async fn handler_zk_ivm_derive(
         })?;
     require_zk_ivm_derive_authority(&req.authority, &verified)?;
     validate_zk_ivm_fee_payment(&req.fee_payment, &req.metadata)?;
-
     let backend = req.vk_ref.backend.as_str();
     if !iroha_core::zk::is_ivm_execution_backend(backend) {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -17741,7 +16787,6 @@ async fn handler_zk_ivm_derive(
             )),
         )));
     }
-
     let parsed = ivm::ProgramMetadata::parse(req.bytecode.as_ref()).map_err(|_| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
@@ -17769,7 +16814,6 @@ async fn handler_zk_ivm_derive(
             endpoint: "v1/zk/ivm/derive",
             retry_after_secs,
         })?;
-
     // Derivation needs only these lightweight policy fields. Borrow the
     // registry record under admitted compute capacity and never clone its
     // optional inline verifying-key bytes on the async runtime thread.
@@ -17824,7 +16868,6 @@ async fn handler_zk_ivm_derive(
             gas_schedule_id,
         )
     };
-
     let network_id = *app.state.network_id_ref();
     let state = Arc::clone(&app.state);
     let authority = req.authority;
@@ -17847,7 +16890,6 @@ async fn handler_zk_ivm_derive(
         .map_err(|err| format!("failed to sign synthetic IVM derive transaction: {err}"))?
         // Proof derivation needs a stable authority, but signature validity is not required here.
         .with_authority(authority);
-
         let view = state.query_view();
         let proved = iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context(
                 &view,
@@ -17896,7 +16938,6 @@ async fn handler_zk_ivm_derive(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_zk_ivm_prove(
     State(app): State<SharedAppState>,
@@ -17928,7 +16969,6 @@ async fn handler_zk_ivm_prove(
         "signed account headers are required to create an IVM prove job",
     )?;
     zk_ivm_prove_gc_jobs(&app);
-
     let mut req: ZkIvmProveRequestDto = norito::json::from_slice(body.as_ref()).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
@@ -17944,7 +16984,6 @@ async fn handler_zk_ivm_prove(
         ));
     }
     validate_zk_ivm_fee_payment(&req.fee_payment, &req.metadata)?;
-
     let backend = req.vk_ref.backend.as_str();
     if !iroha_core::zk::is_ivm_execution_backend(backend) {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -17978,7 +17017,6 @@ async fn handler_zk_ivm_prove(
         &mut req.metadata,
         req.bytecode.as_ref(),
     )?;
-
     // Queue admission is independent of physical execution admission. Only
     // inspect lightweight registry policy here; the potentially 64 MiB inline
     // key is cloned, read, and hashed later inside the admitted blocking job.
@@ -18046,10 +17084,8 @@ async fn handler_zk_ivm_prove(
             )));
         }
     }
-
     let job_id = zk_ivm_prove_job_id()?;
     let created_ms = zk_ivm_prove_now_ms();
-
     let ZkIvmProveRequestDto {
         vk_ref,
         authority,
@@ -18090,7 +17126,6 @@ async fn handler_zk_ivm_prove(
         app.zk_ivm_prove_inflight.as_ref(),
         app.zk_ivm_prove_inflight_total,
     );
-
     let backend = vk_ref.backend.clone();
     let keys_dir = app.zk_prover_keys_dir.clone();
     let network_id = *app.state.network_id_ref();
@@ -18121,7 +17156,6 @@ async fn handler_zk_ivm_prove(
             );
             return;
         }
-
         let Some(inflight_permit) = (tokio::select! {
             permit = inflight.clone().acquire_owned() => match permit {
                 Ok(permit) => Some(permit),
@@ -18139,7 +17173,6 @@ async fn handler_zk_ivm_prove(
             );
             return;
         };
-
         if let Some(mut entry) = jobs.get_mut(&job_id_for_task) {
             entry.status = ZkIvmProveJobStatus::Running;
             if let Ok(body) = zk_ivm_prove_job_response_body(
@@ -18159,7 +17192,6 @@ async fn handler_zk_ivm_prove(
             inflight.as_ref(),
             inflight_total,
         );
-
         let job_id_for_worker = job_id_for_task.clone();
         let prove_job = tokio::task::spawn_blocking(move || {
             // The physical-work permit lives in this blocking task across key
@@ -18248,7 +17280,6 @@ async fn handler_zk_ivm_prove(
                 if vk_commitment != expected_commitment {
                     return Err("verifying key commitment mismatch".to_owned());
                 }
-
                 let parsed = ivm::ProgramMetadata::parse(bytecode.as_ref())
                     .map_err(|_| "invalid IVM header".to_owned())?;
                 if parsed.metadata.mode & ivm::ivm_mode::ZK == 0 {
@@ -18271,7 +17302,6 @@ async fn handler_zk_ivm_prove(
                 .map_err(|err| format!("failed to sign synthetic IVM prove transaction: {err}"))?
                 // Proof derivation needs stable authority; signature validity is not required.
                 .with_authority(authority.clone());
-
                 let view = state.query_view();
                 let derived_proved = iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution_bounded_with_vk_context(
                     &view,
@@ -18282,7 +17312,6 @@ async fn handler_zk_ivm_prove(
                     ZK_IVM_MAX_PROVED_JSON_BYTES,
                 )
                 .map_err(|err| err.to_string())?;
-
                 if let Some(client_proved) = maybe_client_proved.as_ref()
                     && client_proved != &derived_proved
                 {
@@ -18291,11 +17320,9 @@ async fn handler_zk_ivm_prove(
                             .to_owned(),
                     );
                 }
-
                 let overlay_bytes = norito::to_bytes(&derived_proved.overlay)
                     .map_err(|_| "failed to encode derived proved overlay".to_owned())?;
                 let overlay_hash = iroha_crypto::Hash::new(&overlay_bytes);
-
                 let proof_box = if backend.as_str() == iroha_core::zk::ZK_BACKEND_HALO2_IPA {
                     let pk_path = zk_pk_store_path(&keys_dir, &vk_ref);
                     let pk_bytes = read_zk_key_file_bounded(
@@ -18352,11 +17379,9 @@ async fn handler_zk_ivm_prove(
             })();
             Ok::<_, String>(zk_ivm_prove_terminal_body(job_id_for_worker, outcome))
         });
-
         // Keep both permits and the request-memory reservation until physical
         // completion; cancellation after start is discard-only.
         let (outcome, discard) = zk_ivm_await_started_prove_job(prove_job, &mut cancel_rx).await;
-
         if !discard {
             let (status, response_body) = outcome.unwrap_or_else(|error| {
                 zk_ivm_prove_terminal_body(job_id_for_task.clone(), Err(error))
@@ -18371,7 +17396,6 @@ async fn handler_zk_ivm_prove(
                 response_body,
             );
         }
-
         drop(slot_permit);
         drop(retention_for_task);
         zk_ivm_prove_observe_queue_metrics(
@@ -18382,7 +17406,6 @@ async fn handler_zk_ivm_prove(
             inflight_total,
         );
     });
-
     let mut response = crate::utils::respond_with_format(
         ZkIvmProveJobCreatedDto { job_id },
         crate::utils::ResponseFormat::Json,
@@ -18390,7 +17413,6 @@ async fn handler_zk_ivm_prove(
     install_canonical_account_private_cache_headers(&mut response);
     Ok(response)
 }
-
 fn validate_zk_ivm_prove_job_id(job_id: &str) -> Result<(), Error> {
     if job_id.len() == 32
         && job_id
@@ -18405,7 +17427,6 @@ fn validate_zk_ivm_prove_job_id(job_id: &str) -> Result<(), Error> {
         ),
     )))
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_zk_ivm_prove_get(
     State(app): State<SharedAppState>,
@@ -18435,7 +17456,6 @@ async fn handler_zk_ivm_prove_get(
         "signed account headers are required to read an IVM prove job",
     )?;
     zk_ivm_prove_gc_jobs(&app);
-
     let job_id = job_id.0;
     validate_zk_ivm_prove_job_id(&job_id)?;
     let Some(entry) = app
@@ -18451,10 +17471,8 @@ async fn handler_zk_ivm_prove_get(
         install_canonical_account_private_cache_headers(&mut response);
         return Ok(response);
     };
-
     let body = entry.response_body.clone();
     drop(entry);
-
     let mut response = proof_cached_json_response_with_egress(
         &app,
         &headers,
@@ -18473,7 +17491,6 @@ async fn handler_zk_ivm_prove_get(
     }
     Ok(response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_zk_ivm_prove_delete(
     State(app): State<SharedAppState>,
@@ -18503,7 +17520,6 @@ async fn handler_zk_ivm_prove_delete(
         "signed account headers are required to delete an IVM prove job",
     )?;
     zk_ivm_prove_gc_jobs(&app);
-
     let job_id = job_id.0;
     validate_zk_ivm_prove_job_id(&job_id)?;
     let Some((_key, state)) = app
@@ -18522,14 +17538,12 @@ async fn handler_zk_ivm_prove_delete(
     install_canonical_account_private_cache_headers(&mut response);
     Ok(response)
 }
-
 #[cfg(feature = "app_api")]
 fn zk_attachments_tenant(
     verified: &crate::app_auth::VerifiedCanonicalRequest,
 ) -> crate::zk_attachments::AttachmentTenant {
     crate::zk_attachments::AttachmentTenant::from_account(&verified.account)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_zk_attachments_disabled() -> Response {
     utils::respond_with_status_and_format(
@@ -18545,7 +17559,6 @@ async fn handler_zk_attachments_disabled() -> Response {
         utils::current_response_format(),
     )
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_zk_attachments_create(
     State(app): State<SharedAppState>,
@@ -18559,7 +17572,6 @@ async fn handler_zk_attachments_create(
     let tenant = zk_attachments_tenant(&verified);
     Ok(crate::zk_attachments::handle_post_attachment(tenant, headers, body).await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_zk_attachments_list(
     State(app): State<SharedAppState>,
@@ -18572,7 +17584,6 @@ async fn handler_zk_attachments_list(
     let tenant = zk_attachments_tenant(&verified);
     Ok(crate::zk_attachments::handle_list_attachments(tenant).await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_zk_attachments_filtered(
     State(app): State<SharedAppState>,
@@ -18586,7 +17597,6 @@ async fn handler_zk_attachments_filtered(
     let tenant = zk_attachments_tenant(&verified);
     Ok(crate::zk_attachments::handle_list_attachments_filtered(tenant, AxQuery(q)).await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_zk_attachments_count(
     State(app): State<SharedAppState>,
@@ -18607,7 +17617,6 @@ async fn handler_zk_attachments_count(
     let tenant = zk_attachments_tenant(&verified);
     Ok(crate::zk_attachments::handle_count_attachments(tenant, AxQuery(q)).await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_zk_attachment_get(
     State(app): State<SharedAppState>,
@@ -18628,7 +17637,6 @@ async fn handler_zk_attachment_get(
     let tenant = zk_attachments_tenant(&verified);
     Ok(crate::zk_attachments::handle_get_attachment(tenant, id).await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_zk_attachment_delete(
     State(app): State<SharedAppState>,
@@ -18649,7 +17657,6 @@ async fn handler_zk_attachment_delete(
     let tenant = zk_attachments_tenant(&verified);
     Ok(crate::zk_attachments::handle_delete_attachment(tenant, id).await)
 }
-
 async fn handler_zk_vote_tally(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -18668,7 +17675,6 @@ async fn handler_zk_vote_tally(
     )
     .await
 }
-
 // -------------- Telemetry (AppState-based) --------------
 #[cfg(feature = "telemetry")]
 fn status_offline_snapshot(
@@ -18685,7 +17691,6 @@ fn status_offline_snapshot(
         None
     }
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_status_tail(
     State(app): State<SharedAppState>,
@@ -18742,7 +17747,6 @@ async fn handler_status_tail(
     )
     .await
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_status_root(
     State(app): State<SharedAppState>,
@@ -18795,7 +17799,6 @@ async fn handler_status_root(
     )
     .await
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_metrics(
     State(app): State<SharedAppState>,
@@ -18822,7 +17825,6 @@ async fn handler_metrics(
     }
     routing::handle_metrics(&app.telemetry, nexus_enabled).await
 }
-
 fn soracloud_runtime_status_sections(
     app: &SharedAppState,
 ) -> (
@@ -18844,7 +17846,6 @@ fn soracloud_runtime_status_sections(
             json_object(vec![json_entry("available", false)]),
         );
     };
-
     if !runtime.materialization_available() {
         let snapshot = runtime.snapshot();
         let state_dir = runtime.state_dir().display().to_string();
@@ -18882,10 +17883,8 @@ fn soracloud_runtime_status_sections(
             ]),
         );
     }
-
     let snapshot = runtime.snapshot();
     let state_dir = runtime.state_dir().display().to_string();
-
     let mut service_revisions = 0_u64;
     let mut healthy_services = 0_u64;
     let mut hydrating_services = 0_u64;
@@ -18896,7 +17895,6 @@ fn soracloud_runtime_status_sections(
     let mut authoritative_pending_mailbox_messages = 0_u64;
     let mut bundle_cache_misses = 0_u64;
     let mut artifact_cache_misses = 0_u64;
-
     for revisions in snapshot.services.values() {
         for plan in revisions.values() {
             service_revisions = service_revisions.saturating_add(1);
@@ -18933,7 +17931,6 @@ fn soracloud_runtime_status_sections(
             );
         }
     }
-
     let apartment_count = u64::try_from(snapshot.apartments.len()).unwrap_or(u64::MAX);
     let mut running_apartments = 0_u64;
     let mut expired_apartments = 0_u64;
@@ -18947,7 +17944,6 @@ fn soracloud_runtime_status_sections(
             }
         }
     }
-
     let status = if service_revisions == 0 && apartment_count == 0 {
         "idle"
     } else if unavailable_services > 0 || expired_apartments > 0 {
@@ -18963,7 +17959,6 @@ fn soracloud_runtime_status_sections(
         "degraded" => "embedded runtime manager reports hydrating or degraded workloads",
         _ => "embedded runtime manager reports healthy hosted workloads",
     };
-
     let service_health = json_object(vec![
         json_entry("mode", "embedded_runtime_manager"),
         json_entry("status", status),
@@ -19003,10 +17998,8 @@ fn soracloud_runtime_status_sections(
         json_entry("state_dir", state_dir),
         json_entry("snapshot", snapshot),
     ]);
-
     (service_health, runtime_pressure, runtime_manager)
 }
-
 fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json::Value {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -19014,7 +18007,6 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
         .unwrap_or(0);
     let view = app.state.view();
     let world = view.world();
-
     let mut active_capability_adverts = 0_u64;
     let mut proxy_only_validator_count = 0_u64;
     for (_validator_account_id, capability) in world.soracloud_inrou_host_capabilities().iter() {
@@ -19025,7 +18017,6 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
             }
         }
     }
-
     let mut hosting_peers = std::collections::BTreeSet::new();
     let mut hosted_replica_count = 0_u64;
     let mut portable_vm = 0_u64;
@@ -19046,7 +18037,6 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
             }
         }
     }
-
     json_object(vec![
         json_entry("active_capability_adverts", active_capability_adverts),
         json_entry(
@@ -19064,7 +18054,6 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
         ),
     ])
 }
-
 #[cfg(feature = "telemetry")]
 async fn soracloud_failed_admissions_section(
     telemetry: &routing::MaybeTelemetry,
@@ -19077,7 +18066,6 @@ async fn soracloud_failed_admissions_section(
             json_entry("sorafs_provider_rejected", 0_u64),
         ]);
     }
-
     let metrics = telemetry.metrics().await;
     let governance_manifest_rejected: u64 = [
         "missing_manifest",
@@ -19094,7 +18082,6 @@ async fn soracloud_failed_admissions_section(
             .get()
     })
     .sum();
-
     let sorafs_provider_rejected: u64 = [
         "decode",
         "stale",
@@ -19119,7 +18106,6 @@ async fn soracloud_failed_admissions_section(
     .sum();
     let failed_admission_total =
         governance_manifest_rejected.saturating_add(sorafs_provider_rejected);
-
     json_object(vec![
         json_entry("available", true),
         json_entry("total", failed_admission_total),
@@ -19127,7 +18113,6 @@ async fn soracloud_failed_admissions_section(
         json_entry("sorafs_provider_rejected", sorafs_provider_rejected),
     ])
 }
-
 #[cfg(not(feature = "telemetry"))]
 async fn soracloud_failed_admissions_section(
     _telemetry: &routing::MaybeTelemetry,
@@ -19139,7 +18124,6 @@ async fn soracloud_failed_admissions_section(
         json_entry("sorafs_provider_rejected", 0_u64),
     ])
 }
-
 #[cfg(feature = "app_api")]
 fn canonicalize_soracloud_local_read_headers(headers: &HeaderMap) -> BTreeMap<String, String> {
     headers
@@ -19152,7 +18136,6 @@ fn canonicalize_soracloud_local_read_headers(headers: &HeaderMap) -> BTreeMap<St
         })
         .collect()
 }
-
 #[cfg(feature = "app_api")]
 fn soracloud_local_read_request_commitment(request: &SoracloudLocalReadRequest) -> Hash {
     Hash::new(
@@ -19173,7 +18156,6 @@ fn soracloud_local_read_request_commitment(request: &SoracloudLocalReadRequest) 
         .expect("Soracloud local read request commitment encoding should be infallible"),
     )
 }
-
 #[cfg(feature = "app_api")]
 fn soracloud_public_ordered_mailbox_request_commitment(
     observed_height: u64,
@@ -19203,7 +18185,6 @@ fn soracloud_public_ordered_mailbox_request_commitment(
         .expect("Soracloud ordered mailbox request commitment encoding should be infallible"),
     )
 }
-
 #[cfg(feature = "app_api")]
 fn authoritative_pending_public_mailbox_messages(
     world: &impl WorldReadOnly,
@@ -19225,7 +18206,6 @@ fn authoritative_pending_public_mailbox_messages(
     )
     .unwrap_or(u32::MAX)
 }
-
 #[cfg(feature = "app_api")]
 fn resolve_soracloud_local_read_proxy_target(
     app: &SharedAppState,
@@ -19246,7 +18226,6 @@ fn resolve_soracloud_local_read_proxy_target(
             format!("invalid local Soracloud peer id `{local_peer_id}`: {error}"),
         )
     })?;
-
     let state_view = app.state.view();
     let Some(bundle) = state_view.world().soracloud_service_revisions().get(&(
         request.service_name.clone(),
@@ -19291,7 +18270,6 @@ fn resolve_soracloud_local_read_proxy_target(
     }
     Ok(Some(primary_peer_id))
 }
-
 #[cfg(feature = "app_api")]
 fn report_soracloud_local_read_proxy_failure(
     app: &SharedAppState,
@@ -19306,7 +18284,6 @@ fn report_soracloud_local_read_proxy_failure(
         runtime.report_generated_hf_proxy_failure(request, &target_peer_id.to_string(), error);
     }
 }
-
 #[cfg(feature = "app_api")]
 fn report_soracloud_local_read_local_proxy_failure(
     app: &SharedAppState,
@@ -19317,7 +18294,6 @@ fn report_soracloud_local_read_local_proxy_failure(
         runtime.report_generated_hf_local_proxy_failure(request, error);
     }
 }
-
 #[cfg(feature = "app_api")]
 fn maybe_request_soracloud_generated_hf_reconcile(
     app: &SharedAppState,
@@ -19333,7 +18309,6 @@ fn maybe_request_soracloud_generated_hf_reconcile(
         runtime.request_generated_hf_reconcile(request, error);
     }
 }
-
 #[cfg(feature = "app_api")]
 fn handle_soracloud_generated_hf_proxy_validation_failure(
     app: &SharedAppState,
@@ -19344,7 +18319,6 @@ fn handle_soracloud_generated_hf_proxy_validation_failure(
     report_soracloud_local_read_proxy_failure(app, request, target_peer_id, error);
     maybe_request_soracloud_generated_hf_reconcile(app, request, error);
 }
-
 #[cfg(feature = "app_api")]
 fn handle_soracloud_generated_hf_proxy_execution_failure(
     app: &SharedAppState,
@@ -19355,7 +18329,6 @@ fn handle_soracloud_generated_hf_proxy_execution_failure(
     report_soracloud_local_read_proxy_failure(app, request, target_peer_id, error);
     maybe_request_soracloud_generated_hf_reconcile(app, request, error);
 }
-
 #[cfg(feature = "app_api")]
 fn handle_soracloud_generated_hf_local_proxy_execution_failure(
     app: &SharedAppState,
@@ -19365,7 +18338,6 @@ fn handle_soracloud_generated_hf_local_proxy_execution_failure(
     report_soracloud_local_read_local_proxy_failure(app, request, error);
     maybe_request_soracloud_generated_hf_reconcile(app, request, error);
 }
-
 #[cfg(feature = "app_api")]
 fn request_soracloud_generated_hf_proxy_responder_reconcile(
     app: &SharedAppState,
@@ -19381,7 +18353,6 @@ fn request_soracloud_generated_hf_proxy_responder_reconcile(
         );
     }
 }
-
 #[cfg(feature = "app_api")]
 fn handle_incoming_soracloud_generated_hf_proxy_authority_failure(
     app: &SharedAppState,
@@ -19390,7 +18361,6 @@ fn handle_incoming_soracloud_generated_hf_proxy_authority_failure(
 ) {
     maybe_request_soracloud_generated_hf_reconcile(app, request, error);
 }
-
 #[cfg(feature = "app_api")]
 fn resolve_incoming_soracloud_proxy_forward_target(
     app: &SharedAppState,
@@ -19407,7 +18377,6 @@ fn resolve_incoming_soracloud_proxy_forward_target(
         .ok()
         .flatten()
 }
-
 #[cfg(feature = "app_api")]
 fn local_soracloud_proxy_receiver_is_assigned_host(
     app: &SharedAppState,
@@ -19428,7 +18397,6 @@ fn local_soracloud_proxy_receiver_is_assigned_host(
             format!("invalid local Soracloud peer id `{local_peer_id}`: {error}"),
         )
     })?;
-
     let state_view = app.state.view();
     let Some(bundle) = state_view.world().soracloud_service_revisions().get(&(
         request.service_name.clone(),
@@ -19452,14 +18420,12 @@ fn local_soracloud_proxy_receiver_is_assigned_host(
     else {
         return Ok(false);
     };
-
     Ok(placement.assigned_hosts.iter().any(|assignment| {
         assignment.peer_id == local_peer_id.to_string()
             && assignment.status
                 != iroha_data_model::soracloud::SoraHfPlacementHostStatusV1::Retired
     }))
 }
-
 #[cfg(feature = "app_api")]
 fn validate_generated_hf_proxy_response_authority(
     app: &SharedAppState,
@@ -19470,7 +18436,6 @@ fn validate_generated_hf_proxy_response_authority(
     if request.handler_name != "infer" {
         return Ok(());
     }
-
     let state_view = app.state.view();
     let Some(bundle) = state_view.world().soracloud_service_revisions().get(&(
         request.service_name.clone(),
@@ -19522,7 +18487,6 @@ fn validate_generated_hf_proxy_response_authority(
             ),
         ));
     }
-
     let placement = iroha_core::soracloud_runtime::resolve_generated_hf_active_placement(
         state_view.world(),
         request.service_name.as_str(),
@@ -19573,7 +18537,6 @@ fn validate_generated_hf_proxy_response_authority(
     }
     Ok(())
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 async fn execute_soracloud_local_read_via_proxy(
     app: &SharedAppState,
@@ -19598,7 +18561,6 @@ async fn execute_soracloud_local_read_via_proxy(
         handle_soracloud_generated_hf_local_proxy_execution_failure(app, &report_request, &error);
         return Err(error);
     };
-
     let request_id = Hash::new(
         norito::to_bytes(&(
             "soracloud:local-read-proxy",
@@ -19629,7 +18591,6 @@ async fn execute_soracloud_local_read_via_proxy(
             },
         )),
     });
-
     match tokio::time::timeout(runtime.local_read_proxy_timeout(), rx).await {
         Ok(Ok(SoracloudLocalReadProxyOutcomeV1::Ok(response))) => {
             match validate_generated_hf_proxy_response_authority(
@@ -19692,7 +18653,6 @@ async fn execute_soracloud_local_read_via_proxy(
         }
     }
 }
-
 #[cfg(all(feature = "app_api", not(any(feature = "p2p_ws", feature = "connect"))))]
 async fn execute_soracloud_local_read_via_proxy(
     _app: &SharedAppState,
@@ -19705,7 +18665,6 @@ async fn execute_soracloud_local_read_via_proxy(
         format!("Soracloud proxy routing to primary peer `{target_peer_id}` requires P2P support"),
     ))
 }
-
 #[cfg(feature = "app_api")]
 fn validate_incoming_soracloud_proxy_request_authority(
     app: &SharedAppState,
@@ -19721,7 +18680,6 @@ fn validate_incoming_soracloud_proxy_request_authority(
             ),
         ));
     }
-
     if request.handler_name != "infer"
         || request.handler_class != iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query
     {
@@ -19730,7 +18688,6 @@ fn validate_incoming_soracloud_proxy_request_authority(
             "Soracloud proxy execution only supports generated HF `infer` query handlers",
         ));
     }
-
     let Some(runtime) = app.soracloud_runtime.as_ref() else {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
@@ -19749,7 +18706,6 @@ fn validate_incoming_soracloud_proxy_request_authority(
             format!("invalid local Soracloud peer id `{local_peer_id}`: {error}"),
         )
     })?;
-
     let state_view = app.state.view();
     let Some(bundle) = state_view.world().soracloud_service_revisions().get(&(
         request.service_name.clone(),
@@ -19774,7 +18730,6 @@ fn validate_incoming_soracloud_proxy_request_authority(
             ),
         ));
     };
-
     let primary_assignment = iroha_core::soracloud_runtime::resolve_generated_hf_primary_assignment(
         state_view.world(),
         request.service_name.as_str(),
@@ -19811,10 +18766,8 @@ fn validate_incoming_soracloud_proxy_request_authority(
             ),
         ));
     }
-
     Ok(())
 }
-
 #[cfg(feature = "app_api")]
 async fn process_incoming_soracloud_proxy_request(
     app: SharedAppState,
@@ -19872,7 +18825,6 @@ async fn process_incoming_soracloud_proxy_request(
             }
         }
     };
-
     network.post(iroha_p2p::Post {
         peer_id: peer.id().clone(),
         priority: iroha_p2p::Priority::High,
@@ -19885,7 +18837,6 @@ async fn process_incoming_soracloud_proxy_request(
         )),
     });
 }
-
 #[cfg(feature = "app_api")]
 async fn process_incoming_soracloud_proxy_response(
     app: &SharedAppState,
@@ -19904,7 +18855,6 @@ async fn process_incoming_soracloud_proxy_response(
         );
         return;
     };
-
     if expected_peer_id != responder_peer_id {
         drop(pending_requests);
         iroha_logger::warn!(
@@ -19921,7 +18871,6 @@ async fn process_incoming_soracloud_proxy_response(
         );
         return;
     }
-
     let Some(pending) = pending_requests.remove(&proxy_response.request_id) else {
         iroha_logger::warn!(
             peer_id = %responder_peer_id,
@@ -19931,7 +18880,6 @@ async fn process_incoming_soracloud_proxy_response(
         return;
     };
     drop(pending_requests);
-
     if proxy_response.schema_version != SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1 {
         let _ = pending
             .sender
@@ -19946,10 +18894,8 @@ async fn process_incoming_soracloud_proxy_response(
             ));
         return;
     }
-
     let _ = pending.sender.send(proxy_response.outcome);
 }
-
 fn insert_routing_headers(
     response: &mut Response,
     routing_decision: RoutingDecision,
@@ -19974,7 +18920,6 @@ fn insert_routing_headers(
         HeaderValue::from_static(routed_by),
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn insert_route_transport_header(response: &mut Response, transport: &'static str) {
     response.headers_mut().insert(
@@ -19982,23 +18927,19 @@ fn insert_route_transport_header(response: &mut Response, transport: &'static st
         HeaderValue::from_static(transport),
     );
 }
-
 const PREFER_RETURN_MINIMAL: &str = "return=minimal";
-
 fn header_contains_preference(value: &HeaderValue, preference: &str) -> bool {
     value.to_str().is_ok_and(|raw| {
         raw.split(',')
             .any(|part| part.trim().eq_ignore_ascii_case(preference))
     })
 }
-
 fn transaction_submission_prefers_minimal_response(headers: &HeaderMap) -> bool {
     headers
         .get_all("prefer")
         .iter()
         .any(|value| header_contains_preference(value, PREFER_RETURN_MINIMAL))
 }
-
 fn signed_transaction_hash_for_entrypoint(
     entrypoint: &TransactionEntrypoint,
 ) -> Option<HashOf<SignedTransaction>> {
@@ -20008,7 +18949,6 @@ fn signed_transaction_hash_for_entrypoint(
         TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
     }
 }
-
 fn insert_transaction_submission_identity_headers(
     response: &mut Response,
     entrypoint_hash: &HashOf<TransactionEntrypoint>,
@@ -20032,7 +18972,6 @@ fn insert_transaction_submission_identity_headers(
         );
     }
 }
-
 fn transaction_submission_response(
     app: &AppState,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -20091,7 +19030,6 @@ fn transaction_submission_response(
     insert_routing_headers(&mut response, routing_decision, routed_by);
     response
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_synced_admission_response(
     app: &AppState,
@@ -20199,7 +19137,6 @@ fn queue_plan_synced_admission_response(
     insert_routing_headers(&mut response, routing_decision, "proxy");
     response
 }
-
 fn routing_resolve_error_to_torii_error(
     app: &SharedAppState,
     error: queue::RoutingResolveError,
@@ -20211,14 +19148,12 @@ fn routing_resolve_error_to_torii_error(
         backpressure: current_torii_backpressure(app.as_ref()),
     }
 }
-
 fn resolve_signed_query_routing(
     app: &AppState,
     query: &SignedQuery,
 ) -> Result<RoutingDecision, queue::RoutingResolveError> {
     resolve_signed_query_authority_routing(app, &query.payload.authority)
 }
-
 fn resolve_signed_query_authority_routing(
     app: &AppState,
     authority: &AccountId,
@@ -20233,7 +19168,6 @@ fn resolve_signed_query_authority_routing(
         Some(&state_view),
     )
 }
-
 fn resolve_signed_query_routing_for_app(
     app: &AppState,
     query: &SignedQuery,
@@ -20272,7 +19206,6 @@ fn resolve_signed_query_routing_for_app(
         | SignedQueryScope::CrossDataspaceFanout => resolve_signed_query_routing(app, query),
     }
 }
-
 fn torii_lane_active_for_routing(
     app: &AppState,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -20280,7 +19213,6 @@ fn torii_lane_active_for_routing(
 ) -> bool {
     !nexus.enabled || app.state.is_lane_active_for_authority(lane_id)
 }
-
 fn torii_active_lane_ids_for_status(
     app: &AppState,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -20296,7 +19228,6 @@ fn torii_active_lane_ids_for_status(
     lane_ids.dedup();
     lane_ids
 }
-
 fn torii_autoscale_capacity_lane_ids_for_status(
     app: &AppState,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -20316,7 +19247,6 @@ fn torii_autoscale_capacity_lane_ids_for_status(
     lane_ids.dedup();
     lane_ids
 }
-
 fn resolve_torii_route_for_dataspace_id(
     app: &AppState,
     dataspace_id: iroha_data_model::nexus::DataSpaceId,
@@ -20347,14 +19277,12 @@ fn resolve_torii_route_for_dataspace_id(
             })?
         })
         .ok_or(queue::RoutingResolveError::NoLaneForDataspace { dataspace_id })?;
-
     iroha_core::queue::resolve_routing_decision(
         RoutingDecision::new(lane_id, dataspace_id),
         &nexus.lane_catalog,
         &nexus.dataspace_catalog,
     )
 }
-
 fn torii_routes_for_dataspaces(
     app: &AppState,
     dataspaces: impl IntoIterator<Item = iroha_data_model::nexus::DataSpaceId>,
@@ -20366,7 +19294,6 @@ fn torii_routes_for_dataspaces(
     }
     Ok(routes.into_values().collect())
 }
-
 fn torii_target_account_routes(
     app: &AppState,
     account_id: &AccountId,
@@ -20379,7 +19306,6 @@ fn torii_target_account_routes(
         )
     })
 }
-
 fn resolve_torii_target_account_routes(
     app: &AppState,
     account_id: &AccountId,
@@ -20391,7 +19317,6 @@ fn resolve_torii_target_account_routes(
             dataspace_id: DataSpaceId::UNIVERSAL,
         }
     })?;
-
     let mut dataspaces: BTreeSet<_> = account_scope.map_or_else(
         || {
             // Fresh private-dataspace accounts can be queryable on another authoritative peer
@@ -20410,10 +19335,8 @@ fn resolve_torii_target_account_routes(
         },
     );
     dataspaces.extend(torii_public_dataspace_ids(app));
-
     torii_routes_for_dataspaces(app, dataspaces)
 }
-
 fn torii_target_alias_routes(
     app: &AppState,
     alias: &iroha_data_model::account::AccountAlias,
@@ -20426,14 +19349,12 @@ fn torii_target_alias_routes(
         )
     })
 }
-
 fn resolve_torii_target_alias_routes(
     app: &AppState,
     alias: &iroha_data_model::account::AccountAlias,
 ) -> Result<Vec<RoutingDecision>, queue::RoutingResolveError> {
     torii_routes_for_dataspaces(app, [alias.dataspace])
 }
-
 fn torii_target_domain_routes(
     app: &AppState,
     domain_id: &iroha_data_model::domain::DomainId,
@@ -20446,7 +19367,6 @@ fn torii_target_domain_routes(
         )
     })
 }
-
 fn resolve_torii_target_domain_routes(
     app: &AppState,
     domain_id: &iroha_data_model::domain::DomainId,
@@ -20461,10 +19381,8 @@ fn resolve_torii_target_domain_routes(
         .ok_or(queue::RoutingResolveError::UnknownDataspace {
             dataspace_id: DataSpaceId::UNIVERSAL,
         })?;
-
     torii_routes_for_dataspaces(app, [dataspace_id])
 }
-
 fn torii_proxy_error_response(
     status: StatusCode,
     code: &'static str,
@@ -20479,7 +19397,6 @@ fn torii_proxy_error_response(
     }
     response
 }
-
 #[cfg(feature = "app_api")]
 fn torii_canonical_auth_required_response(
     code: &'static str,
@@ -20492,21 +19409,17 @@ fn torii_canonical_auth_required_response(
     );
     response
 }
-
 #[cfg(feature = "app_api")]
 fn torii_alias_permission_denied_response(message: impl Into<String>) -> Response {
     torii_proxy_error_response(StatusCode::FORBIDDEN, "permission_denied", message)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const TORII_PROXY_DEFAULT_MAX_HOPS: u8 = 3;
-
 /// The public outer route timer is 65 seconds. Keep one second for Torii to
 /// serialize and return the final response, so authenticated proxy execution
 /// can never outlive the sender's route owner.
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const TORII_PROXY_EXECUTION_BUDGET: Duration = Duration::from_secs(64);
-
 /// Reject deadlines whose wall-clock horizon could not have been produced by
 /// a compliant sender. Internal HTTP proxy requests use the operator-signature
 /// clock contract, so the wire protocol admits exactly that canonical default
@@ -20515,7 +19428,6 @@ const TORII_PROXY_EXECUTION_BUDGET: Duration = Duration::from_secs(64);
 const TORII_PROXY_DEADLINE_CLOCK_SKEW_ALLOWANCE: Duration = Duration::from_secs(
     iroha_config::parameters::defaults::torii::operator_signatures::MAX_CLOCK_SKEW_SECS,
 );
-
 /// Hard absolute-horizon bound, including the audited first-release clock-skew
 /// allowance. Runtime work is independently capped by
 /// [`TORII_PROXY_EXECUTION_BUDGET`].
@@ -20523,22 +19435,18 @@ const TORII_PROXY_DEADLINE_CLOCK_SKEW_ALLOWANCE: Duration = Duration::from_secs(
 const TORII_PROXY_MAX_DEADLINE_HORIZON: Duration = Duration::from_secs(
     TORII_PROXY_EXECUTION_BUDGET.as_secs() + TORII_PROXY_DEADLINE_CLOCK_SKEW_ALLOWANCE.as_secs(),
 );
-
 /// Time left inside the authenticated deadline for bounded response encoding
 /// and P2P actor handoff after receiver execution stops.
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const TORII_PROXY_RESPONSE_EGRESS_RESERVE: Duration = Duration::from_secs(1);
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const TORII_INTERNAL_PROXY_HTTP_PATH: &str = "/v1/internal/torii/proxy";
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AuthoritativeLanePeerStatus {
     peer_id: PeerId,
     torii_url: Option<String>,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Debug)]
 struct AuthoritativeLanePeers {
@@ -20548,7 +19456,6 @@ struct AuthoritativeLanePeers {
     online: Vec<PeerId>,
     offline: Vec<AuthoritativeLanePeerStatus>,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn authoritative_lane_peer_statuses(
     app: &AppState,
@@ -20566,7 +19473,6 @@ fn authoritative_lane_peer_statuses(
             })
             .collect();
     }
-
     app.state
         .authoritative_lane_peer_ids(routing_decision.lane_id)
         .into_iter()
@@ -20576,7 +19482,6 @@ fn authoritative_lane_peer_statuses(
         })
         .collect()
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn authoritative_lane_peer_statuses_at_height(
     app: &AppState,
@@ -20595,7 +19500,6 @@ fn authoritative_lane_peer_statuses_at_height(
             })
             .collect();
     }
-
     app.state
         .authoritative_lane_peer_ids_at_height(routing_decision.lane_id, authority_height)
         .into_iter()
@@ -20605,7 +19509,6 @@ fn authoritative_lane_peer_statuses_at_height(
         })
         .collect()
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn authoritative_lane_peers(
     app: &AppState,
@@ -20614,7 +19517,6 @@ fn authoritative_lane_peers(
     let statuses = authoritative_lane_peer_statuses(app, routing_decision);
     partition_authoritative_lane_peer_statuses(&app.online_peers, statuses)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn partition_authoritative_lane_peer_statuses(
     online_peers_provider: &OnlinePeersProvider,
@@ -20645,7 +19547,6 @@ fn partition_authoritative_lane_peer_statuses(
         offline,
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ToriiProxyUnavailableReason {
@@ -20653,7 +19554,6 @@ enum ToriiProxyUnavailableReason {
     AuthoritativePeersOffline,
     LoopPreventionExhausted,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 impl ToriiProxyUnavailableReason {
     fn as_label(self) -> &'static str {
@@ -20663,7 +19563,6 @@ impl ToriiProxyUnavailableReason {
             Self::LoopPreventionExhausted => "loop_prevention_exhausted",
         }
     }
-
     fn ingress_message(self, routing_decision: RoutingDecision) -> String {
         match self {
             Self::MissingAuthoritativeBinding => format!(
@@ -20683,7 +19582,6 @@ impl ToriiProxyUnavailableReason {
             ),
         }
     }
-
     fn forwarded_message(self, routing_decision: RoutingDecision, hop_count: u8) -> String {
         match self {
             Self::LoopPreventionExhausted => format!(
@@ -20696,7 +19594,6 @@ impl ToriiProxyUnavailableReason {
         }
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ToriiProxyCandidate {
@@ -20704,7 +19601,6 @@ enum ToriiProxyCandidate {
     P2p(PeerId),
     HttpBridge { peer_id: PeerId, torii_url: String },
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 impl ToriiProxyCandidate {
     fn peer_id(&self) -> &PeerId {
@@ -20712,7 +19608,6 @@ impl ToriiProxyCandidate {
             Self::Local(peer_id) | Self::P2p(peer_id) | Self::HttpBridge { peer_id, .. } => peer_id,
         }
     }
-
     fn transport_label(&self) -> &'static str {
         match self {
             Self::Local(_) => "local_quorum",
@@ -20721,7 +19616,6 @@ impl ToriiProxyCandidate {
         }
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Debug)]
 struct ToriiProxyCandidatePeers {
@@ -20733,7 +19627,6 @@ struct ToriiProxyCandidatePeers {
     loop_prevention_drops: usize,
     unavailable_reason: Option<ToriiProxyUnavailableReason>,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn insert_route_unavailable_diagnostics(
     response: &mut Response,
@@ -20764,7 +19657,6 @@ fn insert_route_unavailable_diagnostics(
         loop_prevention_drops,
     );
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_route_unavailable_response(
     routing_decision: RoutingDecision,
@@ -20789,7 +19681,6 @@ fn torii_route_unavailable_response(
     );
     response
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn effective_proxy_routing_decision(
     request_kind: &'static str,
@@ -20808,21 +19699,18 @@ fn effective_proxy_routing_decision(
     }
     resolved_route
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ProxyRoutingPlanMismatch {
     ingress_digest: Hash,
     receiver_digest: Hash,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn validate_proxy_routing_plan_hint(
     expected_plan: ToriiRoutingPlanHintV1,
 ) -> Result<RoutingPlan, iroha_core::torii_proxy::ToriiRoutingPlanHintError> {
     expected_plan.try_into_routing_plan()
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn validate_proxy_routing_plan(
     request_kind: &'static str,
@@ -20849,7 +19737,6 @@ fn validate_proxy_routing_plan(
     }
     Ok(resolved_plan)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn effective_proxy_signed_query_routing_decision(
     resolved_route: RoutingDecision,
@@ -20866,14 +19753,12 @@ fn effective_proxy_signed_query_routing_decision(
     }
     resolved_route
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Debug)]
 struct HostedHttpProxyCandidatePeers {
     peers: Vec<PeerId>,
     loop_prevention_drops: usize,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn hosted_http_proxy_candidate_peer_ids(
     app: &AppState,
@@ -20906,7 +19791,6 @@ fn hosted_http_proxy_candidate_peer_ids(
         loop_prevention_drops,
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_candidate_peer_ids(
     app: &AppState,
@@ -20978,7 +19862,6 @@ fn torii_proxy_candidate_peer_ids(
         unavailable_reason,
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_synced_bound_authorities(
     request: &ToriiProxyRequestV6,
@@ -21006,7 +19889,6 @@ fn queue_plan_synced_bound_authorities(
         _ => Ok(None),
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_synced_proxy_candidate_peer_ids(
     app: &AppState,
@@ -21028,7 +19910,6 @@ fn queue_plan_synced_proxy_candidate_peer_ids(
             .into_iter()
             .filter_map(|status| status.torii_url.map(|url| (status.peer_id, url)))
             .collect::<BTreeMap<_, _>>();
-
     let mut peers = Vec::with_capacity(authoritative_peer_ids.len());
     let mut offline_authoritative_count = 0_usize;
     let mut bridge_authoritative_count = 0_usize;
@@ -21049,7 +19930,6 @@ fn queue_plan_synced_proxy_candidate_peer_ids(
                 peers.push(ToriiProxyCandidate::P2p(peer_id.clone()));
                 continue;
             }
-
             offline_authoritative_count = offline_authoritative_count.saturating_add(1);
             if let Some(torii_url) = bridge_urls.get(peer_id) {
                 bridge_authoritative_count = bridge_authoritative_count.saturating_add(1);
@@ -21060,7 +19940,6 @@ fn queue_plan_synced_proxy_candidate_peer_ids(
             }
         }
     });
-
     let authoritative_total_count = authoritative_peer_ids.len();
     let authoritative_count = peers.len();
     let unavailable_reason = if authoritative_count > 0 {
@@ -21082,7 +19961,6 @@ fn queue_plan_synced_proxy_candidate_peer_ids(
         unavailable_reason,
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_candidate_peer_ids_for_request(
     app: &AppState,
@@ -21115,7 +19993,6 @@ fn torii_proxy_candidate_peer_ids_for_request(
         visited_peer_ids,
     ))
 }
-
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 fn is_local_authoritative_for_peers(app: &AppState, authoritative_peers: &[PeerId]) -> bool {
     let Some(local_peer_id) = app.local_peer_id.as_ref() else {
@@ -21125,7 +20002,6 @@ fn is_local_authoritative_for_peers(app: &AppState, authoritative_peers: &[PeerI
         .iter()
         .any(|peer_id| peer_id == local_peer_id)
 }
-
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 fn is_local_authoritative_for_route(app: &AppState, routing_decision: RoutingDecision) -> bool {
     let authoritative_peers = app
@@ -21133,7 +20009,6 @@ fn is_local_authoritative_for_route(app: &AppState, routing_decision: RoutingDec
         .authoritative_lane_peer_ids(routing_decision.lane_id);
     is_local_authoritative_for_peers(app, &authoritative_peers)
 }
-
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 fn should_execute_route_locally(app: &AppState, routing_decision: RoutingDecision) -> bool {
     let authoritative_peers = app
@@ -21142,12 +20017,10 @@ fn should_execute_route_locally(app: &AppState, routing_decision: RoutingDecisio
     if is_local_authoritative_for_peers(app, &authoritative_peers) {
         return true;
     }
-
     routing_decision.lane_id == LaneId::SINGLE
         && routing_decision.dataspace_id == DataSpaceId::UNIVERSAL
         && authoritative_peers.is_empty()
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn should_execute_route_locally_cached(
     app: &AppState,
@@ -21160,12 +20033,10 @@ fn should_execute_route_locally_cached(
     {
         return *result;
     }
-
     let result = should_execute_route_locally(app, routing_decision);
     cache.push((routing_decision, result));
     result
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn should_execute_incoming_torii_proxy_request_locally(
     app: &AppState,
@@ -21188,7 +20059,6 @@ fn should_execute_incoming_torii_proxy_request_locally(
         }
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn validate_incoming_read_proxy_route(
     app: &AppState,
@@ -21251,7 +20121,6 @@ fn validate_incoming_read_proxy_route(
     }
     Ok(resolved)
 }
-
 #[cfg(feature = "app_api")]
 fn torii_route_for_lane_id(
     app: &AppState,
@@ -21280,7 +20149,6 @@ fn torii_route_for_lane_id(
             backpressure: current_torii_backpressure(app),
         });
     }
-
     iroha_core::queue::resolve_routing_decision(
         RoutingDecision::new(lane_id, lane.dataspace_id),
         &nexus.lane_catalog,
@@ -21293,7 +20161,6 @@ fn torii_route_for_lane_id(
         backpressure: current_torii_backpressure(app),
     })
 }
-
 #[cfg(feature = "app_api")]
 fn torii_route_for_dataspace_id(
     app: &AppState,
@@ -21306,7 +20173,6 @@ fn torii_route_for_dataspace_id(
         backpressure: current_torii_backpressure(app),
     })
 }
-
 #[cfg(feature = "app_api")]
 fn torii_restricted_routes(app: &AppState) -> Vec<RoutingDecision> {
     let state_view = app.state.view();
@@ -21335,7 +20201,6 @@ fn torii_restricted_routes(app: &AppState) -> Vec<RoutingDecision> {
     routes.sort_by_key(|route| (route.dataspace_id.as_u64(), route.lane_id.as_u32()));
     routes
 }
-
 #[cfg(feature = "app_api")]
 fn torii_local_restricted_routes(app: &AppState) -> Vec<RoutingDecision> {
     torii_restricted_routes(app)
@@ -21343,22 +20208,18 @@ fn torii_local_restricted_routes(app: &AppState) -> Vec<RoutingDecision> {
         .filter(|route| is_local_authoritative_for_route(app, *route))
         .collect()
 }
-
 #[cfg(feature = "app_api")]
 fn torii_preferred_private_ingress_routes(app: &AppState) -> Vec<RoutingDecision> {
     let local_restricted_routes = torii_local_restricted_routes(app);
     if !local_restricted_routes.is_empty() {
         return local_restricted_routes;
     }
-
     let restricted_routes = torii_restricted_routes(app);
     if restricted_routes.len() == 1 {
         return restricted_routes;
     }
-
     Vec::new()
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug)]
 enum ToriiAccountReadVisibility {
@@ -21366,7 +20227,6 @@ enum ToriiAccountReadVisibility {
     PublicExact,
     None,
 }
-
 #[cfg(feature = "app_api")]
 impl ToriiAccountReadVisibility {
     fn caller(&self) -> Option<&AccountId> {
@@ -21375,12 +20235,10 @@ impl ToriiAccountReadVisibility {
             Self::PublicExact | Self::None => None,
         }
     }
-
     fn is_signed(&self) -> bool {
         matches!(self, Self::Signed(_))
     }
 }
-
 #[cfg(feature = "app_api")]
 fn torii_signed_visibility_headers_present(headers: &HeaderMap) -> bool {
     headers.get(HEADER_SIGNATURE).is_some()
@@ -21388,7 +20246,6 @@ fn torii_signed_visibility_headers_present(headers: &HeaderMap) -> bool {
         || headers.get(HEADER_NONCE).is_some()
         || headers.get(HEADER_WITNESS).is_some()
 }
-
 #[cfg(feature = "app_api")]
 fn torii_visibility_account_from_headers(
     app: &SharedAppState,
@@ -21414,7 +20271,6 @@ fn torii_visibility_account_from_headers(
             })
         });
     }
-
     if headers.get(HEADER_ACCOUNT).is_some() {
         return Err(Error::AppUnauthorized {
             code: "alias_auth_invalid",
@@ -21422,10 +20278,8 @@ fn torii_visibility_account_from_headers(
                 .to_owned(),
         });
     }
-
     Ok(ToriiAccountReadVisibility::None)
 }
-
 fn torii_visible_account_read_routes(
     app: &AppState,
     caller: Option<&AccountId>,
@@ -21433,7 +20287,6 @@ fn torii_visible_account_read_routes(
     let state_view = app.state.view();
     let world = state_view.world();
     let mut visible_dataspaces = torii_public_dataspace_ids(app);
-
     if let Some(caller) = caller
         && let Ok(account) = world.account(caller)
         && let Some(uaid) = account.value().uaid().copied()
@@ -21441,7 +20294,6 @@ fn torii_visible_account_read_routes(
     {
         visible_dataspaces.extend(bindings.iter().map(|(dataspace_id, _)| *dataspace_id));
     }
-
     if let Some(caller) = caller {
         visible_dataspaces.extend(
             torii_all_dataspace_routes(app)
@@ -21456,18 +20308,15 @@ fn torii_visible_account_read_routes(
                 .map(|route| route.dataspace_id),
         );
     }
-
     torii_all_dataspace_routes(app)
         .into_iter()
         .filter(|route| visible_dataspaces.contains(&route.dataspace_id))
         .collect()
 }
-
 fn torii_public_dataspace_ids(app: &AppState) -> BTreeSet<DataSpaceId> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
     let mut dataspaces = BTreeSet::new();
-
     for lane in nexus.lane_catalog.lanes() {
         if lane.visibility == iroha_data_model::nexus::LaneVisibility::Public
             && torii_lane_active_for_routing(app, nexus, lane.id)
@@ -21475,10 +20324,8 @@ fn torii_public_dataspace_ids(app: &AppState) -> BTreeSet<DataSpaceId> {
             dataspaces.insert(lane.dataspace_id);
         }
     }
-
     dataspaces
 }
-
 #[cfg(feature = "app_api")]
 fn torii_partition_routes_by_visibility(
     app: &SharedAppState,
@@ -21491,7 +20338,6 @@ fn torii_partition_routes_by_visibility(
         .collect::<BTreeSet<_>>();
     let mut allowed_routes = Vec::new();
     let mut denied_routes = 0usize;
-
     for route in routes {
         if visible_dataspaces.contains(&route.dataspace_id) {
             allowed_routes.push(route);
@@ -21499,17 +20345,14 @@ fn torii_partition_routes_by_visibility(
             denied_routes = denied_routes.saturating_add(1);
         }
     }
-
     (allowed_routes, denied_routes)
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ToriiAliasLookupRouteAccess {
     route: RoutingDecision,
     filter_by_permission: bool,
 }
-
 fn torii_account_has_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -21534,7 +20377,6 @@ fn torii_account_has_permission(
             );
         }
     }
-
     world.account_roles_iter(authority).any(|role_id| {
         world
             .roles()
@@ -21542,7 +20384,6 @@ fn torii_account_has_permission(
             .is_some_and(|role| role.permissions().any(|permission| permission == target))
     })
 }
-
 fn torii_global_signed_query_read_routes(
     app: &AppState,
     authority: &AccountId,
@@ -21550,7 +20391,6 @@ fn torii_global_signed_query_read_routes(
     let public_dataspaces = torii_public_dataspace_ids(app);
     let state_view = app.state.view();
     let world = state_view.world();
-
     torii_all_dataspace_routes(app)
         .into_iter()
         .filter(|route| {
@@ -21566,7 +20406,6 @@ fn torii_global_signed_query_read_routes(
         })
         .collect()
 }
-
 fn torii_same_account_read_identity(
     app: &AppState,
     authority: &AccountId,
@@ -21587,7 +20426,6 @@ fn torii_same_account_read_identity(
         .and_then(|account| account.value().uaid().copied());
     authority_uaid.is_some() && authority_uaid == target_uaid
 }
-
 fn torii_authority_can_resolve_account_alias(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -21609,7 +20447,6 @@ fn torii_authority_can_resolve_account_alias(
             return true;
         }
     }
-
     match alias.domain_id(world.dataspace_catalog()) {
         Ok(Some(domain_id)) => {
             let domain_permission: Permission = CanResolveAccountAlias {
@@ -21636,7 +20473,6 @@ fn torii_authority_can_resolve_account_alias(
         }
     }
 }
-
 fn torii_authority_can_resolve_resolved_account_alias(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -21649,7 +20485,6 @@ fn torii_authority_can_resolve_resolved_account_alias(
     if torii_account_has_permission(world, authority, &exact_permission) {
         return true;
     }
-
     let scope = alias
         .canonical_name
         .domain_id()
@@ -21661,7 +20496,6 @@ fn torii_authority_can_resolve_resolved_account_alias(
         &Permission::from(CanResolveAccountAlias { scope }),
     )
 }
-
 #[cfg(feature = "app_api")]
 fn torii_alias_lookup_permission_probe_alias(
     app: &AppState,
@@ -21695,7 +20529,6 @@ fn torii_alias_lookup_permission_probe_alias(
         dataspace_id,
     ))
 }
-
 #[cfg(feature = "app_api")]
 fn torii_alias_lookup_dataspace_allowed_by_permission(
     app: &AppState,
@@ -21742,7 +20575,6 @@ fn torii_alias_lookup_dataspace_allowed_by_permission(
     };
     torii_authority_can_resolve_resolved_account_alias(world, caller, &alias)
 }
-
 #[cfg(feature = "app_api")]
 fn torii_partition_alias_lookup_routes(
     app: &SharedAppState,
@@ -21753,7 +20585,6 @@ fn torii_partition_alias_lookup_routes(
     let public_dataspaces = torii_public_dataspace_ids(app.as_ref());
     let mut allowed_routes = Vec::new();
     let mut denied_routes = 0usize;
-
     for route in routes {
         if public_dataspaces.contains(&route.dataspace_id) {
             allowed_routes.push(ToriiAliasLookupRouteAccess {
@@ -21776,10 +20607,8 @@ fn torii_partition_alias_lookup_routes(
             denied_routes = denied_routes.saturating_add(1);
         }
     }
-
     (allowed_routes, denied_routes)
 }
-
 #[cfg(feature = "app_api")]
 fn torii_partition_alias_index_routes_by_permission(
     app: &SharedAppState,
@@ -21790,7 +20619,6 @@ fn torii_partition_alias_index_routes_by_permission(
     let public_dataspaces = torii_public_dataspace_ids(app.as_ref());
     let mut allowed_routes = Vec::new();
     let mut denied_routes = 0usize;
-
     for route in routes {
         if public_dataspaces.contains(&route.dataspace_id) {
             allowed_routes.push(route);
@@ -21843,10 +20671,8 @@ fn torii_partition_alias_index_routes_by_permission(
             denied_routes = denied_routes.saturating_add(1);
         }
     }
-
     Ok((allowed_routes, denied_routes))
 }
-
 #[cfg(feature = "app_api")]
 fn torii_account_read_routes(
     app: &AppState,
@@ -21860,12 +20686,10 @@ fn torii_account_read_routes(
         Ok(torii_visible_account_read_routes(app, caller))
     }
 }
-
 #[cfg(feature = "app_api")]
 fn torii_account_assets_read_routes(app: &AppState) -> Vec<RoutingDecision> {
     torii_all_dataspace_routes(app)
 }
-
 #[cfg(feature = "app_api")]
 fn torii_account_permissions_read_routes(
     app: &AppState,
@@ -21879,7 +20703,6 @@ fn torii_account_permissions_read_routes(
         Ok(torii_visible_account_read_routes(app, caller))
     }
 }
-
 #[cfg(feature = "app_api")]
 fn torii_account_permissions_route_scope(
     _target_account: &AccountId,
@@ -21894,7 +20717,6 @@ fn torii_account_permissions_route_scope(
         }
     }
 }
-
 fn torii_nexus_route(app: &AppState) -> Result<RoutingDecision, Response> {
     resolve_torii_route_for_dataspace_id(app, DataSpaceId::UNIVERSAL).map_err(|error| {
         torii_proxy_error_response(
@@ -21904,7 +20726,6 @@ fn torii_nexus_route(app: &AppState) -> Result<RoutingDecision, Response> {
         )
     })
 }
-
 fn parse_internal_fanout_account_id(
     account_id: &str,
     context: &'static str,
@@ -21919,7 +20740,6 @@ fn parse_internal_fanout_account_id(
             )
         })
 }
-
 #[cfg(feature = "app_api")]
 fn torii_fanout_scope_routes(
     app: &AppState,
@@ -21940,7 +20760,6 @@ fn torii_fanout_scope_routes(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 fn torii_account_read_route_scope(
     target_account: &AccountId,
@@ -21957,7 +20776,6 @@ fn torii_account_read_route_scope(
         }
     }
 }
-
 fn torii_all_dataspace_routes(app: &AppState) -> Vec<RoutingDecision> {
     let state_view = app.state.view();
     let nexus = state_view.nexus();
@@ -21981,7 +20799,6 @@ fn torii_all_dataspace_routes(app: &AppState) -> Vec<RoutingDecision> {
         .map(|(dataspace_id, lane_id)| RoutingDecision::new(lane_id, dataspace_id))
         .collect()
 }
-
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_response_format(format: ResponseFormat) -> ToriiProxyResponseFormatV1 {
     match format {
@@ -21989,7 +20806,6 @@ fn torii_proxy_response_format(format: ResponseFormat) -> ToriiProxyResponseForm
         ResponseFormat::Json => ToriiProxyResponseFormatV1::Json,
     }
 }
-
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 fn response_format_from_torii_proxy(format: ToriiProxyResponseFormatV1) -> ResponseFormat {
     match format {
@@ -21997,17 +20813,14 @@ fn response_format_from_torii_proxy(format: ToriiProxyResponseFormatV1) -> Respo
         ToriiProxyResponseFormatV1::Json => ResponseFormat::Json,
     }
 }
-
 fn current_torii_queue_pressure(app: &AppState) -> queue::QueuePressureSnapshot {
     let block_time = app.state.sumeragi_block_cadence();
     app.queue
         .refresh_pressure_budget_from_block_time(block_time)
 }
-
 fn current_torii_backpressure(app: &AppState) -> queue::BackpressureState {
     current_torii_queue_pressure(app).into_backpressure()
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn new_torii_proxy_session_id() -> Hash {
     let mut nonce = [0_u8; Hash::LENGTH];
@@ -22015,10 +20828,8 @@ fn new_torii_proxy_session_id() -> Hash {
         .unwrap_or_else(|error| panic!("Torii proxy process-session OS RNG failed: {error}"));
     Hash::new(nonce)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 type OwnedToriiProxyRequestIdPreimage = (&'static str, Hash, PeerId, u64, ToriiProxyRequestKindV4);
-
 /// Borrowed wire-equivalent of [`OwnedToriiProxyRequestIdPreimage`].
 ///
 /// Each tuple field keeps the historical length prefix, but the potentially
@@ -22032,16 +20843,13 @@ struct BorrowedToriiProxyRequestIdPreimage<'a> {
     sequence: u64,
     request: &'a ToriiProxyRequestKindV4,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 impl norito::core::NoritoSerialize for BorrowedToriiProxyRequestIdPreimage<'_> {
     fn schema_hash() -> [u8; 16] {
         <OwnedToriiProxyRequestIdPreimage as norito::core::NoritoSerialize>::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         const DOMAIN: &str = "torii:proxy:v5";
-
         let mut scratch = norito::core::SmallBuf::<384>::new();
         norito::core::write_len_prefixed_exact(writer, &DOMAIN, &mut scratch)?;
         norito::core::write_len_prefixed_exact(writer, self.process_session_id, &mut scratch)?;
@@ -22056,13 +20864,11 @@ impl norito::core::NoritoSerialize for BorrowedToriiProxyRequestIdPreimage<'_> {
         norito::core::write_len_prefixed_exact(writer, self.request, &mut scratch)?;
         Ok(())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         fn field(value: &dyn norito::core::NoritoSerialize) -> Option<usize> {
             let bytes = value.encoded_len_exact()?;
             norito::core::len_prefix_len(bytes).checked_add(bytes)
         }
-
         const DOMAIN: &str = "torii:proxy:v5";
         [
             field(&DOMAIN)?,
@@ -22075,7 +20881,6 @@ impl norito::core::NoritoSerialize for BorrowedToriiProxyRequestIdPreimage<'_> {
         .try_fold(0_usize, usize::checked_add)
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_request_id_for_session_sequence(
     process_session_id: &Hash,
@@ -22098,7 +20903,6 @@ fn torii_proxy_request_id_for_session_sequence(
         norito::to_bytes(&preimage).expect("Torii proxy request id encoding should be infallible"),
     )
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn next_torii_proxy_request_id(
     app: &AppState,
@@ -22120,7 +20924,6 @@ fn next_torii_proxy_request_id(
         request,
     ))
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_synced_proxy_request_id(
     app: &AppState,
@@ -22139,7 +20942,6 @@ fn queue_plan_synced_proxy_request_id(
         transaction.hash(),
     ))
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_synced_proxy_request_id_for_entrypoint(
     app: &AppState,
@@ -22150,7 +20952,6 @@ fn queue_plan_synced_proxy_request_id_for_entrypoint(
         entrypoint_hash,
     )
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_hedge_delay(app: &AppState) -> Duration {
     app.state
@@ -22159,7 +20960,6 @@ fn torii_proxy_hedge_delay(app: &AppState) -> Duration {
         .unwrap_or(Duration::ZERO)
         .clamp(Duration::from_millis(50), Duration::from_millis(250))
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_candidate_launch_delay(
     queue_plan_synced: bool,
@@ -22171,14 +20971,12 @@ fn torii_proxy_candidate_launch_delay(
     }
     hedge_delay.saturating_mul(u32::try_from(candidate_index).unwrap_or(u32::MAX))
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn prune_completed_torii_proxy_requests(app: &SharedAppState) {
     let now = Instant::now();
     let mut completed = app.torii_proxy_completed.lock().await;
     completed.prune(now);
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn mark_torii_proxy_request_completed(app: &SharedAppState, request_id: Hash) {
     {
@@ -22188,7 +20986,6 @@ async fn mark_torii_proxy_request_completed(app: &SharedAppState, request_id: Ha
     let mut completed = app.torii_proxy_completed.lock().await;
     completed.record(request_id, Instant::now());
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn new_torii_proxy_request(
     app: &AppState,
@@ -22201,7 +20998,6 @@ fn new_torii_proxy_request(
             "Torii ingress routing requires a configured local peer id",
         ));
     };
-
     let request_id = match queue_plan_synced_proxy_request_id(app, &request) {
         Some(request_id) => request_id,
         None => next_torii_proxy_request_id(app, local_peer_id, &request).map_err(|error| {
@@ -22246,7 +21042,6 @@ fn new_torii_proxy_request(
         request,
     })
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_now_unix_ms() -> Result<u64, &'static str> {
     let millis = SystemTime::now()
@@ -22255,7 +21050,6 @@ fn torii_proxy_now_unix_ms() -> Result<u64, &'static str> {
         .as_millis();
     u64::try_from(millis).map_err(|_| "system clock milliseconds exceed the proxy wire field")
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_remaining_budget(
     deadline_unix_ms: u64,
@@ -22273,12 +21067,10 @@ fn torii_proxy_remaining_budget(
     }
     Ok(remaining)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn validate_torii_proxy_deadline(deadline_unix_ms: u64) -> Result<Duration, &'static str> {
     torii_proxy_remaining_budget(deadline_unix_ms, torii_proxy_now_unix_ms()?)
 }
-
 #[cfg(test)]
 fn torii_proxy_test_deadline_unix_ms() -> u64 {
     torii_proxy_now_unix_ms()
@@ -22286,7 +21078,6 @@ fn torii_proxy_test_deadline_unix_ms() -> u64 {
         .checked_add(60_000)
         .expect("test Torii proxy deadline must fit u64")
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn forwarded_torii_proxy_request_owned(
     mut request: ToriiProxyRequestV6,
@@ -22303,7 +21094,6 @@ fn forwarded_torii_proxy_request_owned(
     request.hop_count = request.hop_count.saturating_add(1);
     request
 }
-
 #[cfg(test)]
 fn forwarded_torii_proxy_request(
     request: &ToriiProxyRequestV6,
@@ -22311,14 +21101,12 @@ fn forwarded_torii_proxy_request(
 ) -> ToriiProxyRequestV6 {
     forwarded_torii_proxy_request_owned(request.clone(), local_peer_id)
 }
-
 fn insert_routed_by_header(response: &mut Response, routed_by: &'static str) {
     response.headers_mut().insert(
         HeaderName::from_static("x-iroha-routed-by"),
         HeaderValue::from_static(routed_by),
     );
 }
-
 fn insert_usize_header(response: &mut Response, name: &'static str, value: usize) {
     if let Ok(header) = HeaderValue::from_str(&value.to_string()) {
         response
@@ -22326,7 +21114,6 @@ fn insert_usize_header(response: &mut Response, name: &'static str, value: usize
             .insert(HeaderName::from_static(name), header);
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum SignedQueryScope {
     PublicControlPlane,
@@ -22337,7 +21124,6 @@ enum SignedQueryScope {
     TargetAlias(iroha_data_model::account::AccountAlias),
     TargetDomain(iroha_data_model::domain::DomainId),
 }
-
 fn torii_signed_query_permission_denied_response(
     authority: &AccountId,
     denied_routes: usize,
@@ -22350,7 +21136,6 @@ fn torii_signed_query_permission_denied_response(
         ),
     )
 }
-
 fn torii_intersect_signed_query_routes(
     routes: Vec<RoutingDecision>,
     allowed_routes: Vec<RoutingDecision>,
@@ -22370,7 +21155,6 @@ fn torii_intersect_signed_query_routes(
     }
     (allowed, denied)
 }
-
 fn torii_authorize_signed_query_routes(
     app: &AppState,
     request: &impl SignedQueryScopeInput,
@@ -22448,7 +21232,6 @@ fn torii_authorize_signed_query_routes(
         }
     }
 }
-
 fn payload_matches_query<Query>(payload: &[u8]) -> bool
 where
     Query: norito::codec::Decode + norito::codec::Encode,
@@ -22459,53 +21242,38 @@ where
     };
     cursor.is_empty() && norito::codec::Encode::encode(&query) == payload
 }
-
+fn canonical_iterable_query_parts(
+    query: &iroha_data_model::query::QueryWithParams,
+) -> (iroha_data_model::query::QueryItemKind, &[u8], &[u8], &[u8]) {
+    query.parts()
+}
+/// Canonical iterable envelopes no longer retain a runtime boxed query.
+///
+/// Callers that specifically require the allocation-free legacy typed carrier
+/// use this helper to fail closed before decoding opaque components.
+fn legacy_iterable_query_box(
+    _query: &iroha_data_model::query::QueryWithParams,
+) -> Option<&iroha_data_model::query::QueryBox<iroha_data_model::query::QueryOutputBatchBox>> {
+    None
+}
 fn is_trigger_inventory_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
-    use iroha_data_model::{
-        query::{
-            QueryItemKind, iter_query_inner,
-            trigger::prelude::{FindActiveTriggerIds, FindTriggers},
-        },
-        trigger::{Trigger, TriggerId},
+    use iroha_data_model::query::{
+        QueryItemKind,
+        trigger::prelude::{FindActiveTriggerIds, FindTriggers},
     };
-
-    if let Some(query_box) = query.query_box() {
-        if let Some(erased) = iter_query_inner::<Trigger>(query_box) {
-            return payload_matches_query::<FindTriggers>(erased.payload());
+    match query.item {
+        QueryItemKind::Trigger => payload_matches_query::<FindTriggers>(&query.query_payload),
+        QueryItemKind::TriggerId => {
+            payload_matches_query::<FindActiveTriggerIds>(&query.query_payload)
         }
-        if let Some(erased) = iter_query_inner::<TriggerId>(query_box) {
-            return payload_matches_query::<FindActiveTriggerIds>(erased.payload());
-        }
-        return false;
+        _ => false,
     }
-
-    query
-        .fast_dsl_parts()
-        .is_some_and(|(item_kind, _, _, payload)| match item_kind {
-            QueryItemKind::Trigger => payload_matches_query::<FindTriggers>(payload),
-            QueryItemKind::TriggerId => payload_matches_query::<FindActiveTriggerIds>(payload),
-            _ => false,
-        })
 }
-
 fn is_public_control_plane_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
-    use iroha_data_model::{
-        peer::PeerId,
-        query::{QueryItemKind, iter_query_inner, peer::prelude::FindPeers},
-    };
+    use iroha_data_model::query::{QueryItemKind, peer::prelude::FindPeers};
 
-    if let Some(query_box) = query.query_box() {
-        return iter_query_inner::<PeerId>(query_box)
-            .is_some_and(|erased| payload_matches_query::<FindPeers>(erased.payload()));
-    }
-
-    query
-        .fast_dsl_parts()
-        .is_some_and(|(item_kind, _, _, payload)| {
-            item_kind == QueryItemKind::PeerId && payload_matches_query::<FindPeers>(payload)
-        })
+    query.item == QueryItemKind::PeerId && payload_matches_query::<FindPeers>(&query.query_payload)
 }
-
 fn decode_query_payload<Query>(payload: &[u8]) -> Option<Query>
 where
     Query: norito::codec::Decode + norito::codec::Encode,
@@ -22514,7 +21282,6 @@ where
     let query = <Query as norito::codec::Decode>::decode(&mut cursor).ok()?;
     (cursor.is_empty() && norito::codec::Encode::encode(&query) == payload).then_some(query)
 }
-
 fn decode_query_payload_bounded<Query>(
     payload: &[u8],
     memory_limits: QueryScopeMemoryLimits,
@@ -22552,7 +21319,6 @@ where
             return Ok(None);
         }
     };
-
     let encoded_len =
         norito::codec::encode_adaptive_into(&query, &mut std::io::sink()).map_err(|_| {
             torii_proxy_error_response(
@@ -22598,7 +21364,6 @@ where
     }
     Ok((canonical.as_slice() == payload).then_some(query))
 }
-
 fn bounded_unit_query_payload_matches(payload: &[u8]) -> bool {
     // Every fanout-classifiable unit query has an empty fixed-v1 payload. Do
     // not invoke the generic erased-query decoder here: `Decode::decode`
@@ -22606,7 +21371,6 @@ fn bounded_unit_query_payload_matches(payload: &[u8]) -> bool {
     // non-unit query that shares the same output item kind.
     payload.is_empty()
 }
-
 fn target_scope_singular_query(
     query: &iroha_data_model::query::SingularQueryBox,
 ) -> Option<SignedQueryScope> {
@@ -22643,13 +21407,11 @@ fn target_scope_singular_query(
         _ => None,
     }
 }
-
 fn target_asset_definition_scope(
     _asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
 ) -> Option<SignedQueryScope> {
     None
 }
-
 fn resolve_asset_definition_scope(
     app: &AppState,
     asset_definition_id: &iroha_data_model::asset::AssetDefinitionId,
@@ -22661,7 +21423,6 @@ fn resolve_asset_definition_scope(
         .cloned()
         .map(SignedQueryScope::TargetDomain)
 }
-
 #[cfg(feature = "app_api")]
 fn asset_definition_domain_snapshot(
     app: &AppState,
@@ -22673,7 +21434,6 @@ fn asset_definition_domain_snapshot(
         .map(|(definition_id, domain_id)| (definition_id.clone(), domain_id.clone()))
         .collect()
 }
-
 fn target_account_iterable_query(
     query: &iroha_data_model::query::QueryWithParams,
 ) -> Option<AccountId> {
@@ -22682,65 +21442,42 @@ fn target_account_iterable_query(
             FindAssetsByAccountId, FindDomainsByAccountId, FindNftsByAccountId,
             FindPermissionsByAccountId, FindRolesByAccountId,
         },
-        query::{QueryItemKind, iter_query_inner},
-        role::RoleId,
+        query::{
+            QueryItemKind,
+            escrow::prelude::{FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller},
+        },
     };
-
-    if let Some(query_box) = query.query_box() {
-        if let Some(erased) = iter_query_inner::<iroha_data_model::domain::Domain>(query_box)
-            && let Some(query) = decode_query_payload::<FindDomainsByAccountId>(erased.payload())
-        {
-            return Some(query.account_id().clone());
+    match query.item {
+        QueryItemKind::Domain => {
+            decode_query_payload::<FindDomainsByAccountId>(&query.query_payload)
+                .map(|query| query.account_id().clone())
         }
-        if let Some(erased) = iter_query_inner::<iroha_data_model::asset::value::Asset>(query_box)
-            && let Some(query) = decode_query_payload::<FindAssetsByAccountId>(erased.payload())
-        {
-            return Some(query.account_id().clone());
+        QueryItemKind::Asset => decode_query_payload::<FindAssetsByAccountId>(&query.query_payload)
+            .map(|query| query.account_id().clone()),
+        QueryItemKind::Nft => decode_query_payload::<FindNftsByAccountId>(&query.query_payload)
+            .map(|query| query.account_id().clone()),
+        QueryItemKind::Permission => {
+            decode_query_payload::<FindPermissionsByAccountId>(&query.query_payload)
+                .map(|query| query.account_id().clone())
         }
-        if let Some(erased) = iter_query_inner::<iroha_data_model::nft::Nft>(query_box)
-            && let Some(query) = decode_query_payload::<FindNftsByAccountId>(erased.payload())
-        {
-            return Some(query.account_id().clone());
+        QueryItemKind::RoleId => decode_query_payload::<FindRolesByAccountId>(&query.query_payload)
+            .map(|query| query.account_id().clone()),
+        QueryItemKind::AssetEscrowsBySeller => {
+            decode_query_payload::<FindAssetEscrowsBySeller>(&query.query_payload)
+                .map(|query| query.seller)
         }
-        if let Some(erased) = iter_query_inner::<Permission>(query_box)
-            && let Some(query) =
-                decode_query_payload::<FindPermissionsByAccountId>(erased.payload())
-        {
-            return Some(query.account_id().clone());
+        QueryItemKind::AssetEscrowsByBuyer => {
+            decode_query_payload::<FindAssetEscrowsByBuyer>(&query.query_payload)
+                .map(|query| query.buyer)
         }
-        if let Some(erased) = iter_query_inner::<RoleId>(query_box)
-            && let Some(query) = decode_query_payload::<FindRolesByAccountId>(erased.payload())
-        {
-            return Some(query.account_id().clone());
-        }
-        return None;
+        _ => None,
     }
-
-    query
-        .fast_dsl_parts()
-        .and_then(|(item_kind, _, _, payload)| match item_kind {
-            QueryItemKind::Domain => decode_query_payload::<FindDomainsByAccountId>(payload)
-                .map(|query| query.account_id().clone()),
-            QueryItemKind::Asset => decode_query_payload::<FindAssetsByAccountId>(payload)
-                .map(|query| query.account_id().clone()),
-            QueryItemKind::Nft => decode_query_payload::<FindNftsByAccountId>(payload)
-                .map(|query| query.account_id().clone()),
-            QueryItemKind::Permission => {
-                decode_query_payload::<FindPermissionsByAccountId>(payload)
-                    .map(|query| query.account_id().clone())
-            }
-            QueryItemKind::RoleId => decode_query_payload::<FindRolesByAccountId>(payload)
-                .map(|query| query.account_id().clone()),
-            _ => None,
-        })
 }
-
 fn target_domain_iterable_query(
     _query: &iroha_data_model::query::QueryWithParams,
 ) -> Option<iroha_data_model::domain::DomainId> {
     None
 }
-
 fn target_scope_singular_query_for_app(
     app: &AppState,
     query: &iroha_data_model::query::SingularQueryBox,
@@ -22757,94 +21494,37 @@ fn target_scope_singular_query_for_app(
         _ => target_scope_singular_query(query),
     }
 }
-
 fn target_domain_iterable_query_for_app(
     app: &AppState,
     query: &iroha_data_model::query::QueryWithParams,
 ) -> Option<iroha_data_model::domain::DomainId> {
-    use iroha_data_model::{
-        account::Account, prelude::FindAccountsWithAsset, query::iter_query_inner,
-    };
+    use iroha_data_model::prelude::FindAccountsWithAsset;
 
-    if let Some(query_box) = query.query_box() {
-        if let Some(erased) = iter_query_inner::<Account>(query_box)
-            && let Some(query) = decode_query_payload::<FindAccountsWithAsset>(erased.payload())
-        {
-            return resolve_asset_definition_scope(app, query.asset_definition_id()).and_then(
-                |scope| match scope {
-                    SignedQueryScope::TargetDomain(domain_id) => Some(domain_id),
-                    _ => None,
-                },
-            );
-        }
-        return None;
-    }
-
-    query
-        .fast_dsl_parts()
-        .and_then(|(item_kind, _, _, payload)| {
-            (item_kind == iroha_data_model::query::QueryItemKind::Account)
-                .then(|| decode_query_payload::<FindAccountsWithAsset>(payload))
-                .flatten()
-                .and_then(|query| {
-                    resolve_asset_definition_scope(app, query.asset_definition_id()).and_then(
-                        |scope| {
-                            let SignedQueryScope::TargetDomain(domain_id) = scope else {
-                                return None;
-                            };
-                            Some(domain_id)
-                        },
-                    )
-                })
+    (query.item == iroha_data_model::query::QueryItemKind::Account)
+        .then(|| decode_query_payload::<FindAccountsWithAsset>(&query.query_payload))
+        .flatten()
+        .and_then(|query| {
+            resolve_asset_definition_scope(app, query.asset_definition_id()).and_then(|scope| {
+                let SignedQueryScope::TargetDomain(domain_id) = scope else {
+                    return None;
+                };
+                Some(domain_id)
+            })
         })
 }
-
 fn is_authority_routed_iterable_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
-    use iroha_data_model::query::{
-        QueryItemKind, iter_query_inner, transaction::prelude::FindTransactions,
-    };
+    use iroha_data_model::query::{QueryItemKind, transaction::prelude::FindTransactions};
 
-    if let Some(query_box) = query.query_box() {
-        if let Some(erased) =
-            iter_query_inner::<iroha_data_model::query::CommittedTransaction>(query_box)
-        {
-            return payload_matches_query::<FindTransactions>(erased.payload());
-        }
-        return false;
-    }
-
-    query
-        .fast_dsl_parts()
-        .is_some_and(|(item_kind, _, _, payload)| match item_kind {
-            QueryItemKind::CommittedTransaction => {
-                payload_matches_query::<FindTransactions>(payload)
-            }
-            _ => false,
-        })
+    query.item == QueryItemKind::CommittedTransaction
+        && payload_matches_query::<FindTransactions>(&query.query_payload)
 }
-
 fn is_trigger_inventory_query_bounded(
     query: &iroha_data_model::query::QueryWithParams,
     _memory_limits: QueryScopeMemoryLimits,
 ) -> Result<bool, Response> {
-    use iroha_data_model::{
-        query::{QueryItemKind, iter_query_inner},
-        trigger::{Trigger, TriggerId},
-    };
+    use iroha_data_model::query::QueryItemKind;
 
-    if let Some(query_box) = query.query_box() {
-        if let Some(erased) = iter_query_inner::<Trigger>(query_box) {
-            return Ok(bounded_unit_query_payload_matches(erased.payload()));
-        }
-        if let Some(erased) = iter_query_inner::<TriggerId>(query_box) {
-            return Ok(bounded_unit_query_payload_matches(erased.payload()));
-        }
-        return Ok(false);
-    }
-
-    let Some((item_kind, _, _, payload)) = query.fast_dsl_parts() else {
-        return Ok(false);
-    };
+    let (item_kind, _, _, payload) = canonical_iterable_query_parts(query);
     match item_kind {
         QueryItemKind::Trigger | QueryItemKind::TriggerId => {
             Ok(bounded_unit_query_payload_matches(payload))
@@ -22852,33 +21532,19 @@ fn is_trigger_inventory_query_bounded(
         _ => Ok(false),
     }
 }
-
 fn is_public_control_plane_query_bounded(
     query: &iroha_data_model::query::QueryWithParams,
     _memory_limits: QueryScopeMemoryLimits,
 ) -> Result<bool, Response> {
-    use iroha_data_model::{
-        peer::PeerId,
-        query::{QueryItemKind, iter_query_inner},
-    };
+    use iroha_data_model::query::QueryItemKind;
 
-    if let Some(query_box) = query.query_box() {
-        let Some(erased) = iter_query_inner::<PeerId>(query_box) else {
-            return Ok(false);
-        };
-        return Ok(bounded_unit_query_payload_matches(erased.payload()));
-    }
-
-    let Some((item_kind, _, _, payload)) = query.fast_dsl_parts() else {
-        return Ok(false);
-    };
+    let (item_kind, _, _, payload) = canonical_iterable_query_parts(query);
     if item_kind == QueryItemKind::PeerId {
         Ok(bounded_unit_query_payload_matches(payload))
     } else {
         Ok(false)
     }
 }
-
 fn target_account_iterable_query_bounded(
     query: &iroha_data_model::query::QueryWithParams,
     memory_limits: QueryScopeMemoryLimits,
@@ -22888,49 +21554,15 @@ fn target_account_iterable_query_bounded(
             FindAssetsByAccountId, FindDomainsByAccountId, FindNftsByAccountId,
             FindPermissionsByAccountId, FindRolesByAccountId,
         },
-        query::{QueryItemKind, iter_query_inner},
-        role::RoleId,
+        query::QueryItemKind,
     };
-
     macro_rules! target_account {
         ($query:ty, $payload:expr) => {
             decode_query_payload_bounded::<$query>($payload, memory_limits)?
                 .map(|query| query.account_id().clone())
         };
     }
-
-    if let Some(query_box) = query.query_box() {
-        if let Some(erased) = iter_query_inner::<iroha_data_model::domain::Domain>(query_box)
-            && let Some(account_id) = target_account!(FindDomainsByAccountId, erased.payload())
-        {
-            return Ok(Some(account_id));
-        }
-        if let Some(erased) = iter_query_inner::<iroha_data_model::asset::value::Asset>(query_box)
-            && let Some(account_id) = target_account!(FindAssetsByAccountId, erased.payload())
-        {
-            return Ok(Some(account_id));
-        }
-        if let Some(erased) = iter_query_inner::<iroha_data_model::nft::Nft>(query_box)
-            && let Some(account_id) = target_account!(FindNftsByAccountId, erased.payload())
-        {
-            return Ok(Some(account_id));
-        }
-        if let Some(erased) = iter_query_inner::<Permission>(query_box)
-            && let Some(account_id) = target_account!(FindPermissionsByAccountId, erased.payload())
-        {
-            return Ok(Some(account_id));
-        }
-        if let Some(erased) = iter_query_inner::<RoleId>(query_box)
-            && let Some(account_id) = target_account!(FindRolesByAccountId, erased.payload())
-        {
-            return Ok(Some(account_id));
-        }
-        return Ok(None);
-    }
-
-    let Some((item_kind, _, _, payload)) = query.fast_dsl_parts() else {
-        return Ok(None);
-    };
+    let (item_kind, _, _, payload) = canonical_iterable_query_parts(query);
     Ok(match item_kind {
         QueryItemKind::Domain => target_account!(FindDomainsByAccountId, payload),
         QueryItemKind::Asset => target_account!(FindAssetsByAccountId, payload),
@@ -22940,30 +21572,17 @@ fn target_account_iterable_query_bounded(
         _ => None,
     })
 }
-
 fn target_domain_iterable_query_for_app_bounded(
     app: &AppState,
     query: &iroha_data_model::query::QueryWithParams,
     memory_limits: QueryScopeMemoryLimits,
 ) -> Result<Option<iroha_data_model::domain::DomainId>, Response> {
-    use iroha_data_model::{
-        account::Account, prelude::FindAccountsWithAsset, query::iter_query_inner,
-    };
+    use iroha_data_model::prelude::FindAccountsWithAsset;
 
-    let payload = if let Some(query_box) = query.query_box() {
-        let Some(erased) = iter_query_inner::<Account>(query_box) else {
-            return Ok(None);
-        };
-        erased.payload()
-    } else {
-        let Some((item_kind, _, _, payload)) = query.fast_dsl_parts() else {
-            return Ok(None);
-        };
-        if item_kind != iroha_data_model::query::QueryItemKind::Account {
-            return Ok(None);
-        }
-        payload
-    };
+    let (item_kind, _, _, payload) = canonical_iterable_query_parts(query);
+    if item_kind != iroha_data_model::query::QueryItemKind::Account {
+        return Ok(None);
+    }
     let Some(query) =
         decode_query_payload_bounded::<FindAccountsWithAsset>(payload, memory_limits)?
     else {
@@ -22978,48 +21597,32 @@ fn target_domain_iterable_query_for_app_bounded(
         }),
     )
 }
-
 fn is_authority_routed_iterable_query_bounded(
     query: &iroha_data_model::query::QueryWithParams,
     _memory_limits: QueryScopeMemoryLimits,
 ) -> Result<bool, Response> {
-    use iroha_data_model::query::{QueryItemKind, iter_query_inner};
+    use iroha_data_model::query::QueryItemKind;
 
-    if let Some(query_box) = query.query_box() {
-        let Some(erased) =
-            iter_query_inner::<iroha_data_model::query::CommittedTransaction>(query_box)
-        else {
-            return Ok(false);
-        };
-        return Ok(bounded_unit_query_payload_matches(erased.payload()));
-    }
-
-    let Some((item_kind, _, _, payload)) = query.fast_dsl_parts() else {
-        return Ok(false);
-    };
+    let (item_kind, _, _, payload) = canonical_iterable_query_parts(query);
     if item_kind == QueryItemKind::CommittedTransaction {
         Ok(bounded_unit_query_payload_matches(payload))
     } else {
         Ok(false)
     }
 }
-
 trait SignedQueryScopeInput {
     fn request_with_authority(&self) -> &iroha_data_model::query::QueryRequestWithAuthority;
 }
-
 impl SignedQueryScopeInput for iroha_data_model::query::QueryRequestWithAuthority {
     fn request_with_authority(&self) -> &iroha_data_model::query::QueryRequestWithAuthority {
         self
     }
 }
-
 impl SignedQueryScopeInput for iroha_data_model::query::SignedQuery {
     fn request_with_authority(&self) -> &iroha_data_model::query::QueryRequestWithAuthority {
         &self.payload
     }
 }
-
 fn signed_query_scope(request: &impl SignedQueryScopeInput) -> SignedQueryScope {
     match request.request_with_authority().request() {
         iroha_data_model::query::QueryRequest::Continue(_) => SignedQueryScope::AuthorityRouted,
@@ -23048,7 +21651,6 @@ fn signed_query_scope(request: &impl SignedQueryScopeInput) -> SignedQueryScope 
             }),
     }
 }
-
 fn signed_query_scope_for_app(
     app: &AppState,
     request: &impl SignedQueryScopeInput,
@@ -23085,7 +21687,6 @@ fn signed_query_scope_for_app(
         }
     }
 }
-
 fn signed_query_scope_for_app_bounded(
     app: &AppState,
     request: &impl SignedQueryScopeInput,
@@ -23119,7 +21720,6 @@ fn signed_query_scope_for_app_bounded(
     };
     Ok(scope)
 }
-
 fn torii_authorized_signed_query_routes(
     app: &AppState,
     request: &impl SignedQueryScopeInput,
@@ -23150,7 +21750,6 @@ fn torii_authorized_signed_query_routes(
             })?,
         ]);
     }
-
     let routes = match scope {
         SignedQueryScope::PublicControlPlane => Vec::new(),
         SignedQueryScope::LocalReplicated => Vec::new(),
@@ -23164,7 +21763,6 @@ fn torii_authorized_signed_query_routes(
     };
     torii_authorize_signed_query_routes(app, request, scope, routes)
 }
-
 #[cfg(test)]
 fn clone_verified_query_request(
     request: &iroha_data_model::query::QueryRequestWithAuthority,
@@ -23174,7 +21772,6 @@ fn clone_verified_query_request(
     norito::decode_from_bytes(&bytes)
         .expect("verified routed query requests should decode deterministically")
 }
-
 fn verified_query_request_encoded_len(
     request: &iroha_data_model::query::QueryRequestWithAuthority,
 ) -> Result<usize, Response> {
@@ -23186,7 +21783,6 @@ fn verified_query_request_encoded_len(
         )
     })
 }
-
 fn exact_query_fanout_envelope(
     working_set_bytes: usize,
     signed_query_bytes: usize,
@@ -23198,12 +21794,10 @@ fn exact_query_fanout_envelope(
         verified_query_request_encoded_len(request)?,
     )
 }
-
 struct FixedCapacityNoritoWriter<'a> {
     bytes: &'a mut Vec<u8>,
     max_bytes: usize,
 }
-
 impl std::io::Write for FixedCapacityNoritoWriter<'_> {
     fn write(&mut self, chunk: &[u8]) -> std::io::Result<usize> {
         let remaining = self
@@ -23218,12 +21812,10 @@ impl std::io::Write for FixedCapacityNoritoWriter<'_> {
         self.bytes.extend_from_slice(chunk);
         Ok(chunk.len())
     }
-
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
-
 fn encode_versioned_norito_bounded<T>(value: &T, max_bytes: usize) -> Result<Vec<u8>, Response>
 where
     T: iroha_version::Version + norito::core::NoritoSerialize,
@@ -23289,14 +21881,12 @@ where
     }
     Ok(bytes)
 }
-
 fn encode_signed_query_versioned_bounded(
     query: &SignedQuery,
     max_bytes: usize,
 ) -> Result<Vec<u8>, Response> {
     encode_versioned_norito_bounded(query, max_bytes)
 }
-
 fn clone_verified_query_request_bounded(
     request: &iroha_data_model::query::QueryRequestWithAuthority,
     envelope: QueryFanoutMemoryEnvelope,
@@ -23348,14 +21938,12 @@ fn clone_verified_query_request_bounded(
             )
         })
 }
-
 #[cfg(test)]
 fn fanout_route_scan_query_request(
     request: &iroha_data_model::query::QueryRequestWithAuthority,
 ) -> Result<iroha_data_model::query::QueryRequestWithAuthority, Response> {
     prepare_fanout_route_scan_query_request(clone_verified_query_request(request))
 }
-
 fn fanout_route_scan_query_request_bounded(
     request: &iroha_data_model::query::QueryRequestWithAuthority,
     envelope: QueryFanoutMemoryEnvelope,
@@ -23364,7 +21952,6 @@ fn fanout_route_scan_query_request_bounded(
         request, envelope,
     )?)
 }
-
 fn prepare_fanout_route_scan_query_request(
     mut request: iroha_data_model::query::QueryRequestWithAuthority,
 ) -> Result<iroha_data_model::query::QueryRequestWithAuthority, Response> {
@@ -23418,11 +22005,9 @@ fn prepare_fanout_route_scan_query_request(
     }
     Ok(request)
 }
-
 fn unsupported_routed_query_response(message: impl Into<String>) -> Response {
     torii_proxy_error_response(StatusCode::CONFLICT, "query_unsupported", message)
 }
-
 fn canonical_fanout_error_response(
     error: iroha_data_model::query::error::QueryExecutionFail,
 ) -> Response {
@@ -23439,7 +22024,6 @@ fn canonical_fanout_error_response(
         _ => unsupported_canonical_iterable_fanout_response(),
     }
 }
-
 fn unsupported_canonical_iterable_fanout_response() -> Response {
     torii_proxy_error_response(
         StatusCode::CONFLICT,
@@ -23447,13 +22031,11 @@ fn unsupported_canonical_iterable_fanout_response() -> Response {
         "bounded iterable fanout supports only boxed, unfiltered, unsorted identity FindRoleIds and FindActiveTriggerIds queries; route output must keep that exact batch variant",
     )
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BoundedCanonicalFanoutVariant {
     RoleId,
     TriggerId,
 }
-
 impl BoundedCanonicalFanoutVariant {
     fn matches(self, batch: &iroha_data_model::query::QueryOutputBatchBox) -> bool {
         matches!(
@@ -23468,19 +22050,16 @@ impl BoundedCanonicalFanoutVariant {
         )
     }
 }
-
 fn ensure_bounded_fanout_query(
     request: &iroha_data_model::query::QueryRequestWithAuthority,
 ) -> Result<(), Response> {
     bounded_fanout_query_kind(request).map(drop)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BoundedFanoutQueryKind {
     Iterable(BoundedCanonicalFanoutVariant),
     Singular,
 }
-
 fn bounded_fanout_query_kind(
     request: &iroha_data_model::query::QueryRequestWithAuthority,
 ) -> Result<BoundedFanoutQueryKind, Response> {
@@ -23496,7 +22075,6 @@ fn bounded_fanout_query_kind(
         }
     }
 }
-
 fn bounded_canonical_iterable_fanout_variant(
     request: &iroha_data_model::query::QueryRequestWithAuthority,
 ) -> Result<BoundedCanonicalFanoutVariant, Response> {
@@ -23505,15 +22083,14 @@ fn bounded_canonical_iterable_fanout_variant(
         role::RoleId,
         trigger::TriggerId,
     };
-
     let QueryRequest::Start(query) = &request.request else {
         return Err(unsupported_canonical_iterable_fanout_response());
     };
-    // Fast-DSL carries nested opaque query/predicate/selector frames. Do not
-    // decode any of those merely to decide admission. Canonical fanout accepts
-    // only a typed boxed unit query whose identity predicate/selector are
-    // already visible and allocation-free to inspect.
-    let Some(query_box) = query.query_box() else {
+    // Canonical envelopes carry nested opaque query/predicate/selector frames.
+    // Do not decode any merely to decide admission. Fanout remains fail-closed
+    // unless a legacy typed carrier is available for allocation-free shape
+    // inspection.
+    let Some(query_box) = legacy_iterable_query_box(query) else {
         return Err(unsupported_canonical_iterable_fanout_response());
     };
     let identity_shape = |predicate_is_pass: bool, selector_is_identity: bool| {
@@ -23545,7 +22122,6 @@ fn bounded_canonical_iterable_fanout_variant(
         Err(unsupported_canonical_iterable_fanout_response())
     }
 }
-
 fn push_bounded_canonical_fanout_batch(
     accumulator: &mut iroha_core::smartcontracts::isi::query::CanonicalQueryOutputAccumulator,
     expected_variant: BoundedCanonicalFanoutVariant,
@@ -23558,7 +22134,6 @@ fn push_bounded_canonical_fanout_batch(
         .push_batch(batch)
         .map_err(canonical_fanout_error_response)
 }
-
 fn incompatible_routed_query_response(expected: &'static str) -> Response {
     torii_proxy_error_response(
         StatusCode::CONFLICT,
@@ -23566,7 +22141,6 @@ fn incompatible_routed_query_response(expected: &'static str) -> Response {
         format!("routed query returned an incompatible response variant; expected {expected}"),
     )
 }
-
 fn retain_matching_singular_fanout_output(
     retained: &mut Option<iroha_data_model::query::SingularQueryOutputBox>,
     current: iroha_data_model::query::SingularQueryOutputBox,
@@ -23585,7 +22159,6 @@ fn retain_matching_singular_fanout_output(
     }
     Ok(())
 }
-
 fn encode_verified_singular_fanout_request_bounded(
     request: &iroha_data_model::query::QueryRequestWithAuthority,
     envelope: QueryFanoutMemoryEnvelope,
@@ -23629,7 +22202,6 @@ fn encode_verified_singular_fanout_request_bounded(
     }
     Ok(bytes)
 }
-
 fn decode_verified_singular_fanout_request_bounded(
     bytes: &[u8],
     envelope: QueryFanoutMemoryEnvelope,
@@ -23643,11 +22215,9 @@ fn decode_verified_singular_fanout_request_bounded(
             )
         })
 }
-
 fn canonical_fanout_len_prefixed(payload_len: usize) -> Option<usize> {
     norito::core::len_prefix_len(payload_len).checked_add(payload_len)
 }
-
 fn write_canonical_fanout_exact_field<T>(
     writer: &mut norito::core::Encoder<'_>,
     value: &T,
@@ -23661,13 +22231,11 @@ where
     let mut unused_fallback = norito::core::DeriveSmallBuf::new();
     norito::core::write_len_prefixed_exact(writer, value, &mut unused_fallback)
 }
-
 #[derive(Clone, Copy)]
 enum CanonicalFanoutBatchRef<'a> {
     RoleId(&'a Vec<iroha_data_model::role::RoleId>),
     TriggerId(&'a Vec<iroha_data_model::trigger::TriggerId>),
 }
-
 impl CanonicalFanoutBatchRef<'_> {
     fn from_batch(
         batch: &iroha_data_model::query::QueryOutputBatchBox,
@@ -23685,7 +22253,6 @@ impl CanonicalFanoutBatchRef<'_> {
             _ => Err(unsupported_canonical_iterable_fanout_response()),
         }
     }
-
     fn discriminant(self) -> u32 {
         // Keep these in lockstep with QueryOutputBatchBox. Golden parity tests
         // below fail if the data-model enum order changes.
@@ -23694,7 +22261,6 @@ impl CanonicalFanoutBatchRef<'_> {
             Self::TriggerId(_) => 29,
         }
     }
-
     fn values_encoded_len_exact(self) -> Option<usize> {
         fn sequence<T: norito::core::NoritoSerialize>(values: &[T]) -> Option<usize> {
             let mut total = norito::core::seq_len_prefix_len(values.len());
@@ -23704,13 +22270,11 @@ impl CanonicalFanoutBatchRef<'_> {
             }
             Some(total)
         }
-
         match self {
             Self::RoleId(values) => sequence(values),
             Self::TriggerId(values) => sequence(values),
         }
     }
-
     fn serialize_values(
         self,
         writer: &mut norito::core::Encoder<'_>,
@@ -23728,85 +22292,68 @@ impl CanonicalFanoutBatchRef<'_> {
             }
             Ok(())
         }
-
         match self {
             Self::RoleId(values) => sequence(values, writer),
             Self::TriggerId(values) => sequence(values, writer),
         }
     }
 }
-
 impl norito::core::NoritoSerialize for CanonicalFanoutBatchRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(&self.discriminant(), writer)?;
         let values = CanonicalFanoutValuesRef(*self);
         write_canonical_fanout_exact_field(writer, &values)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         let values_len = self.values_encoded_len_exact()?;
         4_usize.checked_add(canonical_fanout_len_prefixed(values_len)?)
     }
 }
-
 #[derive(Clone, Copy)]
 struct CanonicalFanoutValuesRef<'a>(CanonicalFanoutBatchRef<'a>);
-
 impl norito::core::NoritoSerialize for CanonicalFanoutValuesRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize_values(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.values_encoded_len_exact()
     }
 }
-
 #[derive(Clone, Copy)]
 struct CanonicalFanoutOneColumnRef<'a>(CanonicalFanoutBatchRef<'a>);
-
 impl norito::core::NoritoSerialize for CanonicalFanoutOneColumnRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::write_seq_len(writer, 1)?;
         write_canonical_fanout_exact_field(writer, &self.0)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         let batch_len = self.0.encoded_len_exact()?;
         norito::core::seq_len_prefix_len(1).checked_add(canonical_fanout_len_prefixed(batch_len)?)
     }
 }
-
 #[derive(Clone, Copy)]
 struct CanonicalFanoutBatchTupleRef<'a>(CanonicalFanoutBatchRef<'a>);
-
 impl norito::core::NoritoSerialize for CanonicalFanoutBatchTupleRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         write_canonical_fanout_exact_field(writer, &CanonicalFanoutOneColumnRef(self.0))
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         let columns_len = CanonicalFanoutOneColumnRef(self.0).encoded_len_exact()?;
         canonical_fanout_len_prefixed(columns_len)
     }
 }
-
 #[derive(Clone, Copy)]
 struct CanonicalFanoutOutputRef<'a> {
     batch: CanonicalFanoutBatchRef<'a>,
@@ -23814,7 +22361,6 @@ struct CanonicalFanoutOutputRef<'a> {
     has_more: &'a bool,
     continue_cursor: &'a Option<iroha_data_model::query::parameters::ForwardCursor>,
 }
-
 impl norito::core::NoritoSerialize for CanonicalFanoutOutputRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         write_canonical_fanout_exact_field(writer, &CanonicalFanoutBatchTupleRef(self.batch))?;
@@ -23822,11 +22368,9 @@ impl norito::core::NoritoSerialize for CanonicalFanoutOutputRef<'_> {
         write_canonical_fanout_exact_field(writer, self.has_more)?;
         write_canonical_fanout_exact_field(writer, self.continue_cursor)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         let mut total = 0_usize;
         for field_len in [
@@ -23840,7 +22384,6 @@ impl norito::core::NoritoSerialize for CanonicalFanoutOutputRef<'_> {
         Some(total)
     }
 }
-
 /// Exact, one-buffer writer for the only two iterable output arms admitted by
 /// canonical fanout. The transparent representation preserves QueryResponse's
 /// outer Norito alignment while the custom serializer avoids every full-batch
@@ -23848,7 +22391,6 @@ impl norito::core::NoritoSerialize for CanonicalFanoutOutputRef<'_> {
 #[repr(transparent)]
 #[derive(Debug)]
 struct BoundedCanonicalIterableFanoutResponse(iroha_data_model::query::QueryResponse);
-
 impl BoundedCanonicalIterableFanoutResponse {
     fn new(
         response: iroha_data_model::query::QueryResponse,
@@ -23869,7 +22411,6 @@ impl BoundedCanonicalIterableFanoutResponse {
         CanonicalFanoutBatchRef::from_batch(&output.batch.columns()[0], expected)?;
         Ok(Self(response))
     }
-
     fn output_ref(&self) -> CanonicalFanoutOutputRef<'_> {
         let iroha_data_model::query::QueryResponse::Iterable(output) = &self.0 else {
             unreachable!("bounded canonical response constructor pins iterable output")
@@ -23891,12 +22432,10 @@ impl BoundedCanonicalIterableFanoutResponse {
         }
     }
 }
-
 impl norito::core::NoritoSerialize for BoundedCanonicalIterableFanoutResponse {
     fn schema_hash() -> [u8; 16] {
         <iroha_data_model::query::QueryResponse as norito::core::NoritoSerialize>::schema_hash()
     }
-
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         if norito::core::use_packed_struct() || norito::core::use_packed_seq() {
             return Err(norito::core::Error::UnsupportedFeature(
@@ -23907,11 +22446,9 @@ impl norito::core::NoritoSerialize for BoundedCanonicalIterableFanoutResponse {
         norito::core::NoritoSerialize::serialize(&1_u32, writer)?;
         write_canonical_fanout_exact_field(writer, &self.output_ref())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         if norito::core::use_packed_struct() || norito::core::use_packed_seq() {
             return None;
@@ -23920,7 +22457,6 @@ impl norito::core::NoritoSerialize for BoundedCanonicalIterableFanoutResponse {
         4_usize.checked_add(canonical_fanout_len_prefixed(output_len)?)
     }
 }
-
 fn bounded_canonical_iterable_fanout_response(
     query_response: iroha_data_model::query::QueryResponse,
     expected: BoundedCanonicalFanoutVariant,
@@ -23948,7 +22484,6 @@ fn bounded_canonical_iterable_fanout_response(
         }
     }
 }
-
 fn bounded_singular_fanout_response(
     query_response: iroha_data_model::query::QueryResponse,
     format: ResponseFormat,
@@ -23977,7 +22512,6 @@ fn bounded_singular_fanout_response(
         }
     }
 }
-
 fn bounded_signed_query_fanout_json_encode_error_response(
     error: norito::json::BoundedJsonError,
 ) -> Response {
@@ -23996,7 +22530,6 @@ fn bounded_signed_query_fanout_json_encode_error_response(
         ),
     }
 }
-
 fn bounded_signed_query_fanout_encode_error_response(
     error: crate::utils::BoundedResponseEncodeError,
 ) -> Response {
@@ -24027,7 +22560,6 @@ fn bounded_signed_query_fanout_encode_error_response(
         ),
     }
 }
-
 fn signed_query_fanout_response_from_norito_bytes(bytes: Vec<u8>) -> Response {
     Response::builder()
         .status(StatusCode::OK)
@@ -24038,7 +22570,6 @@ fn signed_query_fanout_response_from_norito_bytes(bytes: Vec<u8>) -> Response {
         .body(Body::from(bytes))
         .expect("build preflighted signed-query fanout response")
 }
-
 fn signed_query_fanout_response_from_json(json: String) -> Response {
     Response::builder()
         .status(StatusCode::OK)
@@ -24049,12 +22580,10 @@ fn signed_query_fanout_response_from_json(json: String) -> Response {
         .body(Body::from(json))
         .expect("build preflighted signed-query fanout JSON response")
 }
-
 fn should_skip_iterable_routed_query_route_error(response: &Response) -> bool {
     response.status() == StatusCode::NOT_FOUND
         || torii_response_has_reject_code(response, "route_unavailable")
 }
-
 fn torii_response_has_reject_code(response: &Response, code: &str) -> bool {
     response
         .headers()
@@ -24062,40 +22591,29 @@ fn torii_response_has_reject_code(response: &Response, code: &str) -> bool {
         .and_then(|value| value.to_str().ok())
         == Some(code)
 }
-
 include!("torii_fanout_diagnostics.rs");
-
 include!("torii_fanout_decode_helpers.rs");
-
+#[cfg(feature = "app_api")]
+include!("torii_app_fanout_memory.rs");
 #[cfg(feature = "app_api")]
 include!("torii_app_routed_read_memory.rs");
-
 #[cfg(feature = "app_api")]
 include!("torii_app_routed_read_request.rs");
-
 #[cfg(feature = "app_api")]
 include!("torii_app_routed_read_http.rs");
-
 #[cfg(feature = "app_api")]
 include!("torii_app_routed_read_source.rs");
-
 #[cfg(feature = "app_api")]
 include!("torii_app_routed_read_collect.rs");
-
 #[cfg(feature = "app_api")]
 include!("torii_app_routed_read_merge.rs");
-
 #[cfg(feature = "app_api")]
 include!("torii_app_routed_read_route_collect.rs");
-
 #[cfg(feature = "app_api")]
 include!("torii_app_routed_read_execute.rs");
-
 #[cfg(test)]
 include!("tests/ordinary_query_memory.rs");
-
 include!("torii_proxy_signed_query_validation.rs");
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_incoming_torii_signed_query_route_scan(
     app: &SharedAppState,
@@ -24136,7 +22654,6 @@ async fn execute_incoming_torii_signed_query_route_scan(
         );
         return hold_query_fanout_memory_in_response_body(response, permit);
     }
-
     let request_decode_limits = match provisional.request_decode_limits(query_bytes.len()) {
         Ok(limits) => limits,
         Err(response) => return hold_query_fanout_memory_in_response_body(response, permit),
@@ -24229,7 +22746,6 @@ async fn execute_incoming_torii_signed_query_route_scan(
     insert_routing_headers(&mut response, routing_decision, "proxy");
     hold_query_fanout_memory_in_response_body(response, permit)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_signed_query_route_scan_via_proxy(
     app: &SharedAppState,
@@ -24256,7 +22772,6 @@ async fn execute_torii_signed_query_route_scan_via_proxy(
     if !response.status().is_success() {
         return Err(response);
     }
-
     let (_, body) = response.into_parts();
     let body = match axum::body::to_bytes(body, envelope.route_body_bytes).await {
         Ok(body) => body,
@@ -24278,7 +22793,6 @@ async fn execute_torii_signed_query_route_scan_via_proxy(
             )
         })
 }
-
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_verified_query_locally(
     app: &SharedAppState,
@@ -24288,7 +22802,6 @@ async fn execute_torii_verified_query_locally(
         .await
         .map_err(IntoResponse::into_response)
 }
-
 #[cfg(all(feature = "app_api", not(any(feature = "p2p_ws", feature = "connect"))))]
 fn torii_proxy_transport_disabled_response(routing_decision: RoutingDecision) -> Response {
     torii_proxy_error_response(
@@ -24301,7 +22814,6 @@ fn torii_proxy_transport_disabled_response(routing_decision: RoutingDecision) ->
         ),
     )
 }
-
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_verified_query_route_scan_locally(
     app: &SharedAppState,
@@ -24346,7 +22858,6 @@ async fn execute_torii_verified_query_route_scan_locally(
     .await
     .map_err(IntoResponse::into_response)
 }
-
 #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_signed_query_route_scan_for_route(
     app: &SharedAppState,
@@ -24385,7 +22896,6 @@ async fn execute_torii_signed_query_route_scan_for_route(
         }
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_singular_query_via_fanout_for_routes_admitted(
     app: &SharedAppState,
@@ -24414,7 +22924,6 @@ async fn execute_torii_singular_query_via_fanout_for_routes_admitted(
     let mut first_output: Option<iroha_data_model::query::SingularQueryOutputBox> = None;
     let mut skipped = SkippedRoutedQueryErrors::default();
     let mut diagnostics = ToriiFanoutDiagnostics::default();
-
     for route in routes {
         diagnostics.record_attempt();
         let request = if should_execute_route_locally(app.as_ref(), route) {
@@ -24466,7 +22975,6 @@ async fn execute_torii_singular_query_via_fanout_for_routes_admitted(
             }
         }
     }
-
     let Some(first_output) = first_output else {
         return with_torii_fanout_headers(skipped.into_response(), diagnostics);
     };
@@ -24481,7 +22989,6 @@ async fn execute_torii_singular_query_via_fanout_for_routes_admitted(
     insert_torii_fanout_headers(&mut response, diagnostics);
     response
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_query_via_fanout_for_routes_admitted(
     app: &SharedAppState,
@@ -24494,7 +23001,6 @@ async fn execute_torii_query_via_fanout_for_routes_admitted(
     proxy_memory: Option<ToriiProxyMemoryReservation>,
 ) -> Response {
     debug_assert!(!routes.is_empty());
-
     let routed_by = routed_by_for_routes(app, &routes);
     if matches!(
         &verified_query.request,
@@ -24506,7 +23012,6 @@ async fn execute_torii_query_via_fanout_for_routes_admitted(
             "routed cross-dataspace query fanout does not support client-provided continuation requests",
         );
     }
-
     if matches!(
         &verified_query.request,
         iroha_data_model::query::QueryRequest::Singular(_)
@@ -24523,7 +23028,6 @@ async fn execute_torii_query_via_fanout_for_routes_admitted(
         )
         .await;
     }
-
     let final_pagination = match &verified_query.request {
         iroha_data_model::query::QueryRequest::Start(start) => start.params.pagination.clone(),
         _ => unreachable!("continuation and singular requests were handled above"),
@@ -24643,11 +23147,9 @@ async fn execute_torii_query_via_fanout_for_routes_admitted(
             }
         }
     }
-
     if !successful_route {
         return with_torii_fanout_headers(skipped.into_response(), diagnostics);
     }
-
     drop(fanout_request);
     drop(query_bytes);
     let batch = match accumulator.finish(final_pagination) {
@@ -24672,7 +23174,6 @@ async fn execute_torii_query_via_fanout_for_routes_admitted(
     insert_torii_fanout_headers(&mut response, diagnostics);
     response
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_signed_query_fanout_routes(
     app: &AppState,
@@ -24694,7 +23195,6 @@ fn torii_signed_query_fanout_routes(
         }
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_signed_query_fanout_proxy_request(
     app: &SharedAppState,
@@ -24773,7 +23273,6 @@ async fn execute_torii_signed_query_fanout_proxy_request(
     .await;
     hold_query_fanout_memory_in_response_body(response, permit)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_query_via_nexus_fanout(
     app: &SharedAppState,
@@ -24818,13 +23317,11 @@ async fn execute_torii_query_via_nexus_fanout(
     };
     hold_query_fanout_memory_in_response_body(response, permit)
 }
-
 fn torii_proxy_query_error(message: impl Into<String>) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(
         message.into(),
     ))
 }
-
 fn encode_torii_proxy_query<T>(value: &T) -> Result<Option<String>, Error>
 where
     T: norito::json::JsonSerialize,
@@ -24837,7 +23334,6 @@ where
             "proxied query params must serialize to a JSON object",
         ));
     };
-
     let mut serializer = url::form_urlencoded::Serializer::new(String::new());
     for (key, value) in object {
         match value {
@@ -24861,7 +23357,6 @@ where
     let encoded = serializer.finish();
     Ok((!encoded.is_empty()).then_some(encoded))
 }
-
 #[cfg(feature = "app_api")]
 fn finish_torii_read_result<T: IntoResponse>(
     result: Result<T, Error>,
@@ -24875,7 +23370,6 @@ fn finish_torii_read_result<T: IntoResponse>(
     insert_routing_headers(&mut response, routing_decision, routed_by);
     response
 }
-
 #[cfg(feature = "app_api")]
 fn finish_torii_read_result_with_format<T: IntoResponse>(
     result: Result<T, Error>,
@@ -24890,19 +23384,16 @@ fn finish_torii_read_result_with_format<T: IntoResponse>(
     insert_routing_headers(&mut response, routing_decision, routed_by);
     response
 }
-
 #[cfg(feature = "app_api")]
 enum BoundedContractViewWork {
     Single(routing::ContractViewDto),
     Batch(routing::ContractViewBatchDto),
 }
-
 #[cfg(feature = "app_api")]
 enum BoundedContractViewOutput {
     Single { status: StatusCode, body: Vec<u8> },
     Batch { body: Vec<u8> },
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_bounded_contract_view_work(
     app: &SharedAppState,
@@ -24912,7 +23403,6 @@ async fn execute_bounded_contract_view_work(
     if let BoundedContractViewWork::Batch(request) = &work {
         routing::validate_contract_view_batch_request(request)?;
     }
-
     let retry_after_secs = app.proof_limits.retry_after.as_secs().max(1);
     let tooling_permit = app
         .zk_ivm_prove_inflight
@@ -24939,7 +23429,6 @@ async fn execute_bounded_contract_view_work(
             }
         }
     });
-
     tokio::time::timeout(app.ivm_tooling_timeout, task)
         .await
         .map_err(|_| {
@@ -24955,7 +23444,6 @@ async fn execute_bounded_contract_view_work(
             )))
         })?
 }
-
 #[cfg(feature = "app_api")]
 fn contract_view_json_bytes_response(status: StatusCode, body: Vec<u8>) -> Response {
     let mut response = Response::new(Body::from(body));
@@ -24966,7 +23454,6 @@ fn contract_view_json_bytes_response(status: StatusCode, body: Vec<u8>) -> Respo
     );
     response
 }
-
 #[cfg(feature = "app_api")]
 fn error_response_with_format(error: Error, format: ResponseFormat) -> Response {
     let status = error.status_code();
@@ -24976,7 +23463,6 @@ fn error_response_with_format(error: Error, format: ResponseFormat) -> Response 
     };
     crate::utils::respond_with_status_and_format(status, envelope, format)
 }
-
 #[cfg(feature = "app_api")]
 fn torii_internal_json_error(message: impl Into<String>) -> Response {
     torii_proxy_error_response(
@@ -24985,7 +23471,6 @@ fn torii_internal_json_error(message: impl Into<String>) -> Response {
         message.into(),
     )
 }
-
 #[cfg(feature = "app_api")]
 fn dataspace_id_for_alias_segment(app: &AppState, dataspace_alias: &str) -> Option<DataSpaceId> {
     let state_view = app.state.view();
@@ -25004,7 +23489,6 @@ fn dataspace_id_for_alias_segment(app: &AppState, dataspace_alias: &str) -> Opti
         }
     })
 }
-
 #[cfg(feature = "app_api")]
 fn torii_state_view_ledger_time_ms(state_view: &iroha_core::state::StateView<'_>) -> u64 {
     state_view
@@ -25013,7 +23497,6 @@ fn torii_state_view_ledger_time_ms(state_view: &iroha_core::state::StateView<'_>
         .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
 }
-
 #[cfg(feature = "app_api")]
 fn asset_definition_home_dataspace_id(
     app: &AppState,
@@ -25035,13 +23518,11 @@ fn asset_definition_home_dataspace_id(
             )
         }
     };
-
     dataspace_alias
         .as_deref()
         .and_then(|alias| dataspace_id_for_alias_segment(app, alias))
         .or_else(|| is_global.then_some(DataSpaceId::UNIVERSAL))
 }
-
 #[cfg(feature = "app_api")]
 fn torii_asset_definition_read_route(
     app: &AppState,
@@ -25050,12 +23531,10 @@ fn torii_asset_definition_read_route(
     asset_definition_home_dataspace_id(app, definition_id)
         .and_then(|dataspace_id| resolve_torii_route_for_dataspace_id(app, dataspace_id).ok())
 }
-
 #[cfg(feature = "app_api")]
 fn contract_alias_dataspace_id(app: &AppState, alias: &ContractAlias) -> Option<DataSpaceId> {
     dataspace_id_for_alias_segment(app, alias.dataspace_segment())
 }
-
 #[cfg(feature = "app_api")]
 fn torii_contract_target_read_route(
     app: &AppState,
@@ -25067,7 +23546,6 @@ fn torii_contract_target_read_route(
         .or_else(|| alias.and_then(|alias| contract_alias_dataspace_id(app, alias)))?;
     resolve_torii_route_for_dataspace_id(app, dataspace_id).ok()
 }
-
 #[cfg(feature = "app_api")]
 fn torii_empty_list_response(routed_by: &'static str) -> Response {
     let mut root = norito::json::Map::new();
@@ -25078,22 +23556,17 @@ fn torii_empty_list_response(routed_by: &'static str) -> Response {
     insert_routed_by_header(&mut response, routed_by);
     response
 }
-
 // Textual inclusion keeps routed-read test names and paths unchanged.
 include!("tests/lib_routed_reads.rs");
-
 include!("torii_proxy_response_bounds.rs");
-
 #[cfg(all(test, any(feature = "p2p_ws", feature = "connect")))]
 include!("tests/torii_proxy_allocation_bounds.rs");
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 struct AdmittedToriiProxySnapshot {
     snapshot: ToriiProxyHttpResponseV1,
     fanout_reservation: Option<QueryFanoutMemoryReservation>,
     ordinary_query_memory: Option<OrdinaryQueryResponseMemory>,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn response_to_admitted_torii_proxy_snapshot(
     mut response: Response,
@@ -25143,7 +23616,6 @@ async fn response_to_admitted_torii_proxy_snapshot(
         ordinary_query_memory,
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn response_to_torii_proxy_snapshot(
     response: Response,
@@ -25153,7 +23625,6 @@ async fn response_to_torii_proxy_snapshot(
         .await
         .snapshot
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_snapshot_to_response(snapshot: ToriiProxyHttpResponseV1) -> Response {
     let status = StatusCode::from_u16(snapshot.status_code).unwrap_or(StatusCode::BAD_GATEWAY);
@@ -25177,7 +23648,6 @@ fn torii_proxy_snapshot_to_response(snapshot: ToriiProxyHttpResponseV1) -> Respo
     }
     response
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn admitted_torii_proxy_snapshot_to_response(admitted: AdmittedToriiProxySnapshot) -> Response {
     let mut response = torii_proxy_snapshot_to_response(admitted.snapshot);
@@ -25189,7 +23659,6 @@ fn admitted_torii_proxy_snapshot_to_response(admitted: AdmittedToriiProxySnapsho
     }
     response
 }
-
 fn header_map_to_torii_proxy_headers(
     headers: &HeaderMap,
 ) -> Vec<iroha_core::torii_proxy::ToriiProxyHeaderV1> {
@@ -25203,7 +23672,6 @@ fn header_map_to_torii_proxy_headers(
         )
         .collect()
 }
-
 fn torii_proxy_headers_to_header_map(
     headers: &[iroha_core::torii_proxy::ToriiProxyHeaderV1],
 ) -> HeaderMap {
@@ -25219,7 +23687,6 @@ fn torii_proxy_headers_to_header_map(
     }
     header_map
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn should_retry_torii_proxy_status(status: StatusCode) -> bool {
     matches!(
@@ -25227,7 +23694,6 @@ fn should_retry_torii_proxy_status(status: StatusCode) -> bool {
         StatusCode::SERVICE_UNAVAILABLE | StatusCode::BAD_GATEWAY | StatusCode::GATEWAY_TIMEOUT
     )
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ToriiProxyAttemptError {
@@ -25236,22 +23702,18 @@ enum ToriiProxyAttemptError {
     /// Dispatch began, but no complete authenticated response was recovered.
     DispatchedWithoutResponse(String),
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 impl ToriiProxyAttemptError {
     fn before_dispatch(reason: impl Into<String>) -> Self {
         Self::DefinitelyNotDispatched(reason.into())
     }
-
     fn after_dispatch(reason: impl Into<String>) -> Self {
         Self::DispatchedWithoutResponse(reason.into())
     }
-
     fn may_have_reached_authority(&self) -> bool {
         matches!(self, Self::DispatchedWithoutResponse(_))
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 impl std::fmt::Display for ToriiProxyAttemptError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -25265,7 +23727,6 @@ impl std::fmt::Display for ToriiProxyAttemptError {
         }
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2: usize =
     iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSION_BYTES;
@@ -25292,7 +23753,6 @@ const QUEUE_PLAN_SYNCED_CERTIFICATE_DECODE_LIMITS_V2: norito::DecodeLimits =
         iroha_data_model::merge::MAX_MERGE_QUEUE_PLAN_ADMISSIONS_BYTES,
         64,
     );
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[allow(clippy::struct_field_names)]
@@ -25302,7 +23762,6 @@ struct QueuePlanSyncedAcceptanceExpectation {
     admission_binding: QueuePlanAdmissionBindingV2,
     durability_threshold: usize,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_synced_acceptance_expectation(
     request: &ToriiProxyRequestV6,
@@ -25343,7 +23802,6 @@ fn queue_plan_synced_acceptance_expectation(
         durability_threshold,
     }))
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_synced_entrypoint_hash(
     request: &ToriiProxyRequestKindV4,
@@ -25358,7 +23816,6 @@ fn queue_plan_synced_entrypoint_hash(
     };
     Some(transaction.hash())
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_outcome_unknown_response(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -25378,17 +23835,14 @@ fn queue_plan_outcome_unknown_response(
     }
     .into_response()
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE: &str = "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN";
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE: &str = "queue_plan_journal_outcome_unknown";
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn is_queue_plan_outcome_unknown_response(response: &Response) -> bool {
     torii_response_has_reject_code(response, QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn validate_queue_plan_synced_response_header(
     snapshot: &ToriiProxyHttpResponseV1,
@@ -25418,7 +23872,6 @@ fn validate_queue_plan_synced_response_header(
         )),
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn validate_queue_plan_synced_snapshot_bounds(
     snapshot: &ToriiProxyHttpResponseV1,
@@ -25482,7 +23935,6 @@ fn validate_queue_plan_synced_snapshot_bounds(
     }
     Ok(())
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn canonical_queue_plan_synced_certificate_headers(
     expected: &QueuePlanSyncedAcceptanceExpectation,
@@ -25510,7 +23962,6 @@ fn canonical_queue_plan_synced_certificate_headers(
     }
     headers
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn decode_queue_plan_synced_certificate(
     bytes: &[u8],
@@ -25530,7 +23981,6 @@ fn decode_queue_plan_synced_certificate(
     }
     Ok(certificate)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn validate_queue_plan_synced_acceptance(
     snapshot: &ToriiProxyHttpResponseV1,
@@ -25540,7 +23990,6 @@ fn validate_queue_plan_synced_acceptance(
     if snapshot.status_code != StatusCode::ACCEPTED.as_u16() {
         return Err("status is not 202 Accepted".to_owned());
     }
-
     validate_queue_plan_synced_response_header(
         snapshot,
         "content-type",
@@ -25573,7 +24022,6 @@ fn validate_queue_plan_synced_acceptance(
     {
         return Err("durable acceptance contains contradictory rejection evidence".to_owned());
     }
-
     let certificate = decode_queue_plan_synced_certificate(&snapshot.body)?;
     if certificate.binding != expected.admission_binding {
         return Err(
@@ -25587,7 +24035,6 @@ fn validate_queue_plan_synced_acceptance(
     )?;
     Ok(validated.certificate.attestations)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn merge_queue_plan_synced_attestations(
     durable_attestations: &mut BTreeMap<u16, QueuePlanAdmissionAttestationV2>,
@@ -25605,7 +24052,6 @@ fn merge_queue_plan_synced_attestations(
     }
     Ok(())
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_synced_snapshot_to_response(
     snapshot: ToriiProxyHttpResponseV1,
@@ -25618,7 +24064,6 @@ fn queue_plan_synced_snapshot_to_response(
     {
         return torii_proxy_snapshot_to_response(snapshot);
     }
-
     let mut reject_code_header_count = 0_usize;
     let mut first_reject_code_header_value = None;
     let mut header_claims_outcome_unknown = false;
@@ -25653,7 +24098,6 @@ fn queue_plan_synced_snapshot_to_response(
         norito::to_bytes(envelope)
             .is_ok_and(|canonical| canonical.as_slice() == snapshot.body.as_slice())
     });
-
     if !header_claims_outcome_unknown && !envelope_claims_outcome_unknown {
         // The current strict proxy response schema has no authenticated
         // admission-phase evidence for rejections. A complete response can
@@ -25667,7 +24111,6 @@ fn queue_plan_synced_snapshot_to_response(
             ),
         );
     }
-
     let validation_error = if snapshot.status_code != StatusCode::SERVICE_UNAVAILABLE.as_u16() {
         Some("status is not 503 Service Unavailable")
     } else if validate_queue_plan_synced_response_header(
@@ -25709,7 +24152,6 @@ fn queue_plan_synced_snapshot_to_response(
             },
         }
     };
-
     if let Some(reason) = validation_error {
         return queue_plan_outcome_unknown_response(
             expected_entrypoint_hash.clone(),
@@ -25718,13 +24160,11 @@ fn queue_plan_synced_snapshot_to_response(
             ),
         );
     }
-
     queue_plan_outcome_unknown_response(
         expected_entrypoint_hash.clone(),
         "authenticated authority reported an indeterminate durable-admission outcome",
     )
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn retain_strongest_retryable_response(slot: &mut Option<Response>, candidate: Response) {
     let candidate_is_unknown = is_queue_plan_outcome_unknown_response(&candidate);
@@ -25735,7 +24175,6 @@ fn retain_strongest_retryable_response(slot: &mut Option<Response>, candidate: R
         *slot = Some(candidate);
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn retain_strongest_queue_plan_synced_failure(
     slot: &mut Option<(u8, usize, Response)>,
@@ -25765,7 +24204,6 @@ fn retain_strongest_queue_plan_synced_failure(
         *slot = Some((priority, candidate_index, candidate));
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_request_kind_name(request: &ToriiProxyRequestKindV4) -> &'static str {
     match request {
@@ -25778,7 +24216,6 @@ fn torii_proxy_request_kind_name(request: &ToriiProxyRequestKindV4) -> &'static 
         ToriiProxyRequestKindV4::HostedHttp(_) => "hosted_http",
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_request_carries_one_shot_signed_query(request: &ToriiProxyRequestKindV4) -> bool {
     matches!(
@@ -25788,7 +24225,6 @@ fn torii_proxy_request_carries_one_shot_signed_query(request: &ToriiProxyRequest
             | ToriiProxyRequestKindV4::SignedQueryFanout { .. }
     )
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_synced_runtime_timing(
     block_cadence: Duration,
@@ -25812,7 +24248,6 @@ fn queue_plan_synced_runtime_timing(
         remaining_route_budget.saturating_sub(poll_interval),
     )
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_attempt_timeout(request: &ToriiProxyRequestKindV4) -> Duration {
     match request {
@@ -25828,7 +24263,6 @@ fn torii_proxy_attempt_timeout(request: &ToriiProxyRequestKindV4) -> Duration {
         | ToriiProxyRequestKindV4::ReadFanout(_) => DEFAULT_ROUTE_TIMEOUT + Duration::from_secs(5),
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_p2p_response_body_limit(
     app: &AppState,
@@ -25848,7 +24282,6 @@ fn torii_proxy_p2p_response_body_limit(
         .max(1);
     application_limit.min(transport_limit).max(1)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn post_torii_proxy_control_until_deadline(
     network: &iroha_core::IrohaNetwork,
@@ -25857,7 +24290,6 @@ async fn post_torii_proxy_control_until_deadline(
     local_deadline: tokio::time::Instant,
 ) -> Result<(), String> {
     const RETRY_INTERVAL: Duration = Duration::from_millis(5);
-
     loop {
         let absolute_remaining =
             validate_torii_proxy_deadline(deadline_unix_ms).map_err(str::to_owned)?;
@@ -25883,7 +24315,6 @@ async fn post_torii_proxy_control_until_deadline(
         }
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn torii_proxy_bridge_request_url(torii_url: &str) -> Result<reqwest::Url, String> {
     let base = reqwest::Url::parse(torii_url)
@@ -25895,7 +24326,6 @@ fn torii_proxy_bridge_request_url(torii_url: &str) -> Result<reqwest::Url, Strin
             )
         })
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn reqwest_response_to_torii_proxy_snapshot(
     mut response: reqwest::Response,
@@ -25976,7 +24406,6 @@ async fn reqwest_response_to_torii_proxy_snapshot(
         body,
     })
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_proxy_request_via_peer(
     app: &SharedAppState,
@@ -25988,7 +24417,6 @@ async fn execute_torii_proxy_request_via_peer(
             "Torii ingress routing requires an attached P2P network",
         ));
     };
-
     let remaining_budget = validate_torii_proxy_deadline(request.deadline_unix_ms)
         .map_err(ToriiProxyAttemptError::before_dispatch)?;
     let request_id = request.request_id.clone();
@@ -26062,7 +24490,6 @@ async fn execute_torii_proxy_request_via_peer(
             pending_key.0
         )));
     }
-
     match tokio::time::timeout(attempt_timeout, rx).await {
         Ok(Ok(response)) => {
             validate_torii_proxy_snapshot_bounds(&response, max_body_bytes).map_err(|error| {
@@ -26101,7 +24528,6 @@ async fn execute_torii_proxy_request_via_peer(
         }
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_proxy_request_via_http_bridge(
     app: &SharedAppState,
@@ -26118,7 +24544,6 @@ async fn execute_torii_proxy_request_via_http_bridge(
     execute_torii_proxy_request_via_http_bridge_shared(app, target_peer_id, torii_url, request)
         .await
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_proxy_request_via_http_bridge_shared(
     app: &SharedAppState,
@@ -26164,7 +24589,6 @@ async fn execute_torii_proxy_request_via_http_bridge_shared(
         axum::http::header::ACCEPT_ENCODING,
         HeaderValue::from_static("identity"),
     );
-
     let request_url = torii_proxy_bridge_request_url(&torii_url)
         .map_err(ToriiProxyAttemptError::before_dispatch)?;
     iroha_logger::debug!(
@@ -26178,7 +24602,6 @@ async fn execute_torii_proxy_request_via_http_bridge_shared(
         attempt_timeout_cap_ms = attempt_timeout_cap.as_millis() as u64,
         "sending Torii proxy request over authoritative HTTP bridge"
     );
-
     let queue_plan_synced = queue_plan_synced_entrypoint_hash(&request.request).is_some();
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -26218,7 +24641,6 @@ async fn execute_torii_proxy_request_via_http_bridge_shared(
                 ToriiProxyAttemptError::after_dispatch(reason)
             }
         })?;
-
     let absolute_remaining = validate_torii_proxy_deadline(request.deadline_unix_ms)
         .map_err(ToriiProxyAttemptError::after_dispatch)?;
     let local_remaining = attempt_deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -26242,7 +24664,6 @@ async fn execute_torii_proxy_request_via_http_bridge_shared(
     })?
     .map_err(ToriiProxyAttemptError::after_dispatch)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_proxy_request_locally(
     app: &SharedAppState,
@@ -26251,7 +24672,6 @@ async fn execute_torii_proxy_request_locally(
 ) -> Result<AdmittedToriiProxySnapshot, ToriiProxyAttemptError> {
     execute_torii_proxy_request_locally_with_proxy_memory(app, local_peer_id, request, None).await
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_proxy_request_locally_with_proxy_memory(
     app: &SharedAppState,
@@ -26283,7 +24703,6 @@ async fn execute_torii_proxy_request_locally_with_proxy_memory(
     }
     Ok(snapshot)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_proxy_request_with_fallback(
     app: &SharedAppState,
@@ -26292,7 +24711,6 @@ async fn execute_torii_proxy_request_with_fallback(
 ) -> Response {
     execute_torii_proxy_request_with_fallback_admitted(app, routing_decision, request, None).await
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_proxy_request_with_fallback_admitted(
     app: &SharedAppState,
@@ -26353,7 +24771,6 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
             candidates.loop_prevention_drops,
         );
     }
-
     let proxy_memory = match pre_admitted_proxy_memory {
         Some(reservation) => reservation,
         None => match acquire_torii_proxy_memory(app) {
@@ -26361,7 +24778,6 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
             Err(response) => return response,
         },
     };
-
     let mut candidate_peers = candidates.peers;
     if let Some(local_index) = candidate_peers
         .iter()
@@ -26391,7 +24807,6 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
         mark_torii_proxy_request_completed(app, request_id).await;
         return hold_torii_proxy_memory_in_response_body(response, proxy_memory);
     }
-
     let response = execute_torii_proxy_request_across_candidates(
         candidate_peers,
         routing_decision,
@@ -26422,7 +24837,6 @@ async fn execute_torii_proxy_request_with_fallback_admitted(
     .await;
     hold_torii_proxy_memory_in_response_body(response, proxy_memory)
 }
-
 #[cfg(all(feature = "app_api", not(any(feature = "p2p_ws", feature = "connect"))))]
 async fn execute_torii_proxy_request_with_fallback(
     _app: &SharedAppState,
@@ -26439,7 +24853,6 @@ async fn execute_torii_proxy_request_with_fallback(
         ),
     )
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn forward_incoming_torii_proxy_request(
     app: &SharedAppState,
@@ -26467,7 +24880,6 @@ async fn forward_incoming_torii_proxy_request(
             ),
         );
     }
-
     let Some(local_peer_id) = app.local_peer_id.as_ref() else {
         return torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -26486,7 +24898,6 @@ async fn forward_incoming_torii_proxy_request(
             "Torii proxy request attempted to revisit a peer in its authenticated hop history",
         );
     }
-
     let forwarded_request = forwarded_torii_proxy_request_owned(request, local_peer_id);
     let candidates = match torii_proxy_candidate_peer_ids_for_request(
         app.as_ref(),
@@ -26545,7 +24956,6 @@ async fn forward_incoming_torii_proxy_request(
             candidates.loop_prevention_drops,
         );
     }
-
     execute_torii_proxy_request_across_candidates(
         candidates.peers,
         routing_decision,
@@ -26575,14 +24985,12 @@ async fn forward_incoming_torii_proxy_request(
     )
     .await
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Clone)]
 struct SharedToriiProxyAttemptRequest {
     inner: Arc<ToriiProxyRequestV6>,
     encoded: Bytes,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 impl SharedToriiProxyAttemptRequest {
     fn new(request: ToriiProxyRequestV6, max_encoded_bytes: usize) -> Result<Self, String> {
@@ -26595,21 +25003,17 @@ impl SharedToriiProxyAttemptRequest {
             encoded,
         })
     }
-
     fn into_arc(self) -> Arc<ToriiProxyRequestV6> {
         self.inner
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 impl core::ops::Deref for SharedToriiProxyAttemptRequest {
     type Target = ToriiProxyRequestV6;
-
     fn deref(&self) -> &Self::Target {
         self.inner.as_ref()
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_proxy_request_across_candidates<F, Fut, C, CFut>(
     candidate_peers: Vec<ToriiProxyCandidate>,
@@ -26655,7 +25059,6 @@ where
             );
         }
     };
-
     if torii_proxy_request_carries_one_shot_signed_query(&request.request) {
         let mut last_pre_dispatch_error = None;
         for candidate in candidate_peers {
@@ -26701,7 +25104,6 @@ where
                 }
             }
         }
-
         complete_request(request_id).await;
         return torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -26724,7 +25126,6 @@ where
             ),
         );
     }
-
     if !queue_plan_synced {
         // Generic proxy responses may be as large as the configured body
         // ceiling. Execute candidates sequentially so neither delayed hedges
@@ -26776,7 +25177,6 @@ where
             )
         });
     }
-
     let mut durable_attestations = BTreeMap::<u16, QueuePlanAdmissionAttestationV2>::new();
     let mut last_retryable: Option<Response> = None;
     let mut queue_plan_synced_failure: Option<(u8, usize, Response)> = None;
@@ -26883,7 +25283,6 @@ where
                         Err(_) => {}
                     }
                 }
-
                 let mut response = match queue_plan_synced_expectation.as_ref() {
                     Some(expected) => queue_plan_synced_snapshot_to_response(snapshot, expected),
                     None => torii_proxy_snapshot_to_response(snapshot),
@@ -26929,7 +25328,6 @@ where
             }
         }
     }
-
     complete_request(request_id).await;
     if let Some(expected) = queue_plan_synced_expectation.as_ref()
         && !durable_attestations.is_empty()
@@ -26958,7 +25356,6 @@ where
             )
         })
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_admission_registry_conflict_response(
     entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -26976,7 +25373,6 @@ fn queue_plan_admission_registry_conflict_response(
     insert_transaction_submission_identity_headers(&mut response, &entrypoint_hash, None);
     response
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Debug, PartialEq, Eq)]
 enum QueuePlanAdmissionRegistryWaitOutcome {
@@ -26985,7 +25381,6 @@ enum QueuePlanAdmissionRegistryWaitOutcome {
     Malformed(String),
     TimedOut,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn wait_for_exact_queue_plan_admission_registry(
     state: &CoreState,
@@ -27013,7 +25408,6 @@ async fn wait_for_exact_queue_plan_admission_registry(
         tokio::time::sleep(poll_interval).await;
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_admission_publication_targets(
     local_peer_id: &PeerId,
@@ -27032,7 +25426,6 @@ fn queue_plan_admission_publication_targets(
         .cloned()
         .collect())
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn queue_plan_admission_publication_targets_from_snapshot(
     local_peer_id: &PeerId,
@@ -27053,7 +25446,6 @@ fn queue_plan_admission_publication_targets_from_snapshot(
         .cloned()
         .collect())
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn disseminate_queue_plan_admission_publication(
     app: &SharedAppState,
@@ -27085,7 +25477,6 @@ fn disseminate_queue_plan_admission_publication(
     }
     Ok(targets.len())
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn validate_queue_plan_admission_publication(
     app: &SharedAppState,
@@ -27118,7 +25509,6 @@ fn validate_queue_plan_admission_publication(
                 .to_owned(),
         );
     }
-
     let carrier_height = u64::try_from(app.state.committed_height())
         .map_err(|_| "local committed height does not fit QueuePlan classification".to_owned())?
         .checked_add(1)
@@ -27153,7 +25543,6 @@ fn validate_queue_plan_admission_publication(
     }
     Ok(binding)
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum QueuePlanAdmissionPublicationIngestOutcome {
@@ -27163,7 +25552,6 @@ enum QueuePlanAdmissionPublicationIngestOutcome {
         sumeragi_notified: bool,
     },
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn ingest_queue_plan_admission_publication(
     app: &SharedAppState,
@@ -27204,7 +25592,6 @@ fn ingest_queue_plan_admission_publication(
         sumeragi_notified,
     })
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DurableQueuePlanWakeDisposition {
@@ -27212,7 +25599,6 @@ enum DurableQueuePlanWakeDisposition {
     Delivered,
     Deferred,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn durable_queue_plan_wake_disposition(
     notification_delivered: Option<bool>,
@@ -27223,7 +25609,6 @@ fn durable_queue_plan_wake_disposition(
         Some(false) => DurableQueuePlanWakeDisposition::Deferred,
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn persist_and_wait_for_queue_plan_admission(
     app: &SharedAppState,
@@ -27234,7 +25619,6 @@ async fn persist_and_wait_for_queue_plan_admission(
     if response.status() != StatusCode::ACCEPTED {
         return response;
     }
-
     let snapshot =
         response_to_torii_proxy_snapshot(response, QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V2)
             .await;
@@ -27263,7 +25647,6 @@ async fn persist_and_wait_for_queue_plan_admission(
             format!("aggregated QueuePlan certificate is not an exact quorum: {error}"),
         );
     }
-
     match app
         .state
         .queue_plan_admission_binding_registry_match(expected_binding)
@@ -27285,7 +25668,6 @@ async fn persist_and_wait_for_queue_plan_admission(
         }
         Ok(QueuePlanAdmissionRegistryMatch::Absent) => {}
     }
-
     let certificate_hash = match app
         .kura
         .persist_pending_queue_plan_admission_certificate(&snapshot.body)
@@ -27342,7 +25724,6 @@ async fn persist_and_wait_for_queue_plan_admission(
             );
         }
     }
-
     let remaining_route_budget =
         route_deadline.saturating_duration_since(tokio::time::Instant::now());
     let (poll_interval, wait_budget) = queue_plan_synced_runtime_timing(
@@ -27378,7 +25759,6 @@ async fn persist_and_wait_for_queue_plan_admission(
         ),
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn normalize_proxied_transaction_submission_response(
     app: &AppState,
@@ -27392,7 +25772,6 @@ fn normalize_proxied_transaction_submission_response(
     if proxy_response.status() != StatusCode::ACCEPTED {
         return proxy_response;
     }
-
     let route_transport = proxy_response
         .headers()
         .get("x-iroha-route-transport")
@@ -27435,7 +25814,6 @@ fn normalize_proxied_transaction_submission_response(
     }
     response
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_transaction_via_proxy(
     app: &SharedAppState,
@@ -27614,7 +25992,6 @@ async fn execute_torii_transaction_via_proxy(
         format,
     )
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_query_via_proxy(
     app: &SharedAppState,
@@ -27633,7 +26010,6 @@ async fn execute_torii_query_via_proxy(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 fn torii_read_request(
     endpoint: ToriiReadEndpointV1,
@@ -27651,7 +26027,6 @@ fn torii_read_request(
         response_format: ToriiProxyResponseFormatV1::Json,
     }
 }
-
 #[cfg(feature = "app_api")]
 fn torii_read_http_method(endpoint: ToriiReadEndpointV1) -> reqwest::Method {
     match endpoint {
@@ -27674,7 +26049,6 @@ fn torii_read_http_method(endpoint: ToriiReadEndpointV1) -> reqwest::Method {
         _ => reqwest::Method::GET,
     }
 }
-
 #[cfg(feature = "app_api")]
 fn torii_read_path_arg_encoded(
     request: &ToriiReadProxyRequestV1,
@@ -27684,7 +26058,6 @@ fn torii_read_path_arg_encoded(
     torii_proxy_path_arg(request, index, label)
         .map(|value| urlencoding::encode(&value).into_owned())
 }
-
 #[cfg(feature = "app_api")]
 fn torii_external_read_path(request: &ToriiReadProxyRequestV1) -> Result<String, Response> {
     let path = match request.endpoint {
@@ -27815,7 +26188,6 @@ fn torii_external_read_path(request: &ToriiReadProxyRequestV1) -> Result<String,
     };
     Ok(path)
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_read_via_public_dataspace_upstream(
     upstream_url: String,
@@ -27840,7 +26212,6 @@ async fn execute_torii_read_via_public_dataspace_upstream(
         url.push('?');
         url.push_str(query_string);
     }
-
     let method = torii_read_http_method(request.endpoint);
     let client = reqwest::Client::new();
     let mut builder = client
@@ -27860,7 +26231,6 @@ async fn execute_torii_read_via_public_dataspace_upstream(
             )
             .body(request.body);
     }
-
     let mut response = match builder.send().await {
         Ok(response) => response,
         Err(error) => {
@@ -27905,7 +26275,6 @@ async fn execute_torii_read_via_public_dataspace_upstream(
             return response;
         }
     };
-
     let mut response = Response::new(Body::from(body));
     *response.status_mut() = status;
     if let Some(content_type) = content_type {
@@ -27916,7 +26285,6 @@ async fn execute_torii_read_via_public_dataspace_upstream(
     insert_routing_headers(&mut response, routing_decision, "external");
     response
 }
-
 #[cfg(feature = "app_api")]
 fn torii_proxy_accept_header(format: ToriiProxyResponseFormatV1) -> HeaderValue {
     match format {
@@ -27926,7 +26294,6 @@ fn torii_proxy_accept_header(format: ToriiProxyResponseFormatV1) -> HeaderValue 
         ToriiProxyResponseFormatV1::Json => HeaderValue::from_static("application/json"),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn torii_proxy_path_arg(
     request: &ToriiReadProxyRequestV1,
@@ -27941,7 +26308,6 @@ fn torii_proxy_path_arg(
         )
     })
 }
-
 #[cfg(feature = "app_api")]
 fn trusted_internal_read_error_response(
     status: StatusCode,
@@ -27960,7 +26326,6 @@ fn trusted_internal_read_error_response(
     );
     response
 }
-
 #[cfg(feature = "app_api")]
 fn execute_trusted_internal_account_local_read(
     app: &SharedAppState,
@@ -27969,7 +26334,6 @@ fn execute_trusted_internal_account_local_read(
 ) -> Response {
     execute_torii_internal_account_local_source_read(app, account_literal, format)
 }
-
 #[cfg(feature = "app_api")]
 fn execute_trusted_internal_account_transaction_local_read(
     app: &SharedAppState,
@@ -28004,7 +26368,6 @@ fn execute_trusted_internal_account_transaction_local_read(
         ),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn execute_trusted_internal_account_asset_local_read(
     app: &SharedAppState,
@@ -28021,7 +26384,6 @@ fn execute_trusted_internal_account_asset_local_read(
         format,
     )
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_read_request_locally(
     app: &SharedAppState,
@@ -28952,7 +27314,6 @@ async fn execute_torii_read_request_locally(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_read_via_proxy(
     app: &SharedAppState,
@@ -28981,7 +27342,6 @@ async fn execute_torii_read_via_proxy(
         .await
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_read_for_route(
     app: &SharedAppState,
@@ -29014,14 +27374,12 @@ async fn execute_torii_read_for_route(
         )
         .await;
     }
-
     if should_execute_route_locally(app.as_ref(), routing_decision) {
         execute_torii_read_request_locally(app, request, routing_decision, "local").await
     } else {
         execute_torii_read_via_proxy(app, routing_decision, request, proxy_memory).await
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_proof_record_get_query(
     app: &SharedAppState,
@@ -29053,7 +27411,6 @@ async fn execute_torii_proof_record_get_query(
     insert_routing_headers(&mut response, routing_decision, routed_by);
     response
 }
-
 fn routed_by_for_routes(app: &SharedAppState, routes: &[RoutingDecision]) -> &'static str {
     if !routes.is_empty()
         && routes
@@ -29065,7 +27422,6 @@ fn routed_by_for_routes(app: &SharedAppState, routes: &[RoutingDecision]) -> &'s
         "proxy"
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_single_route_read(
     app: &SharedAppState,
@@ -29086,7 +27442,6 @@ async fn execute_torii_single_route_read(
     )
     .await
 }
-
 /// Execute one route while the caller owns the encompassing fanout permit.
 #[cfg(feature = "app_api")]
 async fn execute_torii_single_route_read_in_fanout(
@@ -29102,7 +27457,6 @@ async fn execute_torii_single_route_read_in_fanout(
     let response = execute_torii_read_for_route(app, route, request, None).await;
     sanitize_exact_alias_route_response(app, route, endpoint, request_body, response).await
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_torii_single_route_read_with_format(
     app: &SharedAppState,
@@ -29163,7 +27517,6 @@ async fn execute_torii_single_route_read_with_format(
         sanitize_exact_alias_route_response(app, route, endpoint, &request_body, response).await;
     hold_query_fanout_memory_in_response_body(response, reservation)
 }
-
 #[cfg(feature = "app_api")]
 async fn sanitize_exact_alias_route_response(
     app: &SharedAppState,
@@ -29183,7 +27536,6 @@ async fn sanitize_exact_alias_route_response(
     {
         return response;
     }
-
     let (mut parts, body) = response.into_parts();
     let body = match axum::body::to_bytes(body, EXACT_ALIAS_READ_MAX_BODY_BYTES).await {
         Ok(body) => body,
@@ -29197,14 +27549,12 @@ async fn sanitize_exact_alias_route_response(
             return response;
         }
     };
-
     let invalid = |message: String| {
         let mut response =
             torii_proxy_error_response(StatusCode::BAD_GATEWAY, "invalid_proxy_response", message);
         insert_routing_headers(&mut response, route, "validated");
         response
     };
-
     let sanitized = match endpoint {
         ToriiReadEndpointV1::AliasResolve => {
             let request: routing::AliasResolveRequestDto =
@@ -29378,7 +27728,6 @@ async fn sanitize_exact_alias_route_response(
         }
         _ => unreachable!("non-sanitized endpoints returned before body collection"),
     };
-
     let sanitized = match sanitized {
         Ok(sanitized) => sanitized,
         Err(error) => {
@@ -29394,7 +27743,6 @@ async fn sanitize_exact_alias_route_response(
     );
     Response::from_parts(parts, Body::from(sanitized))
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn forward_incoming_torii_proxy_request_from_sender(
     app: &SharedAppState,
@@ -29411,7 +27759,6 @@ async fn forward_incoming_torii_proxy_request_from_sender(
     };
     forward_incoming_torii_proxy_request(app, sender_peer_id, routing_decision, request).await
 }
-
 #[cfg(all(not(feature = "app_api"), any(feature = "p2p_ws", feature = "connect")))]
 fn app_api_required_torii_proxy_response(action: &'static str) -> Response {
     torii_proxy_error_response(
@@ -29420,7 +27767,6 @@ fn app_api_required_torii_proxy_response(action: &'static str) -> Response {
         format!("{action} requires the `app_api` feature"),
     )
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 struct ToriiProxyRequestHead {
     schema_version: u16,
@@ -29430,7 +27776,6 @@ struct ToriiProxyRequestHead {
     max_hops: u8,
     visited_peer_ids: Vec<PeerId>,
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 impl ToriiProxyRequestHead {
     fn split(request: ToriiProxyRequestV6) -> (Self, ToriiProxyRequestKindV4) {
@@ -29455,7 +27800,6 @@ impl ToriiProxyRequestHead {
             request,
         )
     }
-
     fn with_request(self, request: ToriiProxyRequestKindV4) -> ToriiProxyRequestV6 {
         ToriiProxyRequestV6 {
             schema_version: self.schema_version,
@@ -29468,7 +27812,6 @@ impl ToriiProxyRequestHead {
         }
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_incoming_torii_proxy_request(
     app: &SharedAppState,
@@ -29483,7 +27826,6 @@ async fn execute_incoming_torii_proxy_request(
     )
     .await
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_incoming_torii_proxy_request_with_proxy_memory(
     app: &SharedAppState,
@@ -29500,7 +27842,6 @@ async fn execute_incoming_torii_proxy_request_with_proxy_memory(
     )
     .await
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_incoming_torii_proxy_request_with_admission(
     app: &SharedAppState,
@@ -29560,7 +27901,6 @@ async fn execute_incoming_torii_proxy_request_with_admission(
         ),
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_incoming_torii_proxy_request_with_admission_inner(
     app: &SharedAppState,
@@ -29635,7 +27975,6 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
             "Torii proxy request attempted to revisit the receiving peer",
         );
     }
-
     // Fanout request variants carry the potentially large signed-query byte
     // vector. Dispatch them by ownership before the legacy proxy context clone
     // below so ingress never duplicates that vector merely to select a route.
@@ -29697,7 +28036,6 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
         )
         .await;
     }
-
     // Split fixed forwarding metadata from the request arm and move the arm
     // through routing. Reconstruct the envelope only when a request actually
     // needs another hop; no full body clone is needed merely to select local
@@ -30136,7 +28474,6 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
         }
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn reject_incoming_torii_proxy_request_capacity(
     network: &iroha_core::IrohaNetwork,
@@ -30203,7 +28540,6 @@ fn reject_incoming_torii_proxy_request_capacity(
         );
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn process_incoming_torii_proxy_request(
     app: SharedAppState,
@@ -30281,7 +28617,6 @@ async fn process_incoming_torii_proxy_request(
         fanout_reservation,
         ordinary_query_memory,
     } = admitted_snapshot;
-
     let post_result = post_torii_proxy_control_until_deadline(
         &network,
         iroha_p2p::Post {
@@ -30313,7 +28648,6 @@ async fn process_incoming_torii_proxy_request(
         );
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn process_incoming_torii_proxy_response(
     app: &SharedAppState,
@@ -30329,7 +28663,6 @@ async fn process_incoming_torii_proxy_response(
             .any(|(request_id, _)| *request_id == pending_key.0);
         (pending, has_other_pending)
     };
-
     let Some(pending) = pending else {
         let mut completed = app.torii_proxy_completed.lock().await;
         if let Some(entry) = completed.entries.get_mut(&pending_key.0) {
@@ -30344,7 +28677,6 @@ async fn process_incoming_torii_proxy_response(
             return;
         }
         drop(completed);
-
         if has_other_pending {
             iroha_logger::warn!(
                 peer_id = %responder_peer_id,
@@ -30360,7 +28692,6 @@ async fn process_incoming_torii_proxy_response(
         }
         return;
     };
-
     if let Err(error) =
         validate_torii_proxy_snapshot_bounds(&proxy_response.response, pending.max_body_bytes)
     {
@@ -30385,7 +28716,6 @@ async fn process_incoming_torii_proxy_response(
         );
         return;
     }
-
     if proxy_response.schema_version != TORII_PROXY_RESPONSE_VERSION_V1 {
         let _ = pending.sender.send(ToriiProxyHttpResponseV1 {
             status_code: StatusCode::BAD_GATEWAY.as_u16(),
@@ -30398,10 +28728,8 @@ async fn process_incoming_torii_proxy_response(
         });
         return;
     }
-
     let _ = pending.sender.send(proxy_response.response);
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn process_incoming_queue_plan_admission_publication(
     app: &SharedAppState,
@@ -30444,7 +28772,6 @@ fn process_incoming_queue_plan_admission_publication(
         }
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn handle_torii_proxy_network_message(
     app: SharedAppState,
@@ -30457,7 +28784,6 @@ async fn handle_torii_proxy_network_message(
         payload.is_torii_proxy_control_message(),
         "Torii proxy dispatcher should only receive Torii/Soracloud proxy control messages"
     );
-
     match payload {
         iroha_core::NetworkMessage::ToriiProxyRequest(request) => {
             let request_id = request.request_id.clone();
@@ -30498,7 +28824,6 @@ async fn handle_torii_proxy_network_message(
         _ => {}
     }
 }
-
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn attach_torii_proxy_network(app: SharedAppState, network: iroha_core::IrohaNetwork) {
     tokio::spawn(async move {
@@ -30506,7 +28831,6 @@ fn attach_torii_proxy_network(app: SharedAppState, network: iroha_core::IrohaNet
             SubscriberFilter,
             message::{SubscriberRoute, Topic},
         };
-
         let (tx, mut rx) = tokio::sync::mpsc::channel(network.subscriber_queue_cap().get());
         let filter =
             SubscriberFilter::topics_for_route([Topic::Control], SubscriberRoute::ToriiProxy);
@@ -30523,7 +28847,6 @@ fn attach_torii_proxy_network(app: SharedAppState, network: iroha_core::IrohaNet
                 }
             }
         }
-
         // Responses must keep flowing while one request waits on downstream
         // proxy I/O. A single worker matches the one complete proxy
         // working-set slot; the one-item queue is deliberately nonblocking so
@@ -30543,7 +28866,6 @@ fn attach_torii_proxy_network(app: SharedAppState, network: iroha_core::IrohaNet
                 .await;
             }
         });
-
         while let Some(msg) = rx.recv().await {
             if msg.payload.is_torii_proxy_control_message() {
                 let (peer, _authenticated_via, payload, _payload_bytes, p2p_memory) =
@@ -30591,7 +28913,6 @@ fn attach_torii_proxy_network(app: SharedAppState, network: iroha_core::IrohaNet
         }
     });
 }
-
 #[cfg(feature = "app_api")]
 fn soracloud_local_read_response(
     response: iroha_core::soracloud_runtime::SoracloudLocalReadResponse,
@@ -30623,7 +28944,6 @@ fn soracloud_local_read_response(
             "x-iroha-soracloud-result-commitment",
             response.result_commitment.to_string(),
         );
-
     if let Ok(bindings_json) = norito::json::to_json(&response.bindings) {
         let encoded = base64::engine::general_purpose::STANDARD.encode(bindings_json);
         builder = builder.header("x-iroha-soracloud-bindings", encoded);
@@ -30638,7 +28958,6 @@ fn soracloud_local_read_response(
             builder = builder.header("x-iroha-soracloud-receipt", encoded);
         }
     }
-
     builder
         .body(Body::from(response.response_bytes))
         .unwrap_or_else(|error| {
@@ -30649,7 +28968,6 @@ fn soracloud_local_read_response(
                 .expect("static response build succeeds")
         })
 }
-
 #[cfg(feature = "app_api")]
 fn soracloud_ordered_mailbox_response(
     response: iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionResult,
@@ -30685,7 +29003,6 @@ fn soracloud_ordered_mailbox_response(
                 .expect("static response build succeeds")
         })
 }
-
 #[cfg(feature = "app_api")]
 fn soracloud_local_read_error_response(
     error: iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
@@ -30706,7 +29023,6 @@ fn soracloud_local_read_error_response(
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         })
 }
-
 #[cfg(feature = "app_api")]
 fn soracloud_public_runtime_unavailable(message: impl Into<String>) -> Response {
     Response::builder()
@@ -30714,7 +29030,6 @@ fn soracloud_public_runtime_unavailable(message: impl Into<String>) -> Response 
         .body(Body::from(message.into()))
         .unwrap_or_else(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())
 }
-
 #[cfg(feature = "app_api")]
 fn hosted_http_request_hash(
     scope: &str,
@@ -30736,7 +29051,6 @@ fn hosted_http_request_hash(
     .expect("hosted-http request hash payload should encode");
     *blake3_hash(&payload).as_bytes()
 }
-
 #[cfg(feature = "app_api")]
 fn hosted_http_rollout_bucket(
     service_name: &str,
@@ -30754,7 +29068,6 @@ fn hosted_http_rollout_bucket(
     );
     (u16::from_le_bytes([digest[0], digest[1]]) % 100) as u8
 }
-
 #[cfg(feature = "app_api")]
 fn select_authoritative_hosted_http_replica(
     world: &impl WorldReadOnly,
@@ -30791,7 +29104,6 @@ fn select_authoritative_hosted_http_replica(
     if healthy_replicas.len() == 1 {
         return healthy_replicas.into_iter().next();
     }
-
     let digest = hosted_http_request_hash(
         "soracloud:hosted-http-replica:v1",
         service_name,
@@ -30803,7 +29115,6 @@ fn select_authoritative_hosted_http_replica(
     let index = usize::from(u16::from_le_bytes([digest[0], digest[1]])) % healthy_replicas.len();
     healthy_replicas.into_iter().nth(index)
 }
-
 #[cfg(feature = "app_api")]
 fn authoritative_weighted_hosted_http_versions(
     app: &SharedAppState,
@@ -30850,7 +29161,6 @@ fn authoritative_weighted_hosted_http_versions(
             ),
         ));
     }
-
     let mut versions = Vec::with_capacity(2);
     if let Some(rollout) = deployment.active_rollout.as_ref() {
         let canary_weight = rollout.traffic_percent.min(100);
@@ -30866,7 +29176,6 @@ fn authoritative_weighted_hosted_http_versions(
     }
     Ok(versions)
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone, Debug)]
 struct ResolvedHostedHttpTarget {
@@ -30875,7 +29184,6 @@ struct ResolvedHostedHttpTarget {
     assigned_peer_id: PeerId,
     local_listen_base_url: Option<String>,
 }
-
 #[cfg(feature = "app_api")]
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn ensure_local_hosted_http_snapshot_origin(
@@ -30898,7 +29206,6 @@ fn ensure_local_hosted_http_snapshot_origin(
         ),
     ))
 }
-
 #[cfg(feature = "app_api")]
 #[cfg(not(any(feature = "p2p_ws", feature = "connect")))]
 fn ensure_local_hosted_http_snapshot_origin(
@@ -30907,7 +29214,6 @@ fn ensure_local_hosted_http_snapshot_origin(
 ) -> Result<(), SoracloudRuntimeExecutionError> {
     Ok(())
 }
-
 #[cfg(feature = "app_api")]
 fn resolve_local_hosted_http_replica_listener(
     app: &SharedAppState,
@@ -30935,7 +29241,6 @@ fn resolve_local_hosted_http_replica_listener(
                 .and_then(|replica| replica.listen_base_url.clone())
         }))
 }
-
 #[cfg(feature = "app_api")]
 fn local_healthy_hosted_http_placement(
     app: &SharedAppState,
@@ -30967,7 +29272,6 @@ fn local_healthy_hosted_http_placement(
     }
     Ok(None)
 }
-
 #[cfg(feature = "app_api")]
 fn resolve_hosted_http_runtime_target(
     app: &SharedAppState,
@@ -30982,10 +29286,8 @@ fn resolve_hosted_http_runtime_target(
         peer_id: String,
         weight: u8,
     }
-
     let service_name = route_match.service_name.clone();
     let weighted_versions = authoritative_weighted_hosted_http_versions(app, &service_name)?;
-
     let mut healthy_targets = Vec::with_capacity(weighted_versions.len());
     let state_view = app.state.view();
     let world = state_view.world();
@@ -31032,7 +29334,6 @@ fn resolve_hosted_http_runtime_target(
         });
     }
     drop(state_view);
-
     if healthy_targets.is_empty() {
         let requested_versions = weighted_versions
             .into_iter()
@@ -31046,7 +29347,6 @@ fn resolve_hosted_http_runtime_target(
             ),
         ));
     }
-
     if healthy_targets.len() == 1 {
         let selected = healthy_targets.remove(0);
         let assigned_peer_id = selected.peer_id.parse::<PeerId>().map_err(|error| {
@@ -31082,7 +29382,6 @@ fn resolve_hosted_http_runtime_target(
             local_listen_base_url,
         });
     }
-
     // Keep canary routing deterministic per client/request tuple so traffic stays stable while
     // still honoring the configured rollout percentage.
     let bucket = hosted_http_rollout_bucket(&service_name, remote_ip, method, uri);
@@ -31128,7 +29427,6 @@ fn resolve_hosted_http_runtime_target(
         local_listen_base_url,
     })
 }
-
 #[cfg(feature = "app_api")]
 fn resolve_exact_hosted_http_runtime_target(
     app: &SharedAppState,
@@ -31236,7 +29534,6 @@ fn resolve_exact_hosted_http_runtime_target(
         local_listen_base_url,
     })
 }
-
 #[cfg(feature = "app_api")]
 async fn proxy_soracloud_public_hosted_http_locally(
     method: &axum::http::Method,
@@ -31261,7 +29558,6 @@ async fn proxy_soracloud_public_hosted_http_locally(
     })?;
     upstream_url.set_path(route_match.request_path.as_str());
     upstream_url.set_query(uri.query());
-
     if upstream_url.scheme() != "http" {
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
@@ -31308,7 +29604,6 @@ async fn proxy_soracloud_public_hosted_http_locally(
     tokio::spawn(async move {
         let _ = connection.await;
     });
-
     let mut path_and_query = upstream_url.path().to_owned();
     if path_and_query.is_empty() {
         path_and_query.push('/');
@@ -31357,7 +29652,6 @@ async fn proxy_soracloud_public_hosted_http_locally(
                 ),
             )
         })?;
-
     let status = upstream_response.status();
     let response_headers = upstream_response.headers().clone();
     let response_body = Body::from_stream(http_body_util::BodyDataStream::new(
@@ -31377,7 +29671,6 @@ async fn proxy_soracloud_public_hosted_http_locally(
         .body(response_body)
         .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response()))
 }
-
 #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
 async fn execute_hosted_http_proxy_request_with_fallback(
     app: &SharedAppState,
@@ -31398,7 +29691,6 @@ async fn execute_hosted_http_proxy_request_with_fallback(
         Ok(reservation) => reservation,
         Err(response) => return Some(response),
     };
-
     let request_kind = ToriiProxyRequestKindV4::HostedHttp(ToriiHostedHttpProxyRequestV1 {
         service_name: target.route_match.service_name.clone(),
         service_version: target.route_match.service_version.clone(),
@@ -31414,7 +29706,6 @@ async fn execute_hosted_http_proxy_request_with_fallback(
         Ok(request) => request,
         Err(response) => return Some(response),
     };
-
     let candidates = hosted_http_proxy_candidate_peer_ids(
         app.as_ref(),
         local_peer_id,
@@ -31442,7 +29733,6 @@ async fn execute_hosted_http_proxy_request_with_fallback(
             ),
         ));
     }
-
     let request_id = request.request_id.clone();
     let request = match SharedToriiProxyAttemptRequest::new(
         request,
@@ -31505,7 +29795,6 @@ async fn execute_hosted_http_proxy_request_with_fallback(
             }
         }
     }
-
     mark_torii_proxy_request_completed(app, request_id).await;
     let response = last_retryable.unwrap_or_else(|| {
         torii_proxy_error_response(
@@ -31524,7 +29813,6 @@ async fn execute_hosted_http_proxy_request_with_fallback(
         proxy_memory,
     ))
 }
-
 #[cfg(not(any(feature = "p2p_ws", feature = "connect")))]
 async fn execute_hosted_http_proxy_request_with_fallback(
     _app: &SharedAppState,
@@ -31537,7 +29825,6 @@ async fn execute_hosted_http_proxy_request_with_fallback(
 ) -> Option<Response> {
     None
 }
-
 #[cfg(feature = "app_api")]
 async fn proxy_soracloud_public_hosted_http(
     State(app): State<SharedAppState>,
@@ -31553,7 +29840,6 @@ async fn proxy_soracloud_public_hosted_http(
             Ok(target) => target,
             Err(error) => return soracloud_local_read_error_response(error),
         };
-
     if let Some(listen_base_url) = target.local_listen_base_url.as_deref() {
         return match proxy_soracloud_public_hosted_http_locally(
             &method,
@@ -31569,7 +29855,6 @@ async fn proxy_soracloud_public_hosted_http(
             Err(error) => soracloud_local_read_error_response(error),
         };
     }
-
     let local_peer_id = app.local_peer_id.as_ref().map(ToString::to_string);
     let assigned_peer_id_string = target.assigned_peer_id.to_string();
     if local_peer_id.as_deref() == Some(assigned_peer_id_string.as_str()) {
@@ -31583,7 +29868,6 @@ async fn proxy_soracloud_public_hosted_http(
             ),
         ));
     }
-
     match execute_hosted_http_proxy_request_with_fallback(
         &app, &target, &method, &uri, &headers, body, remote_ip,
     )
@@ -31602,7 +29886,6 @@ async fn proxy_soracloud_public_hosted_http(
         )),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn current_public_soradns_ledger_time_ms(app: &SharedAppState) -> u64 {
     let latest_block_ms = app.state.view().latest_block().map_or(0, |block| {
@@ -31615,12 +29898,10 @@ fn current_public_soradns_ledger_time_ms(app: &SharedAppState) -> u64 {
         .unwrap_or(latest_block_ms);
     wall_clock_ms.max(latest_block_ms)
 }
-
 #[cfg(feature = "app_api")]
 fn soradns_public_gateway_error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, message.into()).into_response()
 }
-
 #[cfg(feature = "app_api")]
 fn resolve_active_soradns_gateway_host(
     app: &SharedAppState,
@@ -31658,7 +29939,6 @@ fn resolve_active_soradns_gateway_host(
         )),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn rewrite_soradns_public_runtime_uri(
     uri: &axum::http::Uri,
@@ -31683,7 +29963,6 @@ fn rewrite_soradns_public_runtime_uri(
         )
     })
 }
-
 #[cfg(feature = "app_api")]
 fn rewrite_soradns_public_runtime_headers(
     headers: &HeaderMap,
@@ -31699,7 +29978,6 @@ fn rewrite_soradns_public_runtime_headers(
     rewritten.insert(axum::http::header::HOST, host_value);
     Ok(rewritten)
 }
-
 #[cfg(feature = "app_api")]
 fn host_header_without_port(host: &str) -> String {
     let trimmed = host.trim().trim_end_matches('.');
@@ -31712,7 +29990,6 @@ fn host_header_without_port(host: &str) -> String {
         .unwrap_or(trimmed)
         .to_ascii_lowercase()
 }
-
 #[cfg(feature = "app_api")]
 fn soradns_alias_from_taira_mon_host(host: &str) -> Option<String> {
     let normalized_host = host_header_without_port(host);
@@ -31720,7 +29997,6 @@ fn soradns_alias_from_taira_mon_host(host: &str) -> Option<String> {
     let alias = normalized_host.strip_suffix(suffix)?.strip_suffix('.')?;
     (!alias.is_empty()).then(|| alias.to_owned())
 }
-
 #[cfg(feature = "app_api")]
 fn rewrite_taira_mon_public_runtime_headers(
     app: &SharedAppState,
@@ -31738,7 +30014,6 @@ fn rewrite_taira_mon_public_runtime_headers(
     let resolved = resolve_active_soradns_gateway_host(app, &alias)?;
     rewrite_soradns_public_runtime_headers(headers, &resolved)
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_soracloud_public_runtime_request(
     app: SharedAppState,
@@ -31878,7 +30153,6 @@ async fn execute_soracloud_public_runtime_request(
             };
         }
     };
-
     let (observed_height, observed_block_hash) = {
         let state_view = app.state.view();
         (
@@ -31903,7 +30177,6 @@ async fn execute_soracloud_public_runtime_request(
         request_commitment: Hash::new(b""),
     };
     request.request_commitment = soracloud_local_read_request_commitment(&request);
-
     let proxy_target = match resolve_soracloud_local_read_proxy_target(&app, &request) {
         Ok(target) => target,
         Err(error) => {
@@ -31924,13 +30197,11 @@ async fn execute_soracloud_public_runtime_request(
             })
             .and_then(|runtime| runtime.execute_local_read(request))
     };
-
     match execution {
         Ok(response) => soracloud_local_read_response(response),
         Err(error) => soracloud_local_read_error_response(error),
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn forward_soradns_public_runtime_request(
     app: SharedAppState,
@@ -31960,7 +30231,6 @@ async fn forward_soradns_public_runtime_request(
     };
     execute_soracloud_public_runtime_request(app, method, uri, headers, remote_ip, body).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_soradns_public_alias_root(
     axum::extract::Path(fqdn): axum::extract::Path<String>,
@@ -31974,7 +30244,6 @@ async fn handler_soradns_public_alias_root(
     forward_soradns_public_runtime_request(app, fqdn, None, method, uri, headers, remote.ip(), body)
         .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_soradns_public_alias_path(
     axum::extract::Path((fqdn, path)): axum::extract::Path<(String, String)>,
@@ -31997,7 +30266,6 @@ async fn handler_soradns_public_alias_path(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_soracloud_public_local_read(
     State(app): State<SharedAppState>,
@@ -32009,7 +30277,6 @@ async fn handler_soracloud_public_local_read(
 ) -> Response {
     execute_soracloud_public_runtime_request(app, method, uri, headers, remote.ip(), body).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_soracloud_status(
     State(app): State<SharedAppState>,
@@ -32019,7 +30286,6 @@ async fn handler_soracloud_status(
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
     validate_api_token(app.as_ref(), &headers)?;
-
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -32031,22 +30297,18 @@ async fn handler_soracloud_status(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-
     let format =
         match crate::utils::negotiate_json_only_response(accept.as_ref().map(|value| &value.0)) {
             Ok(()) => ResponseFormat::Json,
             Err(response) => return Ok(response),
         };
-
     let failed_admissions = soracloud_failed_admissions_section(&app.telemetry).await;
-
     let backpressure = current_torii_backpressure(app.as_ref());
     let queue_active = u64::try_from(app.queue.active_len()).unwrap_or(u64::MAX);
     let queue_queued = u64::try_from(backpressure.queued()).unwrap_or(u64::MAX);
     let queue_capacity = u64::try_from(backpressure.capacity().get()).unwrap_or(u64::MAX);
     let high_load_threshold = u64::try_from(app.high_load_tx_threshold).unwrap_or(u64::MAX);
     let high_load = backpressure.is_saturated() || queue_active >= high_load_threshold;
-
     let nexus = app.state.nexus_snapshot();
     let configured_lane_count = u64::from(nexus.lane_catalog.lane_count().get());
     let declared_lane_count = u64::try_from(nexus.lane_catalog.lanes().len()).unwrap_or(u64::MAX);
@@ -32088,11 +30350,9 @@ async fn handler_soracloud_status(
             nexus.routing_policy.default_dataspace.as_u64(),
         ),
     ]);
-
     let (service_health, runtime_pressure, runtime_manager) =
         soracloud_runtime_status_sections(&app);
     let hosted_http_topology = soracloud_hosted_http_topology_section(&app);
-
     let resource_pressure = json_object(vec![
         json_entry("queue_active", queue_active),
         json_entry("queue_queued", queue_queued),
@@ -32118,10 +30378,8 @@ async fn handler_soracloud_status(
         json_entry("runtime_manager", runtime_manager),
         json_entry("control_plane", json_value(&control_plane)),
     ]);
-
     Ok(crate::utils::respond_value_with_format(payload, format))
 }
-
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 async fn handler_kaigi_relays(
     State(app): State<SharedAppState>,
@@ -32155,7 +30413,6 @@ async fn handler_kaigi_relays(
     .await
     .map(axum::response::IntoResponse::into_response)
 }
-
 #[cfg(all(feature = "app_api", not(feature = "telemetry")))]
 async fn handler_kaigi_relays(
     State(app): State<SharedAppState>,
@@ -32169,7 +30426,6 @@ async fn handler_kaigi_relays(
         &app.telemetry,
     ))
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_kaigi_call(
     State(app): State<SharedAppState>,
@@ -32186,7 +30442,6 @@ async fn handler_kaigi_call(
     let call_id = parse_kaigi_call_id(&call_raw)?;
     routing::handle_v1_kaigi_call(app.state.clone(), call_id).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_kaigi_call_signals(
     State(app): State<SharedAppState>,
@@ -32210,7 +30465,6 @@ async fn handler_kaigi_call_signals(
     let call_id = parse_kaigi_call_id(&call_raw)?;
     routing::handle_v1_kaigi_call_signals(app.state.clone(), call_id, AxQuery(params)).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_kaigi_call_events_sse(
     State(app): State<SharedAppState>,
@@ -32229,9 +30483,7 @@ async fn handler_kaigi_call_events_sse(
         )
         .into_response());
     }
-
     validate_api_token(app.as_ref(), &headers)?;
-
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -32243,13 +30495,11 @@ async fn handler_kaigi_call_events_sse(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-
     Ok(
         routing::handle_v1_kaigi_call_events_sse(app.events.clone(), call_id, AxQuery(params))
             .into_response(),
     )
 }
-
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 async fn handler_kaigi_relay_detail(
     State(app): State<SharedAppState>,
@@ -32291,7 +30541,6 @@ async fn handler_kaigi_relay_detail(
         )),
     }
 }
-
 #[cfg(all(feature = "app_api", not(feature = "telemetry")))]
 async fn handler_kaigi_relay_detail(
     State(app): State<SharedAppState>,
@@ -32306,7 +30555,6 @@ async fn handler_kaigi_relay_detail(
         &app.telemetry,
     ))
 }
-
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 async fn handler_kaigi_relays_health(
     State(app): State<SharedAppState>,
@@ -32334,7 +30582,6 @@ async fn handler_kaigi_relays_health(
         .await
         .map(axum::response::IntoResponse::into_response)
 }
-
 #[cfg(all(feature = "app_api", not(feature = "telemetry")))]
 async fn handler_kaigi_relays_health(
     State(app): State<SharedAppState>,
@@ -32347,7 +30594,6 @@ async fn handler_kaigi_relays_health(
         &app.telemetry,
     ))
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_kaigi_relays_sse(
     State(app): State<SharedAppState>,
@@ -32373,16 +30619,13 @@ async fn handler_kaigi_relays_sse(
         })?;
         params.relay = Some(parsed.1);
     }
-
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         return Ok(
             routing::handle_v1_kaigi_relays_sse(app.events.clone(), AxQuery(params))
                 .into_response(),
         );
     }
-
     validate_api_token(app.as_ref(), &headers)?;
-
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -32394,10 +30637,8 @@ async fn handler_kaigi_relays_sse(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
-
     Ok(routing::handle_v1_kaigi_relays_sse(app.events.clone(), AxQuery(params)).into_response())
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_soradns_directory_latest(
     State(app): State<SharedAppState>,
@@ -32419,7 +30660,6 @@ async fn handler_soradns_directory_latest(
     routing::handle_v1_soradns_directory_latest(app.state.clone())
         .map(axum::response::IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_soradns_directory_events(
     State(app): State<SharedAppState>,
@@ -32446,19 +30686,15 @@ async fn handler_soradns_directory_events(
     }
     Ok(routing::handle_v1_soradns_directory_events_sse(app.events.clone()).into_response())
 }
-
 // -------------- Streaming: SSE / WS / P2P --------------
-
 #[cfg(feature = "app_api")]
 const STREAM_SUBSCRIPTION_MAX_MESSAGE_BYTES: usize = 256 * 1024;
-
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct CanonicalStreamAdmission {
     app: SharedAppState,
     route: iroha_torii_shared::route_catalog::RouteDescriptor,
 }
-
 #[cfg(feature = "app_api")]
 fn canonical_stream_rate_limit_key(
     headers: &axum::http::HeaderMap,
@@ -32469,7 +30705,6 @@ fn canonical_stream_rate_limit_key(
     let principal = limits::key_from_headers(headers, remote_ip, None, use_api_token);
     format!("stream:{}:{principal}", route.stable_route_id())
 }
-
 #[cfg(feature = "app_api")]
 fn canonical_stream_high_load_threshold(
     app: &SharedAppState,
@@ -32481,7 +30716,6 @@ fn canonical_stream_high_load_threshold(
         app.high_load_stream_tx_threshold
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn enforce_canonical_stream_admission(
     State(admission): State<CanonicalStreamAdmission>,
@@ -32491,7 +30725,6 @@ async fn enforce_canonical_stream_admission(
     if let Some(response) = api_token_rejection(&admission.app, req.headers()) {
         return Ok(response);
     }
-
     let remote_ip = req
         .extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
@@ -32522,17 +30755,14 @@ async fn enforce_canonical_stream_admission(
             .into_response());
         }
     }
-
     Ok(next.run(req).await)
 }
-
 #[cfg(feature = "app_api")]
 fn sse_resume_rejection(headers: &axum::http::HeaderMap) -> Option<Response> {
     headers
         .contains_key("last-event-id")
         .then(routing::stream_resume_unsupported_response)
 }
-
 #[cfg(feature = "app_api")]
 fn validate_norito_websocket_handshake(
     headers: &axum::http::HeaderMap,
@@ -32551,7 +30781,6 @@ fn validate_norito_websocket_handshake(
                 .to_owned(),
         });
     }
-
     let mut protocols = Vec::new();
     for value in headers
         .get_all(axum::http::header::SEC_WEBSOCKET_PROTOCOL)
@@ -32572,7 +30801,6 @@ fn validate_norito_websocket_handshake(
             protocols.push(protocol);
         }
     }
-
     match protocols.as_slice() {
         [] => Err(Error::AppQueryValidation {
             code: "websocket_subprotocol_required",
@@ -32587,7 +30815,6 @@ fn validate_norito_websocket_handshake(
         }),
     }
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod canonical_stream_handshake_tests {
     use std::{
@@ -32611,18 +30838,14 @@ mod canonical_stream_handshake_tests {
             other => panic!("unexpected stream handshake error: {other:?}"),
         }
     }
-
     #[derive(Clone)]
     struct SyntaxProbe(Arc<AtomicUsize>);
-
     struct RejectingStreamSyntax;
-
     impl<S> FromRequestParts<S> for RejectingStreamSyntax
     where
         S: Send + Sync,
     {
         type Rejection = StatusCode;
-
         fn from_request_parts(
             parts: &mut Parts,
             _state: &S,
@@ -32633,11 +30856,9 @@ mod canonical_stream_handshake_tests {
             core::future::ready(Err(StatusCode::BAD_REQUEST))
         }
     }
-
     async fn rejecting_stream_syntax(_: RejectingStreamSyntax) -> StatusCode {
         StatusCode::NO_CONTENT
     }
-
     fn gated_syntax_router(
         app: SharedAppState,
         route: iroha_torii_shared::route_catalog::RouteDescriptor,
@@ -32650,7 +30871,6 @@ mod canonical_stream_handshake_tests {
             )),
         )
     }
-
     fn stream_syntax_request(
         route: iroha_torii_shared::route_catalog::RouteDescriptor,
         probe: &Arc<AtomicUsize>,
@@ -32672,7 +30892,6 @@ mod canonical_stream_handshake_tests {
         }
         request
     }
-
     fn gated_event_websocket_router(app: SharedAppState) -> Router {
         let route = route_catalog::streaming::SUBSCRIPTION_WS;
         Router::new()
@@ -32688,7 +30907,6 @@ mod canonical_stream_handshake_tests {
             )
             .with_state(app)
     }
-
     #[test]
     fn websocket_requires_exact_single_subprotocol() {
         let headers = HeaderMap::new();
@@ -32696,14 +30914,12 @@ mod canonical_stream_handshake_tests {
             error_code(validate_norito_websocket_handshake(&headers, None).unwrap_err()),
             "websocket_subprotocol_required"
         );
-
         let mut headers = HeaderMap::new();
         headers.insert(
             header::SEC_WEBSOCKET_PROTOCOL,
             HeaderValue::from_static(NORITO_V1_WEBSOCKET_SUBPROTOCOL),
         );
         validate_norito_websocket_handshake(&headers, None).expect("canonical subprotocol");
-
         headers.insert(
             header::SEC_WEBSOCKET_PROTOCOL,
             HeaderValue::from_static("IROHA-NORITO-V1"),
@@ -32713,7 +30929,6 @@ mod canonical_stream_handshake_tests {
             "websocket_subprotocol_unsupported"
         );
     }
-
     #[test]
     fn websocket_rejects_protocol_lists_duplicates_and_empty_tokens() {
         for value in [
@@ -32732,7 +30947,6 @@ mod canonical_stream_handshake_tests {
                 "value: {value}"
             );
         }
-
         let mut headers = HeaderMap::new();
         headers.insert(
             header::SEC_WEBSOCKET_PROTOCOL,
@@ -32742,7 +30956,6 @@ mod canonical_stream_handshake_tests {
             error_code(validate_norito_websocket_handshake(&headers, None).unwrap_err()),
             "websocket_subprotocol_invalid"
         );
-
         let mut headers = HeaderMap::new();
         headers.append(
             header::SEC_WEBSOCKET_PROTOCOL,
@@ -32757,7 +30970,6 @@ mod canonical_stream_handshake_tests {
             "websocket_subprotocol_unsupported"
         );
     }
-
     #[test]
     fn websocket_rejects_resume_headers_and_query_parameters() {
         let mut headers = HeaderMap::new();
@@ -32770,7 +30982,6 @@ mod canonical_stream_handshake_tests {
             error_code(validate_norito_websocket_handshake(&headers, None).unwrap_err()),
             "stream_resume_unsupported"
         );
-
         headers.remove("last-event-id");
         assert_eq!(
             error_code(
@@ -32781,7 +30992,6 @@ mod canonical_stream_handshake_tests {
         validate_norito_websocket_handshake(&headers, Some(""))
             .expect("empty query carries no parameters");
     }
-
     #[test]
     fn sse_rejects_any_last_event_id_field() {
         let mut headers = HeaderMap::new();
@@ -32797,14 +31007,12 @@ mod canonical_stream_handshake_tests {
             Some("stream_resume_unsupported")
         );
     }
-
     #[tokio::test]
     async fn api_token_authentication_precedes_stream_establishment() {
         let mut app = crate::mk_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
         state.api_tokens_set = Arc::new(HashSet::from(["stream-secret".to_owned()]));
-
         let calls = Arc::new(AtomicUsize::new(0));
         let handler_calls = Arc::clone(&calls);
         let router = Router::new()
@@ -32822,7 +31030,6 @@ mod canonical_stream_handshake_tests {
                 Arc::clone(&app),
                 enforce_api_token,
             ));
-
         let unauthorized = router
             .clone()
             .oneshot(
@@ -32841,7 +31048,6 @@ mod canonical_stream_handshake_tests {
                 .headers()
                 .contains_key(header::WWW_AUTHENTICATE)
         );
-
         let authorized = router
             .oneshot(
                 Request::builder()
@@ -32855,7 +31061,6 @@ mod canonical_stream_handshake_tests {
         assert_eq!(authorized.status(), StatusCode::SWITCHING_PROTOCOLS);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
-
     #[tokio::test]
     async fn stream_admission_precedes_syntax_and_uses_the_stable_route_id() {
         let mut unauthorized_app = crate::mk_app_state_for_tests();
@@ -32882,7 +31087,6 @@ mod canonical_stream_handshake_tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(syntax_calls.load(Ordering::SeqCst), 0);
         assert_eq!(unauthorized_app.events.receiver_count(), receivers_before);
-
         let mut limited_app = crate::mk_app_state_for_tests();
         Arc::get_mut(&mut limited_app)
             .expect("unique app state")
@@ -32922,7 +31126,6 @@ mod canonical_stream_handshake_tests {
         }
         assert_eq!(limited_app.events.receiver_count(), receivers_before);
     }
-
     #[tokio::test]
     async fn stream_high_load_thresholds_shed_before_syntax_or_subscription_creation() {
         let mut stream_app = crate::mk_app_state_for_tests();
@@ -32944,7 +31147,6 @@ mod canonical_stream_handshake_tests {
         .expect("high-load stream response");
         assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(syntax_calls.load(Ordering::SeqCst), 0);
-
         let mut subscription_app = crate::mk_app_state_for_tests();
         let state = Arc::get_mut(&mut subscription_app).expect("unique app state");
         state.high_load_stream_tx_threshold = usize::MAX;
@@ -32967,7 +31169,6 @@ mod canonical_stream_handshake_tests {
         assert_eq!(syntax_calls.load(Ordering::SeqCst), 0);
         assert_eq!(subscription_app.events.receiver_count(), receivers_before);
     }
-
     #[tokio::test]
     async fn stream_token_rate_limit_buckets_are_isolated_by_route() {
         let mut app = crate::mk_app_state_for_tests();
@@ -32975,13 +31176,11 @@ mod canonical_stream_handshake_tests {
         state.require_api_token = true;
         state.api_tokens_set = Arc::new(HashSet::from(["stream-secret".to_owned()]));
         state.rate_limiter = limits::RateLimiter::new_per_minute(Some(1), Some(1));
-
         let events_route = route_catalog::streaming::EVENTS_SSE;
         let contracts_route = route_catalog::streaming::CONTRACT_EVENTS_SSE;
         let events = gated_syntax_router(Arc::clone(&app), events_route);
         let contracts = gated_syntax_router(Arc::clone(&app), contracts_route);
         let syntax_calls = Arc::new(AtomicUsize::new(0));
-
         for (router, route, remote, expected_status, expected_calls) in [
             (
                 &events,
@@ -33031,21 +31230,18 @@ mod canonical_stream_handshake_tests {
             );
         }
     }
-
     #[tokio::test]
     async fn stream_connect_info_rate_limit_buckets_are_isolated_by_route() {
         let mut app = crate::mk_app_state_for_tests();
         Arc::get_mut(&mut app)
             .expect("unique app state")
             .rate_limiter = limits::RateLimiter::new_per_minute(Some(1), Some(1));
-
         let events_route = route_catalog::streaming::EVENTS_SSE;
         let contracts_route = route_catalog::streaming::CONTRACT_EVENTS_SSE;
         let events = gated_syntax_router(Arc::clone(&app), events_route);
         let contracts = gated_syntax_router(Arc::clone(&app), contracts_route);
         let syntax_calls = Arc::new(AtomicUsize::new(0));
         let remote_ip = [203, 0, 113, 42];
-
         for (router, route, token, port, expected_status, expected_calls) in [
             (
                 &events,
@@ -33099,7 +31295,6 @@ mod canonical_stream_handshake_tests {
             );
         }
     }
-
     #[tokio::test]
     async fn stream_admission_precedes_websocket_upgrade_and_subscriber_creation() {
         let mut unauthorized_app = crate::mk_app_state_for_tests();
@@ -33118,7 +31313,6 @@ mod canonical_stream_handshake_tests {
             .expect("unauthorized WebSocket response");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         assert_eq!(unauthorized_app.events.receiver_count(), receivers_before);
-
         let mut limited_app = crate::mk_app_state_for_tests();
         Arc::get_mut(&mut limited_app)
             .expect("unique app state")
@@ -33149,7 +31343,6 @@ mod canonical_stream_handshake_tests {
         assert_eq!(limited_app.events.receiver_count(), receivers_before);
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_events_sse(
     State(app): State<SharedAppState>,
@@ -33161,7 +31354,6 @@ async fn handler_events_sse(
     }
     Ok(routing::handle_v1_events_sse(app.events.clone(), AxQuery(params))?.into_response())
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_contracts_events_sse(
     State(app): State<SharedAppState>,
@@ -33178,7 +31370,6 @@ async fn handler_contracts_events_sse(
     )?
     .into_response())
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_gov_stream(
     State(app): State<SharedAppState>,
@@ -33203,7 +31394,6 @@ async fn handler_gov_stream(
     }
     Ok(routing::handle_v1_gov_stream(app.events.clone()).into_response())
 }
-
 #[cfg(all(feature = "app_api", feature = "telemetry"))]
 async fn handler_telemetry_live(
     State(app): State<SharedAppState>,
@@ -33242,7 +31432,6 @@ async fn handler_telemetry_live(
     )?
     .into_response())
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_explorer_transactions_stream(
     State(app): State<SharedAppState>,
@@ -33274,7 +31463,6 @@ async fn handler_explorer_transactions_stream(
             .into_response(),
     )
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_explorer_blocks_stream(
     State(app): State<SharedAppState>,
@@ -33305,7 +31493,6 @@ async fn handler_explorer_blocks_stream(
             .into_response(),
     )
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_explorer_instructions_stream(
     State(app): State<SharedAppState>,
@@ -33337,7 +31524,6 @@ async fn handler_explorer_instructions_stream(
             .into_response(),
     )
 }
-
 #[cfg(feature = "app_api")]
 fn is_expected_ws_disconnect(error: &eyre::Report) -> bool {
     let msg = error.to_string().to_ascii_lowercase();
@@ -33346,7 +31532,6 @@ fn is_expected_ws_disconnect(error: &eyre::Report) -> bool {
         || msg.contains("connection reset")
         || msg.contains("already closed")
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod ws_disconnect_classification_tests {
     use super::is_expected_ws_disconnect;
@@ -33360,7 +31545,6 @@ mod ws_disconnect_classification_tests {
             "Event consumption resulted in an error: Connection is closed"
         )));
     }
-
     #[test]
     fn keeps_unexpected_errors_as_failures() {
         assert!(!is_expected_ws_disconnect(&eyre::eyre!(
@@ -33368,7 +31552,6 @@ mod ws_disconnect_classification_tests {
         )));
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_subscription_ws(
     State(app): State<SharedAppState>,
@@ -33378,7 +31561,6 @@ async fn handler_subscription_ws(
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, Error> {
     validate_norito_websocket_handshake(&headers, raw_query.as_deref())?;
-
     // Subscribe before upgrade to buffer events emitted during the WS handshake.
     let events_rx = app.events.subscribe();
     let ws = ws
@@ -33404,7 +31586,6 @@ async fn handler_subscription_ws(
     }))
     .await)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_blocks_stream_ws(
     State(app): State<SharedAppState>,
@@ -33414,7 +31595,6 @@ async fn handler_blocks_stream_ws(
     ws: WebSocketUpgrade,
 ) -> Result<impl IntoResponse, Error> {
     validate_norito_websocket_handshake(&headers, raw_query.as_deref())?;
-
     let kura = app.kura.clone();
     let ws = ws
         .protocols([NORITO_V1_WEBSOCKET_SUBPROTOCOL])
@@ -33431,7 +31611,6 @@ async fn handler_blocks_stream_ws(
     }))
     .await)
 }
-
 #[cfg(feature = "p2p_ws")]
 async fn handler_p2p_ws(
     State(app): State<SharedAppState>,
@@ -33481,7 +31660,6 @@ async fn handler_sumeragi_params(
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     routing::handle_v1_sumeragi_params(State(app.state.clone()), accept).await
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_bls_keys(
     State(app): State<SharedAppState>,
@@ -33510,9 +31688,7 @@ async fn handler_sumeragi_bls_keys(
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     routing::handle_v1_sumeragi_bls_keys(State(app.state.clone()), accept).await
 }
-
 // ---------------- Contracts/VK GET handlers ----------------
-
 #[cfg(feature = "app_api")]
 async fn handler_get_contract_code_bytes(
     State(app): State<SharedAppState>,
@@ -33549,9 +31725,7 @@ async fn handler_get_contract_code_bytes(
     )
     .await
 }
-
 // internal handler; tests should use routing::handle_get_contract_code_bytes via re-export below
-
 #[cfg(feature = "app_api")]
 async fn handler_get_contract_code(
     State(app): State<SharedAppState>,
@@ -33595,7 +31769,6 @@ async fn handler_get_contract_code(
         Err(e) => Err(e),
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_get_contract_code_view(
     State(app): State<SharedAppState>,
@@ -33635,7 +31808,6 @@ async fn handler_get_contract_code_view(
         Err(e) => Err(e),
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_verified_source_job(
     State(app): State<SharedAppState>,
@@ -33672,7 +31844,6 @@ async fn handler_post_contract_verified_source_job(
     drop(compile_permit);
     Ok((status, body).into_response())
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_get_contract_verified_source_job(
     State(app): State<SharedAppState>,
@@ -33692,7 +31863,6 @@ async fn handler_get_contract_verified_source_job(
         .await
         .map(axum::response::IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_get_contract_state(
     State(app): State<SharedAppState>,
@@ -33734,17 +31904,14 @@ async fn handler_get_contract_state(
         .await
         .into_response());
     }
-
     crate::routing::handle_get_contract_state(app.state.clone(), crate::NoritoQuery(q))
         .await
         .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 const DEFAULT_MINT_REQUEST_CONTRACT_ALIAS: &str = "apps_mint_request::paynet";
 #[cfg(feature = "app_api")]
 const MINT_REQUEST_CONTRACT_STATE_PREFIX: &str = "Requests";
-
 #[cfg(feature = "app_api")]
 #[derive(JsonDeserialize)]
 struct MintRequestsQuery {
@@ -33767,7 +31934,6 @@ struct MintRequestsQuery {
     #[norito(default)]
     include_signing_payload: Option<bool>,
 }
-
 #[cfg(feature = "app_api")]
 fn non_empty_string(value: Option<String>) -> Option<String> {
     value.and_then(|value| {
@@ -33775,7 +31941,6 @@ fn non_empty_string(value: Option<String>) -> Option<String> {
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
     })
 }
-
 #[cfg(feature = "app_api")]
 fn mint_requests_contract_state_query(
     query: MintRequestsQuery,
@@ -33797,7 +31962,6 @@ fn mint_requests_contract_state_query(
         .cursor
         .as_deref()
         .and_then(|cursor| cursor.trim().parse::<u64>().ok());
-
     crate::routing::ContractStateQuery {
         contract_address,
         contract_alias,
@@ -33814,7 +31978,6 @@ fn mint_requests_contract_state_query(
         decode: Some("json".to_owned()),
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn execute_mint_requests_contract_state_read(
     app: &SharedAppState,
@@ -33845,12 +32008,10 @@ async fn execute_mint_requests_contract_state_read(
         .await
         .into_response());
     }
-
     crate::routing::handle_get_contract_state(app.state.clone(), crate::NoritoQuery(query))
         .await
         .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_get_mint_requests(
     State(app): State<SharedAppState>,
@@ -33870,7 +32031,6 @@ async fn handler_get_mint_requests(
     let state_query = mint_requests_contract_state_query(query, None);
     execute_mint_requests_contract_state_read(&app, state_query).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_get_mint_request(
     State(app): State<SharedAppState>,
@@ -33891,7 +32051,6 @@ async fn handler_get_mint_request(
     let state_query = mint_requests_contract_state_query(query, Some(request_id));
     execute_mint_requests_contract_state_read(&app, state_query).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_get_vk_by_backend_name(
     State(app): State<SharedAppState>,
@@ -33930,7 +32089,6 @@ async fn handler_get_vk_by_backend_name(
         Err(e) => Err(e),
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_get_proof_by_backend_hash(
     State(app): State<SharedAppState>,
@@ -34002,7 +32160,6 @@ async fn handler_list_vk(
     }
     crate::routing::handle_list_vk(app.state.clone(), AxQuery(q)).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_list_proofs(
     State(app): State<SharedAppState>,
@@ -34049,7 +32206,6 @@ async fn handler_list_proofs(
     )
     .await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_count_proofs(
     State(app): State<SharedAppState>,
@@ -34187,7 +32343,6 @@ async fn handler_debug_axt_cache(
     payload.insert("entries".to_string(), norito::json::Value::Array(entries));
     json_ok(norito::json::Value::Object(payload))
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_debug_witness(
     State(app): State<SharedAppState>,
@@ -34214,7 +32369,6 @@ async fn handler_debug_witness(
             &app.telemetry,
         ));
     }
-
     let witness = iroha_core::sumeragi::witness::snapshot_exec_witness();
     let format =
         crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)).map_err(|_| {
@@ -34222,13 +32376,11 @@ async fn handler_debug_witness(
                 "Not Acceptable".to_string(),
             ))
         })?;
-
     match format {
         ResponseFormat::Json => json_ok(witness),
         ResponseFormat::Norito => Ok(utils::NoritoBody(witness).into_response()),
     }
 }
-
 async fn handler_sumeragi_evidence(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -34264,7 +32416,6 @@ async fn handler_sumeragi_evidence(
     .await
     .map(axum::response::IntoResponse::into_response)
 }
-
 async fn handler_sumeragi_evidence_count(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -34272,7 +32423,6 @@ async fn handler_sumeragi_evidence_count(
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     routing::handle_v1_sumeragi_evidence_count(State(app.state.clone()), accept).await
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_status(
     State(app): State<SharedAppState>,
@@ -34313,7 +32463,6 @@ async fn handler_sumeragi_status(
     .await
     .map(axum::response::IntoResponse::into_response)
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_diagnostics(
     State(app): State<SharedAppState>,
@@ -34349,7 +32498,6 @@ async fn handler_sumeragi_diagnostics(
     .await
     .map(axum::response::IntoResponse::into_response)
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_status_sse(
     State(app): State<SharedAppState>,
@@ -34387,7 +32535,6 @@ async fn handler_sumeragi_status_sse(
     )
     .into_response())
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_telemetry(
     State(app): State<SharedAppState>,
@@ -34417,7 +32564,6 @@ async fn handler_sumeragi_telemetry(
         .await
         .map(axum::response::IntoResponse::into_response)
 }
-
 async fn handler_sumeragi_vrf_penalties(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -34447,7 +32593,6 @@ async fn handler_sumeragi_vrf_penalties(
         .await
         .map(axum::response::IntoResponse::into_response)
 }
-
 async fn handler_sumeragi_vrf_epoch(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -34473,7 +32618,6 @@ async fn handler_sumeragi_vrf_epoch(
             &app.telemetry,
         ));
     }
-
     let epoch = if let Some(rest) = epoch.strip_prefix("0x") {
         u64::from_str_radix(rest, 16).map_err(|_| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -34491,12 +32635,10 @@ async fn handler_sumeragi_vrf_epoch(
             ))
         })?
     };
-
     routing::handle_v1_sumeragi_vrf_epoch(app.state.clone(), epoch)
         .await
         .map(axum::response::IntoResponse::into_response)
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_pacemaker_status(
     State(app): State<SharedAppState>,
@@ -34525,7 +32667,6 @@ async fn handler_pacemaker_status(
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     routing::handle_v1_sumeragi_pacemaker(&app.telemetry, accept).await
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_phases(
     State(app): State<SharedAppState>,
@@ -34554,7 +32695,6 @@ async fn handler_sumeragi_phases(
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     routing::handle_v1_sumeragi_phases(accept).await
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_leader(
     State(app): State<SharedAppState>,
@@ -34583,7 +32723,6 @@ async fn handler_sumeragi_leader(
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     routing::handle_v1_sumeragi_leader(accept).await
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_qc(
     State(app): State<SharedAppState>,
@@ -34614,7 +32753,6 @@ async fn handler_sumeragi_qc(
         .await?
         .into_response())
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_checkpoints(
     State(app): State<SharedAppState>,
@@ -34645,7 +32783,6 @@ async fn handler_sumeragi_checkpoints(
         .await?
         .into_response())
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_commit_qcs(
     State(app): State<SharedAppState>,
@@ -34674,7 +32811,6 @@ async fn handler_sumeragi_commit_qcs(
         .await?
         .into_response())
 }
-
 async fn handler_bridge_finality_proof(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -34717,7 +32853,6 @@ async fn handler_bridge_finality_proof(
     )
     .await
 }
-
 async fn handler_bridge_finality_attestation(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -34727,7 +32862,6 @@ async fn handler_bridge_finality_attestation(
     let result = handler_bridge_finality_attestation_inner(app, height, headers, remote).await;
     Ok(finalize_bridge_finality_attestation_response(result))
 }
-
 async fn handler_bridge_finality_attestation_inner(
     app: SharedAppState,
     height: u64,
@@ -34801,7 +32935,6 @@ async fn handler_bridge_finality_attestation_inner(
     protect_bridge_finality_attestation_response(&mut response);
     Ok(response)
 }
-
 async fn handler_bridge_finality_bundle(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -34848,7 +32981,6 @@ async fn handler_bridge_finality_bundle(
     )
     .await
 }
-
 async fn handler_sccp_message_proof(
     State(app): State<SharedAppState>,
     axum::extract::Path(message_id): axum::extract::Path<String>,
@@ -34901,7 +33033,6 @@ async fn handler_sccp_message_proof(
     )
     .await
 }
-
 async fn handler_sccp_registry(
     State(app): State<SharedAppState>,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
@@ -34931,7 +33062,6 @@ async fn handler_sccp_registry(
         .await?
         .into_response())
 }
-
 async fn handler_sccp_sora_outbound_material(
     State(app): State<SharedAppState>,
     axum::extract::Path((source_profile, route_id, asset_key, revision)): axum::extract::Path<(
@@ -34992,7 +33122,6 @@ async fn handler_sccp_sora_outbound_material(
     )
     .await
 }
-
 async fn handler_sccp_proof_request(
     State(app): State<SharedAppState>,
     axum::extract::Path(message_id): axum::extract::Path<String>,
@@ -35045,7 +33174,6 @@ async fn handler_sccp_proof_request(
     )
     .await
 }
-
 async fn handler_sccp_capabilities(
     State(app): State<SharedAppState>,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
@@ -35075,7 +33203,6 @@ async fn handler_sccp_capabilities(
         .await?
         .into_response())
 }
-
 async fn handler_sccp_messages_recent(
     State(app): State<SharedAppState>,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
@@ -35127,7 +33254,6 @@ async fn handler_sccp_messages_recent(
     )
     .await
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_validator_sets(
     State(app): State<SharedAppState>,
@@ -35156,7 +33282,6 @@ async fn handler_sumeragi_validator_sets(
         .await?
         .into_response())
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_validator_set_by_height(
     State(app): State<SharedAppState>,
@@ -35187,7 +33312,6 @@ async fn handler_sumeragi_validator_set_by_height(
             .into_response(),
     )
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_consensus_keys(
     State(app): State<SharedAppState>,
@@ -35215,7 +33339,6 @@ async fn handler_sumeragi_consensus_keys(
         .await?
         .into_response())
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_key_lifecycle(
     State(app): State<SharedAppState>,
@@ -35243,7 +33366,6 @@ async fn handler_sumeragi_key_lifecycle(
         .await?
         .into_response())
 }
-
 #[cfg(feature = "telemetry")]
 async fn handler_commit_qc(
     State(app): State<SharedAppState>,
@@ -35274,12 +33396,10 @@ async fn handler_commit_qc(
     .map(axum::response::IntoResponse::into_response)
 }
 // ---------------- Contracts/VK POST handlers ----------------
-
 #[cfg(feature = "app_api")]
 const MULTISIG_READ_MAX_BODY_BYTES: usize = 16 * 1024;
 #[cfg(feature = "app_api")]
 const ASSET_TRANSFER_MAX_BODY_BYTES: usize = 64 * 1024;
-
 #[cfg(feature = "app_api")]
 async fn check_public_contract_route_rate_limit(
     app: &SharedAppState,
@@ -35298,7 +33418,6 @@ async fn check_public_contract_route_rate_limit(
     }
     Ok(())
 }
-
 #[cfg(feature = "app_api")]
 async fn check_public_contract_read_route_rate_limit(
     app: &SharedAppState,
@@ -35318,7 +33437,6 @@ async fn check_public_contract_read_route_rate_limit(
     }
     Ok(())
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_alias_set(
     State(app): State<SharedAppState>,
@@ -35349,7 +33467,6 @@ async fn handler_post_contract_alias_set(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_asset_transfer(
     State(app): State<SharedAppState>,
@@ -35382,7 +33499,6 @@ async fn handler_post_asset_transfer(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_call(
     State(app): State<SharedAppState>,
@@ -35414,7 +33530,6 @@ async fn handler_post_contract_call(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_call_batch_prepare(
     State(app): State<SharedAppState>,
@@ -35439,7 +33554,6 @@ async fn handler_post_contract_call_batch_prepare(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_call_simulate(
     State(app): State<SharedAppState>,
@@ -35505,7 +33619,6 @@ async fn handler_post_contract_call_simulate(
         ))),
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_bridge_proof_submit(
     State(app): State<SharedAppState>,
@@ -35545,7 +33658,6 @@ async fn handler_post_bridge_proof_submit(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_bridge_message_submit(
     State(app): State<SharedAppState>,
@@ -35585,7 +33697,6 @@ async fn handler_post_bridge_message_submit(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_view(
     State(app): State<SharedAppState>,
@@ -35654,7 +33765,6 @@ async fn handler_post_contract_view(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_view_batch(
     State(app): State<SharedAppState>,
@@ -35787,7 +33897,6 @@ async fn handler_post_contract_call_multisig_propose(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_call_multisig_approve(
     State(app): State<SharedAppState>,
@@ -35830,7 +33939,6 @@ async fn handler_post_contract_call_multisig_approve(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_multisig_spec(
     State(app): State<SharedAppState>,
@@ -35883,7 +33991,6 @@ async fn handler_post_multisig_spec(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_multisig_propose(
     State(app): State<SharedAppState>,
@@ -35926,7 +34033,6 @@ async fn handler_post_multisig_propose(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_multisig_approve(
     State(app): State<SharedAppState>,
@@ -35969,7 +34075,6 @@ async fn handler_post_multisig_approve(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_multisig_cancel(
     State(app): State<SharedAppState>,
@@ -36012,7 +34117,6 @@ async fn handler_post_multisig_cancel(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_multisig_proposals_query(
     State(app): State<SharedAppState>,
@@ -36068,7 +34172,6 @@ async fn handler_post_multisig_proposals_query(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_multisig_proposals_resolve(
     State(app): State<SharedAppState>,
@@ -36124,7 +34227,6 @@ async fn handler_post_multisig_proposals_resolve(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn check_account_recovery_route_admission(
     app: &SharedAppState,
@@ -36148,7 +34250,6 @@ async fn check_account_recovery_route_admission(
     }
     Ok(())
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_account_recovery_policy_set(
     State(app): State<SharedAppState>,
@@ -36181,7 +34282,6 @@ async fn handler_post_account_recovery_policy_set(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_account_recovery_propose(
     State(app): State<SharedAppState>,
@@ -36214,7 +34314,6 @@ async fn handler_post_account_recovery_propose(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_account_recovery_approve(
     State(app): State<SharedAppState>,
@@ -36247,7 +34346,6 @@ async fn handler_post_account_recovery_approve(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_account_recovery_finalize(
     State(app): State<SharedAppState>,
@@ -36280,7 +34378,6 @@ async fn handler_post_account_recovery_finalize(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_account_recovery_status(
     State(app): State<SharedAppState>,
@@ -36306,7 +34403,6 @@ async fn handler_post_account_recovery_status(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_asset_transfer_control_get(
     State(app): State<SharedAppState>,
@@ -36347,7 +34443,6 @@ async fn handler_post_asset_transfer_control_get(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_sorafs_register_manifest(
     State(app): State<SharedAppState>,
@@ -36394,7 +34489,6 @@ async fn handler_post_sorafs_register_manifest(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_sorafs_capacity_declare(
     State(app): State<SharedAppState>,
@@ -36438,7 +34532,6 @@ async fn handler_post_sorafs_capacity_declare(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_sorafs_capacity_telemetry(
     State(app): State<SharedAppState>,
@@ -36482,7 +34575,6 @@ async fn handler_post_sorafs_capacity_telemetry(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 fn authenticated_por_operator_signer(
     app: &SharedAppState,
@@ -36507,7 +34599,6 @@ fn authenticated_por_operator_signer(
             message: format!("authenticated PoR request signer is invalid: {error}"),
         })
 }
-
 #[cfg(feature = "app_api")]
 async fn admitted_por_provider_key(
     app: &SharedAppState,
@@ -36550,7 +34641,6 @@ async fn admitted_por_provider_key(
         })?;
     Ok(advert.signature.public_key.clone())
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_sorafs_capacity_por_proof(
     State(app): State<SharedAppState>,
@@ -36600,7 +34690,6 @@ async fn handler_post_sorafs_capacity_por_proof(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_sorafs_capacity_por_verdict(
     State(app): State<SharedAppState>,
@@ -36653,7 +34742,6 @@ async fn handler_post_sorafs_capacity_por_verdict(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_sorafs_por_vrf(
     State(app): State<SharedAppState>,
@@ -36799,14 +34887,12 @@ async fn handler_post_sorafs_por_vrf(
             .into_response(),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn por_response_encoding_error(context: &str, error: impl std::fmt::Display) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
         "failed to encode PoR {context}: {error}"
     )))
 }
-
 #[cfg(all(test, feature = "app_api"))]
 #[test]
 fn por_response_encoding_failures_are_internal_server_errors() {
@@ -36822,7 +34908,6 @@ fn por_response_encoding_failures_are_internal_server_errors() {
         axum::http::StatusCode::INTERNAL_SERVER_ERROR
     );
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_get_sorafs_por_status(
     State(app): State<SharedAppState>,
@@ -36851,7 +34936,6 @@ async fn handler_get_sorafs_por_status(
     );
     Ok(resp)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_get_sorafs_por_export(
     State(app): State<SharedAppState>,
@@ -36880,7 +34964,6 @@ async fn handler_get_sorafs_por_export(
     );
     Ok(resp)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_get_sorafs_por_report(
     State(app): State<SharedAppState>,
@@ -36910,7 +34993,6 @@ async fn handler_get_sorafs_por_report(
     );
     Ok(resp)
 }
-
 async fn handler_iso_pacs008(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -36933,7 +35015,6 @@ async fn handler_iso_pacs008(
             iroha_data_model::ValidationFail::NotPermitted("empty ISO 20022 payload".into()),
         ));
     }
-
     let parsed =
         parse_message("pacs.008", &body).map_err(|err| Error::Query(map_iso_error(err)))?;
     let profile = iso_profile_from_request(&runtime, &headers, &query)?;
@@ -36948,13 +35029,11 @@ async fn handler_iso_pacs008(
             ))
         })?
         .to_owned();
-
     if !runtime.check_and_record_inbound(&msg_id, metadata) {
         return Err(Error::Query(
             iroha_data_model::ValidationFail::NotPermitted("duplicate message identifier".into()),
         ));
     }
-
     let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
     let (mut transaction_payload, context) = {
         let world = app.state.world_view();
@@ -36987,12 +35066,9 @@ async fn handler_iso_pacs008(
             return Err(Error::Query(map_iso_error(err)));
         }
     };
-
     runtime.update_message_context(&msg_id, context.clone());
-
     let tx_hash = transaction.hash();
     let tx_hash_str = format!("{}", tx_hash);
-
     if let Err(err) =
         routing::handle_transaction(app.queue.clone(), app.state.clone(), transaction).await
     {
@@ -37006,10 +35082,8 @@ async fn handler_iso_pacs008(
         runtime.mark_rejected(&msg_id, Some(detail), reason_code);
         return Err(err);
     }
-
     runtime.mark_queued(&msg_id);
     let status_snapshot = runtime.mark_accepted(&msg_id, &tx_hash_str);
-
     let mut payload = norito::json::native::Map::new();
     payload.insert(
         "message_id".into(),
@@ -37091,7 +35165,6 @@ async fn handler_iso_pacs008(
         JsonBody(norito::json::native::Value::Object(payload)),
     ))
 }
-
 async fn handler_iso_pacs009(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37114,7 +35187,6 @@ async fn handler_iso_pacs009(
             iroha_data_model::ValidationFail::NotPermitted("empty ISO 20022 payload".into()),
         ));
     }
-
     let parsed =
         parse_message("pacs.009", &body).map_err(|err| Error::Query(map_iso_error(err)))?;
     let profile = iso_profile_from_request(&runtime, &headers, &query)?;
@@ -37129,13 +35201,11 @@ async fn handler_iso_pacs009(
             ))
         })?
         .to_owned();
-
     if !runtime.check_and_record_inbound(&msg_id, metadata) {
         return Err(Error::Query(
             iroha_data_model::ValidationFail::NotPermitted("duplicate message identifier".into()),
         ));
     }
-
     let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
     let (mut transaction_payload, context) = {
         let world = app.state.world_view();
@@ -37168,12 +35238,9 @@ async fn handler_iso_pacs009(
             return Err(Error::Query(map_iso_error(err)));
         }
     };
-
     runtime.update_message_context(&msg_id, context.clone());
-
     let tx_hash = transaction.hash();
     let tx_hash_str = format!("{}", tx_hash);
-
     if let Err(err) =
         routing::handle_transaction(app.queue.clone(), app.state.clone(), transaction).await
     {
@@ -37187,10 +35254,8 @@ async fn handler_iso_pacs009(
         runtime.mark_rejected(&msg_id, Some(detail), reason_code);
         return Err(err);
     }
-
     runtime.mark_queued(&msg_id);
     let status_snapshot = runtime.mark_accepted(&msg_id, &tx_hash_str);
-
     let mut payload = norito::json::native::Map::new();
     payload.insert(
         "message_id".into(),
@@ -37272,7 +35337,6 @@ async fn handler_iso_pacs009(
         JsonBody(norito::json::native::Value::Object(payload)),
     ))
 }
-
 async fn handler_iso_lifecycle_submit(
     app: SharedAppState,
     headers: axum::http::HeaderMap,
@@ -37297,7 +35361,6 @@ async fn handler_iso_lifecycle_submit(
             iroha_data_model::ValidationFail::NotPermitted("empty ISO 20022 payload".into()),
         ));
     }
-
     let parsed =
         parse_message(message_type, &body).map_err(|err| Error::Query(map_iso_error(err)))?;
     let profile = iso_profile_from_request(&runtime, &headers, &query)?;
@@ -37306,13 +35369,11 @@ async fn handler_iso_lifecycle_submit(
         .map_err(|err| Error::Query(map_iso_error(err)))?;
     let msg_id = Iso20022BridgeRuntime::lifecycle_message_id(message_type, &parsed)
         .map_err(|err| Error::Query(map_iso_error(err)))?;
-
     if !runtime.check_and_record_inbound(&msg_id, metadata) {
         return Err(Error::Query(
             iroha_data_model::ValidationFail::NotPermitted("duplicate message identifier".into()),
         ));
     }
-
     let outcome = match runtime.apply_inbound_lifecycle_message(&msg_id, message_type, &parsed) {
         Ok(outcome) => outcome,
         Err(err) => {
@@ -37323,7 +35384,6 @@ async fn handler_iso_lifecycle_submit(
     let status_snapshot = runtime
         .message_status(&msg_id)
         .expect("iso lifecycle status must exist immediately after recording");
-
     let mut payload = norito::json::native::Map::new();
     payload.insert(
         "message_id".into(),
@@ -37371,7 +35431,6 @@ async fn handler_iso_lifecycle_submit(
         JsonBody(norito::json::native::Value::Object(payload)),
     ))
 }
-
 async fn handler_iso_pacs002_submit(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37390,7 +35449,6 @@ async fn handler_iso_pacs002_submit(
     )
     .await
 }
-
 async fn handler_iso_pacs004_submit(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37409,7 +35467,6 @@ async fn handler_iso_pacs004_submit(
     )
     .await
 }
-
 async fn handler_iso_camt056_submit(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37428,7 +35485,6 @@ async fn handler_iso_camt056_submit(
     )
     .await
 }
-
 async fn handler_iso_sese023_submit(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37447,7 +35503,6 @@ async fn handler_iso_sese023_submit(
     )
     .await
 }
-
 async fn handler_iso_sese024_submit(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37466,7 +35521,6 @@ async fn handler_iso_sese024_submit(
     )
     .await
 }
-
 async fn handler_iso_sese025_submit(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37485,7 +35539,6 @@ async fn handler_iso_sese025_submit(
     )
     .await
 }
-
 async fn handler_iso_colr012_submit(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37504,7 +35557,6 @@ async fn handler_iso_colr012_submit(
     )
     .await
 }
-
 async fn handler_iso_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37521,13 +35573,11 @@ async fn handler_iso_status(
             ));
         }
     };
-
     let mut status = runtime.message_status(&msg_id).ok_or_else(|| {
         Error::Query(iroha_data_model::ValidationFail::NotPermitted(
             "unknown ISO 20022 message identifier".into(),
         ))
     })?;
-
     if status.derived_status() != Pacs002Status::Acsc {
         // Opportunistically mark the message as settled when the transaction hash
         // is already committed. This keeps the pacs.002 sequence progressing even
@@ -37543,13 +35593,11 @@ async fn handler_iso_status(
             }
         }
     }
-
     let updated_ms = status
         .updated_at()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
         .unwrap_or(0);
-
     let mut payload = norito::json::native::Map::new();
     payload.insert(
         "message_id".into(),
@@ -37711,7 +35759,6 @@ async fn handler_iso_status(
         JsonBody(norito::json::native::Value::Object(payload)),
     ))
 }
-
 async fn handler_iso_audit_messages(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37735,7 +35782,6 @@ async fn handler_iso_audit_messages(
     };
     Ok((StatusCode::OK, JsonBody(runtime.audit_index())))
 }
-
 async fn handler_iso_pacs002(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37750,11 +35796,9 @@ async fn handler_iso_pacs002(
         "v1/iso20022/messages/pacs002",
     )
     .await?;
-
     let xml = iso_pacs002_xml(&status);
     Ok(iso_xml_response(xml))
 }
-
 async fn handler_iso_pacs004(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37771,7 +35815,6 @@ async fn handler_iso_pacs004(
     .await?;
     Ok(iso_xml_response(iso_pacs004_xml(&status)?))
 }
-
 async fn handler_iso_camt029(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37788,7 +35831,6 @@ async fn handler_iso_camt029(
     .await?;
     Ok(iso_xml_response(iso_camt029_xml(&status)))
 }
-
 async fn handler_iso_sese024(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37805,7 +35847,6 @@ async fn handler_iso_sese024(
     .await?;
     Ok(iso_xml_response(iso_sese024_xml(&status)))
 }
-
 async fn handler_iso_sese025(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37822,7 +35863,6 @@ async fn handler_iso_sese025(
     .await?;
     Ok(iso_xml_response(iso_sese025_xml(&status)?))
 }
-
 async fn iso_status_for_outbox(
     app: &SharedAppState,
     headers: &axum::http::HeaderMap,
@@ -37839,7 +35879,6 @@ async fn iso_status_for_outbox(
             ));
         }
     };
-
     let mut status = runtime.message_status(msg_id).ok_or_else(|| {
         Error::Query(iroha_data_model::ValidationFail::NotPermitted(
             "unknown ISO 20022 message identifier".into(),
@@ -37859,7 +35898,6 @@ async fn iso_status_for_outbox(
     }
     Ok(status)
 }
-
 fn iso_xml_response(xml: String) -> Response {
     (
         StatusCode::OK,
@@ -37868,7 +35906,6 @@ fn iso_xml_response(xml: String) -> Response {
     )
         .into_response()
 }
-
 fn iso_pacs002_xml(status: &IsoMessageStatus) -> String {
     let msg_id = xml_escape(status.message_id());
     let message_name = xml_escape(
@@ -37888,7 +35925,6 @@ fn iso_pacs002_xml(status: &IsoMessageStatus) -> String {
     let original_created_at = xml_timestamp(status.updated_at());
     let group_reason = iso_status_reason_xml("      ", status);
     let tx_reason = iso_status_reason_xml("      ", status);
-
     format!(
         concat!(
             r#"<?xml version="1.0" encoding="UTF-8"?>"#,
@@ -37925,7 +35961,6 @@ fn iso_pacs002_xml(status: &IsoMessageStatus) -> String {
         tx_reason = tx_reason,
     )
 }
-
 fn iso_pacs004_xml(status: &IsoMessageStatus) -> Result<String, Error> {
     let amount =
         require_iso_outbox_field(status.settlement_amount(), "settlement_amount", "pacs.004")?;
@@ -37942,7 +35977,6 @@ fn iso_pacs004_xml(status: &IsoMessageStatus) -> Result<String, Error> {
     let created_at = xml_timestamp(SystemTime::now());
     let original_created_at = xml_timestamp(status.updated_at());
     let return_reason = iso_return_reason_xml("      ", status);
-
     Ok(format!(
         concat!(
             r#"<?xml version="1.0" encoding="UTF-8"?>"#,
@@ -37978,7 +36012,6 @@ fn iso_pacs004_xml(status: &IsoMessageStatus) -> Result<String, Error> {
         return_reason = return_reason,
     ))
 }
-
 fn iso_camt029_xml(status: &IsoMessageStatus) -> String {
     let msg_id = xml_escape(status.message_id());
     let message_name = xml_escape(iso_original_message_name(status));
@@ -37987,7 +36020,6 @@ fn iso_camt029_xml(status: &IsoMessageStatus) -> String {
     let original_created_at = xml_timestamp(status.updated_at());
     let cancellation_status = iso_camt029_status(status);
     let cancellation_reason = iso_cancellation_reason_xml("        ", status);
-
     format!(
         concat!(
             r#"<?xml version="1.0" encoding="UTF-8"?>"#,
@@ -38025,13 +36057,11 @@ fn iso_camt029_xml(status: &IsoMessageStatus) -> String {
         cancellation_reason = cancellation_reason,
     )
 }
-
 fn iso_sese024_xml(status: &IsoMessageStatus) -> String {
     let tx_id = xml_escape(&iso_securities_transaction_id(status));
     let status_code = iso_sese024_status(status);
     let settlement_date = xml_escape(&iso_settlement_date(status));
     let status_reason = iso_settlement_status_reason_xml("      ", status);
-
     format!(
         concat!(
             r#"<?xml version="1.0" encoding="UTF-8"?>"#,
@@ -38053,14 +36083,12 @@ fn iso_sese024_xml(status: &IsoMessageStatus) -> String {
         status_reason = status_reason,
     )
 }
-
 fn iso_sese025_xml(status: &IsoMessageStatus) -> Result<String, Error> {
     if status.derived_status() != Pacs002Status::Acsc {
         return Err(iso_outbox_validation_error(
             "sese.025 confirmation requires a settled ISO 20022 message record",
         ));
     }
-
     let amount =
         require_iso_outbox_field(status.settlement_amount(), "settlement_amount", "sese.025")?;
     let currency = require_iso_outbox_field(
@@ -38101,7 +36129,6 @@ fn iso_sese025_xml(status: &IsoMessageStatus) -> Result<String, Error> {
     let atomicity = xml_escape(atomicity);
     let security_leg = iso_security_leg_xml(status);
     let status_reason = iso_settlement_confirmation_reason_xml("    ", status);
-
     Ok(format!(
         concat!(
             r#"<?xml version="1.0" encoding="UTF-8"?>"#,
@@ -38143,7 +36170,6 @@ fn iso_sese025_xml(status: &IsoMessageStatus) -> Result<String, Error> {
         status_reason = status_reason,
     ))
 }
-
 fn iso_status_reason_xml(indent: &str, status: &IsoMessageStatus) -> String {
     let reason = status
         .rejection_reason_code()
@@ -38176,15 +36202,12 @@ fn iso_status_reason_xml(indent: &str, status: &IsoMessageStatus) -> String {
     xml.push_str("</StsRsnInf>");
     xml
 }
-
 fn iso_return_reason_xml(indent: &str, status: &IsoMessageStatus) -> String {
     iso_wrapped_reason_xml("RtrRsnInf", indent, status)
 }
-
 fn iso_cancellation_reason_xml(indent: &str, status: &IsoMessageStatus) -> String {
     iso_wrapped_reason_xml("CxlStsRsnInf", indent, status)
 }
-
 fn iso_settlement_status_reason_xml(indent: &str, status: &IsoMessageStatus) -> String {
     let reason = status
         .rejection_reason_code()
@@ -38211,7 +36234,6 @@ fn iso_settlement_status_reason_xml(indent: &str, status: &IsoMessageStatus) -> 
     }
     xml
 }
-
 fn iso_settlement_confirmation_reason_xml(indent: &str, status: &IsoMessageStatus) -> String {
     let Some(detail) = status.detail() else {
         return String::new();
@@ -38224,7 +36246,6 @@ fn iso_settlement_confirmation_reason_xml(indent: &str, status: &IsoMessageStatu
     xml.push_str("</AddtlInf>");
     xml
 }
-
 fn iso_wrapped_reason_xml(wrapper: &str, indent: &str, status: &IsoMessageStatus) -> String {
     let reason = status
         .rejection_reason_code()
@@ -38261,7 +36282,6 @@ fn iso_wrapped_reason_xml(wrapper: &str, indent: &str, status: &IsoMessageStatus
     xml.push('>');
     xml
 }
-
 fn iso_reason_xml(reason: &str) -> String {
     let trimmed = reason.trim();
     if let Some(proprietary) = trimmed.strip_prefix("PRTRY:") {
@@ -38269,14 +36289,12 @@ fn iso_reason_xml(reason: &str) -> String {
     }
     format!("<Cd>{}</Cd>", xml_escape(trimmed))
 }
-
 fn iso_original_message_name(status: &IsoMessageStatus) -> &str {
     status
         .metadata()
         .message_type()
         .unwrap_or("unknown.iso20022.message")
 }
-
 fn iso_original_transaction_id(status: &IsoMessageStatus) -> std::borrow::Cow<'_, str> {
     if let Some(hash) = status.transaction_hash() {
         std::borrow::Cow::Borrowed(hash)
@@ -38286,7 +36304,6 @@ fn iso_original_transaction_id(status: &IsoMessageStatus) -> std::borrow::Cow<'_
         std::borrow::Cow::Borrowed(status.message_id())
     }
 }
-
 fn iso_securities_transaction_id(status: &IsoMessageStatus) -> std::borrow::Cow<'_, str> {
     for prefix in ["sese.023:", "sese.024:", "sese.025:"] {
         if let Some(stripped) = status.message_id().strip_prefix(prefix) {
@@ -38295,7 +36312,6 @@ fn iso_securities_transaction_id(status: &IsoMessageStatus) -> std::borrow::Cow<
     }
     iso_original_transaction_id(status)
 }
-
 fn iso_camt029_status(status: &IsoMessageStatus) -> &'static str {
     match status.derived_status() {
         Pacs002Status::Rjct => "CNCL",
@@ -38305,7 +36321,6 @@ fn iso_camt029_status(status: &IsoMessageStatus) -> &'static str {
         }
     }
 }
-
 fn iso_sese024_status(status: &IsoMessageStatus) -> &'static str {
     match status.derived_status() {
         Pacs002Status::Acsc => "SETT",
@@ -38325,14 +36340,12 @@ fn iso_sese024_status(status: &IsoMessageStatus) -> &'static str {
         Pacs002Status::Actc | Pacs002Status::Acsp => "ACCP",
     }
 }
-
 fn iso_settlement_date(status: &IsoMessageStatus) -> String {
     status
         .settlement_date()
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| xml_date(status.settled_at().unwrap_or_else(|| status.updated_at())))
 }
-
 fn iso_security_leg_xml(status: &IsoMessageStatus) -> String {
     let Some(instrument_id) = status.security_instrument_id() else {
         return String::new();
@@ -38342,7 +36355,6 @@ fn iso_security_leg_xml(status: &IsoMessageStatus) -> String {
         "\n    <SctiesMvmntDtls>\n      <SctiesId><OthrId><Id>{instrument_id}</Id></OthrId></SctiesId>\n    </SctiesMvmntDtls>"
     )
 }
-
 fn require_iso_outbox_field<'a>(
     value: Option<&'a str>,
     field: &str,
@@ -38357,26 +36369,22 @@ fn require_iso_outbox_field<'a>(
             ))
         })
 }
-
 fn iso_outbox_validation_error(message: impl Into<String>) -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::Conversion(message.into()),
     ))
 }
-
 fn xml_timestamp(time: SystemTime) -> String {
     OffsetDateTime::from(time)
         .format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_owned())
 }
-
 fn xml_date(time: SystemTime) -> String {
     xml_timestamp(time)
         .split_once('T')
         .map(|(date, _)| date.to_owned())
         .unwrap_or_else(|| "1970-01-01".to_owned())
 }
-
 fn xml_escape(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -38391,7 +36399,6 @@ fn xml_escape(value: &str) -> String {
     }
     escaped
 }
-
 fn insert_iso_metadata_fields(
     payload: &mut norito::json::native::Map,
     status: &crate::iso20022_bridge::IsoMessageStatus,
@@ -38467,7 +36474,6 @@ fn insert_iso_metadata_fields(
         norito::json::native::Value::Array(status_history),
     );
 }
-
 fn map_iso_error(err: MsgError) -> iroha_data_model::ValidationFail {
     use iroha_data_model::ValidationFail;
 
@@ -38501,7 +36507,6 @@ fn map_iso_error(err: MsgError) -> iroha_data_model::ValidationFail {
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_vk_register(
     State(app): State<SharedAppState>,
@@ -38537,7 +36542,6 @@ async fn handler_post_vk_register(
         .await
         .map(IntoResponse::into_response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_post_vk_update(
     State(app): State<SharedAppState>,
@@ -38573,7 +36577,6 @@ async fn handler_post_vk_update(
         .await
         .map(IntoResponse::into_response)
 }
-
 async fn handler_post_transaction(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -38584,7 +36587,6 @@ async fn handler_post_transaction(
 ) -> Result<Response, Error> {
     submit_signed_transaction_for_ingress(app, headers, accept, transaction).await
 }
-
 fn try_acquire_transaction_ingress_compute(
     limiter: &Arc<tokio::sync::Semaphore>,
 ) -> Result<tokio::sync::OwnedSemaphorePermit, Error> {
@@ -38598,7 +36600,6 @@ fn try_acquire_transaction_ingress_compute(
             ),
         })
 }
-
 async fn run_transaction_ingress_compute_job<T, F>(
     permit: tokio::sync::OwnedSemaphorePermit,
     worker_failure_code: &'static str,
@@ -38622,7 +36623,6 @@ where
     })?;
     Ok((result?, permit))
 }
-
 /// Admit one already-decoded caller-signed transaction through the canonical
 /// Torii transaction path.
 ///
@@ -38639,7 +36639,6 @@ pub(crate) async fn submit_signed_transaction_for_ingress(
 ) -> Result<Response, Error> {
     submit_signed_transaction_for_ingress_globally_synced(app, headers, accept, transaction).await
 }
-
 /// Admit a caller-signed transaction only after its exact queue plan is durable.
 ///
 /// Dedicated native-command adapters use the same globally synchronized
@@ -38652,7 +36651,6 @@ pub(crate) async fn submit_signed_transaction_for_ingress_strict_durable(
 ) -> Result<Response, Error> {
     submit_signed_transaction_for_ingress_globally_synced(app, headers, accept, transaction).await
 }
-
 async fn submit_signed_transaction_for_ingress_globally_synced(
     app: SharedAppState,
     headers: axum::http::HeaderMap,
@@ -38761,7 +36759,6 @@ async fn submit_signed_transaction_for_ingress_globally_synced(
         });
     }
 }
-
 async fn handler_post_transaction_entrypoint(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -38840,7 +36837,6 @@ async fn handler_post_transaction_entrypoint(
         })
     }
 }
-
 fn decode_transaction_batch_payloads(
     payloads: Vec<Vec<u8>>,
 ) -> Result<Vec<DecodedVersionedSignedTransaction>, Error> {
@@ -38857,14 +36853,12 @@ fn decode_transaction_batch_payloads(
         })
         .collect()
 }
-
 fn invalid_transaction_batch_envelope(error: norito::Error) -> Error {
     Error::AppQueryValidation {
         code: "invalid_transaction_batch_envelope",
         message: format!("transaction batch envelope could not be decoded: {error}"),
     }
 }
-
 fn validate_transaction_batch_body_size(body: &Bytes, max_bytes: usize) -> Result<(), Error> {
     if body.len() > max_bytes {
         return Err(Error::AppQueryValidation {
@@ -38889,7 +36883,6 @@ fn validate_transaction_batch_body_size(body: &Bytes, max_bytes: usize) -> Resul
     }
     Ok(())
 }
-
 fn decode_transaction_batch_request(
     body: Bytes,
     max_transactions: usize,
@@ -38917,12 +36910,10 @@ fn decode_transaction_batch_request(
             message: "transaction batch must contain at least one signed transaction".to_owned(),
         });
     }
-
     // This exact count comes from Norito's authoritative top-level sequence
     // decoder. Apply queue pressure before allocating or decoding any inner
     // transaction payload.
     routing::reject_ingress_if_queue_capacity_saturated(queue, state, count)?;
-
     let payloads =
         norito::stream_vec_collect_from_reader::<_, Vec<u8>>(std::io::Cursor::new(body.as_ref()))
             .map_err(invalid_transaction_batch_envelope)?;
@@ -38934,22 +36925,18 @@ fn decode_transaction_batch_request(
     }
     decode_transaction_batch_payloads(payloads)
 }
-
 #[derive(Debug)]
 struct TransactionBatchPrecheck {
     single_ed25519_prechecked: bool,
     precheck_rejection: Option<AcceptTransactionFail>,
 }
-
 const ED25519_PRECHECK_SIGNATURE_LENGTH: usize = 64;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Ed25519PrecheckKey {
     message: [u8; Hash::LENGTH],
     signature: [u8; ED25519_PRECHECK_SIGNATURE_LENGTH],
     public_key: [u8; 32],
 }
-
 impl Ed25519PrecheckKey {
     fn new(
         message: &[u8],
@@ -38963,7 +36950,6 @@ impl Ed25519PrecheckKey {
         })
     }
 }
-
 fn precheck_transaction_batch_ed25519(
     transactions: &[DecodedVersionedSignedTransaction],
     batch_cap: usize,
@@ -38977,7 +36963,6 @@ fn precheck_transaction_batch_ed25519(
     if batch_cap == 0 {
         return prechecks;
     }
-
     fn verify_ed25519_batch_slices<'a>(
         messages: &[&'a [u8]],
         signatures: &[&'a [u8]],
@@ -38992,7 +36977,6 @@ fn precheck_transaction_batch_ed25519(
             scratch,
         )
     }
-
     fn signature_error(
         tx: &DecodedVersionedSignedTransaction,
         detail: String,
@@ -39003,7 +36987,6 @@ fn precheck_transaction_batch_ed25519(
             detail,
         ))
     }
-
     let mut scratch = iroha_crypto::Ed25519BatchScratch::default();
     let scratch_cap = batch_cap.min(transactions.len());
     let mut indices = Vec::with_capacity(scratch_cap);
@@ -39012,7 +36995,6 @@ fn precheck_transaction_batch_ed25519(
     let mut messages = Vec::with_capacity(scratch_cap);
     let mut signatures = Vec::with_capacity(scratch_cap);
     let mut public_keys = Vec::with_capacity(scratch_cap);
-
     fn flush_ed25519_precheck_batch<'a>(
         transactions: &[DecodedVersionedSignedTransaction],
         prechecks: &mut [TransactionBatchPrecheck],
@@ -39038,7 +37020,6 @@ fn precheck_transaction_batch_ed25519(
                 .map_or_else(|| (0, err.to_string()), |bad| bad)
             })
         };
-
         match batch_result {
             Ok(()) => {
                 for (&idx, duplicates) in indices.iter().zip(duplicate_groups.iter()) {
@@ -39064,7 +37045,6 @@ fn precheck_transaction_batch_ed25519(
             }
         }
     }
-
     for (idx, tx) in transactions.iter().enumerate() {
         let Some((message, signature, public_key)) = tx.single_ed25519_precheck_parts() else {
             continue;
@@ -39084,7 +37064,6 @@ fn precheck_transaction_batch_ed25519(
         messages.push(message);
         signatures.push(signature);
         public_keys.push(public_key);
-
         if indices.len() == batch_cap {
             flush_ed25519_precheck_batch(
                 transactions,
@@ -39114,10 +37093,8 @@ fn precheck_transaction_batch_ed25519(
         &public_keys,
         &mut scratch,
     );
-
     prechecks
 }
-
 #[cfg(test)]
 mod transaction_ingress_decode_tests {
     use super::*;
@@ -39130,7 +37107,6 @@ mod transaction_ingress_decode_tests {
     fn signed_transaction_for_test() -> SignedTransaction {
         signed_transaction_for_test_with_message("batch decode")
     }
-
     fn signed_transaction_for_test_with_message(message: &str) -> SignedTransaction {
         let keypair =
             checked_transaction_batch_test_keypair(0xa1, iroha_crypto::Algorithm::Ed25519);
@@ -39143,7 +37119,6 @@ mod transaction_ingress_decode_tests {
         .with_instructions([Log::new(Level::INFO, message.to_owned())])
         .sign(keypair.private_key())
     }
-
     fn signed_transaction_for_test_with_keypair(
         network_id: NetworkId,
         keypair: &KeyPair,
@@ -39158,7 +37133,6 @@ mod transaction_ingress_decode_tests {
         .with_instructions([Log::new(Level::INFO, message.to_owned())])
         .sign(keypair.private_key())
     }
-
     fn checked_transaction_batch_test_keypair(
         seed: u8,
         algorithm: iroha_crypto::Algorithm,
@@ -39166,22 +37140,18 @@ mod transaction_ingress_decode_tests {
         KeyPair::try_from_seed(vec![seed; 32], algorithm)
             .expect("derive transaction batch fixture key")
     }
-
     fn versioned_signed_transaction(tx: &SignedTransaction) -> Vec<u8> {
         <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(tx)
     }
-
     const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,
     ];
-
     const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
         0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
         0xff, 0x7f,
     ];
-
     fn transaction_with_invalid_signature(message: &str) -> SignedTransaction {
         let mut tx = signed_transaction_for_test_with_message(message);
         let mut signature = tx.signature().payload().payload().to_vec();
@@ -39194,7 +37164,6 @@ mod transaction_ingress_decode_tests {
         )));
         tx
     }
-
     fn transaction_with_malformed_signature_r(
         message: &str,
         replacement_r: &[u8; 32],
@@ -39207,7 +37176,6 @@ mod transaction_ingress_decode_tests {
         )));
         tx
     }
-
     #[test]
     fn transaction_batch_fixture_keypair_rejects_all_zero_seed_material() {
         assert!(
@@ -39219,7 +37187,6 @@ mod transaction_ingress_decode_tests {
             "checked transaction batch fixtures must reject invalid Secp256k1 seed material"
         );
     }
-
     #[test]
     fn decode_transaction_batch_payloads_prepares_exact_lengths() {
         let signed = signed_transaction_for_test();
@@ -39227,22 +37194,18 @@ mod transaction_ingress_decode_tests {
             .expect("signed transaction encodes")
             .len();
         let versioned = versioned_signed_transaction(&signed);
-
         let decoded =
             decode_transaction_batch_payloads(vec![versioned]).expect("batch transaction decodes");
-
         assert_eq!(decoded.len(), 1);
         assert_eq!(decoded[0].hash(), signed.hash());
         assert_eq!(decoded[0].hash_as_entrypoint(), signed.hash_as_entrypoint());
         assert_eq!(decoded[0].encoded_len(), expected_len);
     }
-
     #[test]
     fn decode_transaction_batch_payloads_rejects_trailing_payload() {
         let signed = signed_transaction_for_test();
         let mut versioned = versioned_signed_transaction(&signed);
         versioned.push(0);
-
         match decode_transaction_batch_payloads(vec![versioned]) {
             Err(Error::AppQueryValidation { code, .. }) => {
                 assert_eq!(code, "invalid_transaction_batch_payload");
@@ -39250,7 +37213,6 @@ mod transaction_ingress_decode_tests {
             other => panic!("expected invalid batch payload, got {other:?}"),
         }
     }
-
     #[test]
     fn transaction_batch_ed25519_precheck_accepts_valid_single_key_batch() {
         let tx1 = signed_transaction_for_test_with_message("ed25519-precheck-valid-1");
@@ -39260,15 +37222,12 @@ mod transaction_ingress_decode_tests {
             versioned_signed_transaction(&tx2),
         ])
         .expect("valid batch decodes");
-
         let prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
-
         assert_eq!(prechecks.len(), 2);
         assert!(prechecks.iter().all(|precheck| {
             precheck.single_ed25519_prechecked && precheck.precheck_rejection.is_none()
         }));
     }
-
     #[test]
     fn transaction_batch_ed25519_precheck_reuses_exact_duplicate_key() {
         let tx = signed_transaction_for_test_with_message("ed25519-precheck-duplicate");
@@ -39277,15 +37236,12 @@ mod transaction_ingress_decode_tests {
             versioned_signed_transaction(&tx),
         ])
         .expect("valid duplicate batch decodes");
-
         let prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
-
         assert_eq!(prechecks.len(), 2);
         assert!(prechecks.iter().all(|precheck| {
             precheck.single_ed25519_prechecked && precheck.precheck_rejection.is_none()
         }));
     }
-
     #[test]
     fn transaction_batch_ed25519_precheck_rejects_exact_duplicate_invalid_signature() {
         let tx = transaction_with_invalid_signature("ed25519-precheck-duplicate-invalid");
@@ -39294,15 +37250,12 @@ mod transaction_ingress_decode_tests {
             versioned_signed_transaction(&tx),
         ])
         .expect("well-formed duplicate invalid-signature batch decodes");
-
         let prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
-
         assert_eq!(prechecks.len(), 2);
         assert!(prechecks.iter().all(|precheck| {
             !precheck.single_ed25519_prechecked && precheck.precheck_rejection.is_some()
         }));
     }
-
     #[test]
     fn transaction_batch_ed25519_precheck_rejects_malformed_signature_r() {
         for (label, replacement_r) in [
@@ -39316,9 +37269,7 @@ mod transaction_ingress_decode_tests {
             let decoded =
                 decode_transaction_batch_payloads(vec![versioned_signed_transaction(&tx)])
                     .expect("well-formed malformed-signature transaction decodes");
-
             let mut prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
-
             assert_eq!(prechecks.len(), 1);
             assert!(
                 !prechecks[0].single_ed25519_prechecked,
@@ -39340,7 +37291,6 @@ mod transaction_ingress_decode_tests {
             }
         }
     }
-
     #[test]
     fn transaction_batch_ed25519_precheck_accepts_repeated_authority_batch() {
         let network_id = signed_query_test_network_id();
@@ -39361,15 +37311,12 @@ mod transaction_ingress_decode_tests {
             versioned_signed_transaction(&tx2),
         ])
         .expect("valid repeated-authority batch decodes");
-
         let prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
-
         assert_eq!(prechecks.len(), 2);
         assert!(prechecks.iter().all(|precheck| {
             precheck.single_ed25519_prechecked && precheck.precheck_rejection.is_none()
         }));
     }
-
     #[test]
     fn transaction_batch_ed25519_precheck_identifies_first_invalid_signature() {
         let valid = signed_transaction_for_test_with_message("ed25519-precheck-valid");
@@ -39379,9 +37326,7 @@ mod transaction_ingress_decode_tests {
             versioned_signed_transaction(&invalid),
         ])
         .expect("well-formed invalid-signature batch decodes");
-
         let mut prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
-
         assert_eq!(prechecks.len(), 2);
         assert!(!prechecks[0].single_ed25519_prechecked);
         assert!(prechecks[0].precheck_rejection.is_none());
@@ -39396,12 +37341,10 @@ mod transaction_ingress_decode_tests {
             other => panic!("expected invalid signature rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn transaction_batch_ed25519_precheck_matches_single_signature_verification() {
         let valid = signed_transaction_for_test_with_message("ed25519-precheck-equivalence-valid");
         let invalid = transaction_with_invalid_signature("ed25519-precheck-equivalence-invalid");
-
         for signed in [valid, invalid] {
             let decoded =
                 decode_transaction_batch_payloads(vec![versioned_signed_transaction(&signed)])
@@ -39410,12 +37353,10 @@ mod transaction_ingress_decode_tests {
             let prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
             let precheck_ok =
                 prechecks[0].single_ed25519_prechecked && prechecks[0].precheck_rejection.is_none();
-
             assert_eq!(precheck_ok, single_ok);
             assert_eq!(prechecks[0].precheck_rejection.is_some(), !single_ok);
         }
     }
-
     #[test]
     fn transaction_batch_non_ed25519_bypasses_ed25519_precheck() {
         let keypair =
@@ -39431,14 +37372,11 @@ mod transaction_ingress_decode_tests {
         let decoded =
             decode_transaction_batch_payloads(vec![versioned_signed_transaction(&signed)])
                 .expect("non-Ed25519 signed transaction decodes");
-
         let prechecks = precheck_transaction_batch_ed25519(&decoded, 64);
-
         assert_eq!(prechecks.len(), 1);
         assert!(!prechecks[0].single_ed25519_prechecked);
         assert!(prechecks[0].precheck_rejection.is_none());
     }
-
     #[tokio::test]
     async fn transaction_batch_rate_limit_collapses_same_authority_run() {
         let keypair =
@@ -39468,14 +37406,12 @@ mod transaction_ingress_decode_tests {
         .expect("same-authority batch decodes");
         let limiter = crate::limits::RateLimiter::new(Some(1), Some(2));
         let authority_key = authority.to_string();
-
         assert!(!allow_transaction_batch_rate_limit(&limiter, None, &decoded).await);
         assert!(
             !limiter.allow(&authority_key).await,
             "failed same-authority run should consume the accepted prefix"
         );
     }
-
     #[tokio::test]
     async fn transaction_batch_rate_limit_preserves_authority_ordering() {
         let keypair_a =
@@ -39513,7 +37449,6 @@ mod transaction_ingress_decode_tests {
         ])
         .expect("mixed-authority batch decodes");
         let limiter = crate::limits::RateLimiter::new(Some(1), Some(1));
-
         assert!(!allow_transaction_batch_rate_limit(&limiter, None, &decoded).await);
         assert!(
             !limiter.allow(&authority_a.to_string()).await,
@@ -39525,19 +37460,15 @@ mod transaction_ingress_decode_tests {
         );
     }
 }
-
 include!("lib_pipeline_handlers.rs");
-
 struct AdmittedSignedQuery {
     query: SignedQuery,
     query_bytes: Vec<u8>,
     envelope: QueryIngressMemoryEnvelope,
     ingress_permit: tokio::sync::OwnedSemaphorePermit,
 }
-
 impl axum::extract::FromRequest<SharedAppState> for AdmittedSignedQuery {
     type Rejection = Response;
-
     async fn from_request(
         mut request: axum::extract::Request,
         state: &SharedAppState,
@@ -39555,13 +37486,11 @@ impl axum::extract::FromRequest<SharedAppState> for AdmittedSignedQuery {
                 .await
                 .map_err(IntoResponse::into_response)?;
         }
-
         // A signed query's routing scope is inside the authenticated body.
         // Classify exactly one parameter-free supported codec before polling
         // the body; duplicate Norito/JSON declarations must not select the
         // first header and bypass the matching decode budget.
         crate::utils::typed_request_content_format(request.headers())?;
-
         let (ingress_permit, ingress_envelope) = {
             // Body reads use a distinct, complete ingress reservation. A slow
             // client therefore cannot consume the fanout execution slot, and
@@ -39584,7 +37513,6 @@ impl axum::extract::FromRequest<SharedAppState> for AdmittedSignedQuery {
                 });
             (permit, envelope)
         };
-
         let body_read_timeout = state.signed_query_admission.body_read_timeout();
         let query = match tokio::time::timeout(
             body_read_timeout,
@@ -39607,7 +37535,6 @@ impl axum::extract::FromRequest<SharedAppState> for AdmittedSignedQuery {
             &query,
             state.query_ingress_envelope.canonical_encoded_bytes,
         )?;
-
         Ok(Self {
             query,
             query_bytes,
@@ -39616,7 +37543,6 @@ impl axum::extract::FromRequest<SharedAppState> for AdmittedSignedQuery {
         })
     }
 }
-
 async fn handler_signed_query_admitted(
     State(app): State<SharedAppState>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
@@ -39627,7 +37553,6 @@ async fn handler_signed_query_admitted(
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
-
     let AdmittedSignedQuery {
         query: query_request,
         query_bytes,
@@ -39653,14 +37578,12 @@ async fn handler_signed_query_admitted(
             Ok(routes) => routes,
             Err(response) => return Ok(response),
         };
-
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     if authorized_routes.len() > 1
         && let Err(response) = ensure_bounded_fanout_query(&verified_query)
     {
         return Ok(response);
     }
-
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     let should_nexus_fanout = matches!(
         &query_scope,
@@ -39669,7 +37592,6 @@ async fn handler_signed_query_admitted(
             | SignedQueryScope::TargetAlias(_)
             | SignedQueryScope::TargetDomain(_)
     ) && authorized_routes.len() > 1;
-
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     if should_nexus_fanout {
         // Promotion is fail-fast while ingress is held: completed fanout
@@ -39701,9 +37623,7 @@ async fn handler_signed_query_admitted(
         )
         .await);
     }
-
     let routing_decision = authorized_routes.first().copied();
-
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     if let Some(routing_decision) = routing_decision
         && !should_execute_route_locally(app.as_ref(), routing_decision)
@@ -39721,7 +37641,6 @@ async fn handler_signed_query_admitted(
             fanout_permit,
         ));
     }
-
     // The byte-weighted promotion is fail-fast while ingress still owns every
     // decoded/canonical request representation. Only after P (+ R for a stored
     // Start) and physical work are admitted may those old representations be
@@ -39740,7 +37659,6 @@ async fn handler_signed_query_admitted(
     }
     Ok(response)
 }
-
 #[cfg(test)]
 async fn handler_signed_query(
     State(app): State<SharedAppState>,
@@ -39766,7 +37684,6 @@ async fn handler_signed_query(
         app.query_ingress_envelope.canonical_encoded_bytes,
     )
     .expect("test signed-query encoding should fit");
-
     handler_signed_query_admitted(
         State(app),
         accept,
@@ -39780,7 +37697,6 @@ async fn handler_signed_query(
     )
     .await
 }
-
 #[cfg(feature = "connect")]
 fn connect_remote_ip_from_headers(headers: &axum::http::HeaderMap) -> Result<IpAddr, &'static str> {
     headers
@@ -39789,7 +37705,6 @@ fn connect_remote_ip_from_headers(headers: &axum::http::HeaderMap) -> Result<IpA
         .and_then(|value| value.parse().ok())
         .ok_or("connect: remote addr unavailable")
 }
-
 #[cfg(feature = "connect")]
 async fn handle_connect_ws_logic(
     app: SharedAppState,
@@ -39852,7 +37767,6 @@ async fn handle_connect_ws_logic(
         }
     })
 }
-
 #[cfg(feature = "connect")]
 #[allow(dead_code)]
 fn _assert_websocket_send() {
@@ -39861,7 +37775,6 @@ fn _assert_websocket_send() {
     assert_send::<WebSocketUpgrade>();
     assert_sync::<WebSocketUpgrade>();
 }
-
 #[cfg(feature = "connect")]
 fn require_connect_enabled(app: &SharedAppState) -> Result<(), Error> {
     if app.connect_enabled {
@@ -39873,7 +37786,6 @@ fn require_connect_enabled(app: &SharedAppState) -> Result<(), Error> {
         })
     }
 }
-
 #[cfg(feature = "connect")]
 async fn handler_connect_ws(
     State(app): State<SharedAppState>,
@@ -39891,7 +37803,6 @@ async fn handler_connect_ws(
     };
     handle_connect_ws_logic(app, headers, query, ws, preauth_guard).await
 }
-
 #[cfg(feature = "connect")]
 async fn handler_connect_session(
     State(app): State<SharedAppState>,
@@ -39901,7 +37812,6 @@ async fn handler_connect_session(
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
 
     require_connect_enabled(&app)?;
-
     let remote_ip = connect_remote_ip_from_headers(&headers).map_err(|message| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(message.to_owned()),
@@ -39917,16 +37827,13 @@ async fn handler_connect_session(
                 )),
             ))
         })?;
-
     let network_id = *app.state.network_id_ref();
     let JsonBody(response) = routing::handle_connect_session(network_id, NoritoJson(req)).await?;
-
     let malformed = |msg: String| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(msg),
         ))
     };
-
     let sid_bytes = B64
         .decode(response.sid.as_bytes())
         .map_err(|err| malformed(format!("connect session sid decode failed: {err}")))?;
@@ -39943,7 +37850,6 @@ async fn handler_connect_session(
         .map_err(|err| malformed(format!("connect session nonce decode failed: {err}")))?
         .try_into()
         .map_err(|_| malformed("connect session nonce had wrong length".into()))?;
-
     app.connect_bus
         .clone()
         .register_tokens(
@@ -39967,10 +37873,8 @@ async fn handler_connect_session(
                 malformed("connect session identity was not canonically bound".to_string())
             }
         })?;
-
     Ok(JsonBody(response))
 }
-
 #[cfg(feature = "connect")]
 async fn handler_connect_session_delete(
     State(app): State<SharedAppState>,
@@ -39982,7 +37886,6 @@ async fn handler_connect_session_delete(
     if let Err(error) = require_connect_enabled(&app) {
         return error.into_response();
     }
-
     match crate::connect::decode_sid(&sid_str) {
         Ok(sid) => {
             let token = match parse_authorization_token(&headers) {
@@ -40017,7 +37920,6 @@ async fn handler_connect_session_delete(
         Err(_) => (StatusCode::BAD_REQUEST, "connect: bad sid").into_response(),
     }
 }
-
 #[cfg(feature = "connect")]
 #[allow(clippy::result_large_err)]
 fn parse_connect_ws_query(
@@ -40074,21 +37976,17 @@ fn parse_connect_ws_query(
     }
     Ok(routing::ConnectWsQuery { sid, role })
 }
-
 const CONNECT_PROTOCOL_TOKEN_PREFIX: &str = "iroha-connect.token.v1.";
-
 #[derive(Debug)]
 struct ConnectWsToken {
     token: String,
     protocol: Option<String>,
 }
-
 #[derive(Debug)]
 struct ProtocolToken {
     token: String,
     protocol: String,
 }
-
 #[allow(clippy::result_large_err)]
 fn resolve_connect_ws_token(
     headers: &axum::http::HeaderMap,
@@ -40097,7 +37995,6 @@ fn resolve_connect_ws_token(
 
     let auth_token = parse_authorization_token(headers)?;
     let protocol_token = parse_protocol_token(headers)?;
-
     if let Some(auth) = auth_token {
         if let Some(proto) = protocol_token.as_ref() {
             if proto.token != auth {
@@ -40117,21 +38014,18 @@ fn resolve_connect_ws_token(
             protocol: None,
         });
     }
-
     if let Some(proto) = protocol_token {
         return Ok(ConnectWsToken {
             token: proto.token,
             protocol: Some(proto.protocol),
         });
     }
-
     Err((
         StatusCode::BAD_REQUEST,
         "connect: missing token; send Authorization: Bearer <token> or Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url>",
     )
         .into_response())
 }
-
 #[cfg(all(test, feature = "connect"))]
 mod connect_token_tests {
     use axum::http::{HeaderMap, HeaderName, StatusCode, header};
@@ -40144,14 +38038,12 @@ mod connect_token_tests {
             .expect_err("token param should be rejected");
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
-
     #[test]
     fn connect_query_rejects_invalid_role() {
         let err = parse_connect_ws_query(Some("sid=abc&role=operator"))
             .expect_err("invalid role should be rejected");
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
-
     #[test]
     fn connect_query_rejects_noncanonical_shapes() {
         for query in [
@@ -40166,14 +38058,12 @@ mod connect_token_tests {
             assert_eq!(err.status(), StatusCode::BAD_REQUEST, "query: {query}");
         }
     }
-
     #[test]
     fn resolve_connect_ws_token_requires_headers() {
         let headers = HeaderMap::new();
         let err = resolve_connect_ws_token(&headers).expect_err("missing token should fail");
         assert_eq!(err.status(), StatusCode::BAD_REQUEST);
     }
-
     #[test]
     fn resolve_connect_ws_token_accepts_bearer() {
         let mut headers = HeaderMap::new();
@@ -40182,14 +38072,12 @@ mod connect_token_tests {
         assert_eq!(token.token, "test-token");
         assert!(token.protocol.is_none());
     }
-
     #[test]
     fn connect_remote_ip_requires_injected_header() {
         let headers = HeaderMap::new();
         let err = connect_remote_ip_from_headers(&headers).expect_err("missing remote addr");
         assert_eq!(err, "connect: remote addr unavailable");
     }
-
     #[test]
     fn connect_remote_ip_accepts_valid_injected_header() {
         let mut headers = HeaderMap::new();
@@ -40200,7 +38088,6 @@ mod connect_token_tests {
         let ip = connect_remote_ip_from_headers(&headers).expect("remote addr");
         assert_eq!(ip.to_string(), "203.0.113.7");
     }
-
     #[test]
     fn connect_remote_ip_rejects_invalid_injected_header() {
         let mut headers = HeaderMap::new();
@@ -40212,7 +38099,6 @@ mod connect_token_tests {
         assert_eq!(err, "connect: remote addr unavailable");
     }
 }
-
 #[allow(clippy::result_large_err)]
 fn parse_authorization_token(
     headers: &axum::http::HeaderMap,
@@ -40255,7 +38141,6 @@ fn parse_authorization_token(
     }
     Ok(Some(token.to_owned()))
 }
-
 #[allow(clippy::result_large_err)]
 fn parse_protocol_token(
     headers: &axum::http::HeaderMap,
@@ -40290,7 +38175,6 @@ fn parse_protocol_token(
     }
     Ok(None)
 }
-
 #[allow(clippy::result_large_err)]
 fn decode_protocol_token(encoded: &str) -> Result<String, axum::response::Response> {
     use axum::http::StatusCode;
@@ -40314,7 +38198,6 @@ fn decode_protocol_token(encoded: &str) -> Result<String, axum::response::Respon
             .into_response()
     })
 }
-
 #[cfg(feature = "connect")]
 async fn handler_connect_session_status(
     State(app): State<SharedAppState>,
@@ -40326,7 +38209,6 @@ async fn handler_connect_session_status(
     if let Err(error) = require_connect_enabled(&app) {
         return error.into_response();
     }
-
     let sid_query = match connect_status::parse_session_status_sid(raw_query.as_deref()) {
         Ok(sid) => sid,
         Err(message) => return (StatusCode::BAD_REQUEST, message).into_response(),
@@ -40351,13 +38233,11 @@ async fn handler_connect_session_status(
         None => StatusCode::NOT_FOUND.into_response(),
     }
 }
-
 #[cfg(feature = "connect")]
 async fn handler_connect_status(State(app): State<SharedAppState>) -> axum::response::Response {
     if let Err(error) = require_connect_enabled(&app) {
         return error.into_response();
     }
-
     let status = app.connect_bus.status().await;
     #[cfg(feature = "telemetry")]
     {
@@ -40390,7 +38270,6 @@ async fn handler_connect_status(State(app): State<SharedAppState>) -> axum::resp
     redacted_status.per_ip_sessions.clear();
     JsonBody(redacted_status).into_response()
 }
-
 #[cfg(feature = "app_api")]
 fn require_signed_alias_request(
     app: &SharedAppState,
@@ -40409,7 +38288,6 @@ fn require_signed_alias_request(
         "signed account headers are required",
     )
 }
-
 #[cfg(feature = "app_api")]
 #[allow(clippy::too_many_arguments)]
 fn require_signed_account_request(
@@ -40437,7 +38315,6 @@ fn require_signed_account_request(
         }),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn multisig_alias_resolve_authority(
     app: &SharedAppState,
@@ -40461,7 +38338,6 @@ fn multisig_alias_resolve_authority(
     )
     .map(Some)
 }
-
 #[cfg(feature = "app_api")]
 fn alias_setup_plan_report_response(
     status_code: StatusCode,
@@ -40476,7 +38352,6 @@ fn alias_setup_plan_report_response(
         AliasSetupDiagnosticV1, AliasSetupReportV1, AliasSetupSeverityV1,
         AliasSetupValidationPhaseV1,
     };
-
     let report = AliasSetupReportV1::new(
         status,
         vec![AliasSetupDiagnosticV1 {
@@ -40496,7 +38371,6 @@ fn alias_setup_plan_report_response(
     );
     (status_code, JsonBody(report)).into_response()
 }
-
 #[cfg(feature = "app_api")]
 fn alias_setup_dependency_rank(intent: &iroha_data_model::alias_setup::AliasIntentV1) -> u8 {
     use iroha_data_model::alias_setup::AliasIntentV1;
@@ -40507,7 +38381,6 @@ fn alias_setup_dependency_rank(intent: &iroha_data_model::alias_setup::AliasInte
         AliasIntentV1::AccountAlias(_) => 2,
     }
 }
-
 #[cfg(feature = "app_api")]
 fn alias_setup_parent_target(
     target: &iroha_data_model::alias_setup::AliasTargetV1,
@@ -40528,7 +38401,6 @@ fn alias_setup_parent_target(
             }),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn alias_setup_parent_expiry_warning(
     child: &iroha_data_model::alias_setup::AliasTargetV1,
@@ -40539,7 +38411,6 @@ fn alias_setup_parent_expiry_warning(
     use iroha_data_model::alias_setup::{
         AliasSetupDiagnosticV1, AliasSetupSeverityV1, AliasSetupValidationPhaseV1,
     };
-
     (parent_expiry_ms < child_expiry_ms).then(|| AliasSetupDiagnosticV1 {
         phase: AliasSetupValidationPhaseV1::Planning,
         code: "alias.plan.parent_lease_expires_first".to_owned(),
@@ -40555,7 +38426,6 @@ fn alias_setup_parent_expiry_warning(
                 .to_owned(),
     })
 }
-
 #[cfg(feature = "app_api")]
 fn alias_setup_transaction_size_blocker(
     canonical_unsigned_payload_bytes: usize,
@@ -40564,7 +38434,6 @@ fn alias_setup_transaction_size_blocker(
     use iroha_data_model::alias_setup::{
         AliasSetupDiagnosticV1, AliasSetupSeverityV1, AliasSetupValidationPhaseV1,
     };
-
     (canonical_unsigned_payload_bytes > maximum_transaction_bytes).then(|| {
         AliasSetupDiagnosticV1 {
             phase: AliasSetupValidationPhaseV1::Planning,
@@ -40584,10 +38453,8 @@ fn alias_setup_transaction_size_blocker(
         }
     })
 }
-
 #[cfg(feature = "app_api")]
 const ALIAS_SETUP_PLAN_TTL_MS: u64 = 60_000;
-
 #[cfg(feature = "app_api")]
 fn alias_setup_plan_deadline(now_ms: u64, guarded_deadline_ms: Option<u64>) -> u64 {
     let planner_deadline_ms = now_ms.saturating_add(ALIAS_SETUP_PLAN_TTL_MS);
@@ -40595,7 +38462,6 @@ fn alias_setup_plan_deadline(now_ms: u64, guarded_deadline_ms: Option<u64>) -> u
         planner_deadline_ms.min(guarded_deadline_ms)
     })
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_alias_setup_plan(
     State(app): State<SharedAppState>,
@@ -40614,7 +38480,6 @@ async fn handler_alias_setup_plan(
         },
         isi::{InstructionBox, alias_setup::EnsureAlias},
     };
-
     check_public_contract_read_route_rate_limit(
         &app,
         &headers,
@@ -40653,7 +38518,6 @@ async fn handler_alias_setup_plan(
             "add the dataspace, domain, or account-alias resource to the setup request",
         ));
     }
-
     request.intents.sort_by(|left, right| {
         alias_setup_dependency_rank(&left.intent)
             .cmp(&alias_setup_dependency_rank(&right.intent))
@@ -40674,7 +38538,6 @@ async fn handler_alias_setup_plan(
             ));
         }
     }
-
     let state_view = app.state.view();
     let Some(latest_block) = state_view.latest_block() else {
         return Ok(alias_setup_plan_report_response(
@@ -40715,7 +38578,6 @@ async fn handler_alias_setup_plan(
     let mut planned_expiries = BTreeMap::new();
     let mut warnings = Vec::new();
     let mut valid_until_ms = alias_setup_plan_deadline(now_ms, None);
-
     for (index, ensure) in request.intents.into_iter().enumerate() {
         let target = ensure.intent.target();
         let disposition = match classify_alias_intent_with_planned_parents_and_endorsement_policy(
@@ -40873,7 +38735,6 @@ async fn handler_alias_setup_plan(
         } else {
             None
         };
-
         let instruction: InstructionBox = EnsureAlias::new(
             ensure.intent.clone(),
             ensure.acquisition,
@@ -40939,7 +38800,6 @@ async fn handler_alias_setup_plan(
             instruction_index: Some(instruction_index),
         });
     }
-
     let totals_by_asset = totals
         .into_iter()
         .map(|(payment_asset, amount)| AliasAssetTotalV1 {
@@ -40983,10 +38843,8 @@ async fn handler_alias_setup_plan(
     });
     Ok(JsonBody(plan).into_response())
 }
-
 #[cfg(feature = "app_api")]
 const ALIAS_LIFECYCLE_PLAN_TTL_MS: u64 = 60_000;
-
 #[cfg(feature = "app_api")]
 fn alias_lifecycle_instruction_frame(
     instruction: &iroha_data_model::isi::InstructionBox,
@@ -41002,7 +38860,6 @@ fn alias_lifecycle_instruction_frame(
         framed_payload,
     })
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_alias_lease_renew_plan(
     State(app): State<SharedAppState>,
@@ -41021,7 +38878,6 @@ async fn handler_alias_lease_renew_plan(
         },
         isi::InstructionBox,
     };
-
     check_public_contract_read_route_rate_limit(
         &app,
         &headers,
@@ -41049,7 +38905,6 @@ async fn handler_alias_lease_renew_plan(
             "encode the request using the supported AliasLeaseRenewPlanRequestV1 layout",
         ));
     }
-
     let state_view = app.state.view();
     let Some(latest_block) = state_view.latest_block() else {
         return Ok(alias_setup_plan_report_response(
@@ -41144,7 +38999,6 @@ async fn handler_alias_lease_renew_plan(
     });
     Ok(JsonBody(plan).into_response())
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_alias_auto_renew_plan(
     State(app): State<SharedAppState>,
@@ -41162,7 +39016,6 @@ async fn handler_alias_auto_renew_plan(
         },
         isi::InstructionBox,
     };
-
     check_public_contract_read_route_rate_limit(
         &app,
         &headers,
@@ -41190,7 +39043,6 @@ async fn handler_alias_auto_renew_plan(
             "encode the request using the supported AliasAutoRenewPlanRequestV1 layout",
         ));
     }
-
     let state_view = app.state.view();
     let Some(latest_block) = state_view.latest_block() else {
         return Ok(alias_setup_plan_report_response(
@@ -41261,7 +39113,6 @@ async fn handler_alias_auto_renew_plan(
     });
     Ok(JsonBody(plan).into_response())
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_public_alias_lookup_by_account(
     State(app): State<SharedAppState>,
@@ -41282,7 +39133,6 @@ async fn handler_public_alias_lookup_by_account(
     .await?;
     handler_alias_lookup_by_account(State(app), method, uri, headers, body).await
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_alias_resolve(
     State(app): State<SharedAppState>,
@@ -41368,14 +39218,12 @@ async fn handler_alias_resolve(
         )
         .await);
     }
-
     Ok(torii_proxy_error_response(
         StatusCode::CONFLICT,
         "route_conflict",
         "multiple routes matched the alias dataspace",
     ))
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_alias_resolve_index(
     State(app): State<SharedAppState>,
@@ -41407,7 +39255,6 @@ async fn handler_alias_resolve_index(
         visibility.caller(),
         request.index,
     )?;
-
     if allowed_routes.len() == 1 && denied_routes == 0 {
         return Ok(execute_torii_single_route_read(
             &app,
@@ -41419,7 +39266,6 @@ async fn handler_alias_resolve_index(
         )
         .await);
     }
-
     let reservation = match try_acquire_query_fanout_memory(&app) {
         Ok(reservation) => reservation,
         Err(response) => return Ok(response),
@@ -41442,7 +39288,6 @@ async fn handler_alias_resolve_index(
             reservation,
         ));
     }
-
     let collected = match collect_torii_alias_json_payloads(
         &allowed_routes,
         denied_routes,
@@ -41497,7 +39342,6 @@ async fn handler_alias_resolve_index(
         reservation,
     ))
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_alias_lookup_by_account(
     State(app): State<SharedAppState>,
@@ -41551,7 +39395,6 @@ async fn handler_alias_lookup_by_account(
     };
     let (allowed_routes, denied_routes) =
         torii_partition_alias_lookup_routes(&app, candidate_routes, &visibility, &request);
-
     if allowed_routes.len() == 1 && denied_routes == 0 && !allowed_routes[0].filter_by_permission {
         let route = allowed_routes[0].route;
         return Ok(execute_torii_single_route_read(
@@ -41564,7 +39407,6 @@ async fn handler_alias_lookup_by_account(
         )
         .await);
     }
-
     let reservation = match try_acquire_query_fanout_memory(&app) {
         Ok(reservation) => reservation,
         Err(response) => return Ok(response),
@@ -41587,7 +39429,6 @@ async fn handler_alias_lookup_by_account(
             reservation,
         ));
     }
-
     let collected = match collect_torii_alias_lookup_json_payloads(
         &app,
         &allowed_routes,
@@ -41646,20 +39487,17 @@ fn recipient_lookup_normalize_fi_id(value: &str) -> Option<&'static str> {
         _ => None,
     }
 }
-
 #[cfg(feature = "app_api")]
 fn recipient_lookup_fi_id_from_alias(alias_fqn: &str) -> Option<&'static str> {
     alias_fqn
         .rsplit_once('@')
         .and_then(|(_, scope)| recipient_lookup_normalize_fi_id(scope))
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct RecipientLookupAccess {
     policy: FxCorridorPolicy,
 }
-
 #[cfg(feature = "app_api")]
 fn recipient_lookup_configured_policy(app: &AppState) -> Result<FxCorridorPolicy, AxResponse> {
     let world = app.state.world_view();
@@ -41706,7 +39544,6 @@ fn recipient_lookup_configured_policy(app: &AppState) -> Result<FxCorridorPolicy
     }
     Ok(policy)
 }
-
 #[cfg(feature = "app_api")]
 async fn recipient_lookup_access_gate(
     app: &SharedAppState,
@@ -41724,7 +39561,6 @@ async fn recipient_lookup_access_gate(
             "recipient lookup requires canonical request signing",
         )));
     };
-
     if !app
         .recipient_lookup_rate_limiter
         .allow(&caller.to_string())
@@ -41739,7 +39575,6 @@ async fn recipient_lookup_access_gate(
             ),
         )));
     }
-
     let policy = match recipient_lookup_configured_policy(app.as_ref()) {
         Ok(policy) => policy,
         Err(response) => return Ok(Err(response)),
@@ -41762,10 +39597,8 @@ async fn recipient_lookup_access_gate(
             "recipient lookup requires a positive source-currency balance under the configured policy",
         )));
     }
-
     Ok(Ok(RecipientLookupAccess { policy }))
 }
-
 #[cfg(feature = "app_api")]
 fn recipient_lookup_alias_allowed_by_policy(
     alias: &AccountAlias,
@@ -41777,7 +39610,6 @@ fn recipient_lookup_alias_allowed_by_policy(
             domain.is_some_and(|domain| policy.allowed_destination_alias_domains.contains(&domain))
         })
 }
-
 #[cfg(feature = "app_api")]
 fn recipient_route_for_account(
     app: &AppState,
@@ -41840,7 +39672,6 @@ fn recipient_route_for_account(
             "recipient has no eligible alias binding under the configured policy",
         ));
     }
-
     let domains = eligible
         .values()
         .map(|(domain, _, _)| domain)
@@ -41852,7 +39683,6 @@ fn recipient_route_for_account(
             "recipient has eligible alias bindings in more than one FI domain",
         ));
     }
-
     let selected = account
         .as_ref()
         .label()
@@ -41865,7 +39695,6 @@ fn recipient_route_for_account(
         fi_id: selected.2.clone(),
     })
 }
-
 #[cfg(feature = "app_api")]
 fn recipient_lookup_response(
     resolved: bool,
@@ -41886,7 +39715,6 @@ fn recipient_lookup_response(
     }
     Value::Object(object)
 }
-
 #[cfg(feature = "app_api")]
 fn recipient_lookup_unresolved_response(
     account_id: &str,
@@ -41904,7 +39732,6 @@ fn recipient_lookup_unresolved_response(
         ),
     )
 }
-
 #[cfg(feature = "app_api")]
 fn recipient_lookup_account_identity_matches(
     actual_account_id: Option<&str>,
@@ -41913,7 +39740,6 @@ fn recipient_lookup_account_identity_matches(
     let expected = expected_account_id.to_string();
     actual_account_id.is_some_and(|actual| actual == expected)
 }
-
 #[cfg(feature = "app_api")]
 fn recipient_lookup_upstream_request_id(headers: &HeaderMap, body: &[u8]) -> String {
     const MAX_REQUEST_ID_LEN: usize = 256;
@@ -41925,7 +39751,6 @@ fn recipient_lookup_upstream_request_id(headers: &HeaderMap, body: &[u8]) -> Str
         .map(str::to_owned)
         .unwrap_or_else(|| format!("torii-recipient-lookup-{}", blake3_hash(body).to_hex()))
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_retail_recipient_route(
     State(app): State<SharedAppState>,
@@ -41989,7 +39814,6 @@ async fn handler_retail_recipient_route(
     };
     alias_json_response(StatusCode::OK, response)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_fee_sponsor_program_by_id(
     State(app): State<SharedAppState>,
@@ -42056,7 +39880,6 @@ async fn handler_fee_sponsor_program_by_id(
     };
     alias_json_response(StatusCode::OK, program)
 }
-
 #[cfg(feature = "app_api")]
 fn fee_quote_rejection_retryable(code: FeeRejectionCode) -> bool {
     matches!(
@@ -42071,7 +39894,6 @@ fn fee_quote_rejection_retryable(code: FeeRejectionCode) -> bool {
             | FeeRejectionCode::RelayCapacityUnavailable
     )
 }
-
 #[cfg(feature = "app_api")]
 fn fee_quote_remediation(code: FeeRejectionCode) -> &'static str {
     match code {
@@ -42122,7 +39944,6 @@ fn fee_quote_remediation(code: FeeRejectionCode) -> &'static str {
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 fn fee_quote_error_details(
     code: FeeRejectionCode,
@@ -42145,7 +39966,6 @@ fn fee_quote_error_details(
         ..FeeErrorDetails::default()
     }
 }
-
 #[cfg(feature = "app_api")]
 fn fee_quote_rejection_response(
     status: StatusCode,
@@ -42165,7 +39985,6 @@ fn fee_quote_rejection_response(
     });
     (status, NoritoBody(envelope)).into_response()
 }
-
 #[cfg(feature = "app_api")]
 fn fee_quote_request_rejection_response(
     status: StatusCode,
@@ -42190,7 +40009,6 @@ fn fee_quote_request_rejection_response(
     });
     (status, NoritoBody(envelope)).into_response()
 }
-
 #[cfg(feature = "app_api")]
 fn fee_quote_routing_decision(
     app: &AppState,
@@ -42198,7 +40016,6 @@ fn fee_quote_routing_decision(
 ) -> Result<iroha_core::queue::RoutingDecision, FeeRejectionCode> {
     fee_quote_routing_decision_from_parts(app.queue.as_ref(), app.state.as_ref(), payload)
 }
-
 #[cfg(feature = "app_api")]
 fn fee_quote_routing_decision_from_parts(
     queue: &Queue,
@@ -42209,7 +40026,6 @@ fn fee_quote_routing_decision_from_parts(
         .route_payload_with_state(payload, state)
         .map_err(|_| FeeRejectionCode::InvalidProgramConfiguration)
 }
-
 #[cfg(feature = "app_api")]
 pub(crate) fn quote_internal_fee_payment(
     app: &AppState,
@@ -42222,7 +40038,6 @@ pub(crate) fn quote_internal_fee_payment(
         payload,
     )
 }
-
 #[cfg(feature = "app_api")]
 pub(crate) fn quote_internal_fee_payment_from_parts(
     network_id: &NetworkId,
@@ -42273,7 +40088,6 @@ pub(crate) fn quote_internal_fee_payment_from_parts(
     .map(|quote| quote.recommended_intent)
     .map_err(|err| rejected(err.code(), err.reason()))
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_fee_quote(
     State(app): State<SharedAppState>,
@@ -42312,7 +40126,6 @@ async fn handler_fee_quote(
             ));
         }
     };
-
     if request.payload.domain != TransactionDomain::Network(*app.state.network_id_ref())
         || request.payload.authority != *caller
     {
@@ -42335,7 +40148,6 @@ async fn handler_fee_quote(
             next_block_height,
         ));
     }
-
     let route = match fee_quote_routing_decision(&app, &request.payload) {
         Ok(route) => route,
         Err(code) => {
@@ -42382,7 +40194,6 @@ async fn handler_fee_quote(
         }
     };
     let quote = draft_quote.quote;
-
     let components = quote
         .charges
         .into_iter()
@@ -42420,11 +40231,9 @@ async fn handler_fee_quote(
     };
     alias_json_response(StatusCode::OK, response)
 }
-
 #[cfg(feature = "app_api")]
 /// Maximum decoded bank Core API response accepted for one fixed-field lookup.
 const RETAIL_RECIPIENT_LOOKUP_RESPONSE_MAX_BYTES_V1: usize = 64 * 1024;
-
 #[cfg(feature = "app_api")]
 async fn handler_retail_recipient_lookup(
     State(app): State<SharedAppState>,
@@ -42466,7 +40275,6 @@ async fn handler_retail_recipient_lookup(
             "alias_fqn must be canonical without surrounding whitespace",
         ));
     }
-
     let requested_account_id_literal = request.account_id.trim().to_owned();
     let (account_id, _, _) = AccountId::parse_encoded(request.account_id.trim())
         .map_err(|err| {
@@ -42529,7 +40337,6 @@ async fn handler_retail_recipient_lookup(
             );
         }
     }
-
     let Some(route) = app
         .recipient_lookup
         .routes
@@ -42543,7 +40350,6 @@ async fn handler_retail_recipient_lookup(
             format!("recipient lookup route is not configured for {fi_id}"),
         ));
     };
-
     let endpoint = format!(
         "{}/v1/retail/recipients/lookup",
         route.base_url.as_str().trim_end_matches('/')
@@ -42626,7 +40432,6 @@ async fn handler_retail_recipient_lookup(
             "recipient lookup upstream response was not a JSON object",
         ));
     };
-
     let full_name = upstream_object
         .get("full_name")
         .and_then(Value::as_str)
@@ -42656,7 +40461,6 @@ async fn handler_retail_recipient_lookup(
         ),
     )
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_asset_alias_resolve(
     State(app): State<SharedAppState>,
@@ -42670,13 +40474,11 @@ async fn handler_asset_alias_resolve(
             ),
         )));
     }
-
     let alias = AssetDefinitionAlias::from_str(alias_literal).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
         ))
     })?;
-
     let world = app.state.world_view();
     let now_ms = routing::asset_alias_observation_time_ms(app.state.as_ref());
     let Some(definition_id) = world.asset_definition_id_by_alias_at(&alias, now_ms) else {
@@ -42703,7 +40505,6 @@ async fn handler_asset_alias_resolve(
         "world_state",
     )
 }
-
 #[cfg(feature = "app_api")]
 fn execute_contract_alias_resolve_local_read(
     app: &SharedAppState,
@@ -42714,7 +40515,6 @@ fn execute_contract_alias_resolve_local_read(
     else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
-
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -42728,7 +40528,6 @@ fn execute_contract_alias_resolve_local_read(
         "world_state",
     )
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_contract_alias_resolve(
     State(app): State<SharedAppState>,
@@ -42773,10 +40572,8 @@ async fn handler_contract_alias_resolve(
         .await
         .into_response());
     }
-
     execute_contract_alias_resolve_local_read(&app, &request)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_ram_lfe_program_policies(
     State(app): State<SharedAppState>,
@@ -42801,7 +40598,6 @@ async fn handler_ram_lfe_program_policies(
         items,
     })
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_ram_lfe_execute(
     State(app): State<SharedAppState>,
@@ -42845,7 +40641,6 @@ async fn handler_ram_lfe_execute(
         .map_err(|err| identifier_internal_error(err.to_string()))?;
     json_ok(ram_lfe_execute_response(&receipt, &draft, output_opening))
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_ram_lfe_receipt_verify(
     State(app): State<SharedAppState>,
@@ -42918,7 +40713,6 @@ async fn handler_ram_lfe_receipt_verify(
         validation,
     ))
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_identifier_policies(
     State(app): State<SharedAppState>,
@@ -42942,7 +40736,6 @@ async fn handler_identifier_policies(
         items,
     })
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_identifier_resolve(
     State(app): State<SharedAppState>,
@@ -42959,7 +40752,6 @@ async fn handler_identifier_resolve(
                     iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
                 ))
             })?;
-
     let world = app.state.world_view();
     let Some(policy) = world.identifier_policies().get(&policy_id).cloned() else {
         return Ok(StatusCode::NOT_FOUND.into_response());
@@ -43002,7 +40794,6 @@ async fn handler_identifier_resolve(
         draft.backend.as_str(),
     )?)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_identifier_claim_receipt(
     State(app): State<SharedAppState>,
@@ -43070,7 +40861,6 @@ async fn handler_identifier_claim_receipt(
         draft.backend.as_str(),
     )?)
 }
-
 #[cfg(feature = "app_api")]
 async fn handler_identifier_receipt_lookup(
     State(app): State<SharedAppState>,
@@ -43095,7 +40885,6 @@ async fn handler_identifier_receipt_lookup(
     };
     json_ok(identifier_claim_lookup_response(&claim))
 }
-
 fn normalise_alias(input: &str) -> String {
     input
         .chars()
@@ -43103,7 +40892,6 @@ fn normalise_alias(input: &str) -> String {
         .map(|c| c.to_ascii_uppercase())
         .collect()
 }
-
 #[cfg(feature = "app_api")]
 fn tx_history_reject(
     status: StatusCode,
@@ -43113,7 +40901,6 @@ fn tx_history_reject(
     let payload = ErrorEnvelope::new(code, message.into());
     (status, utils::NoritoBody(payload)).into_response()
 }
-
 #[cfg(feature = "app_api")]
 fn tx_history_alias_resolution_error_message(err: &Error) -> String {
     match err {
@@ -43129,7 +40916,6 @@ fn tx_history_alias_resolution_error_message(err: &Error) -> String {
         _ => err.to_string(),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn tx_history_alias_resolution_reject(err: Error) -> AxResponse {
     let (status, code) = match &err {
@@ -43148,7 +40934,6 @@ fn tx_history_alias_resolution_reject(err: Error) -> AxResponse {
         tx_history_alias_resolution_error_message(&err),
     )
 }
-
 #[cfg(feature = "app_api")]
 fn decode_tx_history_jwt_json_part(encoded: &str, error: &'static str) -> Result<Value, String> {
     let bytes = URL_SAFE_NO_PAD
@@ -43156,7 +40941,6 @@ fn decode_tx_history_jwt_json_part(encoded: &str, error: &'static str) -> Result
         .map_err(|_| error.to_string())?;
     norito::json::from_slice(&bytes).map_err(|_| error.to_string())
 }
-
 #[cfg(feature = "app_api")]
 fn tx_history_jwt_string_claim(
     claims: &Map,
@@ -43171,7 +40955,6 @@ fn tx_history_jwt_string_claim(
             .map(Some),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn tx_history_jwt_u64_claim(claims: &Map, field: &'static str) -> Result<Option<u64>, String> {
     match claims.get(field) {
@@ -43182,7 +40965,6 @@ fn tx_history_jwt_u64_claim(claims: &Map, field: &'static str) -> Result<Option<
             .map(Some),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn tx_history_jwt_audience_claim(claims: &Map) -> Result<Option<TxHistoryAudienceClaim>, String> {
     match claims.get("aud") {
@@ -43205,7 +40987,6 @@ fn tx_history_jwt_audience_claim(claims: &Map) -> Result<Option<TxHistoryAudienc
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 fn decode_tx_history_jwt_claims(
     auth_header: &str,
@@ -43266,7 +41047,6 @@ fn decode_tx_history_jwt_claims(
         iss: tx_history_jwt_string_claim(claims_object, "iss")?,
         aud: tx_history_jwt_audience_claim(claims_object)?,
     };
-
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| "system clock is before UNIX_EPOCH".to_string())?
@@ -43300,10 +41080,8 @@ fn decode_tx_history_jwt_claims(
             return Err("invalid JWT audience".to_string());
         }
     }
-
     Ok(claims)
 }
-
 #[cfg(feature = "app_api")]
 fn resolve_tx_history_alias_account_id(
     app: &SharedAppState,
@@ -43311,7 +41089,6 @@ fn resolve_tx_history_alias_account_id(
 ) -> Result<Option<AccountId>, Error> {
     Ok(resolve_alias_on_chain(app, alias_input)?.map(|(_, account_id, _)| account_id))
 }
-
 #[cfg(feature = "app_api")]
 fn tx_history_viewer_from_headers(
     app: &SharedAppState,
@@ -43365,7 +41142,6 @@ fn tx_history_viewer_from_headers(
                 "missing dataspace_id claim",
             )
         })?;
-
     let canonical_account_id = AccountId::parse_encoded(subject.trim())
         .ok()
         .map(iroha_data_model::account::ParsedAccountId::into_account_id);
@@ -43388,13 +41164,11 @@ fn tx_history_viewer_from_headers(
     let mut dedupe = HashSet::new();
     let mut account_ids = Vec::new();
     let mut is_mandatory_alias = false;
-
     if let Some(account_id) = canonical_account_id {
         if dedupe.insert(account_id.to_string()) {
             account_ids.push(account_id);
         }
     }
-
     for alias in &alias_candidates {
         match resolve_tx_history_alias_account_id(app, alias) {
             Ok(Some(account_id)) => {
@@ -43427,7 +41201,6 @@ fn tx_history_viewer_from_headers(
             }
         }
     }
-
     if account_ids.is_empty() {
         return Err(tx_history_reject(
             StatusCode::FORBIDDEN,
@@ -43435,7 +41208,6 @@ fn tx_history_viewer_from_headers(
             "requester is not bound to a visible transaction account",
         ));
     }
-
     Ok(TxHistoryViewerContext {
         subject,
         dataspace_id,
@@ -43444,9 +41216,7 @@ fn tx_history_viewer_from_headers(
         is_mandatory_alias,
     })
 }
-
 const LEDGER_HEADER_PAGE_CAP: u64 = 512;
-
 #[derive(
     Debug,
     Clone,
@@ -43465,7 +41235,6 @@ struct StateRootResponse {
     /// Commit QC payload when available for attestation (subject hash, bitmap, aggregate sig).
     commit_qc: Option<iroha_data_model::consensus::Qc>,
 }
-
 #[derive(
     Debug,
     Clone,
@@ -43480,7 +41249,6 @@ struct StateProofResponse {
     state_root: iroha_crypto::Hash,
     commit_qc: iroha_data_model::consensus::Qc,
 }
-
 async fn handler_ledger_headers(
     State(app): State<SharedAppState>,
     crate::NoritoQuery(window): crate::NoritoQuery<routing::HistoryWindowQuery>,
@@ -43491,7 +41259,6 @@ async fn handler_ledger_headers(
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
-
     let current_height = u64::try_from(app.state.committed_height()).unwrap_or(u64::MAX);
     let start_height = match window.from {
         Some(0) => return Err(conversion_error("from must be at least 1".to_owned())),
@@ -43510,7 +41277,6 @@ async fn handler_ledger_headers(
         .unwrap_or(LEDGER_HEADER_PAGE_CAP)
         .min(LEDGER_HEADER_PAGE_CAP)
         .min(usize::MAX as u64) as usize;
-
     let mut headers: Vec<BlockHeader> = Vec::new();
     let mut height = start_height;
     while height >= 1 && headers.len() < limit {
@@ -43532,7 +41298,6 @@ async fn handler_ledger_headers(
         }
         height -= 1;
     }
-
     match format {
         ResponseFormat::Norito => Ok(NoritoBody(headers).into_response()),
         ResponseFormat::Json => {
@@ -43550,7 +41315,6 @@ async fn handler_ledger_headers(
         }
     }
 }
-
 async fn handler_ledger_state_root(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -43571,7 +41335,6 @@ async fn handler_ledger_state_root(
     ) else {
         return Err(conversion_error("height must be at least 1".to_owned()));
     };
-
     let Some(block) = app.state.block_by_height(height_usize) else {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
@@ -43601,7 +41364,6 @@ async fn handler_ledger_state_root(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         )));
     };
-
     match format {
         ResponseFormat::Norito => Ok(NoritoBody(payload).into_response()),
         ResponseFormat::Json => {
@@ -43619,7 +41381,6 @@ async fn handler_ledger_state_root(
         }
     }
 }
-
 async fn handler_ledger_state_proof(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -43640,7 +41401,6 @@ async fn handler_ledger_state_proof(
     ) else {
         return Err(conversion_error("height must be at least 1".to_owned()));
     };
-
     let Some(block) = app.state.block_by_height(height_usize) else {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
@@ -43664,7 +41424,6 @@ async fn handler_ledger_state_proof(
         state_root: commit_qc.post_state_root,
         commit_qc,
     };
-
     match format {
         ResponseFormat::Norito => Ok(NoritoBody(payload).into_response()),
         ResponseFormat::Json => {
@@ -43682,23 +41441,19 @@ async fn handler_ledger_state_proof(
         }
     }
 }
-
 fn finalized_block_not_found() -> Error {
     Error::Query(iroha_data_model::ValidationFail::QueryFailed(
         iroha_data_model::query::error::QueryExecutionFail::NotFound,
     ))
 }
-
 fn finalized_block_wire_internal_error(message: impl Into<String>) -> Error {
     Error::Query(iroha_data_model::ValidationFail::InternalError(
         message.into(),
     ))
 }
-
 fn finalized_block_wire_fits_carrier_v1(wire_len: usize) -> bool {
     wire_len <= iroha_data_model::block::proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1
 }
-
 fn executed_block_wire_too_large_response(height: NonZeroU64) -> Response {
     utils::respond_with_status_and_format(
         StatusCode::PAYLOAD_TOO_LARGE,
@@ -43717,7 +41472,6 @@ fn executed_block_wire_too_large_response(height: NonZeroU64) -> Response {
         utils::current_response_format(),
     )
 }
-
 async fn handler_ledger_executed_block_wire(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -43732,7 +41486,6 @@ async fn handler_ledger_executed_block_wire(
     )
     .ok_or_else(|| conversion_error("block height must be at least 1".to_owned()))?;
     let committed_index = height_usize.get().saturating_sub(1);
-
     // Kura may already contain a staged body which has not reached the
     // committed state journal. Snapshot the finalized hash first so a
     // height-only storage lookup cannot publish that staged body. Release the
@@ -43787,7 +41540,6 @@ async fn handler_ledger_executed_block_wire(
             "canonical wire length changed between bounded preflight and encoding for committed block {height}"
         )));
     }
-
     let mut response = Response::new(Body::from(wire));
     response.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
@@ -43799,7 +41551,6 @@ async fn handler_ledger_executed_block_wire(
     );
     Ok(response)
 }
-
 async fn handler_block_proof(
     State(app): State<SharedAppState>,
     axum::extract::Path((height, entry_hex)): axum::extract::Path<(u64, String)>,
@@ -43810,14 +41561,12 @@ async fn handler_block_proof(
     let entry_hash: HashOf<TransactionEntrypoint> = normalized
         .parse()
         .map_err(|err| conversion_error(format!("invalid entry hash: {err}")))?;
-
     let proofs = app
         .state
         .block_proofs_for_entry(block_height, entry_hash)
         .map_err(map_block_proof_error)?;
     Ok(NoritoBody(proofs))
 }
-
 fn map_block_proof_error(error: BlockProofError) -> Error {
     match error {
         BlockProofError::ZeroHeight | BlockProofError::HeightOutOfRange(_) => {
@@ -43837,7 +41586,6 @@ fn map_block_proof_error(error: BlockProofError) -> Error {
         ),
     }
 }
-
 // -------------- Runtime handlers (removed AppState-based; use closures in router) --------------
 // (re-exports consolidated above)
 mod da;
@@ -43863,7 +41611,6 @@ const HEADER_MTLS_FORWARD: &str = "x-forwarded-client-cert";
 const NORITO_RPC_DISABLED_CODE: &str = "norito_rpc_disabled";
 const NORITO_RPC_CANARY_DENIED_CODE: &str = "norito_rpc_canary_denied";
 const NORITO_RPC_MTLS_REQUIRED_CODE: &str = "norito_rpc_mtls_required";
-
 #[derive(Clone, Debug)]
 enum FeePolicy {
     Disabled,
@@ -43873,26 +41620,22 @@ enum FeePolicy {
         receiver: String,
     },
 }
-
 impl FeePolicy {
     fn is_enabled(&self) -> bool {
         matches!(self, Self::Manual { .. })
     }
-
     fn asset_id(&self) -> Option<&str> {
         match self {
             Self::Manual { asset_id, .. } => Some(asset_id.as_str()),
             Self::Disabled => None,
         }
     }
-
     fn amount(&self) -> Option<&Quantity> {
         match self {
             Self::Manual { amount, .. } => Some(amount),
             Self::Disabled => None,
         }
     }
-
     fn receiver(&self) -> Option<&str> {
         match self {
             Self::Manual { receiver, .. } => Some(receiver.as_str()),
@@ -43900,7 +41643,6 @@ impl FeePolicy {
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AccountOnboardingSigner {
@@ -43913,7 +41655,6 @@ struct AccountOnboardingSigner {
     alias_lease_term_years: u8,
     owner_auto_renew: Option<AccountOnboardingAutoRenewDefaults>,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct AccountOnboardingAutoRenewDefaults {
@@ -43923,17 +41664,14 @@ struct AccountOnboardingAutoRenewDefaults {
     retry_backoff_ms: u64,
     max_failures: u32,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum AuthenticatedOnboardingScope {
     Domain(DomainId),
     Dataspace(Name),
 }
-
 #[derive(Clone, Debug)]
 struct AuthenticatedOnboardingDomain(AuthenticatedOnboardingScope);
-
 #[cfg(feature = "app_api")]
 fn validate_account_onboarding_readiness(
     state: &CoreState,
@@ -43943,7 +41681,6 @@ fn validate_account_onboarding_readiness(
         AliasSetupDiagnosticV1, AliasSetupReportV1, AliasSetupSeverityV1, AliasSetupStatusV1,
         AliasSetupValidationPhaseV1,
     };
-
     let world = state.world_view();
     let nexus = state.nexus_snapshot();
     let catalog = nexus.dataspace_catalog.clone();
@@ -43965,7 +41702,6 @@ fn validate_account_onboarding_readiness(
                 remediation: remediation.to_owned(),
             });
         };
-
     if world.accounts().get(&signer.authority).is_none() {
         blocked(
             "alias.onboarding.authority_missing",
@@ -44057,7 +41793,6 @@ fn validate_account_onboarding_readiness(
             }
         }
     }
-
     for permission in &signer.allowed_permissions {
         if !world
             .executor_data_model()
@@ -44073,7 +41808,6 @@ fn validate_account_onboarding_readiness(
             );
         }
     }
-
     if let Some(program_id) = signer.fee_sponsor_program_id.as_ref() {
         if world.fee_sponsor_programs().get(program_id).is_none() {
             blocked(
@@ -44251,7 +41985,6 @@ fn validate_account_onboarding_readiness(
     };
     AliasSetupReportV1::new(status, diagnostics)
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct SoraFsAppealSettlementSubmitter {
@@ -44260,7 +41993,6 @@ struct SoraFsAppealSettlementSubmitter {
     forwarder: sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceTransactionForwarder,
     worker_scan_interval: Duration,
 }
-
 #[cfg(feature = "app_api")]
 impl SoraFsAppealSettlementSubmitter {
     fn from_config(
@@ -44279,7 +42011,6 @@ impl SoraFsAppealSettlementSubmitter {
             AppealFinanceRuntimeProviderQualificationV1, AppealFinanceTransactionForwarder,
             AppealFinanceTransactionForwarderPolicyV1,
         };
-
         qualify_appeal_finance_runtime_signer_inventory(
             &config.submitter_signers,
             runtime_signers.as_deref(),
@@ -44288,7 +42019,6 @@ impl SoraFsAppealSettlementSubmitter {
         .unwrap_or_else(|error| {
             panic!("SoraFS appeal-finance runtime signer inventory is invalid: {error:?}")
         });
-
         let checkpoint_binding = config.checkpoint_provider.as_ref().unwrap_or_else(|| {
             panic!(
                 "SoraFS appeal-finance submitters require an independent configured checkpoint HSM/KMS binding"
@@ -44368,7 +42098,6 @@ impl SoraFsAppealSettlementSubmitter {
             worker_scan_interval: config.worker_scan_interval,
         }
     }
-
     fn active_binding_for<'a>(
         &'a self,
         authority: &AccountId,
@@ -44402,7 +42131,6 @@ impl SoraFsAppealSettlementSubmitter {
         };
         Ok(binding)
     }
-
     fn signer_for(
         &self,
         authority: &AccountId,
@@ -44416,7 +42144,6 @@ impl SoraFsAppealSettlementSubmitter {
             .ok_or(SoraFsAppealFinanceSignerSelectionError::ProviderMissing)?;
         SoraFsAppealFinanceQualifiedSignerV1::try_new(binding, provider)
     }
-
     fn signer_count(&self, finalized_height: u64) -> usize {
         self.bindings
             .iter()
@@ -44428,12 +42155,10 @@ impl SoraFsAppealSettlementSubmitter {
             })
             .count()
     }
-
     fn worker_scan_interval(&self) -> Duration {
         self.worker_scan_interval
     }
 }
-
 /// Runtime-only signer for durable appeal-finance asset-lock transactions.
 ///
 /// Implementations are expected to delegate to an independently administered
@@ -44443,10 +42168,8 @@ impl SoraFsAppealSettlementSubmitter {
 pub trait SoraFsAppealFinanceTransactionSigner: Send + Sync {
     /// Stable opaque provider handle matching the non-secret configured binding.
     fn handle(&self) -> &str;
-
     /// Exact public key controlled by this provider.
     fn public_key(&self) -> Result<PublicKey, SoraFsAppealFinanceSigningError>;
-
     /// Qualify the active adapter and exact public-policy revision.
     fn qualification(
         &self,
@@ -44454,14 +42177,12 @@ pub trait SoraFsAppealFinanceTransactionSigner: Send + Sync {
         sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1,
         SoraFsAppealFinanceSigningError,
     >;
-
     /// Sign the exact transaction payload.
     fn sign(
         &self,
         payload: TransactionPayload,
     ) -> Result<SignedTransaction, SoraFsAppealFinanceSigningError>;
 }
-
 /// Payload-free appeal-finance signer failure.
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44473,7 +42194,6 @@ pub enum SoraFsAppealFinanceSigningError {
     /// Provider identity, revision, or public policy changed around the request.
     QualificationChanged,
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct SoraFsAppealFinanceQualifiedSignerV1 {
@@ -44483,7 +42203,6 @@ struct SoraFsAppealFinanceQualifiedSignerV1 {
     qualification:
         sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1,
 }
-
 #[cfg(feature = "app_api")]
 impl SoraFsAppealFinanceQualifiedSignerV1 {
     fn try_new(
@@ -44506,11 +42225,9 @@ impl SoraFsAppealFinanceQualifiedSignerV1 {
         }
         Ok(qualified)
     }
-
     fn public_key(&self) -> &PublicKey {
         &self.public_key
     }
-
     fn revalidate(&self) -> Result<(), SoraFsAppealFinanceSignerSelectionError> {
         if self.signer.handle() != self.handle {
             return Err(SoraFsAppealFinanceSignerSelectionError::IdentityMismatch);
@@ -44540,7 +42257,6 @@ impl SoraFsAppealFinanceQualifiedSignerV1 {
         }
         Ok(())
     }
-
     fn sign(
         &self,
         payload: TransactionPayload,
@@ -44553,14 +42269,12 @@ impl SoraFsAppealFinanceQualifiedSignerV1 {
         result
     }
 }
-
 /// Validated runtime registry of opaque appeal-finance signer providers.
 #[cfg(feature = "app_api")]
 #[derive(Clone, Default)]
 pub struct SoraFsAppealFinanceRuntimeSignersV1 {
     signers: BTreeMap<String, Arc<dyn SoraFsAppealFinanceTransactionSigner>>,
 }
-
 #[cfg(feature = "app_api")]
 impl SoraFsAppealFinanceRuntimeSignersV1 {
     /// Validate and construct one runtime signer registry.
@@ -44606,12 +42320,10 @@ impl SoraFsAppealFinanceRuntimeSignersV1 {
         }
         Ok(Self { signers: registry })
     }
-
     fn get(&self, handle: &str) -> Option<Arc<dyn SoraFsAppealFinanceTransactionSigner>> {
         self.signers.get(handle).cloned()
     }
 }
-
 /// Appeal-finance runtime signer registry error.
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44629,7 +42341,6 @@ pub enum SoraFsAppealFinanceRuntimeSignerRegistryError {
     /// Provider identity or public policy changed during registry construction.
     IdentityDrift,
 }
-
 #[cfg(feature = "app_api")]
 fn qualify_appeal_finance_runtime_signer_inventory(
     bindings: &[iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding],
@@ -44711,7 +42422,6 @@ fn qualify_appeal_finance_runtime_signer_inventory(
     }
     Ok(())
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum SoraFsAppealFinanceRuntimeSignerQualificationError {
@@ -44724,7 +42434,6 @@ enum SoraFsAppealFinanceRuntimeSignerQualificationError {
     QualificationMismatch { handle: String },
     QualificationChanged { handle: String },
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SoraFsAppealFinanceSignerSelectionError {
@@ -44734,7 +42443,6 @@ enum SoraFsAppealFinanceSignerSelectionError {
     ProviderUnavailable,
     IdentityMismatch,
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod appeal_finance_runtime_signer_tests {
     use std::sync::{
@@ -44760,16 +42468,13 @@ mod appeal_finance_runtime_signer_tests {
         keypair: KeyPair,
         qualification: sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1,
     }
-
     impl SoraFsAppealFinanceTransactionSigner for TestSigner {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn public_key(&self) -> Result<PublicKey, SoraFsAppealFinanceSigningError> {
             Ok(self.keypair.public_key().clone())
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -44778,7 +42483,6 @@ mod appeal_finance_runtime_signer_tests {
         >{
             Ok(self.qualification)
         }
-
         fn sign(
             &self,
             payload: TransactionPayload,
@@ -44788,7 +42492,6 @@ mod appeal_finance_runtime_signer_tests {
                 .map_err(|_| SoraFsAppealFinanceSigningError::Refused)
         }
     }
-
     struct PostSignQualificationDriftingSigner {
         handle: String,
         keypair: KeyPair,
@@ -44796,16 +42499,13 @@ mod appeal_finance_runtime_signer_tests {
             sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceRuntimeProviderQualificationV1,
         >,
     }
-
     impl SoraFsAppealFinanceTransactionSigner for PostSignQualificationDriftingSigner {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn public_key(&self) -> Result<PublicKey, SoraFsAppealFinanceSigningError> {
             Ok(self.keypair.public_key().clone())
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -44817,7 +42517,6 @@ mod appeal_finance_runtime_signer_tests {
                 .map(|qualification| *qualification)
                 .map_err(|_| SoraFsAppealFinanceSigningError::Unavailable)
         }
-
         fn sign(
             &self,
             _payload: TransactionPayload,
@@ -44832,12 +42531,10 @@ mod appeal_finance_runtime_signer_tests {
             Err(SoraFsAppealFinanceSigningError::Refused)
         }
     }
-
     fn key(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("test Ed25519 key")
     }
-
     fn provider(handle: &str, keypair: KeyPair) -> Arc<dyn SoraFsAppealFinanceTransactionSigner> {
         Arc::new(TestSigner {
             handle: handle.to_owned(),
@@ -44848,12 +42545,10 @@ mod appeal_finance_runtime_signer_tests {
                 ),
         })
     }
-
     #[derive(Debug, Default)]
     struct UnexpectedCheckpointRuntime {
         identity_called: AtomicBool,
     }
-
     impl AppealFinanceCheckpointRuntime for UnexpectedCheckpointRuntime {
         fn identity(
             &self,
@@ -44862,14 +42557,12 @@ mod appeal_finance_runtime_signer_tests {
             self.identity_called.store(true, Ordering::SeqCst);
             Err(AppealFinanceCheckpointExternalError::Unavailable)
         }
-
         fn sign_digest(
             &self,
             _digest: [u8; 32],
         ) -> Result<[u8; 64], AppealFinanceCheckpointExternalError> {
             Err(AppealFinanceCheckpointExternalError::Unavailable)
         }
-
         fn load_latest(
             &self,
         ) -> Result<
@@ -44878,7 +42571,6 @@ mod appeal_finance_runtime_signer_tests {
         > {
             Err(AppealFinanceCheckpointExternalError::Unavailable)
         }
-
         fn compare_and_swap_latest(
             &self,
             _expected_revision: Option<[u8; 32]>,
@@ -44887,12 +42579,10 @@ mod appeal_finance_runtime_signer_tests {
             Err(AppealFinanceCheckpointExternalError::Unavailable)
         }
     }
-
     #[derive(Debug)]
     struct IdentityOnlyCheckpointRuntime {
         identity: AppealFinanceCheckpointRuntimeIdentityV1,
     }
-
     impl AppealFinanceCheckpointRuntime for IdentityOnlyCheckpointRuntime {
         fn identity(
             &self,
@@ -44900,14 +42590,12 @@ mod appeal_finance_runtime_signer_tests {
         {
             Ok(self.identity.clone())
         }
-
         fn sign_digest(
             &self,
             _digest: [u8; 32],
         ) -> Result<[u8; 64], AppealFinanceCheckpointExternalError> {
             Err(AppealFinanceCheckpointExternalError::Unavailable)
         }
-
         fn load_latest(
             &self,
         ) -> Result<
@@ -44916,7 +42604,6 @@ mod appeal_finance_runtime_signer_tests {
         > {
             Err(AppealFinanceCheckpointExternalError::Unavailable)
         }
-
         fn compare_and_swap_latest(
             &self,
             _expected_revision: Option<[u8; 32]>,
@@ -44925,14 +42612,12 @@ mod appeal_finance_runtime_signer_tests {
             Err(AppealFinanceCheckpointExternalError::Unavailable)
         }
     }
-
     #[derive(Debug)]
     struct DurableTestCheckpointRuntime {
         identity: AppealFinanceCheckpointRuntimeIdentityV1,
         signing_key: SigningKey,
         latest: Mutex<Option<AppealFinanceSealedCheckpointRecordV1>>,
     }
-
     impl DurableTestCheckpointRuntime {
         fn new(seed: u8) -> Self {
             let signing_key = SigningKey::from_bytes(&[seed; 32]);
@@ -44946,7 +42631,6 @@ mod appeal_finance_runtime_signer_tests {
                 latest: Mutex::new(None),
             }
         }
-
         fn authentication_policy(&self) -> AppealFinanceCheckpointAuthenticationPolicyV1 {
             AppealFinanceCheckpointAuthenticationPolicyV1 {
                 version: APPEAL_FINANCE_CHECKPOINT_AUTHENTICATION_POLICY_VERSION_V1,
@@ -44957,7 +42641,6 @@ mod appeal_finance_runtime_signer_tests {
             }
         }
     }
-
     impl AppealFinanceCheckpointRuntime for DurableTestCheckpointRuntime {
         fn identity(
             &self,
@@ -44965,14 +42648,12 @@ mod appeal_finance_runtime_signer_tests {
         {
             Ok(self.identity.clone())
         }
-
         fn sign_digest(
             &self,
             digest: [u8; 32],
         ) -> Result<[u8; 64], AppealFinanceCheckpointExternalError> {
             Ok(self.signing_key.sign(&digest).to_bytes())
         }
-
         fn load_latest(
             &self,
         ) -> Result<
@@ -44984,7 +42665,6 @@ mod appeal_finance_runtime_signer_tests {
                 .map(|latest| latest.clone())
                 .map_err(|_| AppealFinanceCheckpointExternalError::Unavailable)
         }
-
         fn compare_and_swap_latest(
             &self,
             expected_revision: Option<[u8; 32]>,
@@ -45006,7 +42686,6 @@ mod appeal_finance_runtime_signer_tests {
             Ok(())
         }
     }
-
     fn durable_test_forwarder(
         policy: AppealFinanceTransactionForwarderPolicyV1,
     ) -> (AppealFinanceTransactionForwarder, TempDir) {
@@ -45022,7 +42701,6 @@ mod appeal_finance_runtime_signer_tests {
         .expect("durable appeal-finance forwarder");
         (forwarder, state_dir)
     }
-
     fn submitter(
         bindings: Vec<iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding>,
         providers: Vec<Arc<dyn SoraFsAppealFinanceTransactionSigner>>,
@@ -45047,7 +42725,6 @@ mod appeal_finance_runtime_signer_tests {
         };
         (submitter, state_dir)
     }
-
     #[test]
     fn registry_rejects_duplicate_opaque_handles() {
         let result = SoraFsAppealFinanceRuntimeSignersV1::new(vec![
@@ -45059,7 +42736,6 @@ mod appeal_finance_runtime_signer_tests {
             Err(SoraFsAppealFinanceRuntimeSignerRegistryError::DuplicateHandle)
         ));
     }
-
     #[test]
     fn registry_handles_use_central_production_grammar() {
         SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(
@@ -45067,7 +42743,6 @@ mod appeal_finance_runtime_signer_tests {
             key(2),
         )])
         .expect("canonical production runtime handle");
-
         for handle in [
             "hsm:test:appeal",
             "https://operator:secret@appeal-signer",
@@ -45083,7 +42758,6 @@ mod appeal_finance_runtime_signer_tests {
             ));
         }
     }
-
     #[test]
     fn post_sign_qualification_drift_discards_transaction_bytes() {
         let configured = key(12);
@@ -45117,13 +42791,11 @@ mod appeal_finance_runtime_signer_tests {
         )
         .into_payload()
         .expect("transaction payload");
-
         assert!(matches!(
             signer.sign(payload),
             Err(SoraFsAppealFinanceSigningError::QualificationChanged)
         ));
     }
-
     #[test]
     fn startup_qualification_rejects_missing_registry() {
         let configured = key(6);
@@ -45139,13 +42811,11 @@ mod appeal_finance_runtime_signer_tests {
                 revoked_at_block_height: None,
             },
         ];
-
         assert!(matches!(
             qualify_appeal_finance_runtime_signer_inventory(&bindings, None, 7),
             Err(SoraFsAppealFinanceRuntimeSignerQualificationError::RegistryMissing)
         ));
     }
-
     #[test]
     fn construction_rejects_missing_registry_before_checkpoint_or_state_access() {
         let configured = key(6);
@@ -45164,7 +42834,6 @@ mod appeal_finance_runtime_signer_tests {
         ];
         let storage_dir = tempfile::tempdir().expect("temporary storage directory");
         let checkpoint_runtime = Arc::new(UnexpectedCheckpointRuntime::default());
-
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe({
             let checkpoint_runtime = checkpoint_runtime.clone();
             || {
@@ -45177,7 +42846,6 @@ mod appeal_finance_runtime_signer_tests {
                 )
             }
         }));
-
         assert!(result.is_err(), "missing registry must reject construction");
         assert!(
             !checkpoint_runtime.identity_called.load(Ordering::SeqCst),
@@ -45191,7 +42859,6 @@ mod appeal_finance_runtime_signer_tests {
             "durable state must not be opened before signer qualification"
         );
     }
-
     #[test]
     fn construction_rejects_substituted_checkpoint_binding_before_state_access() {
         let transaction_key = key(13);
@@ -45242,7 +42909,6 @@ mod appeal_finance_runtime_signer_tests {
             },
         });
         let storage_dir = tempfile::tempdir().expect("temporary storage directory");
-
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             SoraFsAppealSettlementSubmitter::from_config(
                 &config,
@@ -45252,7 +42918,6 @@ mod appeal_finance_runtime_signer_tests {
                 checkpoint_runtime,
             )
         }));
-
         assert!(result.is_err(), "substituted checkpoint must fail startup");
         assert!(
             !storage_dir
@@ -45262,7 +42927,6 @@ mod appeal_finance_runtime_signer_tests {
             "state must not be opened before checkpoint qualification"
         );
     }
-
     #[test]
     fn startup_qualification_rejects_missing_active_or_future_provider() {
         let configured = key(7);
@@ -45304,7 +42968,6 @@ mod appeal_finance_runtime_signer_tests {
                 }
             ) if handle == "hsm:appeal-current"
         ));
-
         let only_current = SoraFsAppealFinanceRuntimeSignersV1::new(vec![provider(
             "hsm:appeal-current",
             configured,
@@ -45323,7 +42986,6 @@ mod appeal_finance_runtime_signer_tests {
             ) if handle == "hsm:appeal-future"
         ));
     }
-
     #[test]
     fn startup_qualification_rejects_key_and_account_substitution() {
         let configured = key(8);
@@ -45351,7 +43013,6 @@ mod appeal_finance_runtime_signer_tests {
             ),
             Err(SoraFsAppealFinanceRuntimeSignerQualificationError::PublicKeyMismatch { .. })
         ));
-
         let substituted_account_binding =
             iroha_config::parameters::actual::SorafsAppealFinanceSignerBinding {
                 authority: AccountId::new(substituted.public_key().clone()),
@@ -45371,7 +43032,6 @@ mod appeal_finance_runtime_signer_tests {
             Err(SoraFsAppealFinanceRuntimeSignerQualificationError::AccountIdMismatch { .. })
         ));
     }
-
     #[test]
     fn startup_qualification_allows_omitted_revoked_historical_provider() {
         let configured = key(10);
@@ -45401,11 +43061,9 @@ mod appeal_finance_runtime_signer_tests {
             configured,
         )])
         .expect("valid current registry");
-
         qualify_appeal_finance_runtime_signer_inventory(&bindings, Some(&registry), 10)
             .expect("already-revoked historical providers may be omitted");
     }
-
     #[test]
     fn startup_qualification_accepts_complete_rotation_inventory() {
         let configured = key(11);
@@ -45444,11 +43102,9 @@ mod appeal_finance_runtime_signer_tests {
             provider("hsm:appeal-future", configured),
         ])
         .expect("valid rotation registry");
-
         qualify_appeal_finance_runtime_signer_inventory(&bindings, Some(&registry), 10)
             .expect("current and future rotation providers qualify at startup");
     }
-
     #[test]
     fn selection_rejects_provider_key_substitution() {
         let configured = key(3);
@@ -45472,7 +43128,6 @@ mod appeal_finance_runtime_signer_tests {
             Err(SoraFsAppealFinanceSignerSelectionError::IdentityMismatch)
         ));
     }
-
     #[test]
     fn active_binding_observation_does_not_require_runtime_signer_provider() {
         let configured = key(4);
@@ -45503,7 +43158,6 @@ mod appeal_finance_runtime_signer_tests {
             Err(SoraFsAppealFinanceSignerSelectionError::ProviderMissing)
         ));
     }
-
     #[test]
     fn selection_obeys_rotation_and_revocation_boundaries() {
         let configured = key(5);
@@ -45558,7 +43212,6 @@ mod appeal_finance_runtime_signer_tests {
         ));
     }
 }
-
 #[cfg(feature = "app_api")]
 pub use sorafs::native_transaction_signer::{
     SoraFsOrderbookTransactionSigner, SoraFsOrderbookTransactionSigningError,
@@ -45574,7 +43227,6 @@ pub use sorafs::native_transaction_signer::{
     qualify_sorafs_proof_outcome_transaction_signer_v1,
     qualify_sorafs_repair_transaction_signer_v1, qualify_sorafs_reserve_transaction_signer_v1,
 };
-
 #[cfg(feature = "app_api")]
 const SORAFS_EVIDENCE_VIEWER_MISSING_RUNTIME_DEPENDENCIES: &str = "missing_runtime_dependencies";
 #[cfg(feature = "app_api")]
@@ -45582,7 +43234,6 @@ const SORAFS_EVIDENCE_VIEWER_UNEXPECTED_RUNTIME_DEPENDENCIES: &str =
     "unexpected_runtime_dependencies";
 #[cfg(feature = "app_api")]
 const SORAFS_EVIDENCE_VIEWER_INITIALIZATION_FAILED: &str = "initialization_failed";
-
 #[cfg(feature = "app_api")]
 fn sorafs_evidence_viewer_dependency_error(
     policy_configured: bool,
@@ -45613,7 +43264,6 @@ fn sorafs_evidence_viewer_dependency_error(
             .then_some(SORAFS_EVIDENCE_VIEWER_UNEXPECTED_RUNTIME_DEPENDENCIES)
     }
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod sorafs_evidence_viewer_startup_tests {
     use super::*;
@@ -45637,7 +43287,6 @@ mod sorafs_evidence_viewer_startup_tests {
                 (supplied_mask != 0b111_1111)
                     .then_some(SORAFS_EVIDENCE_VIEWER_MISSING_RUNTIME_DEPENDENCIES)
             );
-
             let disabled_error = sorafs_evidence_viewer_dependency_error(
                 false,
                 supplied(0),
@@ -45655,14 +43304,12 @@ mod sorafs_evidence_viewer_startup_tests {
             );
         }
     }
-
     #[test]
     fn launcher_uses_only_the_qualified_checkpoint_store_entry_point() {
         let compact_source: String = include_str!("lib.rs")
             .chars()
             .filter(|character| !character.is_whitespace())
             .collect();
-
         let qualified_open = [
             "EvidenceViewerServiceV1::",
             "open_with_checkpoint_store(service_config,service_deps,sorafs_node.clone(),",
@@ -45685,7 +43332,6 @@ mod sorafs_evidence_viewer_startup_tests {
             "open(service_config,service_deps,sorafs_node.clone())",
         ]
         .concat();
-
         assert!(compact_source.contains(&qualified_open));
         assert!(compact_source.contains(&revision_pin));
         assert!(compact_source.contains(&digest_pin));
@@ -45705,7 +43351,6 @@ mod sorafs_evidence_viewer_startup_tests {
         assert!(compact_source.contains("producer.reconcile().is_ok()"));
         assert!(!compact_source.contains(&providerless_open));
     }
-
     #[test]
     fn launcher_uses_bounded_archive_compaction_without_a_fallback() {
         let compact_source: String = include_str!("lib.rs")
@@ -45713,7 +43358,6 @@ mod sorafs_evidence_viewer_startup_tests {
             .filter(|character| !character.is_whitespace())
             .collect();
         let mock_archive_constructor = ["MockCompactionArchive", "::new"].concat();
-
         assert!(
             compact_source
                 .contains("self.spawn_evidence_viewer_compaction_worker(shutdown_signal.clone())")
@@ -45725,7 +43369,6 @@ mod sorafs_evidence_viewer_startup_tests {
         assert!(compact_source.contains("Duration::from_millis(service.compaction_interval_ms())"));
         assert!(!compact_source.contains(&mock_archive_constructor));
     }
-
     #[test]
     fn transparency_retry_backoff_is_bounded_and_deterministic() {
         assert_eq!(evidence_viewer_transparency_backoff_ticks(0), 0);
@@ -45736,7 +43379,6 @@ mod sorafs_evidence_viewer_startup_tests {
         assert_eq!(EVIDENCE_VIEWER_TRANSPARENCY_PAGE_ITEMS_V1, 256);
         assert_eq!(EVIDENCE_VIEWER_TRANSPARENCY_MAX_PAGES_PER_TICK_V1, 16);
     }
-
     #[tokio::test]
     async fn evidence_viewer_compaction_supervision_joins_on_normal_shutdown() {
         let shutdown = ShutdownSignal::new();
@@ -45752,7 +43394,6 @@ mod sorafs_evidence_viewer_startup_tests {
             server_shutdown.receive().await;
             Ok::<(), std::io::Error>(())
         };
-
         let supervised_shutdown = shutdown.clone();
         let supervision = tokio::spawn(async move {
             supervise_evidence_viewer_compaction_worker(supervised_shutdown, Some(worker), server)
@@ -45760,7 +43401,6 @@ mod sorafs_evidence_viewer_startup_tests {
         });
         tokio::task::yield_now().await;
         shutdown.send();
-
         let server_result = tokio::time::timeout(Duration::from_secs(1), supervision)
             .await
             .expect("normal compaction shutdown must not hang")
@@ -45769,7 +43409,6 @@ mod sorafs_evidence_viewer_startup_tests {
         server_result.expect("test Torii server must stop cleanly");
         assert!(worker_joined.load(AtomicOrdering::Acquire));
     }
-
     #[tokio::test]
     async fn evidence_viewer_compaction_supervision_fails_closed_on_unexpected_exit() {
         let shutdown = ShutdownSignal::new();
@@ -45782,7 +43421,6 @@ mod sorafs_evidence_viewer_startup_tests {
             server_observed_shutdown_after_stop.store(true, AtomicOrdering::Release);
             Ok::<(), std::io::Error>(())
         };
-
         let failure = tokio::time::timeout(
             Duration::from_secs(1),
             supervise_evidence_viewer_compaction_worker(shutdown.clone(), Some(worker), server),
@@ -45790,7 +43428,6 @@ mod sorafs_evidence_viewer_startup_tests {
         .await
         .expect("unexpected compaction exit must not hang")
         .expect_err("unexpected compaction exit must fail supervision");
-
         assert_eq!(
             failure,
             EvidenceViewerCompactionSupervisionFailure::WorkerExitedUnexpectedly
@@ -45798,7 +43435,6 @@ mod sorafs_evidence_viewer_startup_tests {
         assert!(shutdown.is_sent());
         assert!(server_observed_shutdown.load(AtomicOrdering::Acquire));
     }
-
     #[tokio::test]
     async fn evidence_viewer_compaction_supervision_fails_closed_on_panic() {
         let shutdown = ShutdownSignal::new();
@@ -45810,7 +43446,6 @@ mod sorafs_evidence_viewer_startup_tests {
             server_shutdown.receive().await;
             Ok::<(), std::io::Error>(())
         };
-
         let failure = tokio::time::timeout(
             Duration::from_secs(1),
             supervise_evidence_viewer_compaction_worker(shutdown.clone(), Some(worker), server),
@@ -45818,20 +43453,17 @@ mod sorafs_evidence_viewer_startup_tests {
         .await
         .expect("panicked compaction worker supervision must not hang")
         .expect_err("panicked compaction worker must fail supervision");
-
         assert_eq!(
             failure,
             EvidenceViewerCompactionSupervisionFailure::WorkerPanicked
         );
         assert!(shutdown.is_sent());
     }
-
     #[test]
     fn startup_failure_is_typed_and_payload_free() {
         let error = Error::SorafsEvidenceViewerStartup {
             code: SORAFS_EVIDENCE_VIEWER_INITIALIZATION_FAILED,
         };
-
         assert_eq!(error.status_code(), StatusCode::SERVICE_UNAVAILABLE);
         let envelope = error.into_envelope();
         assert_eq!(envelope.code(), "sorafs_evidence_viewer_startup_error");
@@ -45842,7 +43474,6 @@ mod sorafs_evidence_viewer_startup_tests {
         assert!(!envelope.message().contains("initialization_failed"));
     }
 }
-
 const fn iso_bridge_body_limit(configured: u64, transaction_limit: usize) -> usize {
     let configured = if configured > usize::MAX as u64 {
         usize::MAX
@@ -45856,7 +43487,6 @@ const fn iso_bridge_body_limit(configured: u64, transaction_limit: usize) -> usi
         transaction_limit
     }
 }
-
 #[cfg(feature = "app_api")]
 fn rebuild_musubi_search_index(
     state: &CoreState,
@@ -45869,7 +43499,6 @@ fn rebuild_musubi_search_index(
     use iroha_data_model::musubi::{
         MusubiPackageMetadataRecordV1, MusubiPackageRecordV1, MusubiSearchSnapshotV1,
     };
-
     let state_view = state.view();
     let Some(finalized_block_hash) = state_view.block_hashes().last().map(|hash| *hash.as_ref())
     else {
@@ -45904,7 +43533,6 @@ fn rebuild_musubi_search_index(
         },
     )
 }
-
 #[cfg(feature = "app_api")]
 fn select_initial_musubi_search_index(
     rebuilt: core::result::Result<
@@ -45926,7 +43554,6 @@ fn select_initial_musubi_search_index(
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 fn finalized_block_hash_at(state: &CoreState, height: u64) -> Option<[u8; 32]> {
     let index = usize::try_from(height.checked_sub(1)?).ok()?;
@@ -45936,7 +43563,6 @@ fn finalized_block_hash_at(state: &CoreState, height: u64) -> Option<[u8; 32]> {
         .get(index)
         .map(|hash| *hash.as_ref())
 }
-
 #[cfg(test)]
 mod iso_bridge_body_limit_tests {
     use super::iso_bridge_body_limit;
@@ -45948,7 +43574,6 @@ mod iso_bridge_body_limit_tests {
         assert_eq!(iso_bridge_body_limit(0, 64_000_000), 1);
     }
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod musubi_search_initialization_tests {
     use iroha_core::musubi_search::{MusubiSearchError, MusubiSearchIndexV1};
@@ -45963,7 +43588,6 @@ mod musubi_search_initialization_tests {
         let unavailable =
             select_initial_musubi_search_index(Err(MusubiSearchError::InconsistentFinalizedEvent));
         assert!(unavailable.snapshot().is_none());
-
         let snapshot = MusubiSearchSnapshotV1 {
             finalized_height: 7,
             finalized_block_hash: [0x51; 32],
@@ -45979,7 +43603,6 @@ mod musubi_search_initialization_tests {
         assert_eq!(available.snapshot(), Some(snapshot));
     }
 }
-
 /// Main network handler and the only entrypoint of the Iroha.
 pub struct Torii {
     chain_id: Arc<ChainId>,
@@ -46203,7 +43826,6 @@ pub struct Torii {
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     soracloud_hf_config: iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
 }
-
 /// Optional runtime-owned Torii dependencies that are not present in all embeddings.
 ///
 /// Fused privacy publication has exactly two valid ownership modes. A standalone
@@ -46328,7 +43950,6 @@ pub struct ToriiRuntimeDeps {
     vpn_relay_trust: Option<Arc<VpnRelayTrust>>,
     torii_proxy_bridge_signer: Option<KeyPair>,
 }
-
 impl ToriiRuntimeDeps {
     /// Construct runtime dependencies from the resolved telemetry handle.
     #[must_use]
@@ -46415,7 +44036,6 @@ impl ToriiRuntimeDeps {
             torii_proxy_bridge_signer: None,
         }
     }
-
     /// Attach the deployment-owned Bootle/Lantern issuance provider registry.
     ///
     /// The registry owns all issuer and authentication secrets. Torii accepts
@@ -46429,14 +44049,12 @@ impl ToriiRuntimeDeps {
         self.bootle_lantern_issuance_provider_registry = Some(registry);
         self
     }
-
     /// Attach the embedded Soracloud runtime-manager handle.
     #[must_use]
     pub fn with_soracloud_runtime(mut self, runtime: SharedSoracloudRuntime) -> Self {
         self.soracloud_runtime = Some(runtime);
         self
     }
-
     /// Attach the resolved Soracloud Hugging Face runtime config.
     #[must_use]
     pub fn with_soracloud_hf_config(
@@ -46446,7 +44064,6 @@ impl ToriiRuntimeDeps {
         self.soracloud_hf_config = Some(config);
         self
     }
-
     /// Attach a prebuilt embedded SoraFS node handle.
     ///
     /// The node must retain its complete fused privacy writer/reader pair and
@@ -46459,7 +44076,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_node = Some(sorafs_node);
         self
     }
-
     /// Attach the runtime-only signer used for authoritative SoraFS proof outcomes.
     ///
     /// Construction qualifies the provider against the exact configured public
@@ -46473,7 +44089,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_proof_outcome_signer = Some(signer);
         self
     }
-
     /// Attach the runtime-only signer used for native SoraFS repair transactions.
     ///
     /// Construction qualifies the provider against the exact configured public
@@ -46487,7 +44102,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_repair_transaction_signer = Some(signer);
         self
     }
-
     /// Attach the runtime-only signer used for native SoraFS reserve/rent transactions.
     ///
     /// Construction qualifies the provider against the exact configured public
@@ -46501,7 +44115,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_reserve_transaction_signer = Some(signer);
         self
     }
-
     /// Attach the runtime-only signer used for native SoraFS orderbook transactions.
     ///
     /// Construction qualifies the provider against the exact configured public
@@ -46515,7 +44128,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_orderbook_transaction_signer = Some(signer);
         self
     }
-
     /// Attach the supervised finalized reputation read boundary.
     ///
     /// Torii receives only this object-safe committed projection API. Runtime
@@ -46530,7 +44142,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_reputation_committed_reader = Some(reader);
         self
     }
-
     /// Attach the supervised finalized-ledger hedging/billing read boundary.
     ///
     /// Torii receives only this object-safe projection API; raw service state,
@@ -46545,7 +44156,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_hedging_billing_runtime = Some(runtime);
         self
     }
-
     /// Attach independently administered runtime-only appeal-finance signers.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -46556,7 +44166,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_appeal_finance_runtime_signers = Some(signers);
         self
     }
-
     /// Attach the runtime-only HSM/KMS signer and monotonic sealed head used
     /// to authenticate appeal-finance forwarder checkpoints.
     #[cfg(feature = "app_api")]
@@ -46570,7 +44179,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_appeal_finance_checkpoint_runtime = Some(runtime);
         self
     }
-
     /// Attach independently administered PoTR gateway/provider signer roles.
     ///
     /// Torii constructs the admission reader itself after its authoritative
@@ -46586,7 +44194,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_potr_runtime_signer_roles = Some(roles);
         self
     }
-
     /// Attach the runtime-only HSM service for exact Torii-built moderation payloads.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -46597,7 +44204,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_moderation_transaction_signer = Some(signer);
         self
     }
-
     /// Attach the durable appeal-finance boundary for finalized moderation outcomes.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -46608,7 +44214,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_moderation_settlement_handoff = Some(boundary);
         self
     }
-
     /// Attach the durable governance/transparency boundary for moderation outcomes.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -46619,7 +44224,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_moderation_publication_handoff = Some(boundary);
         self
     }
-
     /// Attach the durable payload-free juror-notification boundary.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -46630,7 +44234,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_moderation_panel_notification = Some(boundary);
         self
     }
-
     /// Attach the immutable authenticated archive for moderation notification receipts.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -46643,7 +44246,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_moderation_panel_notification_archive = Some(archive);
         self
     }
-
     /// Attach the deployment-owned sealed monotonic moderation checkpoint authority.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -46656,7 +44258,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_moderation_checkpoint_store = Some(checkpoint_store);
         self
     }
-
     /// Attach the runtime-only WebAuthn challenge and verification boundary
     /// used by the case-bound evidence viewer.
     #[cfg(feature = "app_api")]
@@ -46668,7 +44269,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_evidence_viewer_webauthn = Some(boundary);
         self
     }
-
     /// Attach the runtime-only rotating-grant boundary used by the evidence
     /// viewer.
     #[cfg(feature = "app_api")]
@@ -46680,7 +44280,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_evidence_viewer_grants = Some(boundary);
         self
     }
-
     /// Attach the runtime-only Ed25519 receipt signer used by the evidence
     /// viewer.
     #[cfg(feature = "app_api")]
@@ -46692,7 +44291,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_evidence_viewer_receipt_signer = Some(signer);
         self
     }
-
     /// Attach the runtime-only irreversible object-erasure boundary used by the
     /// evidence viewer.
     #[cfg(feature = "app_api")]
@@ -46704,7 +44302,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_evidence_viewer_erasure = Some(boundary);
         self
     }
-
     /// Attach the deployment-owned linearizable checkpoint authority used by
     /// the evidence viewer.
     #[cfg(feature = "app_api")]
@@ -46716,7 +44313,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_evidence_viewer_checkpoint_store = Some(checkpoint_store);
         self
     }
-
     /// Attach the runtime-only authenticated immutable compaction archive used
     /// by the evidence viewer.
     #[cfg(feature = "app_api")]
@@ -46728,7 +44324,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_evidence_viewer_compaction_archive = Some(archive);
         self
     }
-
     /// Attach the deployment-owned signed monotonic transparency-head publisher
     /// used by the evidence viewer.
     #[cfg(feature = "app_api")]
@@ -46743,7 +44338,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_evidence_viewer_transparency_publisher = Some(publisher);
         self
     }
-
     /// Attach the fully constructed runtime-only SoraFS PoP credential service.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -46754,7 +44348,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_pop_credentials = Some(runtime);
         self
     }
-
     /// Attach the runtime-only PKCS#11/KMS wrapper used for SoraFS moderation
     /// quarantine object data keys.
     #[cfg(feature = "app_api")]
@@ -46766,7 +44359,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_moderation_quarantine_key_wrapper = Some(key_wrapper);
         self
     }
-
     /// Attach the runtime-only threshold-PRF provider used for SoraFS
     /// differential-privacy publication cycles.
     #[cfg(feature = "app_api")]
@@ -46778,7 +44370,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_privacy_cycle_prf_provider = Some(provider);
         self
     }
-
     /// Attach the independently administered finalized privacy-release head.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -46789,7 +44380,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_privacy_release_anchor = Some(anchor);
         self
     }
-
     /// Attach the external sealed-CAS leader lease for privacy publication.
     #[cfg(feature = "app_api")]
     #[must_use]
@@ -46800,7 +44390,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_transparency_leader_lease_provider = Some(provider);
         self
     }
-
     /// Attach the deployment-owned fused privacy Governance target writer.
     ///
     /// Standalone node construction requires the authenticated-head reader too.
@@ -46814,7 +44403,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_fenced_transparency_publisher = Some(publisher);
         self
     }
-
     /// Attach the authenticated authoritative-head reader for fused privacy publication.
     ///
     /// Standalone node construction requires the fused target writer too. Both
@@ -46829,7 +44417,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_fenced_transparency_head_reader = Some(reader);
         self
     }
-
     /// Attach the runtime-only HSM signer for the signed Governance DAG root.
     ///
     /// Standalone node construction requires this role whenever
@@ -46845,7 +44432,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_governance_dag_signer = Some(signer);
         self
     }
-
     /// Attach the sealed monotonic checkpoint store for a standalone signed
     /// Governance DAG producer.
     ///
@@ -46862,7 +44448,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_governance_dag_checkpoint_store = Some(checkpoint_store);
         self
     }
-
     /// Attach the runtime-only audited ACME client used by SoraFS gateway TLS
     /// automation. The client owns no configuration fallback.
     #[cfg(feature = "app_api")]
@@ -46874,7 +44459,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_gateway_acme_client = Some(client);
         self
     }
-
     /// Attach the runtime-only authenticated DNS/HTTPS transport used to fetch
     /// configured SoraFS gateway compliance feeds.
     #[cfg(feature = "app_api")]
@@ -46886,7 +44470,6 @@ impl ToriiRuntimeDeps {
         self.sorafs_gateway_compliance_feed_transport = Some(transport);
         self
     }
-
     /// Attach a shared SoraFS provider-discovery cache.
     #[must_use]
     pub fn with_sorafs_cache(
@@ -46896,21 +44479,18 @@ impl ToriiRuntimeDeps {
         self.sorafs_cache = Some(sorafs_cache);
         self
     }
-
     /// Attach the shared secret used to mint helper-authenticated VPN tickets.
     #[must_use]
     pub fn with_vpn_helper_ticket_secret(mut self, secret: Option<[u8; 32]>) -> Self {
         self.vpn_helper_ticket_secret = secret;
         self
     }
-
     /// Attach immutable VPN relay trust authenticated during node startup.
     #[must_use]
     pub fn with_vpn_relay_trust(mut self, trust: Option<VpnRelayTrust>) -> Self {
         self.vpn_relay_trust = trust.map(Arc::new);
         self
     }
-
     /// Attach the node keypair used to sign internal Torii HTTP bridge requests.
     #[must_use]
     pub fn with_torii_proxy_bridge_signer(mut self, signer: KeyPair) -> Self {
@@ -46918,13 +44498,11 @@ impl ToriiRuntimeDeps {
         self
     }
 }
-
 impl From<routing::MaybeTelemetry> for ToriiRuntimeDeps {
     fn from(telemetry: routing::MaybeTelemetry) -> Self {
         Self::new(telemetry)
     }
 }
-
 #[cfg(feature = "app_api")]
 fn qualify_configured_sorafs_native_transaction_signer_for_startup<S>(
     role: SorafsNativeTransactionSignerRoleV1,
@@ -46991,7 +44569,6 @@ where
         )
     })
 }
-
 #[cfg(feature = "app_api")]
 const fn sorafs_native_signer_role_required(
     storage_enabled: bool,
@@ -46999,14 +44576,12 @@ const fn sorafs_native_signer_role_required(
 ) -> bool {
     storage_enabled || role_generation_enabled
 }
-
 #[cfg(feature = "app_api")]
 fn preflight_sorafs_native_transaction_signers(
     config: &Config,
     runtime_deps: &mut ToriiRuntimeDeps,
 ) -> Result<(), String> {
     let configured = &config.sorafs_storage.native_transaction_signers;
-
     let proof_provider = runtime_deps.sorafs_proof_outcome_signer.take();
     runtime_deps.sorafs_proof_outcome_signer =
         qualify_configured_sorafs_native_transaction_signer_for_startup(
@@ -47016,7 +44591,6 @@ fn preflight_sorafs_native_transaction_signers(
             proof_provider,
             qualify_sorafs_proof_outcome_transaction_signer_v1,
         )?;
-
     let repair_provider = runtime_deps.sorafs_repair_transaction_signer.take();
     runtime_deps.sorafs_repair_transaction_signer =
         qualify_configured_sorafs_native_transaction_signer_for_startup(
@@ -47029,7 +44603,6 @@ fn preflight_sorafs_native_transaction_signers(
             repair_provider,
             qualify_sorafs_repair_transaction_signer_v1,
         )?;
-
     let reserve_provider = runtime_deps.sorafs_reserve_transaction_signer.take();
     runtime_deps.sorafs_reserve_transaction_signer =
         qualify_configured_sorafs_native_transaction_signer_for_startup(
@@ -47042,7 +44615,6 @@ fn preflight_sorafs_native_transaction_signers(
             reserve_provider,
             qualify_sorafs_reserve_transaction_signer_v1,
         )?;
-
     let orderbook_provider = runtime_deps.sorafs_orderbook_transaction_signer.take();
     runtime_deps.sorafs_orderbook_transaction_signer =
         qualify_configured_sorafs_native_transaction_signer_for_startup(
@@ -47055,10 +44627,8 @@ fn preflight_sorafs_native_transaction_signers(
             orderbook_provider,
             qualify_sorafs_orderbook_transaction_signer_v1,
         )?;
-
     Ok(())
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod sorafs_native_transaction_signer_startup_tests {
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
@@ -47071,7 +44641,6 @@ mod sorafs_native_transaction_signer_startup_tests {
 
     const QUALIFICATION: SorafsNativeTransactionSignerQualificationV1 =
         SorafsNativeTransactionSignerQualificationV1::new(9, [0x59; 32]);
-
     #[test]
     fn storage_enabled_requires_native_signers_independently_of_generation_flags() {
         assert!(sorafs_native_signer_role_required(true, false));
@@ -47079,12 +44648,10 @@ mod sorafs_native_transaction_signer_startup_tests {
         assert!(sorafs_native_signer_role_required(false, true));
         assert!(!sorafs_native_signer_role_required(false, false));
     }
-
     struct ProofSigner {
         handle: String,
         key_pair: KeyPair,
     }
-
     impl ProofSigner {
         fn new(handle: impl Into<String>, seed: u8) -> Self {
             Self {
@@ -47093,7 +44660,6 @@ mod sorafs_native_transaction_signer_startup_tests {
                     .expect("derive native signer startup fixture"),
             }
         }
-
         fn configured_binding(
             &self,
         ) -> iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding {
@@ -47108,24 +44674,19 @@ mod sorafs_native_transaction_signer_startup_tests {
             }
         }
     }
-
     impl SorafsNativeTransactionSignerProviderV1 for ProofSigner {
         fn role(&self) -> SorafsNativeTransactionSignerRoleV1 {
             SorafsNativeTransactionSignerRoleV1::ProofOutcome
         }
-
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn authority(&self) -> AccountId {
             AccountId::new(self.key_pair.public_key().clone())
         }
-
         fn public_key(&self) -> Result<PublicKey, SorafsNativeTransactionSignerProbeErrorV1> {
             Ok(self.key_pair.public_key().clone())
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -47135,7 +44696,6 @@ mod sorafs_native_transaction_signer_startup_tests {
             Ok(QUALIFICATION)
         }
     }
-
     impl SoraFsProofOutcomeTransactionSigner for ProofSigner {
         fn sign(
             &self,
@@ -47146,7 +44706,6 @@ mod sorafs_native_transaction_signer_startup_tests {
                 .map_err(|_| SoraFsProofOutcomeSigningError::Refused)
         }
     }
-
     #[test]
     fn required_native_signer_role_rejects_missing_binding_and_provider() {
         let error = qualify_configured_sorafs_native_transaction_signer_for_startup::<
@@ -47160,10 +44719,8 @@ mod sorafs_native_transaction_signer_startup_tests {
         )
         .err()
         .expect("required role must fail without a configured binding");
-
         assert!(error.contains("missing its configured binding"));
     }
-
     #[test]
     fn inactive_native_signer_role_rejects_injected_provider() {
         let provider: Arc<dyn SoraFsProofOutcomeTransactionSigner> = Arc::new(ProofSigner::new(
@@ -47179,16 +44736,13 @@ mod sorafs_native_transaction_signer_startup_tests {
         )
         .err()
         .expect("inactive role must reject an injected provider");
-
         assert!(error.contains("rejects an injected runtime provider"));
     }
-
     #[test]
     fn native_signer_startup_qualifies_exact_configured_provider() {
         let provider = Arc::new(ProofSigner::new("hsm://sorafs/proof-outcome/primary", 0x21));
         let configured = provider.configured_binding();
         let provider: Arc<dyn SoraFsProofOutcomeTransactionSigner> = provider;
-
         let qualified = qualify_configured_sorafs_native_transaction_signer_for_startup(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
             true,
@@ -47198,13 +44752,11 @@ mod sorafs_native_transaction_signer_startup_tests {
         )
         .expect("exact configured provider must qualify")
         .expect("enabled role returns its qualified facade");
-
         assert_eq!(qualified.handle(), configured.handle);
         assert_eq!(qualified.authority(), configured.authority);
         assert_eq!(qualified.public_key(), Ok(configured.public_key));
         assert_eq!(qualified.qualification(), Ok(QUALIFICATION));
     }
-
     #[test]
     fn native_signer_startup_rejects_substituted_provider() {
         let expected = ProofSigner::new("hsm://sorafs/proof-outcome/primary", 0x31);
@@ -47213,7 +44765,6 @@ mod sorafs_native_transaction_signer_startup_tests {
             "hsm://sorafs/proof-outcome/substituted",
             0x32,
         ));
-
         let error = qualify_configured_sorafs_native_transaction_signer_for_startup(
             SorafsNativeTransactionSignerRoleV1::ProofOutcome,
             true,
@@ -47223,11 +44774,9 @@ mod sorafs_native_transaction_signer_startup_tests {
         )
         .err()
         .expect("substituted provider must fail startup qualification");
-
         assert!(error.contains("substituted"));
     }
 }
-
 #[cfg(feature = "app_api")]
 fn sorafs_signed_governance_binding_matches(
     left: &sorafs_node::config::StorageConfig,
@@ -47244,7 +44793,6 @@ fn sorafs_signed_governance_binding_matches(
         && left.governance_dag_publisher_public_key_hex()
             == right.governance_dag_publisher_public_key_hex()
 }
-
 #[cfg(feature = "app_api")]
 fn preflight_sorafs_governance_dag_signer(
     storage_config: &sorafs_node::config::StorageConfig,
@@ -47293,7 +44841,6 @@ fn preflight_sorafs_governance_dag_signer(
     }
     Ok(())
 }
-
 #[cfg(feature = "app_api")]
 fn preflight_sorafs_governance_dag_checkpoint_store(
     storage_config: &sorafs_node::config::StorageConfig,
@@ -47306,7 +44853,6 @@ fn preflight_sorafs_governance_dag_checkpoint_store(
                 .to_owned(),
         );
     }
-
     let producer_configured = storage_config.governance_dir().is_some();
     let expected_handle = storage_config
         .governance_dag_checkpoint_store_handle()
@@ -47342,7 +44888,6 @@ fn preflight_sorafs_governance_dag_checkpoint_store(
             );
         }
     };
-
     if let Some(node) = prebuilt_node {
         if node.governance_dag_checkpoint_store_binding() != expected_binding {
             return Err(
@@ -47352,7 +44897,6 @@ fn preflight_sorafs_governance_dag_checkpoint_store(
         }
         return Ok(());
     }
-
     let Some((expected_handle, expected_qualification)) = expected_binding else {
         return if checkpoint_store.is_some() {
             Err(
@@ -47383,7 +44927,6 @@ fn preflight_sorafs_governance_dag_checkpoint_store(
     }
     Ok(())
 }
-
 #[cfg(feature = "app_api")]
 fn preflight_sorafs_fenced_privacy_runtime(
     storage_config: &sorafs_node::config::StorageConfig,
@@ -47398,7 +44941,6 @@ fn preflight_sorafs_fenced_privacy_runtime(
     let raw_governance_signer = runtime_deps.sorafs_governance_dag_signer.as_ref();
     let raw_governance_checkpoint_store =
         runtime_deps.sorafs_governance_dag_checkpoint_store.as_ref();
-
     if prebuilt_node.is_some()
         && (raw_publisher.is_some() || raw_head_reader.is_some() || raw_governance_signer.is_some())
     {
@@ -47425,7 +44967,6 @@ fn preflight_sorafs_fenced_privacy_runtime(
                 .to_owned(),
         );
     }
-
     if let Some(node) = prebuilt_node {
         preflight_sorafs_governance_dag_checkpoint_store(
             storage_config,
@@ -47449,7 +44990,6 @@ fn preflight_sorafs_fenced_privacy_runtime(
         })?;
         return Ok(());
     }
-
     preflight_sorafs_governance_dag_signer(storage_config, raw_governance_signer)?;
     preflight_sorafs_governance_dag_checkpoint_store(
         storage_config,
@@ -47496,7 +45036,6 @@ fn preflight_sorafs_fenced_privacy_runtime(
     })?;
     Ok(())
 }
-
 #[cfg(feature = "app_api")]
 fn assert_prebuilt_sorafs_quarantine_key_provider_binding(
     node: &sorafs_node::NodeHandle,
@@ -47509,7 +45048,6 @@ fn assert_prebuilt_sorafs_quarantine_key_provider_binding(
         "injected SoraFS node quarantine-key provider binding does not match torii.sorafs.storage"
     );
 }
-
 #[cfg(feature = "app_api")]
 fn assert_prebuilt_sorafs_privacy_provider_bindings(
     node: &sorafs_node::NodeHandle,
@@ -47565,37 +45103,31 @@ fn assert_prebuilt_sorafs_privacy_provider_bindings(
         "a prebuilt SoraFS node must not also receive a raw authenticated privacy-head reader through Torii"
     );
 }
-
 #[cfg(feature = "app_api")]
 struct EvidenceViewerCompactionWorkerHandle {
     task: tokio::task::JoinHandle<()>,
 }
-
 #[cfg(feature = "app_api")]
 impl EvidenceViewerCompactionWorkerHandle {
     fn new(task: tokio::task::JoinHandle<()>) -> Self {
         Self { task }
     }
-
     async fn join(&mut self) -> Result<(), tokio::task::JoinError> {
         (&mut self.task).await
     }
 }
-
 #[cfg(feature = "app_api")]
 impl Drop for EvidenceViewerCompactionWorkerHandle {
     fn drop(&mut self) {
         self.task.abort();
     }
 }
-
 #[cfg(feature = "app_api")]
 const EVIDENCE_VIEWER_TRANSPARENCY_PAGE_ITEMS_V1: usize = 256;
 #[cfg(feature = "app_api")]
 const EVIDENCE_VIEWER_TRANSPARENCY_MAX_PAGES_PER_TICK_V1: usize = 16;
 #[cfg(feature = "app_api")]
 const EVIDENCE_VIEWER_TRANSPARENCY_MAX_BACKOFF_EXPONENT_V1: u8 = 3;
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EvidenceViewerTransparencyTickFailureV1 {
@@ -47603,7 +45135,6 @@ enum EvidenceViewerTransparencyTickFailureV1 {
     PublisherUnavailable,
     CursorDidNotAdvance,
 }
-
 #[cfg(feature = "app_api")]
 impl EvidenceViewerTransparencyTickFailureV1 {
     const fn code(self) -> &'static str {
@@ -47614,7 +45145,6 @@ impl EvidenceViewerTransparencyTickFailureV1 {
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 const fn evidence_viewer_transparency_backoff_ticks(failure_streak: u8) -> u8 {
     if failure_streak == 0 {
@@ -47627,7 +45157,6 @@ const fn evidence_viewer_transparency_backoff_ticks(failure_streak: u8) -> u8 {
     };
     (1_u8 << exponent) - 1
 }
-
 #[cfg(feature = "app_api")]
 fn publish_evidence_viewer_transparency_tick(
     service: &sorafs_node::evidence_viewer::EvidenceViewerServiceV1,
@@ -47648,7 +45177,6 @@ fn publish_evidence_viewer_transparency_tick(
         return Ok(());
     }
     let mut predecessor = current.and_then(|head| head.body.receipt_cursor);
-
     for _ in 0..EVIDENCE_VIEWER_TRANSPARENCY_MAX_PAGES_PER_TICK_V1 {
         let projection = service
             .transparency_projection(
@@ -47678,7 +45206,6 @@ fn publish_evidence_viewer_transparency_tick(
     }
     Ok(())
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EvidenceViewerCompactionSupervisionFailure {
@@ -47687,7 +45214,6 @@ enum EvidenceViewerCompactionSupervisionFailure {
     WorkerCancelled,
     ServerExitedUnexpectedly,
 }
-
 #[cfg(feature = "app_api")]
 impl EvidenceViewerCompactionSupervisionFailure {
     const fn diagnostic(self) -> &'static str {
@@ -47707,7 +45233,6 @@ impl EvidenceViewerCompactionSupervisionFailure {
         }
     }
 }
-
 #[cfg(feature = "app_api")]
 async fn supervise_evidence_viewer_compaction_worker<F>(
     shutdown_signal: ShutdownSignal,
@@ -47722,7 +45247,6 @@ where
         return Ok(server.await);
     };
     tokio::pin!(server);
-
     tokio::select! {
         worker_result = worker.join() => {
             let shutdown_was_sent = shutdown_signal.is_sent();
@@ -47758,7 +45282,6 @@ where
         }
     }
 }
-
 impl Torii {
     #[cfg(feature = "app_api")]
     fn spawn_musubi_search_projection_worker(&self, shutdown_signal: ShutdownSignal) {
@@ -47769,7 +45292,6 @@ impl Torii {
         let search = self.musubi_search.clone();
         tokio::spawn(async move {
             let mut ignore_through_height = 0_u64;
-
             // The subscription is opened before this rebuild, so events committed
             // concurrently are queued. `ignore_through_height` discards only the
             // prefix already represented by the rebuilt finalized state.
@@ -47794,7 +45316,6 @@ impl Torii {
                         iroha_core::musubi_search::MusubiSearchIndexV1::default();
                 }
             }
-
             loop {
                 tokio::select! {
                     _ = shutdown_signal.receive() => break,
@@ -47905,7 +45426,6 @@ impl Torii {
             }
         });
     }
-
     #[cfg(feature = "telemetry")]
     #[allow(clippy::unused_self)]
     fn add_telemetry_routes(&self, builder: &mut RouterBuilder) {
@@ -47955,7 +45475,6 @@ impl Torii {
             mount_authenticated_asset_holder_routes!(self, builder);
         }
     }
-
     #[cfg(not(feature = "telemetry"))]
     #[allow(clippy::unused_self)]
     fn add_telemetry_routes(&self, builder: &mut RouterBuilder) {
@@ -47967,26 +45486,21 @@ impl Torii {
             mount_authenticated_asset_holder_routes!(self, builder);
         }
     }
-
     #[cfg(feature = "app_api")]
     fn spawn_pin_registry_metrics_worker(&self, shutdown_signal: ShutdownSignal) {
         if !self.telemetry.allows_metrics() {
             return;
         }
-
         let state = self.state.clone();
         let telemetry = self.telemetry.clone();
-
         tokio::spawn(async move {
             const PIN_REGISTRY_METRICS_INTERVAL_SECS: u64 = 30;
             let mut ticker =
                 tokio::time::interval(Duration::from_secs(PIN_REGISTRY_METRICS_INTERVAL_SECS));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
             if let Err(err) = Self::sample_pin_registry_metrics(&state, &telemetry) {
                 iroha_logger::error!(?err, "failed to read initial SoraFS pin resource summary");
             }
-
             loop {
                 tokio::select! {
                     _ = shutdown_signal.receive() => break,
@@ -47999,7 +45513,6 @@ impl Torii {
             }
         });
     }
-
     #[cfg(feature = "app_api")]
     fn sample_pin_registry_metrics(
         state: &Arc<CoreState>,
@@ -48007,7 +45520,6 @@ impl Torii {
     ) -> Result<(), String> {
         const PIN_GLOBAL_USAGE_STATE_KEY_V1: &str = "sorafs_pin_accounting_v1/global";
         const PIN_GLOBAL_USAGE_MAX_BYTES_V1: usize = 128;
-
         let key = iroha_data_model::state_path::StatePath::from_str(PIN_GLOBAL_USAGE_STATE_KEY_V1)
             .map_err(|error| format!("invalid pin resource summary state path: {error:?}"))?;
         let world = state.world_view();
@@ -48036,26 +45548,20 @@ impl Torii {
         });
         Ok(())
     }
-
     #[cfg(feature = "app_api")]
     fn spawn_por_ingestion_metrics_worker(&self, shutdown_signal: ShutdownSignal) {
         if !self.telemetry.allows_metrics() || !self.sorafs_node.is_enabled() {
             return;
         }
-
         let telemetry = self.telemetry.clone();
         let sorafs_node = self.sorafs_node.clone();
-
         tokio::spawn(async move {
             const POR_INGEST_METRICS_INTERVAL_SECS: u64 = 30;
             let mut ticker =
                 tokio::time::interval(Duration::from_secs(POR_INGEST_METRICS_INTERVAL_SECS));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
             let mut known_pairs: HashSet<([u8; 32], [u8; 32])> = HashSet::new();
-
             Self::sample_por_ingestion_metrics(&sorafs_node, &telemetry, &mut known_pairs);
-
             loop {
                 tokio::select! {
                     _ = shutdown_signal.receive() => break,
@@ -48070,7 +45576,6 @@ impl Torii {
             }
         });
     }
-
     #[cfg(feature = "app_api")]
     fn spawn_evidence_viewer_compaction_worker(
         &self,
@@ -48083,14 +45588,12 @@ impl Torii {
         else {
             return None;
         };
-
         let task = tokio::spawn(async move {
             let mut ticker =
                 tokio::time::interval(Duration::from_millis(service.compaction_interval_ms()));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut transparency_failure_streak = 0_u8;
             let mut transparency_backoff_ticks = 0_u8;
-
             loop {
                 tokio::select! {
                     _ = shutdown_signal.receive() => break,
@@ -48149,7 +45652,6 @@ impl Torii {
         });
         Some(EvidenceViewerCompactionWorkerHandle::new(task))
     }
-
     #[cfg(feature = "app_api")]
     fn sample_por_ingestion_metrics(
         sorafs_node: &sorafs_node::NodeHandle,
@@ -48158,12 +45660,10 @@ impl Torii {
     ) {
         let statuses = sorafs_node.por_ingestion_overview();
         let mut active_pairs: HashSet<([u8; 32], [u8; 32])> = HashSet::new();
-
         telemetry.with_metrics(|metrics| {
             for status in &statuses {
                 let pair = (status.manifest_digest, status.provider_id);
                 active_pairs.insert(pair);
-
                 let manifest_hex = hex::encode(status.manifest_digest);
                 let provider_hex = hex::encode(status.provider_id);
                 metrics.record_sorafs_por_ingestion_backlog(
@@ -48178,7 +45678,6 @@ impl Torii {
                 );
             }
         });
-
         telemetry.with_metrics(|metrics| {
             for pair in known_pairs.iter() {
                 if active_pairs.contains(pair) {
@@ -48190,10 +45689,8 @@ impl Torii {
                 metrics.record_sorafs_por_ingestion_failures(&provider_hex, &manifest_hex, 0);
             }
         });
-
         *known_pairs = active_pairs;
     }
-
     fn add_sumeragi_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         let app_state = builder.state().clone();
@@ -48210,7 +45707,6 @@ impl Torii {
                 );
             };
         }
-
         mount_operator_get!(EVIDENCE_COUNT, handler_sumeragi_evidence_count);
         mount_operator_get!(EVIDENCE_LIST, handler_sumeragi_evidence);
         mount_get!(SCCP_MESSAGE_PROOF, handler_sccp_message_proof);
@@ -48230,7 +45726,6 @@ impl Torii {
             handler_bridge_finality_attestation
         );
         mount_get!(BRIDGE_FINALITY_BUNDLE, handler_bridge_finality_bundle);
-
         #[cfg(feature = "telemetry")]
         {
             mount_operator_get!(STATUS, handler_sumeragi_status);
@@ -48257,7 +45752,6 @@ impl Torii {
             mount_operator_get!(COMMIT_QC, handler_commit_qc);
         }
     }
-
     fn add_core_info_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         let app_state = builder.state().clone();
@@ -48354,12 +45848,10 @@ impl Torii {
             catalog_get(handler_block_proof),
         );
     }
-
     #[cfg(not(feature = "app_api"))]
     fn add_alias_routes(&self, _builder: &mut RouterBuilder) {
         let _ = self;
     }
-
     #[cfg(feature = "app_api")]
     fn add_alias_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
@@ -48413,12 +45905,10 @@ impl Torii {
             catalog_post(handler_asset_alias_resolve),
         );
     }
-
     #[cfg(not(feature = "app_api"))]
     fn add_fee_routes(&self, _builder: &mut RouterBuilder) {
         let _ = self;
     }
-
     #[cfg(feature = "app_api")]
     fn add_fee_routes(&self, builder: &mut RouterBuilder) {
         let quote_body_limit: usize = self
@@ -48439,7 +45929,6 @@ impl Torii {
                 .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
     }
-
     fn add_time_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         let app_state = builder.state().clone();
@@ -48452,7 +45941,6 @@ impl Torii {
             catalog_get(handler_time_status).authenticated_operator(app_state),
         );
     }
-
     #[cfg(feature = "schema")]
     #[allow(clippy::unused_self)]
     fn add_schema_routes(&self, builder: &mut RouterBuilder) {
@@ -48461,13 +45949,11 @@ impl Torii {
             catalog_get(handler_schema),
         );
     }
-
     #[cfg(not(feature = "schema"))]
     #[allow(clippy::unused_self)]
     fn add_schema_routes(&self, _builder: &mut RouterBuilder) {
         let _ = self;
     }
-
     #[allow(clippy::unused_self)]
     fn add_openapi_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
@@ -48480,7 +45966,6 @@ impl Torii {
             catalog_get(handler_openapi),
         );
     }
-
     #[allow(clippy::unused_self)]
     fn add_operator_auth_routes(&self, builder: &mut RouterBuilder) {
         builder.route(
@@ -48504,7 +45989,6 @@ impl Torii {
                 .authenticated_in_handler(HandlerAuthentication::OperatorCredentialExchange),
         );
     }
-
     #[cfg(feature = "profiling")]
     #[allow(clippy::unused_self)]
     fn add_profiling_routes(&self, builder: &mut RouterBuilder) {
@@ -48514,13 +45998,11 @@ impl Torii {
             catalog_get(handler_profile).authenticated_operator(app_state),
         );
     }
-
     #[cfg(not(feature = "profiling"))]
     #[allow(clippy::unused_self)]
     fn add_profiling_routes(&self, _builder: &mut RouterBuilder) {
         let _ = self;
     }
-
     /// Transactions (binary Norito) endpoint
     fn add_transaction_routes(&self, builder: &mut RouterBuilder) {
         let body_limit: usize = self
@@ -48549,7 +46031,6 @@ impl Torii {
                 .layer(DefaultBodyLimit::max(body_limit))
                 .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
-
         builder.route(
             &route_catalog::iso20022::PACS008_SUBMIT,
             catalog_post(handler_iso_pacs008)
@@ -48633,7 +46114,6 @@ impl Torii {
             catalog_get(handler_iso_sese025).authenticated_operator(app_state),
         );
     }
-
     /// Data-availability ingest endpoints.
     #[allow(clippy::unused_self)]
     fn add_da_routes(&self, builder: &mut RouterBuilder) {
@@ -48721,14 +46201,12 @@ impl Torii {
                 ),
         );
     }
-
     /// Musubi Kotodama package-registry routes.
     #[allow(clippy::unused_self)]
     #[cfg(not(feature = "app_api"))]
     fn add_musubi_routes(&self, _builder: &mut RouterBuilder) {
         let _ = self;
     }
-
     /// Musubi Kotodama package-registry routes.
     #[allow(clippy::unused_self)]
     #[cfg(feature = "app_api")]
@@ -48749,7 +46227,6 @@ impl Torii {
                 );
             };
         }
-
         route!(EXACT_PACKAGE, musubi::handler_find_exact_package);
         route!(EXACT_RELEASE, musubi::handler_find_exact_release);
         route!(
@@ -48821,14 +46298,12 @@ impl Torii {
             musubi::handler_build_release_digest_assert
         );
     }
-
     /// Contracts and VK registry routes
     #[allow(clippy::unused_self)]
     #[cfg(not(feature = "app_api"))]
     fn add_contracts_and_vk_routes(&self, _builder: &mut RouterBuilder) {
         let _ = self;
     }
-
     /// Contracts and VK registry routes
     #[allow(clippy::unused_self)]
     #[cfg(feature = "app_api")]
@@ -49752,7 +47227,6 @@ impl Torii {
                 .authenticated_canonical_account_body(app_state, 0),
         );
     }
-
     /// P2P fallback, event SSE, subscription WS, and block stream WS
     #[allow(clippy::unused_self)]
     fn add_network_stream_routes(&self, builder: &mut RouterBuilder) {
@@ -49769,7 +47243,6 @@ impl Torii {
             catalog_get(|| async move { (axum::http::StatusCode::NOT_FOUND, "p2p_ws disabled") })
                 .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
         );
-
         #[cfg(feature = "app_api")]
         {
             let app = builder.state().clone();
@@ -49823,7 +47296,6 @@ impl Torii {
             );
         }
     }
-
     /// Policy and pipeline recovery routes
     fn add_policy_and_pipeline_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
@@ -49859,7 +47331,6 @@ impl Torii {
             catalog_get(handler_policy).authenticated_operator(app_state),
         );
     }
-
     /// Signed Norito query endpoint
     fn add_query_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
@@ -49869,7 +47340,6 @@ impl Torii {
                 .authenticated_in_handler(HandlerAuthentication::CanonicalSignedBody),
         );
     }
-
     /// Proof record read route
     fn add_proof_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
@@ -49884,7 +47354,6 @@ impl Torii {
             catalog_get(handler_proof_retention_status).authenticated_operator(app_state),
         );
     }
-
     /// Native MCP capability and JSON-RPC bridge routes.
     fn add_mcp_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
@@ -49898,7 +47367,6 @@ impl Torii {
                 .authenticated_in_handler(HandlerAuthentication::NestedRouteAuthentication),
         );
     }
-
     /// Iroha Connect routes (feature-gated)
     #[cfg(feature = "connect")]
     fn add_connect_routes(&self, builder: &mut RouterBuilder) {
@@ -49930,12 +47398,10 @@ impl Torii {
             catalog_get(handler_connect_status).authenticated_operator(app_state),
         );
     }
-
     #[cfg(not(feature = "connect"))]
     fn add_connect_routes(&self, _builder: &mut RouterBuilder) {
         let _ = self;
     }
-
     /// App-facing typed and protocol-native endpoints.
     #[cfg(feature = "app_api")]
     fn add_app_api_routes(&self, builder: &mut RouterBuilder) {
@@ -50662,7 +48128,6 @@ impl Torii {
             catalog_get(handler_kaigi_relays_sse)
                 .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
         );
-
         if self.webhooks_enabled {
             builder.route(
                 &route_catalog::application_api::WEBHOOKS_GET,
@@ -50694,7 +48159,6 @@ impl Torii {
             );
         }
     }
-
     fn add_soracloud_public_runtime_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
         builder.route(
@@ -50714,7 +48178,6 @@ impl Torii {
             catalog_any(handler_soracloud_public_local_read).unauthenticated(),
         );
     }
-
     #[cfg(feature = "app_api")]
     fn add_sorafs_routes(&self, builder: &mut RouterBuilder) {
         // The public route set is a build-time contract. Runtime configuration changes
@@ -50743,7 +48206,6 @@ impl Torii {
             &route_catalog::sorafs::ROUTING_PEERS,
             catalog_get(sorafs::delegated_routing::handle_get_routing_peers),
         );
-
         let sorafs_body_limit: usize = self
             .transaction_max_content_len
             .get()
@@ -50829,7 +48291,6 @@ impl Torii {
                 );
             };
         }
-
         capacity_get!(
             CAPACITY_STATE,
             sorafs::api::handle_get_sorafs_capacity_state
@@ -51206,7 +48667,6 @@ impl Torii {
                 .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
         );
     }
-
     #[cfg(feature = "app_api")]
     fn add_content_routes(builder: &mut RouterBuilder) {
         builder.route(
@@ -51215,7 +48675,6 @@ impl Torii {
                 .authenticated_in_handler(HandlerAuthentication::ManifestConditionalContent),
         );
     }
-
     #[cfg(feature = "app_api")]
     fn add_soradns_routes(builder: &mut RouterBuilder) {
         builder.route(
@@ -51227,7 +48686,6 @@ impl Torii {
             catalog_get(handler_soradns_directory_events),
         );
     }
-
     fn add_cataloged_runtime_governance_routes(&self, builder: &mut RouterBuilder) {
         #[cfg(not(feature = "app_api"))]
         let _ = self;
@@ -51241,7 +48699,6 @@ impl Torii {
             .expect("transaction content limit should fit usize");
         let proof_body_limit =
             usize::try_from(app_state.proof_limits.max_body_bytes).unwrap_or(usize::MAX);
-
         macro_rules! mount_get {
             ($descriptor:ident, $handler:expr) => {
                 builder.route(&routes::$descriptor, catalog_get($handler));
@@ -51287,7 +48744,6 @@ impl Torii {
         mount_account_proof_post!(ZK_MERKLE_PATH, handler_zk_merkle_path);
         mount_account_proof_post!(ZK_VOTE_TALLY, handler_zk_vote_tally);
         mount_authenticated_zk_compute_routes!(builder, app_state, proof_body_limit);
-
         mount_account_get!(RUNTIME_ABI_ACTIVE, handler_runtime_abi_active);
         mount_get!(RUNTIME_ABI_HASH, handler_runtime_abi_hash);
         mount_account_get!(RUNTIME_METRICS, handler_runtime_metrics);
@@ -51311,7 +48767,6 @@ impl Torii {
             NODE_PROJECTION_CHECKPOINT,
             handler_node_query_projection_checkpoint
         );
-
         builder.route(
             &routes::RUNTIME_UPGRADES,
             catalog_get(handler_runtime_upgrades_list).authenticated_operator(app_state.clone()),
@@ -51329,7 +48784,6 @@ impl Torii {
             &routes::RUNTIME_UPGRADE_CANCEL,
             catalog_post(handler_runtime_cancel_upgrade).authenticated_operator(app_state.clone()),
         );
-
         #[cfg(feature = "app_api")]
         {
             builder.route(
@@ -51352,7 +48806,6 @@ impl Torii {
                 catalog_delete(handler_zk_ivm_prove_delete)
                     .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
             );
-
             let attachment_body_limit = crate::zk_attachments::max_bytes_cfg();
             macro_rules! mount_attachment_get {
                 ($descriptor:ident, $handler:expr) => {
@@ -51396,7 +48849,6 @@ impl Torii {
                 mount_attachment_delete!(handler_zk_attachments_disabled);
                 mount_attachment_get!(ZK_ATTACHMENTS_COUNT, handler_zk_attachments_disabled);
             }
-
             builder.route(
                 &routes::NODE_PROJECTION_CHECKPOINT_PLAN,
                 catalog_post(handler_node_query_projection_checkpoint_plan)
@@ -51417,7 +48869,6 @@ impl Torii {
                 catalog_get(handler_node_query_projection_shard_export)
                     .authenticated_operator(app_state.clone()),
             );
-
             mount_account_post!(
                 MINISTRY_AGENDA_DRAFT,
                 handler_ministry_agenda_proposal_draft
@@ -51494,11 +48945,9 @@ impl Torii {
             mount_account_get!(GOV_CITIZEN_STATUS, handler_gov_citizen_status);
         }
     }
-
     fn add_runtime_governance_routes(&self, builder: &mut RouterBuilder) {
         self.add_cataloged_runtime_governance_routes(builder);
     }
-
     /// Construct `Torii` using the classic telemetry arguments (`Telemetry` + enabled flag).
     #[allow(clippy::too_many_arguments)]
     #[cfg(feature = "telemetry")]
@@ -51544,7 +48993,6 @@ impl Torii {
             handle,
         )
     }
-
     /// Construct `Torii` when the telemetry feature is disabled.
     #[allow(clippy::too_many_arguments)]
     #[cfg(not(feature = "telemetry"))]
@@ -51578,7 +49026,6 @@ impl Torii {
             routing::MaybeTelemetry::disabled(),
         )
     }
-
     /// Construct `Torii`.
     ///
     /// # Panics
@@ -52078,9 +49525,7 @@ impl Torii {
         let high_load_subscription_tx_threshold = config
             .api_high_load_subscription_threshold
             .unwrap_or(high_load_stream_tx_threshold);
-
         let telemetry_profile = telemetry.profile();
-
         let api_tokens_set: Arc<HashSet<String>> =
             Arc::new(config.api_tokens.iter().cloned().collect());
         let operator_auth = Arc::new(
@@ -52116,7 +49561,6 @@ impl Torii {
                 "torii.sorafs_por.auditor_signature_threshold ({threshold}) exceeds the configured trusted Ed25519 operator/auditor set ({trusted_auditors})"
             );
         }
-
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_telemetry_urls = config
             .peer_telemetry_urls
@@ -52126,7 +49570,6 @@ impl Torii {
             .collect::<Vec<_>>();
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_geo = telemetry::peers::GeoLookupConfig::from(&config.peer_geo);
-
         #[cfg(all(feature = "telemetry", feature = "app_api"))]
         telemetry.with_metrics(|tel| {
             let metadata = sorafs_gateway_fixture_telemetry();
@@ -52139,7 +49582,6 @@ impl Torii {
                 );
             }
         });
-
         #[cfg(feature = "app_api")]
         let sorafs_admission = load_sorafs_admission(&config);
         #[cfg(feature = "app_api")]
@@ -52501,7 +49943,6 @@ impl Torii {
                     use sorafs_node::moderation_orchestrator::{
                         ModerationOrchestratorConfigV1, ModerationRuntimeProviderQualificationV1,
                     };
-
                     let transaction_signer_qualification =
                         ModerationRuntimeProviderQualificationV1::new(
                             config.transaction_signer_revision,
@@ -53127,7 +50568,6 @@ impl Torii {
             soracloud_hf_config,
         }
     }
-
     /// Wire a P2P handle for WebSocket fallback (feature `p2p_ws`).
     #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     pub fn with_p2p(mut self, p2p: iroha_core::IrohaNetwork) -> Self {
@@ -53146,20 +50586,17 @@ impl Torii {
     pub fn with_p2p(self, _p2p: iroha_core::IrohaNetwork) -> Self {
         self
     }
-
     /// Advertise the local peer id so Torii can decide when ingress requests must be proxied.
     #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
     pub fn with_local_peer_id(mut self, peer_id: PeerId) -> Self {
         self.local_peer_id = Some(peer_id);
         self
     }
-
     /// No-op when P2P support is disabled.
     #[cfg(not(any(feature = "app_api", feature = "p2p_ws", feature = "connect")))]
     pub fn with_local_peer_id(self, _peer_id: PeerId) -> Self {
         self
     }
-
     fn parse_cors_origins(origins: &[String]) -> Vec<HeaderValue> {
         origins
             .iter()
@@ -53178,7 +50615,6 @@ impl Torii {
             })
             .collect()
     }
-
     fn parse_cors_methods(methods: &[String]) -> Vec<HttpMethod> {
         methods
             .iter()
@@ -53192,7 +50628,6 @@ impl Torii {
             })
             .collect()
     }
-
     fn parse_cors_headers(config_path: &str, headers: &[String]) -> Vec<HeaderName> {
         headers
             .iter()
@@ -53205,19 +50640,16 @@ impl Torii {
             })
             .collect()
     }
-
     fn build_cors_layer(&self) -> Option<CorsLayer> {
         if !self.cors.enabled {
             return None;
         }
-
         let origins = Self::parse_cors_origins(&self.cors.allowed_origins);
         if origins.is_empty() {
             panic!(
                 "torii.cors.enabled=true requires at least one torii.cors.allowed_origins entry"
             );
         }
-
         let methods = Self::parse_cors_methods(&self.cors.allowed_methods);
         if methods.is_empty() {
             panic!(
@@ -53247,7 +50679,6 @@ impl Torii {
         }
         Some(layer)
     }
-
     fn prepare_da_runtime_services(&self) -> DaRuntimeServices {
         let replay_store_dir = self.da_ingest.replay_cache_store_dir.clone();
         let replay_cursor_store = da::ReplayCursorStore::open_with_max_lane_epochs(
@@ -53300,7 +50731,6 @@ impl Torii {
             self.da_ingest.spool_batch_max,
             self.telemetry.clone(),
         ));
-
         DaRuntimeServices {
             replay_cache,
             replay_store,
@@ -53308,7 +50738,6 @@ impl Torii {
             spooler,
         }
     }
-
     /// Helper function to create router and shared runtime state.
     #[allow(clippy::too_many_lines)]
     fn create_api_router_with_state(&self) -> (axum::Router, SharedAppState) {
@@ -53334,12 +50763,9 @@ impl Torii {
                 dm_query::ErasedIterQuery<dm::block::BlockHeader>,
             ]);
         }
-
         #[cfg(feature = "app_api")]
         let gateway_components = self.sorafs_gateway_security.clone();
-
         let da_runtime = self.prepare_da_runtime_services();
-
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_telemetry = telemetry::peers::PeerTelemetryService::new(
             collect_peer_urls(&self.online_peers, &self.peer_telemetry_urls),
@@ -53347,7 +50773,6 @@ impl Torii {
             *self.state.network_id_ref(),
             Some(self.da_receipt_signer.clone()),
         );
-
         let zk_ivm_prove_jobs = Arc::new(DashMap::new());
         let zk_ivm_prove_job_budget = Arc::new(ZkIvmProveJobBudget::new(
             self.zk_ivm_prove_job_max_retained_bytes,
@@ -53426,7 +50851,6 @@ impl Torii {
         } else {
             Vec::new()
         });
-
         let app_state: SharedAppState = Arc::new(AppState {
             events: self.events.clone(),
             kura: self.kura.clone(),
@@ -53687,7 +51111,6 @@ impl Torii {
             #[cfg(any(feature = "p2p_ws", feature = "connect"))]
             torii_proxy_sequence: std::sync::atomic::AtomicU64::new(1),
         });
-
         #[cfg(feature = "app_api")]
         if gateway_components.is_some() {
             let version = sorafs_manifest::gateway_fixture::SORAFS_GATEWAY_FIXTURE_VERSION;
@@ -53695,9 +51118,7 @@ impl Torii {
                 metrics.set_sorafs_gateway_fixture_version(version);
             });
         }
-
         let _ = current_torii_queue_pressure(app_state.as_ref());
-
         // Touch certain fields to avoid dead-code warnings under feature combinations
         let _ = (&app_state.kiso, &app_state.online_peers);
         #[cfg(any(feature = "app_api", feature = "p2p_ws", feature = "connect"))]
@@ -53727,7 +51148,6 @@ impl Torii {
             &app_state.account_onboarding,
             &app_state.soracloud_runtime,
         );
-
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         if let Some(tls_state) = &app_state.sorafs_gateway_tls_state {
             if let Ok(snapshot) = tls_state.try_read() {
@@ -53737,7 +51157,6 @@ impl Torii {
                     .with_metrics(|metrics| snapshot.apply_metrics(metrics, now));
             }
         }
-
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         {
             let metadata = sorafs_gateway_fixture_telemetry();
@@ -53750,21 +51169,17 @@ impl Torii {
                 )
             });
         }
-
         #[cfg(any(feature = "p2p_ws", feature = "connect"))]
         if let Some(network) = app_state.p2p.clone() {
             attach_torii_proxy_network(app_state.clone(), network);
         }
-
         let router = self.compose_api_router(app_state.clone());
         (router, app_state)
     }
-
     /// Helper function to create router. This router can be tested without starting up an HTTP server
     fn create_api_router(&self) -> axum::Router {
         self.create_api_router_with_state().0
     }
-
     /// Compose the HTTP router from prepared runtime state.
     #[allow(clippy::too_many_lines)]
     fn compose_api_router(&self, app_state: SharedAppState) -> axum::Router {
@@ -53774,7 +51189,6 @@ impl Torii {
             compiled_route_features(),
         )
         .unwrap_or_else(|error| panic!("invalid Torii route catalog: {error:?}"));
-
         self.add_sumeragi_routes(&mut builder);
         // Core info and introspection
         self.add_telemetry_routes(&mut builder);
@@ -53815,7 +51229,6 @@ impl Torii {
         self.add_app_api_routes(&mut builder);
         #[cfg(feature = "app_api")]
         self.add_soracloud_public_runtime_routes(&mut builder);
-
         let (router, mounted_manifest) = builder
             .finish()
             .unwrap_or_else(|errors| panic!("Torii route assembly failed: {errors:?}"));
@@ -53876,35 +51289,28 @@ impl Torii {
         if let Some(cors_layer) = self.build_cors_layer() {
             router = router.layer(cors_layer);
         }
-
         // A global CORS layer must not manufacture OPTIONS routes which the
         // descriptor explicitly excluded from the mounted projection.
         let router = router.layer(axum::middleware::from_fn(enforce_cataloged_cors_preflight));
-
         // This boundary catches failures from CORS, route-local command guards,
         // authentication, rate/size limits, timeout, and handlers.
         let router = router.layer(axum::middleware::from_fn(catch_handler_panics));
-
         // Reject paths whose interpretation could change across proxies or
         // routers before any selected handler is invoked.
         let router = router.layer(axum::middleware::from_fn(enforce_strict_request_target));
-
         // Enforce the finite ErrorEnvelope contract after every ordinary
         // response-producing layer, including strict-target and Accept-header
         // failures. A handler cannot leak a bare status or ad-hoc error body.
         let router = router.layer(axum::middleware::from_fn(enforce_typed_error_contract));
-
         // Normalize every JSON response, including errors returned before
         // handler selection, to the required UTF-8 media type.
         let router = router.layer(axum::middleware::from_fn(enforce_json_utf8_charset));
-
         // Offline command and operation-status responses, plus readiness
         // failures, are never cacheable, including early validation,
         // authorization, not-found, and recovery failures. Successful
         // readiness responses receive the exact private revalidation policy
         // even if an inner layer supplied a conflicting cache directive.
         let router = router.layer(axum::middleware::from_fn(enforce_offline_cache_policy));
-
         // Metrics wrap every response-producing layer, including CORS,
         // malformed headers, authentication, request-size, rate-limit,
         // timeout, and panic paths.
@@ -53912,7 +51318,6 @@ impl Torii {
             app_state.clone(),
             record_http_metrics,
         ));
-
         // The trace span wraps every inner middleware and carries the request ID
         // and route metadata installed by the outer layers below.
         let router = router.layer(TraceLayer::new_for_http().make_span_with(
@@ -53938,20 +51343,16 @@ impl Torii {
                 )
             },
         ));
-
         // Matched-route metadata must wrap metrics and tracing so neither ever
         // needs to use a raw URL as a fallback label.
         let router = router.layer(axum::middleware::from_fn_with_state(
             route_index,
             attach_matched_route_metadata,
         ));
-
         // Correlation IDs wrap every response, including CORS, pre-authentication,
         // request-size, rate-limit, timeout, and panic failures.
         let router = router.layer(axum::middleware::from_fn(attach_request_id));
-
         let router = router.with_state(app_state.clone());
-
         {
             let mut guard = app_state
                 .mcp_dispatch_router
@@ -53959,10 +51360,8 @@ impl Torii {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             *guard = Some(router.clone());
         }
-
         router
     }
-
     /// Public helper to get the API router for integration tests without starting an HTTP server.
     ///
     /// This keeps test code decoupled from server start and avoids binding to a TCP port.
@@ -53973,13 +51372,11 @@ impl Torii {
             inject_loopback_connect_info_when_missing,
         ))
     }
-
     /// Expose the push bridge to tests so registration side effects can be inspected.
     #[cfg(feature = "push")]
     pub fn push_bridge_for_tests(&self) -> Option<push::PushBridge> {
         self.push.clone()
     }
-
     /// To handle incoming requests `Torii` should be started first.
     ///
     /// # Errors
@@ -54000,7 +51397,6 @@ impl Torii {
         }
         let torii_address = self.address.value().clone();
         iroha_logger::info!(addr = %torii_address, "starting Torii HTTP server");
-
         // Initialize optional app-facing subsystems.
         #[cfg(feature = "app_api")]
         {
@@ -54037,10 +51433,8 @@ impl Torii {
                 crate::zk_attachments::start_gc_worker();
             }
         }
-
         #[cfg(feature = "app_api")]
         self.spawn_musubi_search_projection_worker(shutdown_signal.clone());
-
         if let Some(runtime) = self.iso_bridge.clone() {
             let mut rx = self.events.subscribe();
             tokio::spawn(async move {
@@ -54093,7 +51487,6 @@ impl Torii {
                 }
             });
         }
-
         {
             let mut rx = self.events.subscribe();
             let cache = self.pipeline_status_cache.clone();
@@ -54129,7 +51522,6 @@ impl Torii {
                 }
             });
         }
-
         #[cfg(feature = "app_api")]
         {
             if let Some(anchor_cfg) = self.da_ingest.taikai_anchor.clone() {
@@ -54140,45 +51532,36 @@ impl Torii {
                 );
             }
         }
-
         #[cfg(feature = "app_api")]
         self.spawn_pin_registry_metrics_worker(shutdown_signal.clone());
-
         #[cfg(feature = "app_api")]
         self.spawn_por_ingestion_metrics_worker(shutdown_signal.clone());
-
         #[cfg(feature = "app_api")]
         let evidence_viewer_compaction_worker =
             self.spawn_evidence_viewer_compaction_worker(shutdown_signal.clone());
-
         #[cfg(feature = "app_api")]
         if let Some(runtime) = &self.por_runtime {
             runtime.clone().spawn(shutdown_signal.clone());
         }
-
         #[cfg(feature = "app_api")]
         if let Some(runtime) = &self.sorafs_pop_credentials {
             runtime.clone().spawn(shutdown_signal.clone());
         }
-
         #[cfg(feature = "app_api")]
         if let Some(runtime) = &self.gc_runtime {
             runtime.clone().spawn(shutdown_signal.clone());
         }
-
         #[cfg(feature = "app_api")]
         if let Some(components) = &self.sorafs_gateway_security {
             if let Some(automation) = &components.tls_automation {
                 automation.spawn(self.telemetry.clone(), shutdown_signal.clone());
             }
         }
-
         let listener = bind_torii_tcp_listener(torii_address.clone())
             .await
             .change_context(Error::StartServer)
             .attach("failed to bind to the specified address")
             .attach_with(|| self.address.clone().into_attachment())?;
-
         let (api_router, app_state) = self.create_api_router_with_state();
         #[cfg(feature = "app_api")]
         {
@@ -54213,9 +51596,7 @@ impl Torii {
         }
         #[cfg(not(feature = "app_api"))]
         drop(app_state);
-
         iroha_logger::info!(addr = %torii_address, "Torii bound and listening");
-
         let server = serve_torii_http(
             listener,
             api_router,
@@ -54238,13 +51619,11 @@ impl Torii {
         })?;
         #[cfg(not(feature = "app_api"))]
         let server_result = server.await;
-
         server_result
             .map_err(Report::from)
             .change_context(Error::FailedExit)
     }
 }
-
 /// GET /openapi(.json) — expose OpenAPI descriptor subject to Torii access policy.
 async fn handler_openapi(
     State(app): State<SharedAppState>,
@@ -54255,10 +51634,8 @@ async fn handler_openapi(
     if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         check_access(&app, &headers, Some(remote_ip), "openapi").await?;
     }
-
     Ok(routing::handler_openapi_spec(axum::extract::State(app)).await)
 }
-
 /// GET /v1/mcp — expose MCP capabilities and tool-count metadata.
 async fn handler_mcp_capabilities(
     State(app): State<SharedAppState>,
@@ -54268,7 +51645,6 @@ async fn handler_mcp_capabilities(
         JsonBody(mcp::capabilities_payload_for_state(&app)),
     )
 }
-
 /// POST /v1/mcp — dispatch bounded MCP JSON-RPC calls through exact cataloged routes.
 async fn handler_mcp_jsonrpc(
     State(app): State<SharedAppState>,
@@ -54304,7 +51680,6 @@ async fn handler_mcp_jsonrpc(
                 return mcp::private_no_store_response((status, JsonBody(payload)));
             }
         };
-
     let payload = match norito::json::from_slice::<norito::json::Value>(&request_bytes) {
         Ok(payload) => payload,
         Err(err) => {
@@ -54314,11 +51689,9 @@ async fn handler_mcp_jsonrpc(
             ));
         }
     };
-
     if mcp::is_initialized_notification(&payload) {
         return mcp::private_no_store_response(StatusCode::ACCEPTED);
     }
-
     let response_payload = if let Some(batch) = payload.as_array() {
         if batch.is_empty() {
             mcp::jsonrpc_invalid_request("batch request must not be empty")
@@ -54334,10 +51707,8 @@ async fn handler_mcp_jsonrpc(
     } else {
         mcp::handle_jsonrpc_request(app, &headers, payload).await
     };
-
     mcp::private_no_store_response((StatusCode::OK, JsonBody(response_payload)))
 }
-
 #[cfg(feature = "app_api")]
 fn build_sorafs_cache(
     config: &iroha_config::parameters::actual::Torii,
@@ -54346,12 +51717,10 @@ fn build_sorafs_cache(
     if !config.sorafs_discovery.discovery_enabled {
         return None;
     }
-
     let Some(admission_registry) = admission else {
         iroha_logger::warn!("SoraFS discovery cache disabled: admission registry not available");
         return None;
     };
-
     let mut capabilities = Vec::new();
     for name in &config.sorafs_discovery.known_capabilities {
         match sorafs::parse_capability_name(name) {
@@ -54361,12 +51730,10 @@ fn build_sorafs_cache(
             }
         }
     }
-
     assert!(
         !capabilities.is_empty(),
         "torii.sorafs.known_capabilities must include at least one capability"
     );
-
     let known_capabilities = capabilities
         .iter()
         .map(|cap| sorafs::capability_name(*cap))
@@ -54391,7 +51758,6 @@ fn build_sorafs_cache(
     }
     cache
 }
-
 #[cfg(feature = "app_api")]
 fn sorafs_potr_runtime_roles_match_config(
     configured: &iroha_config::parameters::actual::SorafsPotrRuntimeBinding,
@@ -54403,7 +51769,6 @@ fn sorafs_potr_runtime_roles_match_config(
     let provider_qualification = provider.qualification();
     let readers = roles.reader_bindings();
     let baseline = roles.baseline_admission_policy();
-
     gateway.handle() == configured.gateway_signer.handle.as_str()
         && gateway.signer_id() == configured.gateway_signer.signer_id
         && gateway_qualification.revision() == configured.gateway_signer.revision
@@ -54428,7 +51793,6 @@ fn sorafs_potr_runtime_roles_match_config(
                 .baseline_admission_policy
                 .admission_envelope_digest
 }
-
 #[cfg(feature = "app_api")]
 fn require_sorafs_potr_finalized_reader_inputs(
     enabled: bool,
@@ -54467,7 +51831,6 @@ fn require_sorafs_potr_finalized_reader_inputs(
         (true, Some(_), Some(roles), Some(admission)) => Ok(Some((roles, admission))),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn load_sorafs_admission(
     config: &iroha_config::parameters::actual::Torii,
@@ -54480,7 +51843,6 @@ fn load_sorafs_admission(
         }
         return None;
     };
-
     let trusted_council_keys = admission_cfg
         .trusted_council_keys
         .iter()
@@ -54503,7 +51865,6 @@ fn load_sorafs_admission(
         admission_cfg.signature_threshold.get(),
     )
     .unwrap_or_else(|err| panic!("invalid SoraFS provider admission council policy: {err}"));
-
     let registry = sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
         .unwrap_or_else(|err| {
             panic!(
@@ -54513,7 +51874,6 @@ fn load_sorafs_admission(
         });
     Some(Arc::new(registry))
 }
-
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct GatewaySecurityComponents {
@@ -54524,7 +51884,6 @@ struct GatewaySecurityComponents {
     compliance_feed_transport: Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
     blinded_resolver: Option<Arc<sorafs::BlindedCidResolver>>,
 }
-
 #[cfg(feature = "app_api")]
 fn gateway_acme_config(
     config: &iroha_config::parameters::actual::SorafsGatewayAcme,
@@ -54544,7 +51903,6 @@ fn gateway_acme_config(
         },
     }
 }
-
 #[cfg(feature = "app_api")]
 fn gateway_runtime_provider_binding(
     config: &iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding,
@@ -54558,7 +51916,6 @@ fn gateway_runtime_provider_binding(
         panic!("invalid non-secret SoraFS gateway runtime provider binding in iroha_config")
     })
 }
-
 #[cfg(feature = "app_api")]
 fn gateway_compliance_controller_config(
     config: &iroha_config::parameters::actual::SorafsGatewayCompliance,
@@ -54567,7 +51924,6 @@ fn gateway_compliance_controller_config(
         GatewayComplianceFeedHostPolicy, GatewayComplianceFeedPolicy, GatewayComplianceFetchLimits,
         GatewayComplianceTrustPolicyV1, GatewayComplianceTrustedSignerV1,
     };
-
     let convert_signer =
         |signer: &iroha_config::parameters::actual::SorafsGatewayComplianceSigner| {
             GatewayComplianceTrustedSignerV1 {
@@ -54627,7 +51983,6 @@ fn gateway_compliance_controller_config(
         max_history_entries: config.max_history_entries,
     }
 }
-
 #[cfg(feature = "app_api")]
 fn build_sorafs_gateway_security(
     config: &iroha_config::parameters::actual::SorafsGateway,
@@ -54640,7 +51995,6 @@ fn build_sorafs_gateway_security(
         GatewayPolicyConfig, GatewayRateLimitConfig, GatewayRateLimiter, TlsAutomationHandle,
         TlsStateSnapshot,
     };
-
     let rate_limit = GatewayRateLimitConfig {
         max_requests: config.rate_limit.max_requests.map(NonZeroU32::get),
         window: config.rate_limit.window,
@@ -54654,7 +52008,6 @@ fn build_sorafs_gateway_security(
     let rate_limiter = GatewayRateLimiter::new(rate_limit);
     let policy = Arc::new(GatewayPolicy::new(policy_config, admission, rate_limiter));
     let tls_state = Arc::new(RwLock::new(TlsStateSnapshot::new(config.acme.ech_enabled)));
-
     if config.acme.enabled != config.acme.provider.is_some() {
         panic!(
             "torii.sorafs.gateway.acme provider binding must be present exactly when ACME is enabled"
@@ -54691,7 +52044,6 @@ fn build_sorafs_gateway_security(
         }
         (false, None) => None,
     };
-
     let (compliance_controller, compliance_feed_transport) = match (
         config.compliance.as_ref(),
         compliance_feed_transport,
@@ -54725,7 +52077,6 @@ fn build_sorafs_gateway_security(
         }
         (None, None) => (None, None),
     };
-
     let blinded_resolver = config.salt_schedule_dir.as_ref().map_or_else(
         || None,
         |dir| match sorafs::SaltSchedule::load_from_dir(dir) {
@@ -54742,7 +52093,6 @@ fn build_sorafs_gateway_security(
             }
         },
     );
-
     GatewaySecurityComponents {
         policy,
         tls_state,
@@ -54752,7 +52102,6 @@ fn build_sorafs_gateway_security(
         blinded_resolver,
     }
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod gateway_runtime_config_tests {
     use ed25519_dalek::SigningKey;
@@ -54761,7 +52110,6 @@ mod gateway_runtime_config_tests {
 
     #[derive(Debug)]
     struct TestAcmeClient;
-
     impl sorafs::gateway::AcmeClient for TestAcmeClient {
         fn qualification(
             &self,
@@ -54774,7 +52122,6 @@ mod gateway_runtime_config_tests {
                 test_marked: false,
             })
         }
-
         fn order_certificate(
             &self,
             _order: &sorafs::gateway::CertificateOrder,
@@ -54782,10 +52129,8 @@ mod gateway_runtime_config_tests {
             Err(sorafs::gateway::AcmeClientError::Rejected)
         }
     }
-
     #[derive(Debug)]
     struct TestComplianceFeedTransport;
-
     impl sorafs::gateway::GatewayComplianceFeedTransport for TestComplianceFeedTransport {
         fn qualification(
             &self,
@@ -54808,7 +52153,6 @@ mod gateway_runtime_config_tests {
                 test_marked: false,
             })
         }
-
         fn resolve(
             &self,
             _hostname: &str,
@@ -54818,7 +52162,6 @@ mod gateway_runtime_config_tests {
                 "test transport must not be invoked".into(),
             ))
         }
-
         fn fetch(
             &self,
             _request: &sorafs::gateway::GatewayComplianceFetchRequest,
@@ -54831,21 +52174,17 @@ mod gateway_runtime_config_tests {
             ))
         }
     }
-
     #[derive(Debug)]
     struct TestStreamTokenRuntimeSigner {
         public_key: [u8; 32],
     }
-
     impl sorafs::StreamTokenRuntimeSigner for TestStreamTokenRuntimeSigner {
         fn handle(&self) -> &str {
             "pkcs11:prod/stream-token/v1"
         }
-
         fn public_key(&self) -> [u8; 32] {
             self.public_key
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -54856,7 +52195,6 @@ mod gateway_runtime_config_tests {
                 4, [0xb4; 32],
             ))
         }
-
         fn sign(
             &self,
             _signing_payload: &[u8],
@@ -54865,7 +52203,6 @@ mod gateway_runtime_config_tests {
             Err(sorafs::StreamTokenSigningError::Refused)
         }
     }
-
     fn compliance_signer(
         signer_id: &str,
         signing_key_byte: u8,
@@ -54876,7 +52213,6 @@ mod gateway_runtime_config_tests {
             public_key: signing_key.verifying_key().to_bytes(),
         }
     }
-
     fn acme_provider_binding()
     -> iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding {
         iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding {
@@ -54885,7 +52221,6 @@ mod gateway_runtime_config_tests {
             policy_digest: [0x51; 32],
         }
     }
-
     fn compliance_feed_provider_binding()
     -> iroha_config::parameters::actual::SorafsGatewayRuntimeProviderBinding {
         let pins_by_hostname = BTreeMap::from([(
@@ -54901,7 +52236,6 @@ mod gateway_runtime_config_tests {
             .expect("test feed transport policy digest"),
         }
     }
-
     fn compliance_config(
         checkpoint_path: PathBuf,
     ) -> iroha_config::parameters::actual::SorafsGatewayCompliance {
@@ -54950,7 +52284,6 @@ mod gateway_runtime_config_tests {
             max_history_entries: 37,
         }
     }
-
     #[test]
     fn acme_runtime_mapping_preserves_every_resolved_field() {
         let source = iroha_config::parameters::actual::SorafsGatewayAcme {
@@ -54972,9 +52305,7 @@ mod gateway_runtime_config_tests {
             },
             ech_enabled: true,
         };
-
         let mapped = gateway_acme_config(&source);
-
         assert_eq!(mapped.enabled, source.enabled);
         assert_eq!(mapped.account_email, source.account_email);
         assert_eq!(mapped.directory_url, source.directory_url);
@@ -55000,15 +52331,12 @@ mod gateway_runtime_config_tests {
             source_provider.policy_digest
         );
     }
-
     #[test]
     fn compliance_runtime_mapping_preserves_every_resolved_field() {
         let source = compliance_config(PathBuf::from(
             "/var/lib/iroha/sorafs/compliance-checkpoint.norito",
         ));
-
         let mapped = gateway_compliance_controller_config(&source);
-
         assert_eq!(mapped.trust_policy.policy_id, source.policy_id);
         assert_eq!(mapped.region_scope, format!("region:{}", source.region_id));
         assert_eq!(
@@ -55114,7 +52442,6 @@ mod gateway_runtime_config_tests {
         );
         mapped.validate().expect("mapped policy must remain valid");
     }
-
     #[test]
     fn runtime_dependency_builders_retain_injected_instances() {
         let acme_client: Arc<dyn sorafs::gateway::AcmeClient> = Arc::new(TestAcmeClient);
@@ -55126,12 +52453,10 @@ mod gateway_runtime_config_tests {
                     .verifying_key()
                     .to_bytes(),
             });
-
         let dependencies = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
             .with_sorafs_stream_token_signer(Arc::clone(&stream_token_signer))
             .with_sorafs_gateway_acme_client(Arc::clone(&acme_client))
             .with_sorafs_gateway_compliance_feed_transport(Arc::clone(&compliance_transport));
-
         assert!(Arc::ptr_eq(
             dependencies
                 .sorafs_stream_token_signer
@@ -55154,7 +52479,6 @@ mod gateway_runtime_config_tests {
             &compliance_transport
         ));
     }
-
     #[test]
     fn gateway_security_builds_only_from_resolved_config_and_runtime_dependencies() {
         let checkpoint_dir = tempfile::tempdir().expect("temporary checkpoint directory");
@@ -55170,14 +52494,12 @@ mod gateway_runtime_config_tests {
         config.acme.provider = Some(acme_provider_binding());
         config.acme.ech_enabled = true;
         config.compliance = Some(compliance_config(checkpoint_dir.join("checkpoint.norito")));
-
         let components = build_sorafs_gateway_security(
             &config,
             None,
             Some(acme_client),
             Some(Arc::clone(&compliance_transport)),
         );
-
         assert!(components.tls_automation.is_some());
         assert!(
             components
@@ -55196,7 +52518,6 @@ mod gateway_runtime_config_tests {
             &compliance_transport
         ));
     }
-
     #[test]
     #[should_panic(
         expected = "torii.sorafs.gateway.acme is enabled but no runtime ACME client was injected"
@@ -55205,10 +52526,8 @@ mod gateway_runtime_config_tests {
         let mut config = iroha_config::parameters::actual::SorafsGateway::default();
         config.acme.enabled = true;
         config.acme.provider = Some(acme_provider_binding());
-
         let _ = build_sorafs_gateway_security(&config, None, None, None);
     }
-
     #[test]
     #[should_panic(
         expected = "torii.sorafs.gateway.acme provider binding must be present exactly when ACME is enabled"
@@ -55216,10 +52535,8 @@ mod gateway_runtime_config_tests {
     fn acme_enabled_without_configured_provider_binding_fails_closed() {
         let mut config = iroha_config::parameters::actual::SorafsGateway::default();
         config.acme.enabled = true;
-
         let _ = build_sorafs_gateway_security(&config, None, Some(Arc::new(TestAcmeClient)), None);
     }
-
     #[test]
     #[should_panic(
         expected = "injected SoraFS gateway ACME client failed exact startup qualification"
@@ -55230,10 +52547,8 @@ mod gateway_runtime_config_tests {
         let mut provider = acme_provider_binding();
         provider.revision += 1;
         config.acme.provider = Some(provider);
-
         let _ = build_sorafs_gateway_security(&config, None, Some(Arc::new(TestAcmeClient)), None);
     }
-
     #[test]
     #[should_panic(
         expected = "torii.sorafs.gateway.compliance is enabled but no runtime authenticated feed transport was injected"
@@ -55243,11 +52558,9 @@ mod gateway_runtime_config_tests {
         config.compliance = Some(compliance_config(
             std::env::temp_dir().join("unused-compliance-checkpoint.norito"),
         ));
-
         let _ = build_sorafs_gateway_security(&config, None, None, None);
     }
 }
-
 #[cfg(feature = "app_api")]
 fn build_sorafs_quota_config(
     config: &iroha_config::parameters::actual::SorafsQuota,
@@ -55260,7 +52573,6 @@ fn build_sorafs_quota_config(
             window: window.window,
         }
     }
-
     sorafs::SorafsQuotaConfig {
         capacity_declaration: convert_window(&config.capacity_declaration),
         capacity_telemetry: convert_window(&config.capacity_telemetry),
@@ -55268,7 +52580,6 @@ fn build_sorafs_quota_config(
         por_submission: convert_window(&config.por_submission),
     }
 }
-
 #[cfg(feature = "app_api")]
 fn por_runtime_readiness_error(
     config: &iroha_config::parameters::actual::SorafsPor,
@@ -55307,7 +52618,6 @@ fn por_runtime_readiness_error(
     }
     None
 }
-
 #[cfg(feature = "app_api")]
 fn assert_por_runtime_ready(config: &iroha_config::parameters::actual::SorafsPor) {
     if let Some(detail) = por_runtime_readiness_error(config) {
@@ -55316,7 +52626,6 @@ fn assert_por_runtime_ready(config: &iroha_config::parameters::actual::SorafsPor
         );
     }
 }
-
 #[cfg(feature = "app_api")]
 fn build_por_components(
     config: &Config,
@@ -55329,7 +52638,6 @@ fn build_por_components(
 ) {
     let por_cfg = &config.sorafs_por;
     assert_por_runtime_ready(por_cfg);
-
     let snapshot_path = por_cfg
         .state_dir
         .join(iroha_config::parameters::defaults::sorafs::por::COORDINATOR_STATE_FILE);
@@ -55355,7 +52663,6 @@ fn build_por_components(
             snapshot_path.display()
         ),
     };
-
     if !por_cfg.enabled {
         return (coordinator, None);
     }
@@ -55415,10 +52722,8 @@ fn build_por_components(
         por_cfg.vrf_submission_deadline_secs,
     )
     .with_verified_vrf_provider(vrf_provider);
-
     (coordinator, Some(Arc::new(runtime)))
 }
-
 #[cfg(all(test, feature = "app_api"))]
 mod por_runtime_readiness_tests {
     use super::{assert_por_runtime_ready, por_runtime_readiness_error};
@@ -55452,15 +52757,12 @@ mod por_runtime_readiness_tests {
         config.drand.quorum = 2;
         config
     }
-
     #[test]
     fn por_runtime_is_disabled_or_requires_complete_verified_entropy_config() {
         let mut config = iroha_config::parameters::actual::SorafsPor::default();
         assert_eq!(por_runtime_readiness_error(&config), None);
-
         config.enabled = true;
         assert!(por_runtime_readiness_error(&config).is_some());
-
         let panic = std::panic::catch_unwind(|| assert_por_runtime_ready(&config))
             .expect_err("enabled incomplete PoR runtime must fail startup");
         let message = panic
@@ -55469,11 +52771,9 @@ mod por_runtime_readiness_tests {
             .or_else(|| panic.downcast_ref::<&str>().copied())
             .expect("readiness panic must carry a message");
         assert!(message.contains("pinned drand"));
-
         let configured = configured_por();
         assert_eq!(por_runtime_readiness_error(&configured), None);
         assert_por_runtime_ready(&configured);
-
         let mut missing_key = configured.clone();
         missing_key.drand.public_key = [0; 96];
         assert!(por_runtime_readiness_error(&missing_key).is_some());
@@ -55485,7 +52785,6 @@ mod por_runtime_readiness_tests {
         assert!(por_runtime_readiness_error(&late_vrf).is_some());
     }
 }
-
 #[cfg(feature = "app_api")]
 fn build_gc_runtime(
     sorafs_node: &sorafs_node::NodeHandle,
@@ -55499,23 +52798,19 @@ fn build_gc_runtime(
         iroha_logger::warn!("GC runtime disabled: SoraFS storage is not enabled for this node");
         return None;
     }
-
     let runtime = Arc::new(sorafs::GcSweeperRuntime::new(
         sorafs_node.clone(),
         state,
         config,
     ));
-
     iroha_logger::info!(
         interval_secs = config.interval_secs(),
         max_deletions = config.max_deletions_per_run(),
         retention_grace_secs = config.retention_grace_secs(),
         "SoraFS GC runtime initialised"
     );
-
     Some(runtime)
 }
-
 /// Torii errors.
 #[derive(thiserror::Error, displaydoc::Display, pretty_error_debug::Debug)]
 pub enum Error {
@@ -55643,7 +52938,6 @@ pub enum Error {
     /// Torii server terminated with an error
     FailedExit,
 }
-
 fn offline_reject_code_from_message(message: &str) -> Option<&str> {
     use iroha_data_model::offline::OFFLINE_REJECTION_REASON_PREFIX;
 
@@ -55652,7 +52946,6 @@ fn offline_reject_code_from_message(message: &str) -> Option<&str> {
     let (label, _) = rest.split_once(':')?;
     if label.is_empty() { None } else { Some(label) }
 }
-
 fn offline_reject_code_from_query_fail(
     fail: &iroha_data_model::query::error::QueryExecutionFail,
 ) -> Option<&str> {
@@ -55663,7 +52956,6 @@ fn offline_reject_code_from_query_fail(
         _ => None,
     }
 }
-
 fn offline_reject_code_from_instruction_fail(
     fail: &iroha_data_model::isi::error::InstructionExecutionError,
 ) -> Option<&str> {
@@ -55676,7 +52968,6 @@ fn offline_reject_code_from_instruction_fail(
         _ => None,
     }
 }
-
 fn offline_reject_code_from_validation_fail(
     fail: &iroha_data_model::ValidationFail,
 ) -> Option<&str> {
@@ -55689,13 +52980,11 @@ fn offline_reject_code_from_validation_fail(
         _ => None,
     }
 }
-
 fn validation_fail_message(fail: &iroha_data_model::ValidationFail) -> String {
     use iroha_data_model::{
         ValidationFail as V, isi::error::InstructionExecutionError as I,
         query::error::QueryExecutionFail as Q,
     };
-
     match fail {
         V::QueryFailed(Q::Conversion(message))
         | V::InstructionFailed(I::Query(Q::Conversion(message))) => message.clone(),
@@ -55705,7 +52994,6 @@ fn validation_fail_message(fail: &iroha_data_model::ValidationFail) -> String {
         other => other.to_string(),
     }
 }
-
 fn public_validation_fail_envelope(
     fail: &iroha_data_model::ValidationFail,
     status: StatusCode,
@@ -55722,7 +53010,6 @@ fn public_validation_fail_envelope(
     }
     ErrorEnvelope::new("query_validation_failed", validation_fail_message(fail))
 }
-
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         let format = utils::current_response_format();
@@ -55949,7 +53236,6 @@ impl IntoResponse for Error {
                 if let Ok(header) = HeaderValue::from_str(reject_code) {
                     headers.insert(HeaderName::from_static("x-iroha-reject-code"), header);
                 }
-
                 if let Ok(depth) = HeaderValue::from_str(&backpressure.queued().to_string()) {
                     headers.insert("X-Iroha-Queue-Depth", depth);
                 }
@@ -55966,7 +53252,6 @@ impl IntoResponse for Error {
                         HeaderValue::from_static("healthy")
                     },
                 );
-
                 if matches!(
                     source.as_ref(),
                     queue::Error::Full
@@ -55975,7 +53260,6 @@ impl IntoResponse for Error {
                 ) {
                     headers.insert("Retry-After", HeaderValue::from_static("1"));
                 }
-
                 response
             }
             Self::AcceptTransaction(err) => {
@@ -56004,20 +53288,16 @@ impl IntoResponse for Error {
         }
     }
 }
-
 #[allow(dead_code)]
 fn _assert_torii_types_are_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Error>();
     assert_send_sync::<AppState>();
 }
-
 // Textual inclusion keeps runtime test helpers at their original module path.
 include!("tests/lib_runtime_handlers.rs");
-
 // Textual inclusion keeps the original test-module namespace unchanged.
 include!("tests/lib_queue_metadata.rs");
-
 #[cfg(all(test, feature = "app_api"))]
 pub(crate) use tests_runtime_handlers::mk_app_state_for_tests;
 
@@ -56147,7 +53427,6 @@ impl Error {
             }
         }
     }
-
     fn status_code(&self) -> StatusCode {
         use Error::*;
 
@@ -56190,13 +53469,11 @@ impl Error {
             }
         }
     }
-
     fn query_status_code(validation_error: &iroha_data_model::ValidationFail) -> StatusCode {
         use iroha_data_model::{
             ValidationFail::*, isi::error::InstructionExecutionError,
             query::error::QueryExecutionFail::*,
         };
-
         match validation_error {
             NotPermitted(_) => StatusCode::FORBIDDEN,
             IvmAdmission(_) => StatusCode::BAD_REQUEST,
@@ -56227,13 +53504,11 @@ impl Error {
             }
         }
     }
-
     #[cfg(feature = "telemetry")]
     fn telemetry_profile_forbidden(endpoint: &'static str, profile: TelemetryProfile) -> Self {
         Self::TelemetryProfileRestricted { endpoint, profile }
     }
 }
-
 impl Error {
     fn status_code_for_queue_error(err: &queue::Error) -> StatusCode {
         match err {
@@ -56258,7 +53533,6 @@ impl Error {
             }
         }
     }
-
     fn queue_error_summary(err: &queue::Error) -> (&'static str, &'static str) {
         match err {
             queue::Error::Full => ("queue_full", "transaction queue is at capacity"),
@@ -56328,7 +53602,6 @@ impl Error {
             ),
         }
     }
-
     fn queue_error_envelope(
         err: &queue::Error,
         backpressure: queue::BackpressureState,
@@ -56391,17 +53664,12 @@ impl Error {
         })
     }
 }
-
 include!("queue_rejection_metadata.rs");
-
 /// Result type
 pub type Result<T, E = Error> = std::result::Result<T, E>;
-
 include!("online_peers_provider.rs");
-
 // Textual inclusion keeps every `tests` item at its original module path.
 include!("tests/lib_tests.rs");
 include!("tests/lib_conn_scheme.rs");
-
 // Textual inclusion keeps the telemetry test-module namespace unchanged.
 include!("tests/lib_peer_telemetry.rs");

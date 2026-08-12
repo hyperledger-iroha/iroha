@@ -75,8 +75,6 @@ use iroha_crypto::{
     derive_keyset_from_slice,
     sm::{Sm2PrivateKey, Sm2PublicKey, Sm2Signature, encode_sm2_public_key_payload},
 };
-#[cfg(test)]
-use iroha_data_model::da::types::DaRentQuote;
 use iroha_data_model::{
     HasMetadata, NetworkId,
     account::{
@@ -89,11 +87,7 @@ use iroha_data_model::{
         id::{AssetDefinitionId, AssetId},
         validate_asset_transfer_availability_reason,
     },
-    block::{
-        BlockHeader,
-        consensus::{LaneBlockCommitment, PERMISSIONED_TAG, QcVote},
-    },
-    consensus::{CertPhase, Qc, QcAggregate, default_chain_order_hash},
+    block::{BlockHeader, consensus::LaneBlockCommitment},
     da::manifest::DaManifestV1,
     domain::{Domain, DomainId, NewDomain},
     escrow::EscrowId,
@@ -121,8 +115,8 @@ use iroha_data_model::{
             RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,
         },
         settlement::{
-            DvpIsi, FundFxCorridorEscrow, FxCorridorOracleEvidence, PvpIsi, RefundFxCorridorEscrow,
-            SetFxCorridorPolicy, SettleFxCorridor, SettlementInstructionBox,
+            DvpIsi, FundFxCorridorEscrow, PvpIsi, RefundFxCorridorEscrow, SetFxCorridorPolicy,
+            SettleFxCorridor, SettlementInstructionBox,
         },
         smart_contract_code::{
             ActivateContractInstance, CancelSmartContractCodeUpload, DeactivateContractInstance,
@@ -173,7 +167,7 @@ use iroha_data_model::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, TransactionPayload,
         TransactionSubmissionReceipt,
         executable::{ContractArgumentRecord, ContractInvocation},
-        signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
+        signed::{SignedTransaction, TransactionBuilder},
     },
     trigger::{
         Trigger, TriggerId,
@@ -184,6 +178,12 @@ use iroha_data_model::{
         ValidationFeeTreasuryPayoutBindingV1,
     },
 };
+// These types only construct fixtures in the in-file test module.
+// Keeping them cfg-scoped avoids carrying test topology into production builds.
+// Production receives the evidence through decoded instructions instead;
+// direct construction remains deliberately confined to tests.
+#[cfg(test)]
+use iroha_data_model::{da::types::DaRentQuote, isi::settlement::FxCorridorOracleEvidence};
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity},
@@ -208,8 +208,7 @@ use napi::{
 use napi_derive::napi;
 use norito::{
     codec::{DecodeAll, Encode},
-    core::{self as norito_core, DecodeFromSlice},
-    decode_from_bytes,
+    core as norito_core, decode_from_bytes,
     json::{self, Map, Value},
 };
 use rand_core_06::OsRng;
@@ -277,7 +276,6 @@ const SM2_PUBLIC_KEY_LENGTH: usize = 65;
 const SM2_SIGNATURE_LENGTH: usize = Sm2Signature::LENGTH;
 const KAIGI_ROSTER_PUBLIC_INPUTS_DESC: &[u8] = br#"{"schema":"kaigi_roster_current","inputs":["commitment","nullifier","roster_root_limb0","roster_root_limb1","roster_root_limb2","roster_root_limb3"]}"#;
 const ZK1_ENVELOPE_PREFIX: &[u8] = b"ZK1\0";
-
 const SORAFS_ALIAS_POSITIVE_TTL_SECS: u64 = 10 * 60;
 const SORAFS_ALIAS_REFRESH_WINDOW_SECS: u64 = 2 * 60;
 const SORAFS_ALIAS_HARD_EXPIRY_SECS: u64 = 15 * 60;
@@ -288,7 +286,6 @@ const SORAFS_ALIAS_SUCCESSOR_GRACE_SECS: u64 = 5 * 60;
 const SORAFS_ALIAS_GOVERNANCE_GRACE_SECS: u64 = 0;
 const JS_MAX_SAFE_INTEGER_U64: u64 = 9_007_199_254_740_991;
 const JS_MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
-
 /// Report the stable C bridge ABI expected by the JavaScript privacy host.
 ///
 /// Keeping this as an exported N-API function lets JavaScript fail closed when
@@ -297,7 +294,6 @@ const JS_MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 pub fn connect_norito_bridge_abi_version() -> u32 {
     PRIVACY_BRIDGE_ABI_VERSION_V1
 }
-
 fn validation_fee_fixed_hash(value: &Uint8Array, label: &str) -> napi::Result<[u8; 32]> {
     let bytes: [u8; 32] = value.as_ref().try_into().map_err(|_| {
         napi::Error::new(
@@ -313,7 +309,6 @@ fn validation_fee_fixed_hash(value: &Uint8Array, label: &str) -> napi::Result<[u
     }
     Ok(bytes)
 }
-
 fn validation_fee_iroha_hash(value: &Uint8Array, label: &str) -> napi::Result<[u8; 32]> {
     let bytes = validation_fee_fixed_hash(value, label)?;
     if bytes[31] & 1 == 0 {
@@ -324,7 +319,6 @@ fn validation_fee_iroha_hash(value: &Uint8Array, label: &str) -> napi::Result<[u
     }
     Ok(bytes)
 }
-
 /// Encode the frozen Norito request for one validation-fee proof page.
 #[napi(js_name = "validationFeeCurrentPolicyProofRequestV1")]
 pub fn validation_fee_current_policy_proof_request_v1(
@@ -353,7 +347,6 @@ pub fn validation_fee_current_policy_proof_request_v1(
             )
         })
 }
-
 /// Locally verify one validation-fee proof page under immutable deployment bindings.
 #[napi(js_name = "validationFeeVerifyCurrentPolicyProofV1")]
 #[allow(clippy::too_many_arguments)]
@@ -409,7 +402,6 @@ pub fn validation_fee_verify_current_policy_proof_v1(
         .map_err(napi::Error::from_reason)?;
     json::to_json(&projection).map_err(norito_to_napi)
 }
-
 const SUPPORTED_CRYPTO_ALGORITHMS: &[Algorithm] = &[
     Algorithm::Ed25519,
     Algorithm::Secp256k1,
@@ -423,14 +415,11 @@ const SUPPORTED_CRYPTO_ALGORITHMS: &[Algorithm] = &[
     Algorithm::Gost3410_2012_512ParamSetB,
     Algorithm::Sm2,
 ];
-
 fn ensure_packed_struct_disabled() {
     static INIT: std::sync::Once = std::sync::Once::new();
     INIT.call_once(|| {});
 }
-
 const MAX_KOTODAMA_SOURCE_NAME_BYTES: usize = 4096;
-
 /// Bounded canonical Kotodama compiler request accepted by the Node binding.
 #[napi(object)]
 pub struct JsKotodamaCompileRequest {
@@ -441,7 +430,6 @@ pub struct JsKotodamaCompileRequest {
     /// Whether to compile with the canonical ZK contract policy.
     pub zk: bool,
 }
-
 /// Compile Kotodama with the canonical Rust compiler without blocking the Node event loop.
 #[allow(
     clippy::trailing_empty_array,
@@ -456,7 +444,6 @@ pub async fn compile_kotodama(
         .map_err(|err| napi::Error::from_reason(format!("Kotodama compiler task failed: {err}")))?
         .map_err(napi::Error::from_reason)
 }
-
 fn validate_kotodama_source_name(source_name: Option<&str>) -> Result<(), String> {
     let Some(source_name) = source_name else {
         return Ok(());
@@ -474,7 +461,6 @@ fn validate_kotodama_source_name(source_name: Option<&str>) -> Result<(), String
     }
     Ok(())
 }
-
 fn compile_kotodama_request(
     request: &JsKotodamaCompileRequest,
 ) -> Result<JsKotodamaCompileResult, String> {
@@ -510,7 +496,6 @@ fn compile_kotodama_request(
         .map_err(|err| format!("encode Kotodama budget report: {err}"))?;
     let artifact = output.artifact;
     let manifest = output.manifest;
-
     let manifest_json = norito::json::to_json(&manifest)
         .map_err(|err| format!("encode Kotodama manifest: {err}"))?;
     let code_hash = manifest
@@ -532,7 +517,6 @@ fn compile_kotodama_request(
         diagnostics_json: None,
     })
 }
-
 /// Ed25519 key pair returned to JavaScript.
 #[napi(object)]
 pub struct JsKeyPair {
@@ -545,7 +529,6 @@ pub struct JsKeyPair {
     /// Optional distinguishing identifier for algorithms that require it (SM2).
     pub distid: Option<String>,
 }
-
 /// Canonical Kotodama compilation result envelope returned by the Rust compiler.
 ///
 /// Source errors are data, not rejected JavaScript promises. Both result fields
@@ -560,7 +543,6 @@ pub struct JsKotodamaCompileResult {
     /// Canonical Norito JSON diagnostic array on compilation failure.
     pub diagnostics_json: Option<String>,
 }
-
 /// Successful canonical Kotodama compilation output returned by the Rust compiler.
 #[napi(object)]
 pub struct JsKotodamaCompileOutput {
@@ -577,7 +559,6 @@ pub struct JsKotodamaCompileOutput {
     /// Canonical compiler-budget sidecar, bound to `code_hash`.
     pub budget_report_json: String,
 }
-
 /// Confidential key hierarchy returned to JavaScript callers.
 #[napi(object)]
 pub struct JsConfidentialKeyset {
@@ -592,7 +573,6 @@ pub struct JsConfidentialKeyset {
     /// Full view key (fvk).
     pub fvk: Buffer,
 }
-
 /// Proof artefacts required for a privacy-mode Kaigi join.
 #[napi(object)]
 pub struct JsKaigiRosterJoinProof {
@@ -605,7 +585,6 @@ pub struct JsKaigiRosterJoinProof {
     /// Norito-encoded `OpenVerifyEnvelope` payload.
     pub proof: Buffer,
 }
-
 /// Canonical SM2 fixture describing deterministic signing outputs.
 #[napi(object)]
 pub struct JsSm2Fixture {
@@ -632,7 +611,6 @@ pub struct JsSm2Fixture {
     /// Canonical `s` component (uppercase hex).
     pub s: String,
 }
-
 /// Optional overrides for `SoraFS` alias cache policy (all values in seconds).
 #[napi(object)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -655,7 +633,6 @@ pub struct JsAliasPolicy {
     /// Grace window applied to governance-triggered alias rotations.
     pub governance_grace_secs: Option<i64>,
 }
-
 /// Evaluation output exposed to JavaScript callers.
 #[napi(object)]
 pub struct JsAliasEvaluation {
@@ -676,7 +653,6 @@ pub struct JsAliasEvaluation {
     /// Whether the bundle should be served to clients.
     pub servable: bool,
 }
-
 /// Result of parsing an account address string via the shared codec.
 #[napi(object)]
 pub struct JsAccountAddressParse {
@@ -685,7 +661,6 @@ pub struct JsAccountAddressParse {
     /// Network prefix inferred while parsing the encoded literal.
     pub network_prefix: Option<u16>,
 }
-
 /// Rendered textual encodings for an account address.
 #[napi(object)]
 pub struct JsAccountAddressRender {
@@ -694,7 +669,6 @@ pub struct JsAccountAddressRender {
     /// I105 encoding generated with the supplied network prefix.
     pub i105: String,
 }
-
 /// Deterministic gateway host bindings exposed to JavaScript callers.
 #[napi(object)]
 pub struct JsGatewayHosts {
@@ -711,7 +685,6 @@ pub struct JsGatewayHosts {
     /// Host patterns the runtime must authorise (canonical, wildcard, pretty).
     pub host_patterns: Vec<String>,
 }
-
 /// Fixture options for generating synthetic alias proof bundles.
 #[napi(object)]
 #[derive(Default)]
@@ -729,7 +702,6 @@ pub struct JsAliasProofFixtureOptions {
     /// Optional override for the expiry epoch value.
     pub expiry_epoch: Option<i64>,
 }
-
 /// Alias proof fixture payload returned to JavaScript.
 #[napi(object)]
 pub struct JsAliasProofFixture {
@@ -746,7 +718,6 @@ pub struct JsAliasProofFixture {
     /// Registry tree height encoded into the bundle.
     pub registry_height: i64,
 }
-
 /// Assignment entry returned when decoding a replication order.
 #[napi(object)]
 pub struct JsReplicationAssignment {
@@ -757,7 +728,6 @@ pub struct JsReplicationAssignment {
     /// Optional lane hint supplied by governance.
     pub lane: Option<String>,
 }
-
 /// SLA parameters returned when decoding a replication order.
 #[derive(Clone, Copy)]
 #[napi(object)]
@@ -769,7 +739,6 @@ pub struct JsReplicationSla {
     /// Minimum `PoR` success percentage scaled by 1000.
     pub min_por_success_percent_milli: u32,
 }
-
 /// Metadata entry embedded in a replication order.
 #[napi(object)]
 pub struct JsReplicationMetadataEntry {
@@ -778,7 +747,6 @@ pub struct JsReplicationMetadataEntry {
     /// Metadata value.
     pub value: String,
 }
-
 /// Result of decoding a Norito-encoded replication order.
 #[napi(object)]
 pub struct JsReplicationOrder {
@@ -809,7 +777,6 @@ pub struct JsReplicationOrder {
     /// Metadata entries attached to the order.
     pub metadata: Vec<JsReplicationMetadataEntry>,
 }
-
 /// One governance DAG block in an ordered contiguous tail supplied to head validation.
 #[napi(object)]
 pub struct JsSorafsGovernanceDagBlockInput {
@@ -818,7 +785,6 @@ pub struct JsSorafsGovernanceDagBlockInput {
     /// UTF-8 diagnostic label preserved in `ValidationOutcomeV1.inputs`.
     pub label: String,
 }
-
 /// One typed canonical payload supplied to heterogeneous fixture-bundle validation.
 #[napi(object)]
 pub struct JsSorafsReferenceBundlePayload {
@@ -829,7 +795,6 @@ pub struct JsSorafsReferenceBundlePayload {
     /// UTF-8 diagnostic label preserved in `ValidationOutcomeV1.inputs`.
     pub label: String,
 }
-
 /// Return the immutable source revision embedded by the release build.
 #[napi]
 #[must_use]
@@ -838,7 +803,6 @@ pub fn embedded_source_revision() -> String {
         .unwrap_or("unknown")
         .to_owned()
 }
-
 /// Derive deterministic `SoraDNS` gateway hosts from an FQDN.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for bindings
@@ -848,7 +812,6 @@ pub fn soradns_derive_gateway_hosts(fqdn: String) -> napi::Result<JsGatewayHosts
     })?;
     js_gateway_hosts_from_bindings(&bindings)
 }
-
 /// Derive deterministic `SoraDNS` gateway hosts using a custom pretty suffix.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for bindings
@@ -862,7 +825,6 @@ pub fn soradns_derive_gateway_hosts_with_pretty_suffix(
         )?;
     js_gateway_hosts_from_bindings(&bindings)
 }
-
 fn js_gateway_hosts_from_bindings(bindings: &GatewayHostBindings) -> napi::Result<JsGatewayHosts> {
     let host_patterns = bindings
         .host_patterns()
@@ -878,7 +840,6 @@ fn js_gateway_hosts_from_bindings(bindings: &GatewayHostBindings) -> napi::Resul
         host_patterns,
     })
 }
-
 /// Parse an account address string in strict encoded form (canonical I105).
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for bindings
@@ -903,7 +864,6 @@ pub fn account_address_parse_encoded(
         network_prefix: Some(network_prefix),
     })
 }
-
 /// Render canonical account address bytes into textual encodings.
 #[allow(clippy::needless_pass_by_value)] // napi binding prefers owned typed arrays
 #[napi]
@@ -922,7 +882,6 @@ pub fn account_address_render(
         i105,
     })
 }
-
 fn parse_account_id(input: &str, label: &str) -> napi::Result<AccountId> {
     let raw = input.trim();
     let parsed = match AccountAddress::parse_encoded(raw, None) {
@@ -936,15 +895,12 @@ fn parse_account_id(input: &str, label: &str) -> napi::Result<AccountId> {
         napi::Error::new(napi::Status::InvalidArg, format!("invalid {label}: {err}"))
     })
 }
-
 fn i105_discriminant_hint(input: &str) -> Option<u16> {
     AccountAddress::i105_discriminant(input).ok()
 }
-
 fn scoped_chain_discriminant_for_literal(input: &str) -> Option<ChainDiscriminantGuard> {
     i105_discriminant_hint(input).map(ChainDiscriminantGuard::enter)
 }
-
 /// Build a canonical public `AssetId` literal from definition/account parts.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` inputs at the boundary
@@ -959,7 +915,6 @@ pub fn encode_asset_id(asset_definition_id: String, account_id: String) -> napi:
     let account = parse_account_id(&account_id, "account id")?;
     Ok(AssetId::new(definition, account).canonical_literal())
 }
-
 #[napi(js_name = "blake3Hash")]
 /// Compute the BLAKE3-256 digest for the provided payload.
 #[allow(clippy::unnecessary_wraps, clippy::needless_pass_by_value)]
@@ -967,7 +922,6 @@ pub fn blake3_hash_bytes(payload: Uint8Array) -> napi::Result<Buffer> {
     let digest = blake3_hash(payload.as_ref());
     Ok(Buffer::from(digest.as_bytes().to_vec()))
 }
-
 fn parse_fixed32(value: &Uint8Array, context: &str) -> napi::Result<[u8; 32]> {
     let bytes = value.as_ref();
     if bytes.len() != 32 {
@@ -980,7 +934,6 @@ fn parse_fixed32(value: &Uint8Array, context: &str) -> napi::Result<[u8; 32]> {
     out.copy_from_slice(bytes);
     Ok(out)
 }
-
 fn derive_kaigi_scalar_u64(seed: &[u8], label: &[u8]) -> u64 {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"iroha-js:kaigi:roster-join:v1");
@@ -992,7 +945,6 @@ fn derive_kaigi_scalar_u64(seed: &[u8], label: &[u8]) -> u64 {
     let value = u64::from_le_bytes(scalar);
     if value == 0 { 1 } else { value }
 }
-
 fn parse_kaigi_roster_root_hex(value: Option<String>) -> napi::Result<Hash> {
     let Some(raw) = value.map(|entry| entry.trim().to_owned()) else {
         return Ok(empty_roster_root_hash());
@@ -1021,21 +973,17 @@ fn parse_kaigi_roster_root_hex(value: Option<String>) -> napi::Result<Hash> {
     bytes.copy_from_slice(decoded.as_slice());
     Ok(Hash::prehashed(bytes))
 }
-
 fn usize_to_u32_len(len: usize, context: &str) -> u32 {
     u32::try_from(len).unwrap_or_else(|_| panic!("{context} length exceeds u32::MAX"))
 }
-
 fn zk1_append_tlv(buf: &mut Vec<u8>, tag: [u8; 4], payload: &[u8]) {
     buf.extend_from_slice(&tag);
     buf.extend_from_slice(&usize_to_u32_len(payload.len(), "zk1 tlv payload").to_le_bytes());
     buf.extend_from_slice(payload);
 }
-
 fn zk1_append_proof(buf: &mut Vec<u8>, proof: &[u8]) {
     zk1_append_tlv(buf, *b"PROF", proof);
 }
-
 fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Halo2Scalar]]) {
     if columns.is_empty() {
         return;
@@ -1044,7 +992,6 @@ fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Halo2Scalar]]) {
     if columns.iter().any(|column| column.len() != rows) {
         return;
     }
-
     let mut payload = Vec::with_capacity(8 + rows * columns.len() * mem::size_of::<Halo2Scalar>());
     payload
         .extend_from_slice(&usize_to_u32_len(columns.len(), "zk1 instance columns").to_le_bytes());
@@ -1056,7 +1003,6 @@ fn zk1_append_instances_cols(buf: &mut Vec<u8>, columns: &[&[Halo2Scalar]]) {
     }
     zk1_append_tlv(buf, *b"I10P", payload.as_slice());
 }
-
 fn build_kaigi_roster_join_proof_bytes(
     seed: &[u8],
     roster_root: &Hash,
@@ -1064,12 +1010,10 @@ fn build_kaigi_roster_join_proof_bytes(
     let account_idx = derive_kaigi_scalar_u64(seed, b"account");
     let domain_salt = derive_kaigi_scalar_u64(seed, b"domain");
     let nullifier_seed = derive_kaigi_scalar_u64(seed, b"nullifier");
-
     let account_scalar = Halo2Scalar::from(account_idx);
     let domain_scalar = Halo2Scalar::from(domain_salt);
     let nullifier_scalar = Halo2Scalar::from(nullifier_seed);
     let root_scalars = roster_root_limbs(roster_root);
-
     let params: ParamsIPA<Halo2Curve> = ParamsIPA::new(KAIGI_ROSTER_CIRCUIT_K);
     let verifying_key = keygen_vk(&params, &KaigiRosterJoinCircuit::default()).map_err(|err| {
         napi::Error::new(
@@ -1077,7 +1021,6 @@ fn build_kaigi_roster_join_proof_bytes(
             format!("failed to generate Kaigi roster verifying key: {err}"),
         )
     })?;
-
     let circuit = KaigiRosterJoinCircuit::new(
         account_scalar,
         domain_scalar,
@@ -1090,14 +1033,12 @@ fn build_kaigi_roster_join_proof_bytes(
             format!("failed to generate Kaigi roster proving key: {err}"),
         )
     })?;
-
     let commitment_scalar = compute_commitment(account_scalar, domain_scalar);
     let nullifier_scalar_public = compute_nullifier(account_scalar, nullifier_scalar);
     let mut instance_columns = vec![vec![commitment_scalar], vec![nullifier_scalar_public]];
     instance_columns.extend(root_scalars.iter().map(|scalar| vec![*scalar]));
     let instance_refs: Vec<&[Halo2Scalar]> = instance_columns.iter().map(Vec::as_slice).collect();
     let proof_instances = vec![instance_refs.as_slice()];
-
     let mut transcript = Blake2bWrite::<_, Halo2Curve, Challenge255<Halo2Curve>>::init(Vec::new());
     create_proof::<
         IPACommitmentScheme<Halo2Curve>,
@@ -1121,11 +1062,9 @@ fn build_kaigi_roster_join_proof_bytes(
         )
     })?;
     let proof_payload = transcript.finalize();
-
     let mut zk1 = ZK1_ENVELOPE_PREFIX.to_vec();
     zk1_append_proof(&mut zk1, proof_payload.as_slice());
     zk1_append_instances_cols(&mut zk1, instance_refs.as_slice());
-
     let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
         backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         circuit_id: KAIGI_ROSTER_BACKEND.to_string(),
@@ -1140,7 +1079,6 @@ fn build_kaigi_roster_join_proof_bytes(
             format!("failed to encode Kaigi roster proof envelope: {err}"),
         )
     })?;
-
     Ok(JsKaigiRosterJoinProof {
         commitment: Buffer::from(compute_commitment_bytes(account_idx, domain_salt).to_vec()),
         nullifier: Buffer::from(compute_nullifier_bytes(account_idx, nullifier_seed).to_vec()),
@@ -1148,7 +1086,6 @@ fn build_kaigi_roster_join_proof_bytes(
         proof: Buffer::from(encoded),
     })
 }
-
 /// Build a Halo2/IPA Kaigi roster-join proof for `ZkRosterV1` joins.
 #[napi(js_name = "buildKaigiRosterJoinProof")]
 #[allow(clippy::needless_pass_by_value)]
@@ -1165,7 +1102,6 @@ pub fn build_kaigi_roster_join_proof(
     let roster_root = parse_kaigi_roster_root_hex(roster_root_hex)?;
     build_kaigi_roster_join_proof_bytes(seed.as_ref(), &roster_root)
 }
-
 fn checked_keygen_seed(seed: Uint8Array) -> napi::Result<Vec<u8>> {
     if seed.len() != 32 {
         return Err(napi::Error::new(
@@ -1175,7 +1111,6 @@ fn checked_keygen_seed(seed: Uint8Array) -> napi::Result<Vec<u8>> {
     }
     Ok(seed.to_vec())
 }
-
 /// Generate an Ed25519 key pair using `iroha_crypto`.
 ///
 /// When supplied, `seed` must be a secret 32-byte value with at least 256 bits
@@ -1187,10 +1122,8 @@ pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
         None => KeyPair::try_random_with_algorithm(Algorithm::Ed25519),
     }
     .map_err(norito_to_napi)?;
-
     let public_bytes = checked_public_key_payload(keypair.public_key())?;
     let (_, private_bytes) = keypair.private_key().to_bytes();
-
     Ok(JsKeyPair {
         algorithm: "ed25519".to_owned(),
         public_key: Buffer::from(public_bytes.to_vec()),
@@ -1198,7 +1131,6 @@ pub fn ed25519_keypair(seed: Option<Uint8Array>) -> napi::Result<JsKeyPair> {
         distid: None,
     })
 }
-
 fn algorithm_alias_key(value: &str) -> String {
     value
         .chars()
@@ -1206,7 +1138,6 @@ fn algorithm_alias_key(value: &str) -> String {
         .flat_map(char::to_lowercase)
         .collect()
 }
-
 fn parse_crypto_algorithm(value: Option<&str>) -> napi::Result<Algorithm> {
     let value = value.unwrap_or("ed25519").trim();
     let key = algorithm_alias_key(value);
@@ -1231,14 +1162,12 @@ fn parse_crypto_algorithm(value: Option<&str>) -> napi::Result<Algorithm> {
     };
     Ok(algorithm)
 }
-
 fn checked_public_key_payload(public_key: &PublicKey) -> napi::Result<&[u8]> {
     public_key
         .try_to_bytes()
         .map(|(_algorithm, payload)| payload)
         .map_err(norito_to_napi)
 }
-
 fn js_keypair_from_keypair(keypair: KeyPair) -> napi::Result<JsKeyPair> {
     let algorithm = keypair.algorithm();
     let public_bytes = checked_public_key_payload(keypair.public_key())?;
@@ -1250,7 +1179,6 @@ fn js_keypair_from_keypair(keypair: KeyPair) -> napi::Result<JsKeyPair> {
         distid: None,
     })
 }
-
 /// Return canonical algorithm labels available through the JavaScript native binding.
 #[napi(js_name = "supportedCryptoAlgorithms")]
 pub fn supported_crypto_algorithms_js() -> Vec<String> {
@@ -1259,7 +1187,6 @@ pub fn supported_crypto_algorithms_js() -> Vec<String> {
         .map(|algorithm| algorithm.as_static_str().to_owned())
         .collect()
 }
-
 /// Normalize a user-facing algorithm label to the canonical Rust `iroha_crypto` label.
 #[napi(js_name = "normalizeCryptoAlgorithm")]
 #[allow(clippy::needless_pass_by_value)]
@@ -1268,7 +1195,6 @@ pub fn normalize_crypto_algorithm_js(algorithm: Option<String>) -> napi::Result<
         .as_static_str()
         .to_owned())
 }
-
 /// Generate or deterministically derive a key pair for any supported Iroha signing algorithm.
 ///
 /// When supplied, `seed` must be a secret 32-byte value with at least 256 bits
@@ -1287,7 +1213,6 @@ pub fn crypto_keypair(
     .map_err(norito_to_napi)?;
     js_keypair_from_keypair(keypair)
 }
-
 /// Reconstruct a key pair from private-key bytes for any supported Iroha signing algorithm.
 #[napi(js_name = "cryptoKeypairFromPrivate")]
 #[allow(clippy::needless_pass_by_value)]
@@ -1301,7 +1226,6 @@ pub fn crypto_keypair_from_private(
     let keypair = KeyPair::from_private_key(private_key).map_err(norito_to_napi)?;
     js_keypair_from_keypair(keypair)
 }
-
 /// Derive public-key bytes from private-key bytes for any supported Iroha signing algorithm.
 #[napi(js_name = "cryptoPublicKeyFromPrivate")]
 #[allow(clippy::needless_pass_by_value)]
@@ -1316,7 +1240,6 @@ pub fn crypto_public_key_from_private(
     let public_bytes = checked_public_key_payload(&public_key)?;
     Ok(Buffer::from(public_bytes.to_vec()))
 }
-
 /// Sign a message with private-key bytes for any supported Iroha signing algorithm.
 #[napi(js_name = "cryptoSign")]
 #[allow(clippy::needless_pass_by_value)]
@@ -1331,7 +1254,6 @@ pub fn crypto_sign(
     let signature = Signature::try_new(&private_key, message.as_ref()).map_err(norito_to_napi)?;
     Ok(Buffer::from(signature.payload().to_vec()))
 }
-
 /// Verify a signature against public-key bytes for any supported Iroha signing algorithm.
 #[napi(js_name = "cryptoVerify")]
 #[allow(clippy::needless_pass_by_value)]
@@ -1360,7 +1282,6 @@ pub fn crypto_verify(
     };
     Ok(signature.verify(&public_key, message.as_ref()).is_ok())
 }
-
 /// Encode public-key bytes as an Iroha multihash literal.
 #[napi(js_name = "cryptoPublicKeyMultihash")]
 #[allow(clippy::needless_pass_by_value)]
@@ -1373,7 +1294,6 @@ pub fn crypto_public_key_multihash(
         .and_then(|public_key| public_key.try_to_multihash_string())
         .map_err(norito_to_napi)
 }
-
 /// Encode private-key bytes as an exposed Iroha multihash literal.
 #[napi(js_name = "cryptoPrivateKeyMultihash")]
 #[allow(clippy::needless_pass_by_value)]
@@ -1388,7 +1308,6 @@ pub fn crypto_private_key_multihash(
         .try_to_multihash_string()
         .map_err(norito_to_napi)
 }
-
 /// Derive an Ed25519 public key from a private key seed or keypair payload.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs typed arrays require owned values at the boundary
@@ -1399,7 +1318,6 @@ pub fn ed25519_public_key_from_private(private_key: Uint8Array) -> napi::Result<
     let public_bytes = checked_public_key_payload(keypair.public_key())?;
     Ok(Buffer::from(public_bytes.to_vec()))
 }
-
 fn parse_soracloud_storage_class(value: &str) -> napi::Result<StorageClass> {
     match value.trim().to_ascii_lowercase().as_str() {
         "hot" => Ok(StorageClass::Hot),
@@ -1411,7 +1329,6 @@ fn parse_soracloud_storage_class(value: &str) -> napi::Result<StorageClass> {
         )),
     }
 }
-
 fn parse_positive_u64_literal(value: &str, label: &str) -> napi::Result<u64> {
     let parsed = value.trim().parse::<u64>().map_err(|err| {
         napi::Error::new(
@@ -1427,7 +1344,6 @@ fn parse_positive_u64_literal(value: &str, label: &str) -> napi::Result<u64> {
     }
     Ok(parsed)
 }
-
 fn parse_positive_u128_literal(value: &str, label: &str) -> napi::Result<u128> {
     let parsed = value.trim().parse::<u128>().map_err(|err| {
         napi::Error::new(
@@ -1443,7 +1359,6 @@ fn parse_positive_u128_literal(value: &str, label: &str) -> napi::Result<u128> {
     }
     Ok(parsed)
 }
-
 fn parse_ed25519_keypair_hex(private_key_hex: &str) -> napi::Result<KeyPair> {
     let private_key_bytes = hex::decode(private_key_hex.trim()).map_err(|err| {
         napi::Error::new(
@@ -1455,19 +1370,16 @@ fn parse_ed25519_keypair_hex(private_key_hex: &str) -> napi::Result<KeyPair> {
         PrivateKey::from_bytes(Algorithm::Ed25519, &private_key_bytes).map_err(norito_to_napi)?;
     KeyPair::from_private_key(private_key).map_err(norito_to_napi)
 }
-
 fn sign_soracloud_payload(keypair: &KeyPair, payload: &[u8]) -> napi::Result<ManifestProvenance> {
     Ok(ManifestProvenance {
         signer: keypair.public_key().clone(),
         signature: Signature::try_new(keypair.private_key(), payload).map_err(norito_to_napi)?,
     })
 }
-
 fn soracloud_source_hash(repo_id: &str, resolved_revision: &str) -> napi::Result<Hash> {
     let payload = norito::to_bytes(&(repo_id, resolved_revision)).map_err(norito_to_napi)?;
     Ok(Hash::new(payload))
 }
-
 /// Build the fully signed request body accepted by `/v1/soracloud/hf/deploy`.
 #[allow(clippy::too_many_arguments)]
 #[napi]
@@ -1526,7 +1438,6 @@ pub fn soracloud_build_hf_deploy_request_json(
             "model_name must not be empty",
         ));
     }
-
     let storage_class = parse_soracloud_storage_class(&storage_class)?;
     let lease_term_ms = parse_positive_u64_literal(&lease_term_ms, "lease_term_ms")?;
     let base_fee = Quantity::from_canonical_numeric(Numeric::new(
@@ -1544,7 +1455,6 @@ pub fn soracloud_build_hf_deploy_request_json(
             )
         })?;
     let keypair = parse_ed25519_keypair_hex(&private_key_hex)?;
-
     let deploy_payload = encode_hf_shared_lease_join_provenance_payload(
         &repo_id,
         &resolved_revision,
@@ -1558,7 +1468,6 @@ pub fn soracloud_build_hf_deploy_request_json(
     )
     .map_err(norito_to_napi)?;
     let provenance = sign_soracloud_payload(&keypair, &deploy_payload)?;
-
     let service_name_typed = service_name.parse::<Name>().map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
@@ -1580,7 +1489,6 @@ pub fn soracloud_build_hf_deploy_request_json(
             .map_err(norito_to_napi)?;
     let generated_service_provenance =
         sign_soracloud_payload(&keypair, &service_provenance_payload)?;
-
     let generated_apartment_provenance = apartment_name
         .as_deref()
         .map(|apartment_name| {
@@ -1601,7 +1509,6 @@ pub fn soracloud_build_hf_deploy_request_json(
             sign_soracloud_payload(&keypair, &payload)
         })
         .transpose()?;
-
     let mut payload = Map::new();
     payload.insert(
         "repo_id".to_owned(),
@@ -1643,7 +1550,6 @@ pub fn soracloud_build_hf_deploy_request_json(
         "base_fee".to_owned(),
         json::to_value(&base_fee).map_err(norito_to_napi)?,
     );
-
     let mut root = Map::new();
     root.insert("payload".to_owned(), Value::Object(payload));
     root.insert(
@@ -1660,16 +1566,13 @@ pub fn soracloud_build_hf_deploy_request_json(
             json::to_value(generated_apartment_provenance).map_err(norito_to_napi)?,
         );
     }
-
     json::to_json(&Value::Object(root)).map_err(norito_to_napi)
 }
-
 /// Return the default SM2 distinguishing identifier used when none is provided.
 #[napi]
 pub fn sm2_default_distid() -> String {
     Sm2PublicKey::default_distid()
 }
-
 /// Generate an SM2 key pair using `iroha_crypto` defaults.
 #[napi]
 pub fn sm2_keypair(distid: Option<String>) -> napi::Result<JsKeyPair> {
@@ -1690,7 +1593,6 @@ pub fn sm2_keypair(distid: Option<String>) -> napi::Result<JsKeyPair> {
         distid: Some(distid),
     })
 }
-
 /// Derive an SM2 key pair deterministically from a seed.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -1712,7 +1614,6 @@ pub fn sm2_keypair_from_seed(distid: Option<String>, seed: Uint8Array) -> napi::
         distid: Some(distid),
     })
 }
-
 /// Reconstruct an SM2 key pair from raw private-key bytes.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -1731,7 +1632,6 @@ pub fn sm2_keypair_from_private(
         distid: Some(private.distid().to_owned()),
     })
 }
-
 /// Compute the canonical multihash string for an SM2 public key.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -1757,7 +1657,6 @@ pub fn sm2_public_key_multihash(
         .and_then(|pk| pk.try_to_multihash_string())
         .map_err(norito_to_napi)
 }
-
 /// Sign a message using an SM2 private key.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -1770,7 +1669,6 @@ pub fn sm2_sign(
     let signature = try_sign_sm2_message(&private, message.as_ref())?;
     Ok(Buffer::from(signature.to_vec()))
 }
-
 /// Verify an SM2 signature against the provided message and public key.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -1784,7 +1682,6 @@ pub fn sm2_verify(
     let signature = parse_sm2_signature(signature.as_ref())?;
     Ok(public.verify(message.as_ref(), &signature).is_ok())
 }
-
 /// Encode an instruction JSON payload to canonical Norito bytes.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String` for `#[napi]` bindings
@@ -1794,7 +1691,6 @@ pub fn norito_encode_instruction(json_payload: String) -> napi::Result<Buffer> {
     let encoded = norito_core::to_bytes(&instruction).map_err(norito_to_napi)?;
     Ok(Buffer::from(encoded))
 }
-
 fn subscription_syscall_program_bytes(syscall: u32, max_cycles: NonZeroU64) -> Vec<u8> {
     let opcode = u8::try_from(syscall).expect("subscription syscall opcode fits in u8");
     let mut code = Vec::new();
@@ -1810,7 +1706,6 @@ fn subscription_syscall_program_bytes(syscall: u32, max_cycles: NonZeroU64) -> V
     artifact.extend_from_slice(&code);
     artifact
 }
-
 /// Inspect and fail closed on one subscription trigger action returned inside
 /// a Torii unsigned mutation draft.
 ///
@@ -1826,7 +1721,6 @@ pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Resu
         events::EventFilterBox,
         subscription::{SUBSCRIPTION_TRIGGER_REF_METADATA_KEY, SubscriptionTriggerRef},
     };
-
     let action: Action =
         json::from_value(json::Value::String(encoded_action)).map_err(norito_to_napi)?;
     let Executable::Ivm(bytecode) = action.executable() else {
@@ -1859,14 +1753,12 @@ pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Resu
             "subscription trigger contains an unexpected IVM program",
         ));
     };
-
     if action.retry_policy().is_some() {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
             "subscription trigger retry_policy must be null",
         ));
     }
-
     let mut summary = json::Map::new();
     summary.insert(
         "version".to_owned(),
@@ -1884,7 +1776,6 @@ pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Resu
         "max_cycles".to_owned(),
         json::Value::String(max_cycles.get().to_string()),
     );
-
     match program_kind {
         "billing" => {
             if action.repeats() != Repeats::Exactly(1) {
@@ -1977,10 +1868,8 @@ pub fn inspect_subscription_trigger_action(encoded_action: String) -> napi::Resu
         }
         _ => unreachable!("subscription program kind is classified above"),
     }
-
     json::to_json(&json::Value::Object(summary)).map_err(norito_to_napi)
 }
-
 /// Decode canonical Norito bytes for an instruction back into JSON form.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned typed arrays for `#[napi]` bindings
@@ -1992,7 +1881,6 @@ pub fn norito_decode_instruction(bytes: Uint8Array) -> napi::Result<String> {
         let value = instruction_to_json_value(&instruction)?;
         json::to_json(&value).map_err(norito_to_napi)
     }));
-
     match decode {
         Ok(result) => result,
         Err(payload) => {
@@ -2008,7 +1896,6 @@ pub fn norito_decode_instruction(bytes: Uint8Array) -> napi::Result<String> {
         }
     }
 }
-
 /// Compute the canonical native fingerprint for one validation-fee policy proposal.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -2033,7 +1920,6 @@ pub fn validation_fee_policy_proposal_fingerprint_v1(
     .fingerprint();
     Ok(Buffer::from(fingerprint.to_vec()))
 }
-
 /// Compute the canonical native fingerprint for one validation-fee payout lifecycle proposal.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -2056,7 +1942,6 @@ pub fn validation_fee_payout_lifecycle_proposal_fingerprint_v1(
         .fingerprint();
     Ok(Buffer::from(fingerprint.to_vec()))
 }
-
 /// Relay envelope fixture used in Nexus cross-lane verification tests.
 #[napi(object)]
 pub struct JsLaneRelaySample {
@@ -2065,7 +1950,6 @@ pub struct JsLaneRelaySample {
     /// Same envelope with a tampered checksum byte.
     pub tampered: Buffer,
 }
-
 /// Return a deterministic relay envelope fixture and a tampered copy for testing.
 #[napi]
 pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
@@ -2105,18 +1989,15 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
         .with_manifest_root(Some([0x42; 32]));
     let valid =
         Buffer::from(norito::to_bytes(&envelope).map_err(|err| norito_to_napi(format!("{err}")))?);
-
     let mut tampered = valid.to_vec();
     if let Some(last) = tampered.last_mut() {
         *last ^= 0xFF;
     }
-
     Ok(JsLaneRelaySample {
         valid,
         tampered: Buffer::from(tampered),
     })
 }
-
 /// Verify the Norito-encoded relay envelope bytes returned by `/v1/sumeragi/status`.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
@@ -2130,7 +2011,6 @@ pub fn verify_lane_relay_envelope(envelope: Uint8Array) -> napi::Result<()> {
     })?;
     parsed.verify().map_err(norito_to_napi)
 }
-
 /// Decode relay envelope bytes into a JSON string for inspection.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
@@ -2144,7 +2024,6 @@ pub fn decode_lane_relay_envelope(envelope: Uint8Array) -> napi::Result<String> 
     })?;
     json::to_json_pretty(&parsed).map_err(norito_to_napi)
 }
-
 /// Verify a relay envelope provided as a JSON string.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API strings are owned at the boundary
@@ -2153,7 +2032,6 @@ pub fn verify_lane_relay_envelope_json(envelope_json: String) -> napi::Result<()
     let parsed: LaneRelayEnvelope = json::from_json(&envelope_json).map_err(norito_to_napi)?;
     parsed.verify().map_err(norito_to_napi)
 }
-
 /// Compute the settlement hash for a JSON `LaneBlockCommitment`.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API strings are owned at the boundary
@@ -2164,14 +2042,12 @@ pub fn lane_settlement_hash(settlement_json: String) -> napi::Result<String> {
     let hash = compute_settlement_hash(&commitment).map_err(norito_to_napi)?;
     Ok(hex::encode_upper(hash.as_ref()))
 }
-
 /// Touch manifest output returned to JavaScript callers.
 #[napi(object)]
 pub struct JsTouchManifest {
     /// Manifest rendered as Norito JSON.
     pub manifest_json: String,
 }
-
 /// Canonicalise a touch manifest by trimming keys, dropping blanks, then sorting and deduplicating.
 #[napi]
 pub fn axt_touch_manifest(read: Vec<String>, write: Vec<String>) -> napi::Result<JsTouchManifest> {
@@ -2181,7 +2057,6 @@ pub fn axt_touch_manifest(read: Vec<String>, write: Vec<String>) -> napi::Result
         manifest_json: json::to_json(&manifest).map_err(norito_to_napi)?,
     })
 }
-
 /// Canonicalised AXT descriptor and derived binding bytes.
 #[napi(object)]
 pub struct JsAxtDescriptorArtifacts {
@@ -2196,7 +2071,6 @@ pub struct JsAxtDescriptorArtifacts {
     /// Poseidon-derived binding bytes.
     pub binding: Buffer,
 }
-
 /// Touch declaration provided by JavaScript callers.
 #[napi(object)]
 pub struct JsAxtTouchSpec {
@@ -2207,7 +2081,6 @@ pub struct JsAxtTouchSpec {
     /// Declared write set (deduplicated and sorted internally).
     pub write: Option<Vec<String>>,
 }
-
 /// Build a canonical AXT descriptor and binding from JavaScript inputs.
 #[napi]
 pub fn axt_build_descriptor(
@@ -2215,7 +2088,6 @@ pub fn axt_build_descriptor(
     touches: Vec<JsAxtTouchSpec>,
 ) -> napi::Result<JsAxtDescriptorArtifacts> {
     ensure_packed_struct_disabled();
-
     let mut builder = AxtDescriptorBuilder::new();
     for dsid in dataspace_ids {
         builder = builder.dataspace(DataSpaceId::new(dsid.into()));
@@ -2231,16 +2103,13 @@ pub fn axt_build_descriptor(
             manifest.write,
         );
     }
-
     let descriptor = builder
         .build()
         .map_err(|err| norito_to_napi(format!("{err}")))?;
     validate_descriptor(&descriptor).map_err(|err| norito_to_napi(format!("{err}")))?;
-
     let descriptor_json = json::to_json(&descriptor).map_err(norito_to_napi)?;
     let descriptor_bytes =
         norito::to_bytes(&descriptor).map_err(|err| norito_to_napi(format!("{err}")))?;
-
     let binding_bytes = compute_descriptor_binding(&descriptor).map_err(norito_to_napi)?;
     let touch_manifest: Vec<AxtTouchFragment> = descriptor
         .touches
@@ -2253,7 +2122,6 @@ pub fn axt_build_descriptor(
             },
         })
         .collect();
-
     Ok(JsAxtDescriptorArtifacts {
         descriptor_json,
         descriptor_bytes: Buffer::from(descriptor_bytes),
@@ -2262,7 +2130,6 @@ pub fn axt_build_descriptor(
         binding: Buffer::from(binding_bytes.to_vec()),
     })
 }
-
 /// Compute an AXT binding from canonical Norito descriptor bytes.
 #[napi]
 pub fn axt_compute_binding(descriptor_bytes: Buffer) -> napi::Result<Buffer> {
@@ -2282,7 +2149,6 @@ pub fn axt_compute_binding(descriptor_bytes: Buffer) -> napi::Result<Buffer> {
     let binding_bytes = compute_descriptor_binding(&descriptor).map_err(norito_to_napi)?;
     Ok(Buffer::from(binding_bytes.to_vec()))
 }
-
 #[allow(unsafe_code)]
 fn decode_instruction_aligned(bytes: &[u8]) -> Result<InstructionBox, norito_core::Error> {
     let primary_error = match norito::decode_canonical::<InstructionBox>(bytes) {
@@ -2314,7 +2180,6 @@ pub fn derive_confidential_keyset(spend_key: Uint8Array) -> napi::Result<JsConfi
         fvk: Buffer::from(keyset.full_view_key().to_vec()),
     })
 }
-
 /// Derive the confidential v2 owner tag from a 32-byte spend key.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -2337,7 +2202,6 @@ pub fn derive_confidential_owner_tag_v2(
             .to_vec(),
     ))
 }
-
 /// Derive a canonical confidential v2 note diversifier from seed material.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -2353,7 +2217,6 @@ pub fn derive_confidential_diversifier_v2(seed: Uint8Array) -> napi::Result<Buff
         confidential_v2::derive_confidential_diversifier_v2(seed).to_vec(),
     ))
 }
-
 /// Derive a diversified confidential v2 receive address from a spend key and seed.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -2384,7 +2247,6 @@ pub fn derive_confidential_receive_address_v2(
         diversifier_hex: hex::encode(diversifier),
     })
 }
-
 /// Derive a confidential v2 note commitment from note material.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -2412,7 +2274,6 @@ pub fn derive_confidential_note_v2(
     .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
     Ok(Buffer::from(commitment.to_vec()))
 }
-
 /// Derive a confidential v2 nullifier from spend key material.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -2447,7 +2308,6 @@ pub fn derive_confidential_nullifier_v2(
             .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
     Ok(Buffer::from(nullifier.to_vec()))
 }
-
 /// Build a confidential transfer v2 proof envelope.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
@@ -2512,7 +2372,6 @@ pub fn build_confidential_transfer_proof_v2(
         proof: Buffer::from(proof.proof.bytes),
     })
 }
-
 /// Build a confidential unshield v2 proof envelope.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
@@ -2572,7 +2431,6 @@ pub fn build_confidential_unshield_proof_v2(
         proof: Buffer::from(proof.proof.bytes),
     })
 }
-
 /// Build a confidential unshield v3 proof envelope with optional private change.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
@@ -2640,7 +2498,6 @@ pub fn build_confidential_unshield_proof_v3(
         proof: Buffer::from(proof.proof.bytes),
     })
 }
-
 /// Produce the canonical SM2 fixture output for the given distinguishing ID, seed, and message.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -2674,7 +2531,6 @@ pub fn sm2_fixture_from_seed(
     let signature_hex = hex::encode_upper(signature_bytes);
     let r_hex = hex::encode_upper(signature.r);
     let s_hex = hex::encode_upper(signature.s);
-
     Ok(JsSm2Fixture {
         distid,
         seed_hex: hex::encode_upper(seed_bytes),
@@ -2689,11 +2545,9 @@ pub fn sm2_fixture_from_seed(
         s: s_hex,
     })
 }
-
 fn sm2_distid_arg(distid: Option<String>) -> String {
     distid.unwrap_or_else(Sm2PublicKey::default_distid)
 }
-
 fn parse_sm2_private_key(distid: Option<String>, bytes: &[u8]) -> napi::Result<Sm2PrivateKey> {
     if bytes.len() != SM2_PRIVATE_KEY_LENGTH {
         return Err(napi::Error::new(
@@ -2708,7 +2562,6 @@ fn parse_sm2_private_key(distid: Option<String>, bytes: &[u8]) -> napi::Result<S
     Sm2PrivateKey::from_bytes(distid, bytes)
         .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))
 }
-
 fn try_sign_sm2_message(
     private: &Sm2PrivateKey,
     message: &[u8],
@@ -2718,7 +2571,6 @@ fn try_sign_sm2_message(
         .map(|signature| signature.as_bytes())
         .map_err(|err| norito_to_napi(format!("failed to sign SM2 message: {err}")))
 }
-
 fn parse_sm2_public_key(distid: Option<String>, bytes: &[u8]) -> napi::Result<Sm2PublicKey> {
     if bytes.len() != SM2_PUBLIC_KEY_LENGTH {
         return Err(napi::Error::new(
@@ -2733,7 +2585,6 @@ fn parse_sm2_public_key(distid: Option<String>, bytes: &[u8]) -> napi::Result<Sm
     Sm2PublicKey::from_sec1_bytes(distid, bytes)
         .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))
 }
-
 fn parse_sm2_signature(bytes: &[u8]) -> napi::Result<Sm2Signature> {
     if bytes.len() != SM2_SIGNATURE_LENGTH {
         return Err(napi::Error::new(
@@ -2749,18 +2600,15 @@ fn parse_sm2_signature(bytes: &[u8]) -> napi::Result<Sm2Signature> {
     Sm2Signature::from_bytes(&array)
         .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err.to_string()))
 }
-
 fn account_address_err(err: AccountAddressError) -> napi::Error {
     napi::Error::new(
         napi::Status::InvalidArg,
         format!("{}: {err}", err.code_str()),
     )
 }
-
 fn norito_to_napi<E: fmt::Display>(error: E) -> napi::Error {
     napi::Error::new(napi::Status::GenericFailure, error.to_string())
 }
-
 fn sign_js_transaction(
     builder: TransactionBuilder,
     private_key: &PrivateKey,
@@ -2770,7 +2618,6 @@ fn sign_js_transaction(
         .try_sign(private_key)
         .map_err(|err| norito_to_napi(format!("failed to sign {context} transaction: {err}",)))
 }
-
 fn alias_policy_from_js(policy: Option<&JsAliasPolicy>) -> napi::Result<AliasCachePolicy> {
     let mut positive = SORAFS_ALIAS_POSITIVE_TTL_SECS;
     let mut refresh = SORAFS_ALIAS_REFRESH_WINDOW_SECS;
@@ -2780,7 +2627,6 @@ fn alias_policy_from_js(policy: Option<&JsAliasPolicy>) -> napi::Result<AliasCac
     let mut rotation = SORAFS_ALIAS_ROTATION_MAX_AGE_SECS;
     let mut successor = SORAFS_ALIAS_SUCCESSOR_GRACE_SECS;
     let mut governance = SORAFS_ALIAS_GOVERNANCE_GRACE_SECS;
-
     if let Some(policy) = policy {
         if let Some(value) = policy.positive_ttl_secs {
             positive = ensure_positive(value, "positiveTtlSecs")?;
@@ -2807,7 +2653,6 @@ fn alias_policy_from_js(policy: Option<&JsAliasPolicy>) -> napi::Result<AliasCac
             governance = ensure_non_negative(value, "governanceGraceSecs")?;
         }
     }
-
     if refresh > positive {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -2820,7 +2665,6 @@ fn alias_policy_from_js(policy: Option<&JsAliasPolicy>) -> napi::Result<AliasCac
             "hardExpirySecs must be greater than or equal to positiveTtlSecs",
         ));
     }
-
     Ok(AliasCachePolicy::new(
         Duration::from_secs(positive),
         Duration::from_secs(refresh),
@@ -2832,7 +2676,6 @@ fn alias_policy_from_js(policy: Option<&JsAliasPolicy>) -> napi::Result<AliasCac
         Duration::from_secs(governance),
     ))
 }
-
 fn ensure_positive(value: i64, name: &str) -> napi::Result<u64> {
     if value <= 0 {
         return Err(napi::Error::new(
@@ -2842,11 +2685,9 @@ fn ensure_positive(value: i64, name: &str) -> napi::Result<u64> {
     }
     js_number_to_u64(value, name)
 }
-
 fn ensure_non_negative(value: i64, name: &str) -> napi::Result<u64> {
     js_number_to_u64(value, name)
 }
-
 fn parse_hex_bytes(input: &str, context: &str) -> napi::Result<Vec<u8>> {
     let trimmed = input.trim_start_matches("0x");
     if !trimmed.len().is_multiple_of(2) {
@@ -2862,7 +2703,6 @@ fn parse_hex_bytes(input: &str, context: &str) -> napi::Result<Vec<u8>> {
         )
     })
 }
-
 /// Return the default alias cache policy used by `SoraFS` gateways.
 #[napi]
 pub fn sorafs_alias_policy_defaults() -> JsAliasPolicy {
@@ -2894,7 +2734,6 @@ pub fn sorafs_alias_policy_defaults() -> JsAliasPolicy {
         ),
     }
 }
-
 /// Evaluate an alias proof bundle against the provided or default policy.
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String`/struct inputs
 #[napi]
@@ -2925,7 +2764,6 @@ pub fn sorafs_evaluate_alias_proof(
     let evaluation = policy.evaluate(&bundle, now);
     alias_evaluation_to_js(evaluation)
 }
-
 fn u64_to_js_number(value: u64, field: &str) -> napi::Result<i64> {
     if value > JS_MAX_SAFE_INTEGER_U64 {
         return Err(napi::Error::new(
@@ -2940,7 +2778,6 @@ fn u64_to_js_number(value: u64, field: &str) -> napi::Result<i64> {
         )
     })
 }
-
 fn alias_evaluation_to_js(evaluation: AliasProofEvaluation) -> napi::Result<JsAliasEvaluation> {
     let state = match evaluation.state {
         AliasProofState::Fresh => "fresh",
@@ -2968,7 +2805,6 @@ fn alias_evaluation_to_js(evaluation: AliasProofEvaluation) -> napi::Result<JsAl
         servable: evaluation.state.is_servable(),
     })
 }
-
 fn resolve_manifest_cid(opts: &JsAliasProofFixtureOptions) -> napi::Result<Vec<u8>> {
     if let Some(hex) = opts.manifest_cid_hex.as_ref() {
         let cid = parse_hex_bytes(hex, "manifestCidHex")?;
@@ -2983,7 +2819,6 @@ fn resolve_manifest_cid(opts: &JsAliasProofFixtureOptions) -> napi::Result<Vec<u
         Ok(sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]))
     }
 }
-
 fn js_number_to_u64(value: i64, field: &str) -> napi::Result<u64> {
     let value = u64::try_from(value).map_err(|_| {
         napi::Error::new(
@@ -2999,7 +2834,6 @@ fn js_number_to_u64(value: i64, field: &str) -> napi::Result<u64> {
     }
     Ok(value)
 }
-
 fn resolve_fixture_timestamps(
     opts: &JsAliasProofFixtureOptions,
     now: u64,
@@ -3035,7 +2869,6 @@ fn resolve_fixture_timestamps(
     }
     Ok((generated, expires))
 }
-
 fn resolve_fixture_epochs(opts: &JsAliasProofFixtureOptions) -> napi::Result<(u64, u64)> {
     let bound_at = opts
         .bound_at_epoch
@@ -3049,7 +2882,6 @@ fn resolve_fixture_epochs(opts: &JsAliasProofFixtureOptions) -> napi::Result<(u6
         .unwrap_or(bound_at + 100);
     Ok((bound_at, expiry_epoch))
 }
-
 fn sign_bundle_with_council(bundle: &mut AliasProofBundleV1) -> napi::Result<()> {
     let root = alias_merkle_root(&bundle.binding, &bundle.merkle_path).map_err(norito_to_napi)?;
     bundle.registry_root = root;
@@ -3072,7 +2904,6 @@ fn sign_bundle_with_council(bundle: &mut AliasProofBundleV1) -> napi::Result<()>
         });
     bundle.validate().map_err(norito_to_napi)
 }
-
 /// Produce a deterministic alias proof example for documentation and testing.
 #[napi]
 pub fn sorafs_alias_proof_fixture(
@@ -3084,14 +2915,12 @@ pub fn sorafs_alias_proof_fixture(
     let now = unix_now_secs();
     let (generated, expires) = resolve_fixture_timestamps(&opts, now)?;
     let (bound_at, expiry_epoch) = resolve_fixture_epochs(&opts)?;
-
     let binding = AliasBindingV1 {
         alias: alias.clone(),
         manifest_cid,
         bound_at,
         expiry_epoch,
     };
-
     let mut bundle = AliasProofBundleV1 {
         binding,
         registry_root: [0u8; 32],
@@ -3101,15 +2930,12 @@ pub fn sorafs_alias_proof_fixture(
         merkle_path: Vec::new(),
         council_signatures: Vec::new(),
     };
-
     sign_bundle_with_council(&mut bundle)?;
-
     let proof_bytes = norito::to_bytes(&bundle).map_err(norito_to_napi)?;
     let proof_b64 = STANDARD.encode(proof_bytes);
     let registry_root_hex = hex::encode(bundle.registry_root);
     let generated_i64 = u64_to_js_number(generated, "generated_at_unix")?;
     let expires_i64 = u64_to_js_number(expires, "expires_at_unix")?;
-
     Ok(JsAliasProofFixture {
         proof_b64,
         alias,
@@ -3119,7 +2945,6 @@ pub fn sorafs_alias_proof_fixture(
         registry_height: u64_to_js_number(bundle.registry_height, "registry_height")?,
     })
 }
-
 #[napi(object)]
 /// Provider descriptor used by `sorafsMultiFetchLocal`.
 pub struct JsLocalProviderSpec {
@@ -3134,7 +2959,6 @@ pub struct JsLocalProviderSpec {
     /// Optional provider metadata (range capability, quotas, etc.).
     pub metadata: Option<JsProviderMetadata>,
 }
-
 #[napi(object)]
 #[derive(Clone, Copy)]
 /// Server-advertised chunk range limits for `SoraFS` providers.
@@ -3150,7 +2974,6 @@ pub struct JsRangeCapability {
     /// Whether the provider can attach Merkle proofs alongside chunks.
     pub supports_merkle_proof: Option<bool>,
 }
-
 #[napi(object)]
 #[derive(Clone, Copy)]
 /// Concurrency and throughput quotas enforced during orchestrated fetches.
@@ -3162,7 +2985,6 @@ pub struct JsStreamBudget {
     /// Optional burst allowance expressed in bytes.
     pub burst_bytes: Option<JsU64>,
 }
-
 #[napi(object)]
 /// Transport hint describing how to reach a provider.
 pub struct JsTransportHint {
@@ -3173,21 +2995,17 @@ pub struct JsTransportHint {
     /// Relative priority applied when choosing between multiple hints.
     pub priority: u8,
 }
-
 /// Lossless wrapper that accepts JavaScript `number` (within safe range) or `bigint` and stores it as `u64`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JsU64(pub u64);
-
 impl TypeName for JsU64 {
     fn type_name() -> &'static str {
         "number | bigint"
     }
-
     fn value_type() -> ValueType {
         ValueType::Unknown
     }
 }
-
 impl ValidateNapiValue for JsU64 {
     #[allow(unsafe_code)]
     unsafe fn validate(
@@ -3203,7 +3021,6 @@ impl ValidateNapiValue for JsU64 {
         }
     }
 }
-
 impl FromNapiValue for JsU64 {
     #[allow(unsafe_code)]
     unsafe fn from_napi_value(env: sys::napi_env, napi_val: sys::napi_value) -> napi::Result<Self> {
@@ -3270,7 +3087,6 @@ impl FromNapiValue for JsU64 {
         }
     }
 }
-
 impl ToNapiValue for JsU64 {
     #[allow(unsafe_code)]
     unsafe fn to_napi_value(env: sys::napi_env, val: Self) -> napi::Result<sys::napi_value> {
@@ -3282,19 +3098,16 @@ impl ToNapiValue for JsU64 {
         Ok(raw)
     }
 }
-
 impl From<JsU64> for u64 {
     fn from(value: JsU64) -> Self {
         value.0
     }
 }
-
 impl From<u64> for JsU64 {
     fn from(value: u64) -> Self {
         Self(value)
     }
 }
-
 #[napi(object)]
 /// Detailed provider metadata consumed by the orchestrator.
 pub struct JsProviderMetadata {
@@ -3331,7 +3144,6 @@ pub struct JsProviderMetadata {
     /// Transport hints advertising available protocols.
     pub transport_hints: Option<Vec<JsTransportHint>>,
 }
-
 #[napi(object)]
 /// Snapshot of provider telemetry inputs for scoreboard weighting.
 pub struct JsTelemetryEntry {
@@ -3354,7 +3166,6 @@ pub struct JsTelemetryEntry {
     /// Last update timestamp expressed in Unix seconds.
     pub last_updated_unix: Option<JsU64>,
 }
-
 #[napi(object)]
 /// Scoreboard boost configuration for a specific provider.
 pub struct JsProviderBoost {
@@ -3363,7 +3174,6 @@ pub struct JsProviderBoost {
     /// Signed adjustment applied to the provider score.
     pub delta: i32,
 }
-
 #[napi(object)]
 /// Scoreboard entry summarising eligibility and weighted score.
 pub struct JsScoreboardEntry {
@@ -3378,7 +3188,6 @@ pub struct JsScoreboardEntry {
     /// Eligibility status string (or reason when ineligible).
     pub eligibility: String,
 }
-
 #[napi(object)]
 #[derive(Default)]
 /// Optional tuning knobs for the local multi-fetch helper.
@@ -3410,7 +3219,6 @@ pub struct JsMultiFetchOptions {
     /// Include the computed scoreboard entries in the return payload.
     pub return_scoreboard: Option<bool>,
 }
-
 #[napi(object)]
 /// Aggregate provider statistics produced by a multi-fetch run.
 pub struct JsMultiFetchProviderReport {
@@ -3423,7 +3231,6 @@ pub struct JsMultiFetchProviderReport {
     /// Whether the provider was disabled due to failures.
     pub disabled: bool,
 }
-
 #[napi(object)]
 /// Per-chunk execution details returned from multi-fetch.
 pub struct JsMultiFetchChunkReceipt {
@@ -3438,7 +3245,6 @@ pub struct JsMultiFetchChunkReceipt {
     /// Size of the chunk payload in bytes.
     pub bytes: u32,
 }
-
 #[napi(object)]
 /// Result payload produced by `sorafsMultiFetchLocal`.
 pub struct JsMultiFetchResult {
@@ -3453,7 +3259,6 @@ pub struct JsMultiFetchResult {
     /// Optional scoreboard entries used for the fetch session.
     pub scoreboard: Option<Vec<JsScoreboardEntry>>,
 }
-
 /// Options controlling DA proof generation behaviour.
 #[napi(object)]
 #[derive(Default)]
@@ -3465,7 +3270,6 @@ pub struct JsDaProofOptions {
     /// Explicit `PoR` leaf indexes to verify.
     pub leaf_indexes: Option<Vec<u32>>,
 }
-
 /// Single proof-of-retrievability record returned to JavaScript callers.
 #[derive(Clone)]
 #[napi(object)]
@@ -3513,7 +3317,6 @@ pub struct JsDaProofRecord {
     #[doc = "Whether the proof verified against the supplied root."]
     pub verified: bool,
 }
-
 /// Summary describing manifest/payload `PoR` verification results.
 #[napi(object)]
 pub struct JsDaProofSummary {
@@ -3538,14 +3341,12 @@ pub struct JsDaProofSummary {
     #[doc = "Individual proof records corresponding to the manifest/payload set."]
     pub proofs: Vec<JsDaProofRecord>,
 }
-
 #[derive(Clone)]
 struct DaProofOptionsNormalized {
     sample_count: usize,
     sample_seed: u64,
     explicit_indexes: Vec<usize>,
 }
-
 impl DaProofOptionsNormalized {
     fn from_js(options: Option<JsDaProofOptions>) -> napi::Result<Self> {
         let sample_count = options
@@ -3573,13 +3374,11 @@ impl DaProofOptionsNormalized {
         })
     }
 }
-
 #[derive(Clone, Copy)]
 enum ProofOrigin {
     Sampled,
     Explicit,
 }
-
 impl ProofOrigin {
     fn label(self) -> &'static str {
         match self {
@@ -3588,19 +3387,16 @@ impl ProofOrigin {
         }
     }
 }
-
 struct ProofReport {
     origin: ProofOrigin,
     leaf_index: usize,
     proof: PorProof,
     verified: bool,
 }
-
 fn build_car_plan_from_manifest(manifest: &DaManifestV1) -> napi::Result<CarBuildPlan> {
     sorafs_car::build_plan_from_da_manifest(manifest)
         .map_err(|err| invalid_arg(format!("failed to build CAR plan: {err}")))
 }
-
 fn validate_manifest_consistency(manifest: &DaManifestV1, store: &ChunkStore) -> napi::Result<()> {
     let blob_hash_bytes = manifest.blob_hash.as_ref();
     if store.payload_digest().as_bytes() != blob_hash_bytes {
@@ -3620,12 +3416,10 @@ fn validate_manifest_consistency(manifest: &DaManifestV1, store: &ChunkStore) ->
     }
     Ok(())
 }
-
 #[allow(clippy::needless_pass_by_value)]
 fn chunk_store_err(err: ChunkStoreError) -> napi::Error {
     napi::Error::from_reason(format!("chunk store error: {err}"))
 }
-
 fn collect_sampled_proofs(
     store: &ChunkStore,
     payload: &[u8],
@@ -3649,7 +3443,6 @@ fn collect_sampled_proofs(
         })
         .collect())
 }
-
 fn collect_explicit_proofs(
     store: &ChunkStore,
     payload: &[u8],
@@ -3684,11 +3477,9 @@ fn collect_explicit_proofs(
     }
     Ok(proofs)
 }
-
 fn hex_list(values: &[[u8; 32]]) -> Vec<String> {
     values.iter().map(hex::encode).collect()
 }
-
 fn proof_to_js_record(report: &ProofReport) -> JsDaProofRecord {
     JsDaProofRecord {
         origin: report.origin.label().to_string(),
@@ -3714,7 +3505,6 @@ fn proof_to_js_record(report: &ProofReport) -> JsDaProofRecord {
         verified: report.verified,
     }
 }
-
 #[napi(object)]
 /// Norito bridge configuration for the local QUIC proxy.
 pub struct JsProxyNoritoBridgeConfig {
@@ -3723,7 +3513,6 @@ pub struct JsProxyNoritoBridgeConfig {
     /// Optional file extension applied to spool artefacts.
     pub extension: Option<String>,
 }
-
 #[napi(object)]
 /// CAR bridge configuration for the local QUIC proxy.
 pub struct JsProxyCarBridgeConfig {
@@ -3734,7 +3523,6 @@ pub struct JsProxyCarBridgeConfig {
     /// Whether `.zst` archives are permitted.
     pub allow_zst: Option<bool>,
 }
-
 #[napi(object)]
 /// Kaigi bridge configuration for the local QUIC proxy.
 pub struct JsProxyKaigiBridgeConfig {
@@ -3745,7 +3533,6 @@ pub struct JsProxyKaigiBridgeConfig {
     /// Optional room policy label (`public` or `authenticated`).
     pub room_policy: Option<String>,
 }
-
 #[napi(object)]
 /// Optional local QUIC proxy configuration surfaced to gateway fetches.
 pub struct JsLocalProxyConfig {
@@ -3772,7 +3559,6 @@ pub struct JsLocalProxyConfig {
     /// Optional Kaigi bridge configuration.
     pub kaigi_bridge: Option<JsProxyKaigiBridgeConfig>,
 }
-
 #[napi(object)]
 #[derive(Clone, Copy, Debug)]
 /// `QoS` envelope for Taikai cache classes.
@@ -3786,7 +3572,6 @@ pub struct JsTaikaiQosConfig {
     /// Token burst multiplier.
     pub burst_multiplier: u32,
 }
-
 #[napi(object)]
 #[derive(Clone, Copy, Debug)]
 /// Taikai cache tier/retention configuration.
@@ -3808,7 +3593,6 @@ pub struct JsTaikaiCacheConfig {
     /// Optional reliability tuning for shard circuit breakers.
     pub reliability: Option<JsTaikaiReliabilityConfig>,
 }
-
 #[napi(object)]
 #[derive(Clone, Copy, Debug)]
 /// Reliability configuration for the Taikai pull queue.
@@ -3818,7 +3602,6 @@ pub struct JsTaikaiReliabilityConfig {
     /// Duration (seconds) a circuit stays open before retry.
     pub open_secs: Option<JsU64>,
 }
-
 #[napi(object)]
 #[derive(Clone, Copy, Debug)]
 /// Per-tier hit/insert counters for the Taikai cache.
@@ -3830,7 +3613,6 @@ pub struct JsTaikaiCacheTierCounts {
     /// Count recorded for the cold tier.
     pub cold: JsU64,
 }
-
 #[napi(object)]
 #[derive(Clone, Copy, Debug)]
 /// Eviction counters partitioned by reason.
@@ -3840,7 +3622,6 @@ pub struct JsTaikaiCacheEvictionCounts {
     /// Number of entries evicted due to capacity pressure.
     pub capacity: JsU64,
 }
-
 #[napi(object)]
 #[derive(Clone, Copy, Debug)]
 /// Eviction counters per tier.
@@ -3852,7 +3633,6 @@ pub struct JsTaikaiCacheEvictions {
     /// Evictions from the cold tier.
     pub cold: JsTaikaiCacheEvictionCounts,
 }
-
 #[napi(object)]
 #[derive(Clone, Copy, Debug)]
 /// Promotion counters captured by the Taikai cache.
@@ -3864,7 +3644,6 @@ pub struct JsTaikaiCachePromotions {
     /// Promotions from cold directly to hot.
     pub cold_to_hot: JsU64,
 }
-
 #[napi(object)]
 #[derive(Clone, Copy, Debug)]
 /// `QoS` counters for Taikai cache and queue telemetry.
@@ -3876,7 +3655,6 @@ pub struct JsTaikaiQosCounts {
     /// Count recorded for the bulk class.
     pub bulk: JsU64,
 }
-
 #[napi(object)]
 #[derive(Clone, Copy, Debug)]
 /// Snapshot of Taikai cache activity recorded after a fetch.
@@ -3894,7 +3672,6 @@ pub struct JsTaikaiCacheStats {
     /// `QoS` denials recorded during the fetch.
     pub qos_denials: JsTaikaiQosCounts,
 }
-
 #[napi(object)]
 #[derive(Clone, Copy, Debug)]
 /// Snapshot of the Taikai pull queue state.
@@ -3918,7 +3695,6 @@ pub struct JsTaikaiQueueStats {
     /// Open circuit count across shards.
     pub open_circuits: JsU64,
 }
-
 #[napi(object)]
 #[derive(Default)]
 /// Options controlling `sorafsGatewayFetch`.
@@ -3960,7 +3736,6 @@ pub struct JsGatewayFetchOptions {
     /// Whether the caller allowed a temporary downgrade to a single provider.
     pub allow_single_source_fallback: Option<bool>,
 }
-
 #[napi(object)]
 /// Gateway provider descriptor supplied to orchestrator fetches.
 pub struct JsGatewayProviderSpec {
@@ -3977,7 +3752,6 @@ pub struct JsGatewayProviderSpec {
     /// Optional privacy events endpoint.
     pub privacy_events_url: Option<String>,
 }
-
 #[napi(object)]
 /// CAR archive statistics returned after verification.
 pub struct JsCarArchiveStats {
@@ -3996,7 +3770,6 @@ pub struct JsCarArchiveStats {
     /// Number of `PoR` leaves observed during verification.
     pub por_leaf_count: JsU64,
 }
-
 #[napi(object)]
 /// Council signature exported from a manifest governance proof bundle.
 pub struct JsCouncilSignature {
@@ -4005,14 +3778,12 @@ pub struct JsCouncilSignature {
     /// Raw signature rendered as hexadecimal.
     pub signature_hex: String,
 }
-
 #[napi(object)]
 /// Governance proofs bundled with the manifest.
 pub struct JsManifestGovernance {
     /// Council signatures authorising the manifest.
     pub council_signatures: Vec<JsCouncilSignature>,
 }
-
 #[napi(object)]
 /// CAR verification artefacts emitted after gateway fetches.
 pub struct JsCarVerification {
@@ -4033,7 +3804,6 @@ pub struct JsCarVerification {
     /// CAR archive statistics.
     pub car_archive: JsCarArchiveStats,
 }
-
 #[napi(object)]
 /// Result payload produced by `sorafsGatewayFetch`.
 pub struct JsGatewayFetchResult {
@@ -4092,7 +3862,6 @@ pub struct JsGatewayFetchResult {
     /// Snapshot of the Taikai pull queue captured after the fetch.
     pub taikai_cache_queue: Option<JsTaikaiQueueStats>,
 }
-
 #[napi(object)]
 #[allow(clippy::struct_excessive_bools)]
 /// Scoreboard metadata emitted by the gateway orchestrator.
@@ -4144,7 +3913,6 @@ pub struct JsGatewayMetadata {
     /// Whether implicit provider metadata was allowed when scoring adverts.
     pub allow_implicit_metadata: bool,
 }
-
 impl From<TaikaiCacheStatsSnapshot> for JsTaikaiCacheStats {
     fn from(stats: TaikaiCacheStatsSnapshot) -> Self {
         let tier_counts = |counts: TierStats| JsTaikaiCacheTierCounts {
@@ -4171,7 +3939,6 @@ impl From<TaikaiCacheStatsSnapshot> for JsTaikaiCacheStats {
             standard: JsU64(counts.standard),
             bulk: JsU64(counts.bulk),
         };
-
         Self {
             hits: tier_counts(stats.hits),
             misses: JsU64(stats.misses),
@@ -4186,7 +3953,6 @@ impl From<TaikaiCacheStatsSnapshot> for JsTaikaiCacheStats {
         }
     }
 }
-
 impl From<TaikaiPullQueueStats> for JsTaikaiQueueStats {
     fn from(stats: TaikaiPullQueueStats) -> Self {
         let qos = JsTaikaiQosCounts {
@@ -4207,7 +3973,6 @@ impl From<TaikaiPullQueueStats> for JsTaikaiQueueStats {
         }
     }
 }
-
 fn js_range_capability_to_input(range: JsRangeCapability) -> RangeCapabilityInput {
     RangeCapabilityInput {
         max_chunk_span: range.max_chunk_span,
@@ -4217,7 +3982,6 @@ fn js_range_capability_to_input(range: JsRangeCapability) -> RangeCapabilityInpu
         supports_merkle_proof: range.supports_merkle_proof,
     }
 }
-
 fn js_stream_budget_to_input(budget: JsStreamBudget) -> StreamBudgetInput {
     StreamBudgetInput {
         max_in_flight: budget.max_in_flight,
@@ -4225,7 +3989,6 @@ fn js_stream_budget_to_input(budget: JsStreamBudget) -> StreamBudgetInput {
         burst_bytes: budget.burst_bytes.map(Into::into),
     }
 }
-
 fn js_transport_hints_to_input(hints: &[JsTransportHint]) -> Vec<TransportHintInput> {
     hints
         .iter()
@@ -4236,7 +3999,6 @@ fn js_transport_hints_to_input(hints: &[JsTransportHint]) -> Vec<TransportHintIn
         })
         .collect()
 }
-
 fn js_metadata_to_input(metadata: JsProviderMetadata, alias: &str) -> ProviderMetadataInput {
     let JsProviderMetadata {
         provider_id,
@@ -4256,7 +4018,6 @@ fn js_metadata_to_input(metadata: JsProviderMetadata, alias: &str) -> ProviderMe
         stream_budget,
         transport_hints,
     } = metadata;
-
     ProviderMetadataInput {
         provider_id: Some(provider_id.unwrap_or_else(|| alias.to_string())),
         profile_id,
@@ -4276,7 +4037,6 @@ fn js_metadata_to_input(metadata: JsProviderMetadata, alias: &str) -> ProviderMe
         transport_hints: transport_hints.map(|hints| js_transport_hints_to_input(&hints)),
     }
 }
-
 #[allow(clippy::unnecessary_wraps)]
 fn js_provider_to_local(spec: JsLocalProviderSpec) -> napi::Result<LocalProviderInput> {
     let metadata = match spec.metadata {
@@ -4291,7 +4051,6 @@ fn js_provider_to_local(spec: JsLocalProviderSpec) -> napi::Result<LocalProvider
         metadata,
     })
 }
-
 fn js_telemetry_to_inputs(entries: &[JsTelemetryEntry]) -> Vec<TelemetryEntryInput> {
     entries
         .iter()
@@ -4308,7 +4067,6 @@ fn js_telemetry_to_inputs(entries: &[JsTelemetryEntry]) -> Vec<TelemetryEntryInp
         })
         .collect()
 }
-
 #[allow(clippy::unnecessary_wraps)]
 fn build_local_fetch_options(
     options: Option<JsMultiFetchOptions>,
@@ -4340,7 +4098,6 @@ fn build_local_fetch_options(
     }
     Ok(local)
 }
-
 fn local_fetch_result_to_js(
     result: local_fetch::LocalFetchResult,
 ) -> napi::Result<JsMultiFetchResult> {
@@ -4350,9 +4107,7 @@ fn local_fetch_result_to_js(
             "chunk count exceeds JavaScript number range",
         )
     })?;
-
     let payload = Buffer::from(result.outcome.assemble_payload());
-
     let mut provider_reports = Vec::with_capacity(result.outcome.provider_reports.len());
     for report in &result.outcome.provider_reports {
         provider_reports.push(JsMultiFetchProviderReport {
@@ -4372,7 +4127,6 @@ fn local_fetch_result_to_js(
             disabled: report.disabled,
         });
     }
-
     let mut chunk_receipts = Vec::with_capacity(result.outcome.chunk_receipts.len());
     for receipt in &result.outcome.chunk_receipts {
         chunk_receipts.push(JsMultiFetchChunkReceipt {
@@ -4393,7 +4147,6 @@ fn local_fetch_result_to_js(
             bytes: receipt.bytes,
         });
     }
-
     let scoreboard = result.scoreboard.map(|entries| {
         entries
             .into_iter()
@@ -4406,7 +4159,6 @@ fn local_fetch_result_to_js(
             })
             .collect()
     });
-
     Ok(JsMultiFetchResult {
         chunk_count,
         payload,
@@ -4415,7 +4167,6 @@ fn local_fetch_result_to_js(
         scoreboard,
     })
 }
-
 fn proxy_mode_from_label(label: &str) -> napi::Result<ProxyMode> {
     ProxyMode::parse(label).ok_or_else(|| {
         invalid_arg(format!(
@@ -4423,7 +4174,6 @@ fn proxy_mode_from_label(label: &str) -> napi::Result<ProxyMode> {
         ))
     })
 }
-
 fn build_local_proxy_config(cfg: &JsLocalProxyConfig) -> napi::Result<LocalQuicProxyConfig> {
     let mut proxy = LocalQuicProxyConfig::default();
     if let Some(bind) = cfg.bind_addr.as_ref() {
@@ -4521,7 +4271,6 @@ fn build_local_proxy_config(cfg: &JsLocalProxyConfig) -> napi::Result<LocalQuicP
     }
     Ok(proxy)
 }
-
 fn build_taikai_cache_config(cfg: &JsTaikaiCacheConfig) -> napi::Result<TaikaiCacheConfig> {
     fn ensure_positive(value: u64, label: &str) -> napi::Result<u64> {
         if value == 0 {
@@ -4533,21 +4282,18 @@ fn build_taikai_cache_config(cfg: &JsTaikaiCacheConfig) -> napi::Result<TaikaiCa
     fn duration_from_secs(value: u64, label: &str) -> napi::Result<Duration> {
         ensure_positive(value, label).map(Duration::from_secs)
     }
-
     let qos_cfg = &cfg.qos;
     if qos_cfg.burst_multiplier == 0 {
         return Err(invalid_arg(
             "taikaiCache.qos.burstMultiplier must be greater than zero",
         ));
     }
-
     let reliability_cfg = cfg.reliability.unwrap_or(JsTaikaiReliabilityConfig {
         failures_to_trip: None,
         open_secs: None,
     });
     let failures_to_trip = reliability_cfg.failures_to_trip.unwrap_or(3).max(1);
     let open_secs = reliability_cfg.open_secs.map_or(2, Into::into);
-
     Ok(TaikaiCacheConfig {
         hot_capacity_bytes: ensure_positive(
             cfg.hot_capacity_bytes.into(),
@@ -4594,7 +4340,6 @@ fn build_taikai_cache_config(cfg: &JsTaikaiCacheConfig) -> napi::Result<TaikaiCa
         },
     })
 }
-
 fn build_gateway_provider_input(
     spec: &JsGatewayProviderSpec,
 ) -> napi::Result<GatewayProviderInput> {
@@ -4645,7 +4390,6 @@ fn build_gateway_provider_input(
         privacy_events_url: privacy_url,
     })
 }
-
 fn manifest_envelope_from_options(options: &JsGatewayFetchOptions) -> Option<String> {
     options
         .manifest_envelope_b64
@@ -4654,7 +4398,6 @@ fn manifest_envelope_from_options(options: &JsGatewayFetchOptions) -> Option<Str
         .filter(|value| !value.is_empty())
         .map(str::to_string)
 }
-
 fn client_id_from_options(options: &JsGatewayFetchOptions) -> Option<String> {
     options
         .client_id
@@ -4663,7 +4406,6 @@ fn client_id_from_options(options: &JsGatewayFetchOptions) -> Option<String> {
         .filter(|value| !value.is_empty())
         .map(str::to_string)
 }
-
 fn build_gateway_fetch_config(
     manifest_id_hex: &str,
     chunker_handle: &str,
@@ -4700,7 +4442,6 @@ fn build_gateway_fetch_config(
         expected_cache_version,
     })
 }
-
 fn build_gateway_plan(
     specs: &[ChunkFetchSpec],
     payload_digest: [u8; 32],
@@ -4735,7 +4476,6 @@ fn build_gateway_plan(
         }],
     })
 }
-
 fn scoreboard_path_from_options(options: &JsGatewayFetchOptions) -> napi::Result<Option<PathBuf>> {
     let Some(path) = options.scoreboard_out_path.as_ref() else {
         return Ok(None);
@@ -4759,14 +4499,12 @@ fn scoreboard_path_from_options(options: &JsGatewayFetchOptions) -> napi::Result
     }
     Ok(Some(pathbuf))
 }
-
 fn trimmed_string_option(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(ToString::to_string)
 }
-
 #[derive(Clone, Copy)]
 struct ScoreboardMetadataInputs<'a> {
     allow_implicit_metadata: bool,
@@ -4777,11 +4515,9 @@ struct ScoreboardMetadataInputs<'a> {
     gateway_manifest_cid: Option<&'a str>,
     allow_single_source_fallback: bool,
 }
-
 fn option_u64_value(value: Option<u64>) -> Value {
     value.map_or(Value::Null, Value::from)
 }
-
 fn opt_usize_to_u64(value: Option<usize>, field: &str) -> napi::Result<Option<u64>> {
     value
         .map(|val| {
@@ -4790,7 +4526,6 @@ fn opt_usize_to_u64(value: Option<usize>, field: &str) -> napi::Result<Option<u6
         })
         .transpose()
 }
-
 fn transport_policy_labels(
     requested: TransportPolicy,
     override_policy: Option<TransportPolicy>,
@@ -4800,7 +4535,6 @@ fn transport_policy_labels(
         |policy| (policy.label(), true, Some(policy.label())),
     )
 }
-
 fn anonymity_policy_labels(
     requested: AnonymityPolicy,
     override_policy: Option<AnonymityPolicy>,
@@ -4810,7 +4544,6 @@ fn anonymity_policy_labels(
         |policy| (policy.label(), true, Some(policy.label())),
     )
 }
-
 #[allow(clippy::too_many_lines)]
 fn build_scoreboard_metadata_value(
     provider_count: usize,
@@ -4931,7 +4664,6 @@ fn build_scoreboard_metadata_value(
     );
     Ok(Value::Object(metadata))
 }
-
 fn provider_mix_label_from_counts(direct: u64, gateway: u64) -> &'static str {
     match (direct > 0, gateway > 0) {
         (true, true) => "mixed",
@@ -4940,7 +4672,6 @@ fn provider_mix_label_from_counts(direct: u64, gateway: u64) -> &'static str {
         (false, false) => "none",
     }
 }
-
 fn build_gateway_metadata(
     provider_count: usize,
     gateway_provider_count: usize,
@@ -4983,7 +4714,6 @@ fn build_gateway_metadata(
         })?;
     let write_mode_label = config.write_mode.label().to_string();
     let write_mode_enforces_pq = config.write_mode.enforces_pq_only();
-
     Ok(JsGatewayMetadata {
         provider_count: JsU64(provider_count_u64),
         gateway_provider_count: JsU64(gateway_count_u64),
@@ -5010,7 +4740,6 @@ fn build_gateway_metadata(
         allow_implicit_metadata: inputs.allow_implicit_metadata,
     })
 }
-
 fn apply_gateway_options(
     config: &mut OrchestratorConfig,
     options: &JsGatewayFetchOptions,
@@ -5086,12 +4815,10 @@ fn apply_gateway_options(
     }
     Ok(max_peers)
 }
-
 fn usize_to_u32(value: usize, field: &str) -> napi::Result<u32> {
     u32::try_from(value)
         .map_err(|_| invalid_arg(format!("{field} exceeds 32-bit range (value: {value})")))
 }
-
 #[allow(clippy::too_many_lines)]
 fn convert_fetch_session_to_js(
     session: FetchSession,
@@ -5103,7 +4830,6 @@ fn convert_fetch_session_to_js(
 ) -> napi::Result<JsGatewayFetchResult> {
     let outcome = session.outcome;
     let policy_report = session.policy_report;
-
     let payload_bytes = outcome.assemble_payload();
     if blake3_hash(&payload_bytes).as_bytes() != &expected_payload_digest {
         return Err(invalid_arg(
@@ -5113,7 +4839,6 @@ fn convert_fetch_session_to_js(
     let assembled_bytes_u64 = u64::try_from(payload_bytes.len()).map_err(|_| {
         invalid_arg("assembled payload exceeds u64 range (too large for JavaScript)")
     })?;
-
     let chunk_count = usize_to_u32(outcome.chunks.len(), "chunk_count")?;
     let provider_reports = outcome
         .provider_reports
@@ -5129,7 +4854,6 @@ fn convert_fetch_session_to_js(
             })
         })
         .collect::<napi::Result<Vec<_>>>()?;
-
     let chunk_receipts = outcome
         .chunk_receipts
         .iter()
@@ -5146,7 +4870,6 @@ fn convert_fetch_session_to_js(
             })
         })
         .collect::<napi::Result<Vec<_>>>()?;
-
     let local_proxy_manifest_json = match session.local_proxy_manifest.as_ref() {
         Some(manifest) => {
             let value = json::to_value(manifest).map_err(|err| {
@@ -5158,7 +4881,6 @@ fn convert_fetch_session_to_js(
         }
         None => None,
     };
-
     let car_verification = session.car_verification.map(|verification| {
         let car_stats = verification.car_stats;
         let governance = JsManifestGovernance {
@@ -5197,7 +4919,6 @@ fn convert_fetch_session_to_js(
     });
     let taikai_cache_summary = session.taikai_cache_stats.map(JsTaikaiCacheStats::from);
     let taikai_cache_queue = session.taikai_cache_queue.map(JsTaikaiQueueStats::from);
-
     Ok(JsGatewayFetchResult {
         manifest_id_hex: manifest_id_hex.to_string(),
         chunker_handle: chunker_handle.to_string(),
@@ -5234,7 +4955,6 @@ fn convert_fetch_session_to_js(
         taikai_cache_queue,
     })
 }
-
 #[cfg(test)]
 type FetchViaGatewayOverride = Box<
     dyn Fn(
@@ -5248,17 +4968,14 @@ type FetchViaGatewayOverride = Box<
         + Send
         + Sync,
 >;
-
 #[cfg(test)]
 fn fetch_override_slot() -> &'static std::sync::Mutex<Option<FetchViaGatewayOverride>> {
     static STORAGE: std::sync::OnceLock<std::sync::Mutex<Option<FetchViaGatewayOverride>>> =
         std::sync::OnceLock::new();
     STORAGE.get_or_init(|| std::sync::Mutex::new(None))
 }
-
 #[cfg(test)]
 pub(crate) struct FetchViaGatewayOverrideGuard;
-
 #[cfg(test)]
 pub(crate) fn set_fetch_via_gateway_override<F>(override_fn: F) -> FetchViaGatewayOverrideGuard
 where
@@ -5280,7 +4997,6 @@ where
         .expect("fetch_via_gateway override mutex poisoned") = Some(Box::new(override_fn));
     FetchViaGatewayOverrideGuard
 }
-
 #[cfg(test)]
 impl Drop for FetchViaGatewayOverrideGuard {
     fn drop(&mut self) {
@@ -5290,7 +5006,6 @@ impl Drop for FetchViaGatewayOverrideGuard {
             .expect("fetch_via_gateway override mutex poisoned during drop") = None;
     }
 }
-
 async fn run_fetch_via_gateway(
     config: OrchestratorConfig,
     plan: &CarBuildPlan,
@@ -5314,7 +5029,6 @@ async fn run_fetch_via_gateway(
             max_peers,
         );
     }
-
     fetch_via_gateway(
         config,
         plan,
@@ -5325,7 +5039,6 @@ async fn run_fetch_via_gateway(
     )
     .await
 }
-
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
 #[napi(js_name = "sorafsGatewayFetch")]
 /// Execute a gateway-backed multi-provider fetch via the Rust orchestrator.
@@ -5341,17 +5054,14 @@ pub fn sorafs_gateway_fetch(
             "providers list must contain at least one entry",
         ));
     }
-
     let manifest_id = manifest_id_hex.trim().to_ascii_lowercase();
     if manifest_id.len() != 64 || !manifest_id.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(invalid_arg("manifestIdHex must be a 32-byte hex string"));
     }
-
     let chunker_handle_trimmed = chunker_handle.trim();
     if chunker_handle_trimmed.is_empty() {
         return Err(invalid_arg("chunkerHandle must not be empty"));
     }
-
     let plan_value: json::Value = json::from_str(&plan_json)
         .map_err(|err| invalid_arg(format!("failed to parse plan JSON: {err}")))?;
     let parsed_plan = chunk_fetch_plan_from_json(&plan_value)
@@ -5371,14 +5081,11 @@ pub fn sorafs_gateway_fetch(
             )));
         }
     }
-
     let plan = build_gateway_plan(&specs, plan_payload_digest, chunker_handle_trimmed)?;
-
     let provider_inputs = providers
         .iter()
         .map(build_gateway_provider_input)
         .collect::<napi::Result<Vec<_>>>()?;
-
     let opts = options.unwrap_or_default();
     let mut orchestrator_config = OrchestratorConfig::default();
     let mut scoreboard_path = scoreboard_path_from_options(&opts)?;
@@ -5388,14 +5095,11 @@ pub fn sorafs_gateway_fetch(
     let telemetry_label = trimmed_string_option(opts.scoreboard_telemetry_label.as_deref());
     let allow_implicit_metadata = opts.scoreboard_allow_implicit_metadata.unwrap_or(false);
     let allow_single_source_fallback = opts.allow_single_source_fallback.unwrap_or(false);
-
     let max_peers = apply_gateway_options(&mut orchestrator_config, &opts)?;
     let telemetry_region = orchestrator_config.telemetry_region.clone();
-
     let gateway_config = build_gateway_fetch_config(&manifest_id, chunker_handle_trimmed, &opts)?;
     let manifest_envelope_present = gateway_config.manifest_envelope_b64.is_some();
     let manifest_cid_metadata = gateway_config.expected_manifest_cid_hex.clone();
-
     let direct_provider_count = 0usize;
     let gateway_provider_count = provider_inputs.len();
     let metadata_inputs = ScoreboardMetadataInputs {
@@ -5407,7 +5111,6 @@ pub fn sorafs_gateway_fetch(
         gateway_manifest_cid: manifest_cid_metadata.as_deref(),
         allow_single_source_fallback,
     };
-
     if let Some(path) = scoreboard_path.take() {
         let metadata = build_scoreboard_metadata_value(
             direct_provider_count,
@@ -5424,10 +5127,8 @@ pub fn sorafs_gateway_fetch(
         &orchestrator_config,
         &metadata_inputs,
     )?;
-
     let runtime = Runtime::new()
         .map_err(|err| generic_failure(format!("failed to initialise Tokio runtime: {err}")))?;
-
     let session = runtime
         .block_on(run_fetch_via_gateway(
             orchestrator_config,
@@ -5438,7 +5139,6 @@ pub fn sorafs_gateway_fetch(
             max_peers,
         ))
         .map_err(map_gateway_error)?;
-
     convert_fetch_session_to_js(
         session,
         &manifest_id,
@@ -5448,7 +5148,6 @@ pub fn sorafs_gateway_fetch(
         js_metadata,
     )
 }
-
 #[napi(js_name = "daManifestChunkerHandle")]
 /// Derive the canonical chunker handle used to encode a DA manifest.
 #[allow(clippy::needless_pass_by_value)]
@@ -5456,7 +5155,6 @@ pub fn da_manifest_chunker_handle(manifest_bytes: Uint8Array) -> napi::Result<St
     let manifest = decode_da_manifest(manifest_bytes.as_ref())?;
     derive_da_chunker_handle(&manifest)
 }
-
 #[napi(js_name = "daGenerateProofs")]
 /// Generate `PoR` proofs for a DA payload using the canonical manifest chunk plan.
 #[allow(clippy::needless_pass_by_value)]
@@ -5474,9 +5172,7 @@ pub fn da_generate_proofs(
     let summary = DaProofSummaryInternal::try_from(summary_value)?;
     Ok(summary.into())
 }
-
 const DEFAULT_DA_SAMPLE_COUNT: usize = 8;
-
 #[derive(Clone)]
 struct DaProofSummaryInternal {
     blob_hash_hex: String,
@@ -5489,14 +5185,12 @@ struct DaProofSummaryInternal {
     sample_seed: u64,
     proofs: Vec<JsDaProofRecord>,
 }
-
 #[derive(Clone)]
 struct DaProofOptionsInternal {
     sample_count: usize,
     sample_seed: u64,
     leaf_indexes: Vec<usize>,
 }
-
 impl DaProofOptionsInternal {
     fn from_js(options: Option<JsDaProofOptions>) -> napi::Result<Self> {
         let opts = options.unwrap_or_default();
@@ -5529,7 +5223,6 @@ impl DaProofOptionsInternal {
             leaf_indexes,
         })
     }
-
     fn to_iroha_config(&self) -> IrohaDaProofConfig {
         IrohaDaProofConfig {
             sample_count: self.sample_count,
@@ -5538,7 +5231,6 @@ impl DaProofOptionsInternal {
         }
     }
 }
-
 impl From<DaProofSummaryInternal> for JsDaProofSummary {
     fn from(summary: DaProofSummaryInternal) -> Self {
         JsDaProofSummary {
@@ -5555,10 +5247,8 @@ impl From<DaProofSummaryInternal> for JsDaProofSummary {
         }
     }
 }
-
 impl TryFrom<Value> for DaProofSummaryInternal {
     type Error = napi::Error;
-
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         let map = value
             .as_object()
@@ -5573,7 +5263,6 @@ impl TryFrom<Value> for DaProofSummaryInternal {
         for (idx, entry) in proofs_array.iter().enumerate() {
             proofs.push(parse_da_proof_record(entry, idx)?);
         }
-
         Ok(Self {
             blob_hash_hex: string_field(map, "blob_hash")?,
             chunk_root_hex: string_field(map, "chunk_root")?,
@@ -5587,7 +5276,6 @@ impl TryFrom<Value> for DaProofSummaryInternal {
         })
     }
 }
-
 fn parse_da_proof_record(value: &Value, index: usize) -> napi::Result<JsDaProofRecord> {
     let ctx = format!("proofs[{index}]");
     let map = value
@@ -5617,21 +5305,18 @@ fn parse_da_proof_record(value: &Value, index: usize) -> napi::Result<JsDaProofR
         verified: bool_field_ctx(map, "verified", &ctx)?,
     })
 }
-
 fn string_field(map: &Map, key: &str) -> napi::Result<String> {
     map.get(key)
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| invalid_arg(format!("DA proof summary missing string field `{key}`")))
 }
-
 fn string_field_ctx(map: &Map, key: &str, ctx: &str) -> napi::Result<String> {
     map.get(key)
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| invalid_arg(format!("{ctx} missing string field `{key}`")))
 }
-
 fn string_list_field_ctx(map: &Map, key: &str, ctx: &str) -> napi::Result<Vec<String>> {
     let value = map
         .get(key)
@@ -5649,37 +5334,31 @@ fn string_list_field_ctx(map: &Map, key: &str, ctx: &str) -> napi::Result<Vec<St
     }
     Ok(entries)
 }
-
 fn bool_field_ctx(map: &Map, key: &str, ctx: &str) -> napi::Result<bool> {
     match map.get(key) {
         Some(Value::Bool(flag)) => Ok(*flag),
         _ => Err(invalid_arg(format!("{ctx} missing boolean field `{key}`"))),
     }
 }
-
 fn u64_field(map: &Map, key: &str) -> napi::Result<u64> {
     map.get(key)
         .and_then(value_to_u64)
         .ok_or_else(|| invalid_arg(format!("DA proof summary missing integer field `{key}`")))
 }
-
 fn u64_field_ctx(map: &Map, key: &str, ctx: &str) -> napi::Result<u64> {
     map.get(key)
         .and_then(value_to_u64)
         .ok_or_else(|| invalid_arg(format!("{ctx} missing integer field `{key}`")))
 }
-
 fn usize_field(map: &Map, key: &str) -> napi::Result<usize> {
     let value = u64_field(map, key)?;
     usize::try_from(value).map_err(|_| invalid_arg(format!("`{key}` exceeds host limits")))
 }
-
 fn u32_field_ctx(map: &Map, key: &str, ctx: &str) -> napi::Result<u32> {
     let value = u64_field_ctx(map, key, ctx)?;
     u32::try_from(value)
         .map_err(|_| invalid_arg(format!("{ctx}.{key} exceeds 32-bit integer limits")))
 }
-
 fn value_to_u64(value: &Value) -> Option<u64> {
     match value {
         Value::Number(number) => number.as_u64(),
@@ -5687,12 +5366,10 @@ fn value_to_u64(value: &Value) -> Option<u64> {
         _ => None,
     }
 }
-
 fn decode_da_manifest(bytes: &[u8]) -> napi::Result<DaManifestV1> {
     decode_from_bytes(bytes)
         .map_err(|err| invalid_arg(format!("failed to decode DA manifest: {err}")))
 }
-
 fn derive_da_chunker_handle(manifest: &DaManifestV1) -> napi::Result<String> {
     let plan = build_car_plan_from_manifest(manifest)
         .map_err(|err| invalid_arg(format!("failed to derive chunk plan from manifest: {err}")))?;
@@ -5706,7 +5383,6 @@ fn derive_da_chunker_handle(manifest: &DaManifestV1) -> napi::Result<String> {
         descriptor.namespace, descriptor.name, descriptor.semver
     ))
 }
-
 fn map_local_fetch_error(err: LocalFetchError) -> napi::Error {
     match err {
         LocalFetchError::NoProviders => {
@@ -5755,15 +5431,12 @@ fn map_local_fetch_error(err: LocalFetchError) -> napi::Error {
         )),
     }
 }
-
 fn invalid_arg(message: impl Into<String>) -> napi::Error {
     napi::Error::new(napi::Status::InvalidArg, message.into())
 }
-
 fn generic_failure(message: impl Into<String>) -> napi::Error {
     napi::Error::new(napi::Status::GenericFailure, message.into())
 }
-
 fn map_gateway_error(err: GatewayOrchestratorError) -> napi::Error {
     match err {
         GatewayOrchestratorError::Orchestrator(OrchestratorError::MultiSource(multi)) => {
@@ -5772,7 +5445,6 @@ fn map_gateway_error(err: GatewayOrchestratorError) -> napi::Error {
         other => generic_failure(format!("sorafs gateway fetch failed: {other}")),
     }
 }
-
 fn multi_source_js_error(error: MultiSourceError) -> napi::Error {
     use multi_fetch::MultiSourceError::*;
 
@@ -5852,14 +5524,12 @@ fn multi_source_js_error(error: MultiSourceError) -> napi::Error {
         |rendered| napi::Error::new(napi::Status::GenericFailure, rendered),
     )
 }
-
 fn attempt_error_to_value(error: AttemptError) -> Value {
     norito_json!({
         "providerId": error.provider.to_string(),
         "failure": attempt_failure_to_value(error.failure),
     })
 }
-
 fn attempt_failure_to_value(failure: AttemptFailure) -> Value {
     match failure {
         AttemptFailure::Provider {
@@ -5886,7 +5556,6 @@ fn attempt_failure_to_value(failure: AttemptFailure) -> Value {
         }),
     }
 }
-
 /// Verify a manifest/payload pair and emit `PoR` proofs for JavaScript callers.
 #[napi]
 /// Generate a summary digest describing the provided manifest/payload `PoR` proofs.
@@ -5917,7 +5586,6 @@ pub fn da_generate_proof_summary(
         .ingest_plan_source(&plan, &mut source)
         .map_err(chunk_store_err)?;
     validate_manifest_consistency(&manifest, &store)?;
-
     let proof_options = DaProofOptionsNormalized::from_js(options)?;
     let por_root = *store.por_tree().root();
     let mut reports =
@@ -5925,7 +5593,6 @@ pub fn da_generate_proof_summary(
     let mut explicit =
         collect_explicit_proofs(&store, payload_bytes.as_ref(), &proof_options, &por_root)?;
     reports.append(&mut explicit);
-
     let proofs_js = reports.iter().map(proof_to_js_record).collect::<Vec<_>>();
     Ok(JsDaProofSummary {
         blob_hash_hex: hex::encode(manifest.blob_hash.as_ref()),
@@ -5940,7 +5607,6 @@ pub fn da_generate_proof_summary(
         proofs: proofs_js,
     })
 }
-
 fn chunk_verification_error_value(error: &ChunkVerificationError) -> Value {
     match error {
         ChunkVerificationError::LengthMismatch { expected, actual } => {
@@ -5959,7 +5625,6 @@ fn chunk_verification_error_value(error: &ChunkVerificationError) -> Value {
         }
     }
 }
-
 fn capability_mismatch_values(
     providers: &[(multi_fetch::ProviderId, CapabilityMismatch)],
 ) -> Value {
@@ -5969,7 +5634,6 @@ fn capability_mismatch_values(
         .collect();
     Value::Array(entries)
 }
-
 fn capability_mismatch_entry(
     provider: &multi_fetch::ProviderId,
     mismatch: &CapabilityMismatch,
@@ -6017,7 +5681,6 @@ fn capability_mismatch_entry(
         }),
     }
 }
-
 #[allow(clippy::needless_pass_by_value)] // napi-rs requires owned `String`
 #[napi(js_name = "sorafsMultiFetchLocal")]
 /// Execute a multi-provider fetch entirely against the local filesystem.
@@ -6032,20 +5695,15 @@ pub fn sorafs_multi_fetch_local(
             format!("failed to parse plan JSON: {err}"),
         )
     })?;
-
     let provider_inputs = providers
         .into_iter()
         .map(js_provider_to_local)
         .collect::<napi::Result<Vec<_>>>()?;
-
     let options = build_local_fetch_options(options)?;
-
     let result = local_fetch::execute_local_fetch(&plan_value, provider_inputs, options)
         .map_err(map_local_fetch_error)?;
-
     local_fetch_result_to_js(result)
 }
-
 fn to_js_replication_assignments(
     assignments: Vec<sorafs_manifest::capacity::ReplicationAssignmentV1>,
 ) -> napi::Result<Vec<JsReplicationAssignment>> {
@@ -6061,7 +5719,6 @@ fn to_js_replication_assignments(
         })
         .collect()
 }
-
 fn to_js_replication_metadata(
     metadata: Vec<sorafs_manifest::capacity::CapacityMetadataEntry>,
 ) -> Vec<JsReplicationMetadataEntry> {
@@ -6073,7 +5730,6 @@ fn to_js_replication_metadata(
         })
         .collect()
 }
-
 fn to_js_replication_order(order: ReplicationOrderV1) -> napi::Result<JsReplicationOrder> {
     let ReplicationOrderV1 {
         version,
@@ -6088,7 +5744,6 @@ fn to_js_replication_order(order: ReplicationOrderV1) -> napi::Result<JsReplicat
         sla,
         metadata,
     } = order;
-
     let manifest_cid_hex = hex::encode(&manifest_cid);
     let manifest_cid_base64 = STANDARD.encode(&manifest_cid);
     let manifest_cid_utf8 = String::from_utf8(manifest_cid).ok();
@@ -6096,13 +5751,11 @@ fn to_js_replication_order(order: ReplicationOrderV1) -> napi::Result<JsReplicat
     let assignments = to_js_replication_assignments(assignments)?;
     let issued_at_unix = u64_to_js_number(issued_at, "issued_at")?;
     let deadline_at_unix = u64_to_js_number(deadline_at, "deadline_at")?;
-
     let js_sla = JsReplicationSla {
         ingest_deadline_secs: sla.ingest_deadline_secs,
         min_availability_percent_milli: sla.min_availability_percent_milli,
         min_por_success_percent_milli: sla.min_por_success_percent_milli,
     };
-
     Ok(JsReplicationOrder {
         schema_version: version,
         order_id_hex: hex::encode(order_id),
@@ -6119,7 +5772,6 @@ fn to_js_replication_order(order: ReplicationOrderV1) -> napi::Result<JsReplicat
         metadata: to_js_replication_metadata(metadata),
     })
 }
-
 /// Decode a Norito-encoded replication order into a typed JavaScript object.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -6131,11 +5783,9 @@ pub fn sorafs_decode_replication_order(bytes: Uint8Array) -> napi::Result<JsRepl
         .map_err(|err| norito_to_napi(format!("invalid replication order: {err}")))?;
     to_js_replication_order(order)
 }
-
 fn parse_sorafs_generated_at_unix(generated_at_unix: i64) -> napi::Result<u64> {
     js_number_to_u64(generated_at_unix, "generated_at_unix")
 }
-
 fn validate_sorafs_reference_label(label: &str, context: &str) -> napi::Result<()> {
     if label.is_empty() || label.trim().is_empty() {
         return Err(napi::Error::new(
@@ -6164,7 +5814,6 @@ fn validate_sorafs_reference_label(label: &str, context: &str) -> napi::Result<(
     }
     Ok(())
 }
-
 fn validate_sorafs_reference_aggregate_bytes(
     context: &str,
     sizes: impl IntoIterator<Item = usize>,
@@ -6187,7 +5836,6 @@ fn validate_sorafs_reference_aggregate_bytes(
     }
     Ok(())
 }
-
 fn validate_sorafs_reference_governance_cid<'a>(
     cid: Option<&'a [u8]>,
     context: &str,
@@ -6204,7 +5852,6 @@ fn validate_sorafs_reference_governance_cid<'a>(
     }
     Ok(Some(cid))
 }
-
 fn parse_sorafs_orderbook_payload_kind(
     kind: &str,
 ) -> napi::Result<OrderbookValidationPayloadKindV1> {
@@ -6220,7 +5867,6 @@ fn parse_sorafs_orderbook_payload_kind(
         )),
     }
 }
-
 fn parse_sorafs_orderbook_side(side: &str) -> napi::Result<OrderSideV1> {
     match side {
         "bid" => Ok(OrderSideV1::Bid),
@@ -6231,7 +5877,6 @@ fn parse_sorafs_orderbook_side(side: &str) -> napi::Result<OrderSideV1> {
         )),
     }
 }
-
 fn parse_sorafs_orderbook_tier(tier: &str) -> napi::Result<OrderTierV1> {
     match tier {
         "hot" => Ok(OrderTierV1::Hot),
@@ -6243,7 +5888,6 @@ fn parse_sorafs_orderbook_tier(tier: &str) -> napi::Result<OrderTierV1> {
         )),
     }
 }
-
 fn parse_sorafs_orderbook_cancel_reason(reason: &str) -> napi::Result<OrderCancelReasonV1> {
     match reason {
         "owner-requested" => Ok(OrderCancelReasonV1::OwnerRequested),
@@ -6256,7 +5900,6 @@ fn parse_sorafs_orderbook_cancel_reason(reason: &str) -> napi::Result<OrderCance
         )),
     }
 }
-
 fn parse_sorafs_decimal_u64(value: &str, context: &str) -> napi::Result<u64> {
     value.trim().parse::<u64>().map_err(|err| {
         napi::Error::new(
@@ -6265,7 +5908,6 @@ fn parse_sorafs_decimal_u64(value: &str, context: &str) -> napi::Result<u64> {
         )
     })
 }
-
 fn parse_sorafs_xor_quantity(value: &str, context: &str) -> napi::Result<XorQuantity> {
     if value.len() > 155 {
         return Err(napi::Error::new(
@@ -6287,7 +5929,6 @@ fn parse_sorafs_xor_quantity(value: &str, context: &str) -> napi::Result<XorQuan
     }
     Ok(quantity)
 }
-
 fn parse_sorafs_fee_bps(value: u32, context: &str) -> napi::Result<u16> {
     u16::try_from(value).map_err(|_| {
         napi::Error::new(
@@ -6296,11 +5937,9 @@ fn parse_sorafs_fee_bps(value: u32, context: &str) -> napi::Result<u16> {
         )
     })
 }
-
 fn parse_sorafs_fixed32(value: &Uint8Array, context: &str) -> napi::Result<[u8; 32]> {
     parse_fixed32(value, context)
 }
-
 /// Validate a canonical appeal-finance `CancelAssetLock` V1 payload.
 #[napi]
 pub fn sorafs_validate_appeal_finance_cancel_asset_lock_json(
@@ -6313,7 +5952,6 @@ pub fn sorafs_validate_appeal_finance_cancel_asset_lock_json(
         validate_appeal_finance_cancel_asset_lock_bytes(bytes.as_ref(), label, generated_at);
     json::to_string(&outcome).map_err(norito_to_napi)
 }
-
 /// Validate a Norito-encoded orderbook payload and return canonical outcome JSON.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -6328,7 +5966,6 @@ pub fn sorafs_validate_orderbook_payload_json(
     let outcome = validate_orderbook_payload_bytes(kind, bytes.as_ref(), label, generated_at);
     json::to_string(&outcome).map_err(norito_to_napi)
 }
-
 /// Sign an already-encoded mutable orderbook payload and return signed Norito bytes.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -6343,7 +5980,6 @@ pub fn sorafs_sign_orderbook_payload(
             .map_err(norito_to_napi)?;
     Ok(Buffer::from(signed))
 }
-
 /// Build and sign a canonical `SoraFS` orderbook order request from fields.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -6417,7 +6053,6 @@ pub fn sorafs_build_signed_orderbook_order_request(
         .map(Buffer::from)
         .map_err(norito_to_napi)
 }
-
 /// Derive the canonical `V1` `SoraFS` orderbook order ID from owner bytes and nonce.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -6437,7 +6072,6 @@ pub fn sorafs_derive_orderbook_order_id(
         derive_orderbook_order_id_v1(owner_account.as_ref(), nonce).to_vec(),
     ))
 }
-
 /// Build and sign a canonical `SoraFS` orderbook cancellation from fields.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -6459,7 +6093,6 @@ pub fn sorafs_build_signed_orderbook_order_cancel(
         .map(Buffer::from)
         .map_err(norito_to_napi)
 }
-
 fn validate_sorafs_orderbook_owner_account(owner_account: &[u8]) -> napi::Result<()> {
     if owner_account.is_empty() {
         return Err(napi::Error::new(
@@ -6475,7 +6108,6 @@ fn validate_sorafs_orderbook_owner_account(owner_account: &[u8]) -> napi::Result
     }
     Ok(())
 }
-
 /// Build and sign a canonical `SoraFS` settlement receipt from fields.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -6511,14 +6143,12 @@ pub fn sorafs_build_signed_orderbook_settlement_receipt(
         .map(Buffer::from)
         .map_err(norito_to_napi)
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SorafsPdpPayloadKind {
     Commitment,
     Challenge,
     Proof,
 }
-
 fn parse_sorafs_pdp_payload_kind(kind: &str) -> napi::Result<SorafsPdpPayloadKind> {
     match kind {
         "commitment" => Ok(SorafsPdpPayloadKind::Commitment),
@@ -6530,7 +6160,6 @@ fn parse_sorafs_pdp_payload_kind(kind: &str) -> napi::Result<SorafsPdpPayloadKin
         )),
     }
 }
-
 fn parse_sorafs_fixture_bundle_payload_kind(
     kind: &str,
 ) -> napi::Result<FixtureBundlePayloadKindV1> {
@@ -6564,7 +6193,6 @@ fn parse_sorafs_fixture_bundle_payload_kind(
         )),
     }
 }
-
 /// Validate a Norito-encoded PDP payload and return canonical outcome JSON.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -6589,7 +6217,6 @@ pub fn sorafs_validate_pdp_payload_json(
     };
     json::to_string(&outcome).map_err(norito_to_napi)
 }
-
 /// Validate PDP commitment/challenge binding and return canonical outcome JSON.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -6610,7 +6237,6 @@ pub fn sorafs_validate_pdp_commitment_challenge_json(
     );
     json::to_string(&outcome).map_err(norito_to_napi)
 }
-
 /// Validate PDP challenge/proof binding and return canonical outcome JSON.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -6631,7 +6257,6 @@ pub fn sorafs_validate_pdp_challenge_proof_json(
     );
     json::to_string(&outcome).map_err(norito_to_napi)
 }
-
 /// Validate PDP commitment/challenge/proof binding and return canonical outcome JSON.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -6656,7 +6281,6 @@ pub fn sorafs_validate_pdp_bundle_json(
     );
     json::to_string(&outcome).map_err(norito_to_napi)
 }
-
 /// Validate a bounded heterogeneous `SoraFS` fixture bundle and its canonical
 /// cross-links, returning `ValidationOutcomeV1` JSON.
 #[napi]
@@ -6707,7 +6331,6 @@ pub fn sorafs_validate_fixture_bundle_json(
     let outcome = validate_fixture_bundle_payloads(&borrowed, now, generated_at);
     json::to_string(&outcome).map_err(norito_to_napi)
 }
-
 /// Validate one canonical governance log node against its required expected CID.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -6736,7 +6359,6 @@ pub fn sorafs_validate_governance_log_node_json(
     );
     json::to_string(&outcome).map_err(norito_to_napi)
 }
-
 /// Validate one canonical governance DAG block and return outcome JSON.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -6770,7 +6392,6 @@ pub fn sorafs_validate_governance_dag_block_json(
     );
     json::to_string(&outcome).map_err(norito_to_napi)
 }
-
 /// Validate a signed governance DAG head against an ordered contiguous block tail.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API boundary requires owned inputs
@@ -6808,7 +6429,6 @@ pub fn sorafs_validate_governance_dag_head_chain_json(
     );
     json::to_string(&outcome).map_err(norito_to_napi)
 }
-
 #[cfg(test)]
 mod sorafs_orderbook_validation_tests {
     use super::*;
@@ -6836,7 +6456,6 @@ mod sorafs_orderbook_validation_tests {
         assert!(parse_sorafs_orderbook_tier(" hot").is_err());
         assert!(parse_sorafs_orderbook_cancel_reason("owner_requested").is_err());
     }
-
     #[test]
     fn orderbook_owner_account_validation_enforces_v1_byte_ceiling() {
         assert!(
@@ -6850,7 +6469,6 @@ mod sorafs_orderbook_validation_tests {
             .is_err()
         );
     }
-
     #[test]
     fn parse_sorafs_pdp_payload_kind_requires_exact_v1_name() {
         assert_eq!(
@@ -6869,7 +6487,6 @@ mod sorafs_orderbook_validation_tests {
             assert!(parse_sorafs_pdp_payload_kind(retired).is_err());
         }
     }
-
     #[test]
     fn fixture_bundle_selector_and_cross_links_are_exact() {
         assert_eq!(
@@ -6879,7 +6496,6 @@ mod sorafs_orderbook_validation_tests {
         for retired in ["potr_receipt", "PoR-proof", "proof", " repair-report"] {
             assert!(parse_sorafs_fixture_bundle_payload_kind(retired).is_err());
         }
-
         let order =
             include_bytes!("../../../fixtures/sorafs_manifest/replication_order/order_v1.to");
         let proof = include_bytes!("../../../fixtures/sorafs_manifest/por/proof_v1.to");
@@ -6910,7 +6526,6 @@ mod sorafs_orderbook_validation_tests {
             Some(1_700_001_237)
         );
     }
-
     #[test]
     fn parse_sorafs_xor_quantity_preserves_the_exact_signed_512_boundary() {
         const MAX_SCALED: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047";
@@ -6926,13 +6541,11 @@ mod sorafs_orderbook_validation_tests {
             assert!(parse_sorafs_xor_quantity(invalid, "amount").is_err());
         }
     }
-
     #[test]
     fn governance_dag_reference_bounds_are_enforced_before_native_dispatch() {
         let maximum_label = SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1 as usize;
         assert!(validate_sorafs_reference_label(&"a".repeat(maximum_label), "label").is_ok());
         assert!(validate_sorafs_reference_label(&"a".repeat(maximum_label + 1), "label").is_err());
-
         let maximum_input = SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1 as usize;
         assert!(
             validate_sorafs_reference_aggregate_bytes("governance DAG", [maximum_input]).is_ok()
@@ -6941,7 +6554,6 @@ mod sorafs_orderbook_validation_tests {
             validate_sorafs_reference_aggregate_bytes("governance DAG", [maximum_input, 1])
                 .is_err()
         );
-
         assert!(validate_sorafs_reference_governance_cid(None, "expected CID").is_ok());
         let exact_cid = [0_u8; SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 as usize];
         assert!(validate_sorafs_reference_governance_cid(Some(&exact_cid), "expected CID").is_ok());
@@ -6952,7 +6564,6 @@ mod sorafs_orderbook_validation_tests {
             );
         }
     }
-
     #[test]
     fn governance_log_node_reference_fixture_has_stable_outcome() {
         let node =
@@ -6970,7 +6581,6 @@ mod sorafs_orderbook_validation_tests {
         assert_eq!(outcome.code, "SFS-OK-000");
         assert_eq!(outcome.generated_at, 1_700_001_234);
     }
-
     #[test]
     fn appeal_finance_cancel_asset_lock_native_outcomes_are_stable() {
         let canonical = include_bytes!(
@@ -6979,7 +6589,6 @@ mod sorafs_orderbook_validation_tests {
         let zero = include_bytes!(
             "../../../fixtures/sorafs_manifest/appeal_finance/negative/cancel_asset_lock_zero_expected_v1.to"
         );
-
         let accepted = sorafs_validate_appeal_finance_cancel_asset_lock_json(
             Uint8Array::from(canonical.to_vec()),
             "cancel_asset_lock_v1.to".to_owned(),
@@ -6991,7 +6600,6 @@ mod sorafs_orderbook_validation_tests {
             accepted.get("code").and_then(json::Value::as_str),
             Some("SFS-OK-000")
         );
-
         let rejected = sorafs_validate_appeal_finance_cancel_asset_lock_json(
             Uint8Array::from(zero.to_vec()),
             "cancel_asset_lock_zero_expected_v1.to".to_owned(),
@@ -7004,19 +6612,16 @@ mod sorafs_orderbook_validation_tests {
             Some("SFS-VAL-001")
         );
     }
-
     #[test]
     fn governance_dag_reference_fixtures_have_stable_positive_and_negative_outcomes() {
         let root = include_bytes!("../../../fixtures/sorafs_manifest/governance/dag_block_0_v1.to");
         let child =
             include_bytes!("../../../fixtures/sorafs_manifest/governance/dag_block_1_v1.to");
         let head = include_bytes!("../../../fixtures/sorafs_manifest/governance/dag_head_v1.to");
-
         let block_outcome =
             validate_governance_dag_block_bytes(root, "root.to", None, 1_700_001_234);
         assert!(block_outcome.is_ok());
         assert_eq!(block_outcome.generated_at, 1_700_001_234);
-
         let blocks = [
             (root.as_slice(), "root.to".to_owned()),
             (child.as_slice(), "child.to".to_owned()),
@@ -7025,7 +6630,6 @@ mod sorafs_orderbook_validation_tests {
             validate_governance_dag_head_chain_bytes(head, "head.to", &blocks, 1_700_001_235);
         assert!(chain_outcome.is_ok());
         assert_eq!(chain_outcome.generated_at, 1_700_001_235);
-
         let reordered = [
             (child.as_slice(), "child.to".to_owned()),
             (root.as_slice(), "root.to".to_owned()),
@@ -7036,7 +6640,6 @@ mod sorafs_orderbook_validation_tests {
         assert_eq!(negative.code, "SFS-GOV-006");
     }
 }
-
 fn parse_hash_string(input: &str, context: &str) -> napi::Result<Hash> {
     let trimmed = input.trim();
     if trimmed.starts_with("hash:") {
@@ -7060,14 +6663,12 @@ fn parse_hash_string(input: &str, context: &str) -> napi::Result<Hash> {
         )
     })
 }
-
 fn parse_hash_value(value: json::Value, context: &str) -> napi::Result<Hash> {
     match value {
         json::Value::String(ref s) => parse_hash_string(s, context),
         other => json::from_value(other).map_err(norito_to_napi),
     }
 }
-
 fn parse_canonical_hash_value(value: json::Value, context: &str) -> napi::Result<Hash> {
     json::from_value(value).map_err(|err| {
         napi::Error::new(
@@ -7076,14 +6677,12 @@ fn parse_canonical_hash_value(value: json::Value, context: &str) -> napi::Result
         )
     })
 }
-
 fn parse_optional_hash(value: Option<json::Value>, context: &str) -> napi::Result<Option<Hash>> {
     match value {
         None | Some(json::Value::Null) => Ok(None),
         Some(value) => parse_hash_value(value, context).map(Some),
     }
 }
-
 fn parse_optional_string_value(
     value: Option<json::Value>,
     context: &str,
@@ -7094,7 +6693,6 @@ fn parse_optional_string_value(
         Some(other) => parse_string_value(other, context).map(Some),
     }
 }
-
 fn parse_keyed_hash(value: json::Value, context: &str) -> napi::Result<KeyedHash> {
     let mut map = match value {
         json::Value::Object(map) => map,
@@ -7115,7 +6713,6 @@ fn parse_keyed_hash(value: json::Value, context: &str) -> napi::Result<KeyedHash
     )?;
     Ok(KeyedHash { pepper_id, digest })
 }
-
 fn parse_optional_commitment(
     value: Option<json::Value>,
     context: &str,
@@ -7149,7 +6746,6 @@ fn parse_optional_commitment(
         Some(other) => json::from_value(other).map(Some).map_err(norito_to_napi),
     }
 }
-
 fn parse_optional_nullifier(
     value: Option<json::Value>,
     context: &str,
@@ -7183,13 +6779,11 @@ fn parse_optional_nullifier(
         Some(other) => json::from_value(other).map(Some).map_err(norito_to_napi),
     }
 }
-
 fn optional_hash_to_json(value: Option<&Hash>) -> json::Value {
     value.map_or(json::Value::Null, |hash| {
         json::to_value(hash).expect("hash serialization")
     })
 }
-
 fn optional_commitment_to_json(value: Option<&KaigiParticipantCommitment>) -> json::Value {
     value.map_or(json::Value::Null, |commitment| {
         let mut map = json::Map::new();
@@ -7209,7 +6803,6 @@ fn optional_commitment_to_json(value: Option<&KaigiParticipantCommitment>) -> js
         json::Value::Object(map)
     })
 }
-
 fn optional_nullifier_to_json(value: Option<&KaigiParticipantNullifier>) -> json::Value {
     value.map_or(json::Value::Null, |nullifier| {
         let mut map = json::Map::new();
@@ -7224,13 +6817,11 @@ fn optional_nullifier_to_json(value: Option<&KaigiParticipantNullifier>) -> json
         json::Value::Object(map)
     })
 }
-
 fn optional_proof_to_json(value: Option<&Vec<u8>>) -> json::Value {
     value.map_or(json::Value::Null, |bytes| {
         json::Value::String(STANDARD.encode(bytes))
     })
 }
-
 fn parse_optional_base64(
     value: Option<json::Value>,
     context: &str,
@@ -7246,7 +6837,6 @@ fn parse_optional_base64(
         Some(other) => json::from_value(other).map_err(norito_to_napi),
     }
 }
-
 fn parse_base64(value: json::Value, context: &str) -> napi::Result<Vec<u8>> {
     match value {
         json::Value::String(s) => STANDARD.decode(s.as_bytes()).map_err(|err| {
@@ -7288,7 +6878,6 @@ fn parse_base64(value: json::Value, context: &str) -> napi::Result<Vec<u8>> {
         )),
     }
 }
-
 fn required_value(map: &mut json::Map, key: &str, context: &str) -> napi::Result<json::Value> {
     map.remove(key).ok_or_else(|| {
         napi::Error::new(
@@ -7297,7 +6886,6 @@ fn required_value(map: &mut json::Map, key: &str, context: &str) -> napi::Result
         )
     })
 }
-
 fn parse_string_value(value: json::Value, context: &str) -> napi::Result<String> {
     match value {
         json::Value::String(s) => Ok(s),
@@ -7307,12 +6895,10 @@ fn parse_string_value(value: json::Value, context: &str) -> napi::Result<String>
         )),
     }
 }
-
 fn parse_account_id_value(value: json::Value, context: &str) -> napi::Result<AccountId> {
     let literal = parse_string_value(value, context)?;
     parse_account_id(&literal, context)
 }
-
 fn parse_rwa_id_value(value: json::Value, context: &str) -> napi::Result<RwaId> {
     let literal = parse_string_value(value, context)?;
     literal.parse().map_err(|err| {
@@ -7322,7 +6908,6 @@ fn parse_rwa_id_value(value: json::Value, context: &str) -> napi::Result<RwaId> 
         )
     })
 }
-
 fn account_id_to_canonical_i105(account_id: &AccountId) -> napi::Result<String> {
     account_id.canonical_i105().map_err(|err| {
         napi::Error::new(
@@ -7331,7 +6916,6 @@ fn account_id_to_canonical_i105(account_id: &AccountId) -> napi::Result<String> 
         )
     })
 }
-
 fn parse_rwa_parent_refs_value(
     value: json::Value,
     context: &str,
@@ -7362,7 +6946,6 @@ fn parse_rwa_parent_refs_value(
     }
     Ok(parents)
 }
-
 fn rwa_parent_refs_to_json(parents: &[RwaParentRef]) -> json::Value {
     json::Value::Array(
         parents
@@ -7376,13 +6959,11 @@ fn rwa_parent_refs_to_json(parents: &[RwaParentRef]) -> json::Value {
             .collect(),
     )
 }
-
 fn rwa_status_to_json(status: Option<&Name>) -> json::Value {
     status.map_or(json::Value::Null, |status| {
         json::Value::String(status.to_string())
     })
 }
-
 fn rwa_control_policy_to_json(policy: &RwaControlPolicy) -> napi::Result<json::Value> {
     let controller_accounts = policy
         .controller_accounts()
@@ -7423,7 +7004,6 @@ fn rwa_control_policy_to_json(policy: &RwaControlPolicy) -> napi::Result<json::V
     );
     Ok(json::Value::Object(payload))
 }
-
 fn new_rwa_to_json(rwa: &NewRwa) -> napi::Result<json::Value> {
     Ok(norito_json!({
         "domain": rwa.domain(),
@@ -7436,7 +7016,6 @@ fn new_rwa_to_json(rwa: &NewRwa) -> napi::Result<json::Value> {
         "controls": rwa_control_policy_to_json(rwa.controls())?,
     }))
 }
-
 fn normalize_zk_ballot_public_inputs_json(raw: &str, context: &str) -> napi::Result<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -7459,7 +7038,6 @@ fn normalize_zk_ballot_public_inputs_json(raw: &str, context: &str) -> napi::Res
         )
     })
 }
-
 fn normalize_zk_ballot_public_inputs(value: &mut json::Value, context: &str) -> napi::Result<()> {
     let map = match value {
         json::Value::Object(map) => map,
@@ -7494,7 +7072,6 @@ fn normalize_zk_ballot_public_inputs(value: &mut json::Value, context: &str) -> 
     ensure_zk_public_input_amount_canonical(map, context)?;
     Ok(())
 }
-
 fn reject_zk_public_input_key(
     map: &json::Map,
     key: &str,
@@ -7509,7 +7086,6 @@ fn reject_zk_public_input_key(
     }
     Ok(())
 }
-
 fn ensure_zk_public_input_owner_canonical(map: &json::Map, context: &str) -> napi::Result<()> {
     let Some(value) = map.get("owner") else {
         return Ok(());
@@ -7540,7 +7116,6 @@ fn ensure_zk_public_input_owner_canonical(map: &json::Map, context: &str) -> nap
     }
     Ok(())
 }
-
 fn ensure_zk_public_input_amount_canonical(map: &json::Map, context: &str) -> napi::Result<()> {
     let Some(value) = map.get("amount") else {
         return Ok(());
@@ -7556,7 +7131,6 @@ fn ensure_zk_public_input_amount_canonical(map: &json::Map, context: &str) -> na
     })?;
     parse_canonical_quantity_text(amount, &format!("{context}.amount")).map(|_| ())
 }
-
 fn canonicalize_hex32_public_input(
     map: &mut json::Map,
     key: &str,
@@ -7584,7 +7158,6 @@ fn canonicalize_hex32_public_input(
     *value = json::Value::String(canonical);
     Ok(())
 }
-
 fn canonicalize_hex32_value(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     let without_scheme = if let Some((scheme, rest)) = trimmed.split_once(':') {
@@ -7607,12 +7180,10 @@ fn canonicalize_hex32_value(raw: &str) -> Option<String> {
     }
     Some(body.to_ascii_lowercase())
 }
-
 fn zk_hint_present(map: &json::Map, key: &str) -> bool {
     map.get(key)
         .is_some_and(|value| !matches!(value, json::Value::Null))
 }
-
 fn parse_u64_value(value: json::Value, context: &str) -> napi::Result<u64> {
     match value {
         json::Value::Number(number) => number.as_u64().ok_or_else(|| {
@@ -7633,13 +7204,11 @@ fn parse_u64_value(value: json::Value, context: &str) -> napi::Result<u64> {
         )),
     }
 }
-
 fn remove_case_insensitive(map: &mut json::Map, key: &str) -> Option<json::Value> {
     map.remove(key)
         .or_else(|| map.remove(&key.to_ascii_lowercase()))
         .or_else(|| map.remove(&key.to_ascii_uppercase()))
 }
-
 fn parse_u8_value(value: json::Value, context: &str) -> napi::Result<u8> {
     let parsed = parse_u64_value(value, context)?;
     u8::try_from(parsed).map_err(|_| {
@@ -7649,7 +7218,6 @@ fn parse_u8_value(value: json::Value, context: &str) -> napi::Result<u8> {
         )
     })
 }
-
 fn parse_canonical_quantity_text(source: &str, context: &str) -> napi::Result<Quantity> {
     let quantity = Quantity::from_str(source).map_err(|err| {
         napi::Error::new(
@@ -7665,7 +7233,6 @@ fn parse_canonical_quantity_text(source: &str, context: &str) -> napi::Result<Qu
     }
     Ok(quantity)
 }
-
 fn parse_canonical_quantity_value(value: json::Value, context: &str) -> napi::Result<Quantity> {
     let json::Value::String(source) = value else {
         return Err(napi::Error::new(
@@ -7675,7 +7242,6 @@ fn parse_canonical_quantity_value(value: json::Value, context: &str) -> napi::Re
     };
     parse_canonical_quantity_text(&source, context)
 }
-
 fn parse_optional_voting_mode(
     value: Option<json::Value>,
     context: &str,
@@ -7701,14 +7267,12 @@ fn parse_optional_voting_mode(
         )),
     }
 }
-
 fn voting_mode_to_json(mode: VotingMode) -> &'static str {
     match mode {
         VotingMode::Zk => "Zk",
         VotingMode::Plain => "Plain",
     }
 }
-
 fn require_exact_json_fields(
     fields: &json::Map,
     expected: &[&str],
@@ -7737,7 +7301,6 @@ fn require_exact_json_fields(
         ),
     ))
 }
-
 fn validation_fee_policy_from_json_value(
     value: json::Value,
 ) -> napi::Result<ValidationFeePolicyV1> {
@@ -7770,7 +7333,6 @@ fn validation_fee_policy_from_json_value(
         "recipients",
     ];
     const RECIPIENT_FIELDS: &[&str] = &["account_id", "share"];
-
     let json::Value::Object(fields) = &value else {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -7816,7 +7378,6 @@ fn validation_fee_policy_from_json_value(
     }
     json::from_value(value).map_err(norito_to_napi)
 }
-
 fn validation_fee_payout_binding_from_json_value(
     value: json::Value,
     context: &str,
@@ -7835,7 +7396,6 @@ fn validation_fee_payout_binding_from_json_value(
         "recipients",
     ];
     const RECIPIENT_FIELDS: &[&str] = &["account_id", "share"];
-
     let json::Value::Object(fields) = &value else {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -7864,7 +7424,6 @@ fn validation_fee_payout_binding_from_json_value(
     }
     json::from_value(value).map_err(norito_to_napi)
 }
-
 fn validate_validation_fee_payout_binding(
     payout_binding: &ValidationFeeTreasuryPayoutBindingV1,
 ) -> napi::Result<()> {
@@ -7882,14 +7441,12 @@ fn validate_validation_fee_payout_binding(
     }
     Ok(())
 }
-
 fn validation_fee_plain_electorate_rules_from_json(
     payload: &str,
 ) -> napi::Result<ValidationFeePlainElectorateRulesV1> {
     let value: json::Value = json::from_json(payload).map_err(norito_to_napi)?;
     validation_fee_plain_electorate_rules_from_json_value(value)
 }
-
 fn validation_fee_plain_electorate_rules_from_json_value(
     value: json::Value,
 ) -> napi::Result<ValidationFeePlainElectorateRulesV1> {
@@ -7909,7 +7466,6 @@ fn validation_fee_plain_electorate_rules_from_json_value(
         "eligibility_rule",
     ];
     const ELIGIBILITY_RULE_FIELDS: &[&str] = &["rule", "value"];
-
     let json::Value::Object(fields) = &value else {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
@@ -7938,7 +7494,6 @@ fn validation_fee_plain_electorate_rules_from_json_value(
     }
     Ok(rules)
 }
-
 fn validate_validation_fee_policy_proposal(
     policy: &ValidationFeePolicyV1,
     payout_lifecycle_proposal_id: Option<&[u8; 32]>,
@@ -7965,7 +7520,6 @@ fn validate_validation_fee_policy_proposal(
         )),
     }
 }
-
 fn validation_fee_policy_instruction_from_json(value: json::Value) -> napi::Result<InstructionBox> {
     const INSTRUCTION_FIELDS: &[&str] = &[
         "policy",
@@ -8045,12 +7599,10 @@ fn validation_fee_policy_instruction_from_json(value: json::Value) -> napi::Resu
     }
     .into())
 }
-
 fn instruction_from_json(payload: &str) -> napi::Result<InstructionBox> {
     let value: json::Value = json::from_json(payload).map_err(norito_to_napi)?;
     value_to_instruction(value)
 }
-
 fn parse_instruction_payloads(payloads: Vec<String>) -> napi::Result<Vec<InstructionBox>> {
     if payloads.is_empty() {
         return Err(napi::Error::new(
@@ -8065,7 +7617,6 @@ fn parse_instruction_payloads(payloads: Vec<String>) -> napi::Result<Vec<Instruc
     }
     Ok(instructions)
 }
-
 fn parse_executable_batch_payloads(
     payloads: Vec<String>,
 ) -> napi::Result<Vec<ExecutableBatchItem>> {
@@ -8075,7 +7626,6 @@ fn parse_executable_batch_payloads(
             "executable batch entries must be a non-empty array",
         ));
     }
-
     let mut entries = Vec::with_capacity(payloads.len());
     for (index, payload) in payloads.into_iter().enumerate() {
         let value: json::Value = json::from_json(&payload).map_err(|err| {
@@ -8102,7 +7652,6 @@ fn parse_executable_batch_payloads(
                 format!("executable batch entry {index} kind must be a string"),
             ));
         };
-
         let entry = match kind.as_str() {
             "instruction" => {
                 let instruction = fields.remove("instruction").ok_or_else(|| {
@@ -8157,7 +7706,6 @@ fn parse_executable_batch_payloads(
                             ),
                         )
                     })?;
-
                 let expected_code_hash = fields.remove("expectedCodeHash").ok_or_else(|| {
                     napi::Error::new(
                         napi::Status::InvalidArg,
@@ -8170,7 +7718,6 @@ fn parse_executable_batch_payloads(
                     expected_code_hash,
                     &format!("executable batch contract call {index} expectedCodeHash"),
                 )?;
-
                 let entrypoint = fields.remove("entrypoint").ok_or_else(|| {
                     napi::Error::new(
                         napi::Status::InvalidArg,
@@ -8193,7 +7740,6 @@ fn parse_executable_batch_payloads(
                         ),
                     ));
                 }
-
                 let arguments = match fields.remove("arguments") {
                     None | Some(json::Value::Null) => None,
                     Some(value) => {
@@ -8234,13 +7780,11 @@ fn parse_executable_batch_payloads(
     }
     Ok(entries)
 }
-
 fn encode_trigger_action(action: &Action) -> napi::Result<String> {
     norito::to_bytes(action)
         .map(|bytes| STANDARD.encode(bytes))
         .map_err(norito_to_napi)
 }
-
 fn parse_metadata_payload(context: &str, payload: Option<String>) -> napi::Result<Metadata> {
     payload.map_or_else(
         || Ok(Metadata::default()),
@@ -8254,7 +7798,6 @@ fn parse_metadata_payload(context: &str, payload: Option<String>) -> napi::Resul
         },
     )
 }
-
 fn transfer_asset_batch_from_json(value: json::Value) -> napi::Result<InstructionBox> {
     let json::Value::Object(mut fields) = value else {
         return Err(napi::Error::new(
@@ -8327,7 +7870,6 @@ fn transfer_asset_batch_from_json(value: json::Value) -> napi::Result<Instructio
     }
     Ok(InstructionBox::from(TransferAssetBatch::new(entries)))
 }
-
 fn validate_governance_selector_payload(
     payload: Option<&json::Value>,
     field: &str,
@@ -8357,7 +7899,6 @@ fn validate_governance_selector_payload(
     }
     Ok(())
 }
-
 fn validate_governance_instruction_selectors(value: &json::Value) -> napi::Result<()> {
     let json::Value::Object(instruction) = value else {
         return Ok(());
@@ -8383,7 +7924,6 @@ fn validate_governance_instruction_selectors(value: &json::Value) -> napi::Resul
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)] // comprehensive translation keeps instruction handling centralized
 fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
     validate_governance_instruction_selectors(&value)?;
@@ -8655,7 +8195,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     code_hash,
                 }));
             }
-
             if let Some(register_value) = map.remove("Register") {
                 if !map.is_empty() {
                     return Err(napi::Error::new(
@@ -9708,7 +9247,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     "unsupported Kaigi instruction variant; see iroha_data_model::isi::kaigi for supported set",
                 ));
             }
-
             if let Some(json::Value::Object(mut fields)) = map.remove("ProposeDeployContract") {
                 let contract_address: iroha_data_model::smart_contract::ContractAddress =
                     parse_string_value(
@@ -9757,7 +9295,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
-
             if let Some(json::Value::Object(mut fields)) = map.remove("CastZkBallot") {
                 let election_id = parse_string_value(
                     required_value(&mut fields, "election_id", "CastZkBallot")?,
@@ -9782,7 +9319,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 };
                 return Ok(Box::new(ballot).into_instruction_box());
             }
-
             if let Some(json::Value::Object(mut fields)) = map.remove("CastPlainBallot") {
                 let referendum_id = parse_string_value(
                     required_value(&mut fields, "referendum_id", "CastPlainBallot")?,
@@ -9811,7 +9347,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 };
                 return Ok(Box::new(ballot).into_instruction_box());
             }
-
             if let Some(json::Value::Object(mut fields)) = map.remove("RegisterCitizen") {
                 let owner_value = required_value(&mut fields, "owner", "RegisterCitizen")?;
                 let owner = parse_account_id_value(owner_value, "RegisterCitizen.owner")?;
@@ -9822,19 +9357,16 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let instruction = RegisterCitizen { owner, amount };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
-
             if let Some(enact_value) = map.remove("EnactReferendum") {
                 let enact: EnactReferendum =
                     json::from_value(enact_value).map_err(norito_to_napi)?;
                 return Ok(Box::new(enact).into_instruction_box());
             }
-
             if let Some(finalize_value) = map.remove("FinalizeReferendum") {
                 let finalize: FinalizeReferendum =
                     json::from_value(finalize_value).map_err(norito_to_napi)?;
                 return Ok(Box::new(finalize).into_instruction_box());
             }
-
             if let Some(json::Value::Object(mut fields)) = map.remove("PersistCouncilForEpoch") {
                 let epoch = parse_u64_value(
                     required_value(&mut fields, "epoch", "PersistCouncilForEpoch")?,
@@ -9856,7 +9388,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 };
                 return Ok(Box::new(persist).into_instruction_box());
             }
-
             if let Some(json::Value::Object(mut fields)) = map.remove("SubmitAgendaProposal") {
                 let proposal: AgendaProposalV1 = json::from_value(required_value(
                     &mut fields,
@@ -9867,7 +9398,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let instruction = SubmitAgendaProposal { proposal };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
-
             if let Some(json::Value::Object(mut fields)) = map.remove("RegisterSmartContractCode") {
                 let manifest_value =
                     required_value(&mut fields, "manifest", "RegisterSmartContractCode")?;
@@ -9876,7 +9406,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let instruction = RegisterSmartContractCode { manifest };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
-
             if let Some(json::Value::Object(mut fields)) = map.remove("RegisterSmartContractBytes")
             {
                 let code_hash_value =
@@ -9888,7 +9417,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let instruction = RegisterSmartContractBytes { code_hash, code };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
-
             if let Some(json::Value::Object(mut fields)) = map.remove("RemoveSmartContractBytes") {
                 let code_hash_value =
                     required_value(&mut fields, "code_hash", "RemoveSmartContractBytes")?;
@@ -9901,7 +9429,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let instruction = RemoveSmartContractBytes { code_hash, reason };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
-
             if let Some(json::Value::Object(mut fields)) = map.remove("ActivateContractInstance") {
                 let contract_address: iroha_data_model::smart_contract::ContractAddress =
                     parse_string_value(
@@ -9931,7 +9458,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
-
             if let Some(json::Value::Object(mut fields)) = map.remove("DeactivateContractInstance")
             {
                 let contract_address: iroha_data_model::smart_contract::ContractAddress =
@@ -9962,7 +9488,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
-
             if let Some(value) = map.remove("ClaimTwitterFollowReward") {
                 let mut fields = match value {
                     json::Value::Object(map) => map,
@@ -9982,7 +9507,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let instruction = ClaimTwitterFollowReward { binding_hash };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
-
             if let Some(value) = map.remove("SendToTwitter") {
                 let mut fields = match value {
                     json::Value::Object(map) => map,
@@ -10006,7 +9530,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
-
             if let Some(value) = map.remove("CancelTwitterEscrow") {
                 let mut fields = match value {
                     json::Value::Object(map) => map,
@@ -10026,7 +9549,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let instruction = CancelTwitterEscrow { binding_hash };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
-
             if let Some(custom_value) = remove_case_insensitive(&mut map, "Custom") {
                 let mut custom_map = match custom_value {
                     json::Value::Object(map) => map,
@@ -10045,7 +9567,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     })?;
                 return Ok(InstructionBox::from(CustomInstruction::new(payload)));
             }
-
             if let Some(multisig_value) = remove_case_insensitive(&mut map, "Multisig") {
                 let multisig_map = match multisig_value {
                     json::Value::Object(map) => map,
@@ -10062,7 +9583,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     json::Value::Object(multisig_map),
                 )));
             }
-
             if let Some(propose_value) = remove_case_insensitive(&mut map, "MultisigPropose") {
                 let propose_fields = match propose_value {
                     json::Value::Object(map) => map,
@@ -10079,7 +9599,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     json::Value::Object(payload),
                 )));
             }
-
             if let Some(approve_value) = remove_case_insensitive(&mut map, "MultisigApprove") {
                 let approve_fields = match approve_value {
                     json::Value::Object(map) => map,
@@ -10096,7 +9615,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     json::Value::Object(payload),
                 )));
             }
-
             if let Some(cancel_value) = remove_case_insensitive(&mut map, "MultisigCancel") {
                 let cancel_fields = match cancel_value {
                     json::Value::Object(map) => map,
@@ -10113,7 +9631,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     json::Value::Object(payload),
                 )));
             }
-
             if let Some(register_value) = remove_case_insensitive(&mut map, "MultisigRegister") {
                 let register_fields = match register_value {
                     json::Value::Object(map) => map,
@@ -10130,7 +9647,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     json::Value::Object(payload),
                 )));
             }
-
             if let Some(zk_value) = remove_case_insensitive(&mut map, "Zk") {
                 let mut zk_map = match zk_value {
                     json::Value::Object(map) => map,
@@ -10176,7 +9692,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     "unsupported zk instruction variant",
                 ));
             }
-
             Err(napi::Error::new(
                 napi::Status::InvalidArg,
                 "unsupported instruction; refer to Iroha data model instructions for supported variants",
@@ -10188,7 +9703,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
         )),
     }
 }
-
 fn settlement_instruction_from_json(value: json::Value) -> napi::Result<InstructionBox> {
     let json::Value::Object(mut variants) = value else {
         return Err(napi::Error::new(
@@ -10202,7 +9716,6 @@ fn settlement_instruction_from_json(value: json::Value) -> napi::Result<Instruct
             "Settlement instruction must contain exactly one supported settlement variant",
         ));
     }
-
     let (variant, payload) = variants
         .pop_first()
         .expect("length checked settlement variant");
@@ -10275,7 +9788,6 @@ fn settlement_instruction_from_json(value: json::Value) -> napi::Result<Instruct
     };
     Ok(InstructionBox::from(instruction))
 }
-
 fn exact_json_object_fields(
     value: &json::Value,
     expected: &[&str],
@@ -10314,7 +9826,6 @@ fn exact_json_object_fields(
     }
     Ok(())
 }
-
 #[allow(clippy::too_many_lines)] // mirrors `value_to_instruction` for full roundtrips
 fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json::Value> {
     let instruction_ref: &dyn InstructionTrait = &**instruction;
@@ -10505,7 +10016,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             return Ok(json::Value::Object(outer));
         }
     }
-
     if let Some(unregister_box) = instruction_ref.as_any().downcast_ref::<UnregisterBox>() {
         let mut unregister_map = json::Map::new();
         match unregister_box {
@@ -10544,7 +10054,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             return Ok(json::Value::Object(outer));
         }
     }
-
     if let Some(mint_box) = instruction_ref.as_any().downcast_ref::<MintBox>() {
         let mut mint_map = json::Map::new();
         if let MintBox::Asset(mint) = mint_box {
@@ -10572,7 +10081,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             return Ok(json::Value::Object(outer));
         }
     }
-
     if let Some(transfer_box) = instruction_ref.as_any().downcast_ref::<TransferBox>() {
         let mut transfer_map = json::Map::new();
         if let TransferBox::Asset(transfer) = transfer_box {
@@ -10624,7 +10132,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             return Ok(json::Value::Object(outer));
         }
     }
-
     if let Some(batch) = instruction_ref
         .as_any()
         .downcast_ref::<TransferAssetBatch>()
@@ -10636,7 +10143,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(burn_box) = instruction_ref.as_any().downcast_ref::<BurnBox>() {
         let mut burn_map = json::Map::new();
         if let BurnBox::Asset(burn) = burn_box {
@@ -10664,7 +10170,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             return Ok(json::Value::Object(outer));
         }
     }
-
     if let Some(grant_box) = instruction_ref.as_any().downcast_ref::<GrantBox>() {
         if let GrantBox::Permission(grant) = grant_box {
             let mut fields = json::Map::new();
@@ -10683,7 +10188,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             return Ok(json::Value::Object(outer));
         }
     }
-
     if let Some(set_key_value) = instruction_ref.as_any().downcast_ref::<SetKeyValueBox>() {
         if let SetKeyValueBox::Account(set) = set_key_value {
             let mut fields = json::Map::new();
@@ -10726,7 +10230,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             return Ok(json::Value::Object(outer));
         }
     }
-
     if let Some(alias) = instruction_ref
         .as_any()
         .downcast_ref::<SetAssetDefinitionAlias>()
@@ -10758,7 +10261,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(execute_trigger) = instruction_ref.as_any().downcast_ref::<ExecuteTrigger>() {
         let mut payload = json::Map::new();
         payload.insert(
@@ -10776,7 +10278,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         outer.insert("ExecuteTrigger".to_owned(), json::Value::Object(payload));
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(rwa_box) = instruction_ref.as_any().downcast_ref::<RwaInstructionBox>() {
         let (label, payload) = match rwa_box {
             RwaInstructionBox::Register(register) => (
@@ -10876,7 +10377,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         outer.insert(label.to_owned(), payload);
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(custom_instruction) = instruction_ref.as_any().downcast_ref::<CustomInstruction>() {
         let payload_json =
             json::parse_value(custom_instruction.payload.get()).map_err(|error| {
@@ -10887,7 +10387,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             })?;
         return Ok(custom_json_value(payload_json));
     }
-
     if let Some(register) = instruction_ref.as_any().downcast_ref::<RegisterRwa>() {
         let mut outer = json::Map::new();
         outer.insert(
@@ -10896,7 +10395,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(transfer) = instruction_ref.as_any().downcast_ref::<TransferRwa>() {
         let mut outer = json::Map::new();
         outer.insert(
@@ -10910,7 +10408,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(merge) = instruction_ref.as_any().downcast_ref::<MergeRwas>() {
         let mut payload = json::Map::new();
         payload.insert(
@@ -10933,7 +10430,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         outer.insert("MergeRwas".to_owned(), json::Value::Object(payload));
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(redeem) = instruction_ref.as_any().downcast_ref::<RedeemRwa>() {
         let mut outer = json::Map::new();
         outer.insert(
@@ -10945,7 +10441,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(freeze) = instruction_ref.as_any().downcast_ref::<FreezeRwa>() {
         let mut outer = json::Map::new();
         outer.insert(
@@ -10954,7 +10449,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(unfreeze) = instruction_ref.as_any().downcast_ref::<UnfreezeRwa>() {
         let mut outer = json::Map::new();
         outer.insert(
@@ -10963,7 +10457,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(hold) = instruction_ref.as_any().downcast_ref::<HoldRwa>() {
         let mut outer = json::Map::new();
         outer.insert(
@@ -10975,7 +10468,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(release) = instruction_ref.as_any().downcast_ref::<ReleaseRwa>() {
         let mut outer = json::Map::new();
         outer.insert(
@@ -10987,7 +10479,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(force_transfer) = instruction_ref.as_any().downcast_ref::<ForceTransferRwa>() {
         let mut outer = json::Map::new();
         outer.insert(
@@ -11000,7 +10491,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(set_controls) = instruction_ref.as_any().downcast_ref::<SetRwaControls>() {
         let mut outer = json::Map::new();
         outer.insert(
@@ -11012,7 +10502,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(submit) = instruction_ref
         .as_any()
         .downcast_ref::<SubmitAgendaProposal>()
@@ -11026,7 +10515,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(propose) = instruction_ref
         .as_any()
         .downcast_ref::<ProposeValidationFeePolicy>()
@@ -11061,7 +10549,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(propose) = instruction_ref
         .as_any()
         .downcast_ref::<ProposeDeployContract>()
@@ -11102,7 +10589,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(ballot) = instruction_ref.as_any().downcast_ref::<CastZkBallot>() {
         let mut inner = json::Map::new();
         inner.insert(
@@ -11121,7 +10607,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(ballot) = instruction_ref.as_any().downcast_ref::<CastPlainBallot>() {
         let mut inner = json::Map::new();
         inner.insert(
@@ -11148,7 +10633,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         outer.insert("CastPlainBallot".to_owned(), json::Value::Object(inner));
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(citizen) = instruction_ref.as_any().downcast_ref::<RegisterCitizen>() {
         let mut inner = json::Map::new();
         inner.insert(
@@ -11163,14 +10647,12 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         outer.insert("RegisterCitizen".to_owned(), json::Value::Object(inner));
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(register) = instruction_ref.as_any().downcast_ref::<RegisterZkAsset>() {
         return Ok(zk_json_value(
             "RegisterZkAsset",
             json::to_value(register).map_err(norito_to_napi)?,
         ));
     }
-
     if let Some(transition) = instruction_ref
         .as_any()
         .downcast_ref::<ScheduleConfidentialPolicyTransition>()
@@ -11180,7 +10662,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             json::to_value(transition).map_err(norito_to_napi)?,
         ));
     }
-
     if let Some(cancel) = instruction_ref
         .as_any()
         .downcast_ref::<CancelConfidentialPolicyTransition>()
@@ -11190,28 +10671,24 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             json::to_value(cancel).map_err(norito_to_napi)?,
         ));
     }
-
     if let Some(create) = instruction_ref.as_any().downcast_ref::<CreateElection>() {
         return Ok(zk_json_value(
             "CreateElection",
             json::to_value(create).map_err(norito_to_napi)?,
         ));
     }
-
     if let Some(submit) = instruction_ref.as_any().downcast_ref::<SubmitBallot>() {
         return Ok(zk_json_value(
             "SubmitBallot",
             json::to_value(submit).map_err(norito_to_napi)?,
         ));
     }
-
     if let Some(finalize) = instruction_ref.as_any().downcast_ref::<FinalizeElection>() {
         return Ok(zk_json_value(
             "FinalizeElection",
             json::to_value(finalize).map_err(norito_to_napi)?,
         ));
     }
-
     if let Some(enact) = instruction_ref.as_any().downcast_ref::<EnactReferendum>() {
         let mut outer = json::Map::new();
         outer.insert(
@@ -11220,7 +10697,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(finalize) = instruction_ref
         .as_any()
         .downcast_ref::<FinalizeReferendum>()
@@ -11232,7 +10708,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(persist) = instruction_ref
         .as_any()
         .downcast_ref::<PersistCouncilForEpoch>()
@@ -11257,7 +10732,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(register_code) = instruction_ref
         .as_any()
         .downcast_ref::<RegisterSmartContractCode>()
@@ -11272,7 +10746,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(register_bytes) = instruction_ref
         .as_any()
         .downcast_ref::<RegisterSmartContractBytes>()
@@ -11293,7 +10766,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(remove_bytes) = instruction_ref
         .as_any()
         .downcast_ref::<RemoveSmartContractBytes>()
@@ -11313,7 +10785,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(activate) = instruction_ref
         .as_any()
         .downcast_ref::<ActivateContractInstance>()
@@ -11334,7 +10805,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(deactivate) = instruction_ref
         .as_any()
         .downcast_ref::<DeactivateContractInstance>()
@@ -11354,7 +10824,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(claim) = instruction_ref
         .as_any()
         .downcast_ref::<ClaimTwitterFollowReward>()
@@ -11371,7 +10840,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         );
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(send) = instruction_ref.as_any().downcast_ref::<SendToTwitter>() {
         let mut inner = json::Map::new();
         inner.insert(
@@ -11386,7 +10854,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         outer.insert("SendToTwitter".to_owned(), json::Value::Object(inner));
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(cancel) = instruction_ref
         .as_any()
         .downcast_ref::<CancelTwitterEscrow>()
@@ -11400,7 +10867,6 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         outer.insert("CancelTwitterEscrow".to_owned(), json::Value::Object(inner));
         return Ok(json::Value::Object(outer));
     }
-
     if let Some(create) = instruction_ref.as_any().downcast_ref::<CreateKaigi>() {
         let mut payload = json::Map::new();
         payload.insert(
@@ -11605,13 +11071,11 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             json::Value::Object(payload),
         ));
     }
-
     Err(napi::Error::new(
         napi::Status::GenericFailure,
         "unsupported instruction variant; JSON conversion is not yet implemented for this instruction",
     ))
 }
-
 fn kaigi_json_value(tag: &str, payload: json::Value) -> json::Value {
     let mut variant = json::Map::new();
     variant.insert(tag.to_owned(), payload);
@@ -11619,7 +11083,6 @@ fn kaigi_json_value(tag: &str, payload: json::Value) -> json::Value {
     outer.insert("Kaigi".to_owned(), json::Value::Object(variant));
     json::Value::Object(outer)
 }
-
 fn custom_json_value(payload: json::Value) -> json::Value {
     let mut custom = json::Map::new();
     custom.insert("payload".to_owned(), payload);
@@ -11627,7 +11090,6 @@ fn custom_json_value(payload: json::Value) -> json::Value {
     outer.insert("Custom".to_owned(), json::Value::Object(custom));
     json::Value::Object(outer)
 }
-
 fn zk_json_value(tag: &str, payload: json::Value) -> json::Value {
     let mut variant = json::Map::new();
     variant.insert(tag.to_owned(), payload);
@@ -11635,7 +11097,6 @@ fn zk_json_value(tag: &str, payload: json::Value) -> json::Value {
     outer.insert("zk".to_owned(), json::Value::Object(variant));
     json::Value::Object(outer)
 }
-
 fn try_decode_signed_transaction_adaptive_with_flags(
     payload: &[u8],
     flags: u8,
@@ -11650,7 +11111,6 @@ fn try_decode_signed_transaction_adaptive_with_flags(
         Err(_) => Err("panic".to_owned()),
     }
 }
-
 fn try_decode_signed_transaction_versioned(bytes: &[u8]) -> Result<SignedTransaction, String> {
     use norito_core::DecodeFromSlice as _;
 
@@ -11672,17 +11132,14 @@ fn try_decode_signed_transaction_versioned(bytes: &[u8]) -> Result<SignedTransac
     }
     Ok(decoded)
 }
-
 fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
     use norito_core::DecodeFromSlice as _;
 
     let mut attempts = Vec::new();
-
     match try_decode_signed_transaction_versioned(bytes) {
         Ok(decoded) => return Ok(decoded),
         Err(err) => attempts.push(format!("versioned: {err}")),
     }
-
     match SignedTransaction::decode_from_slice(bytes) {
         Ok((decoded, used)) if used == bytes.len() => return Ok(decoded),
         Ok((_, used)) => attempts.push(format!(
@@ -11691,12 +11148,10 @@ fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
         )),
         Err(err) => attempts.push(format!("bare adaptive: {err}")),
     }
-
     match norito::decode_from_bytes::<SignedTransaction>(bytes) {
         Ok(decoded) => return Ok(decoded),
         Err(err) => attempts.push(format!("framed norito: {err}")),
     }
-
     if let Ok(view) = norito_core::from_bytes_view(bytes) {
         let payload = view.as_bytes();
         let packed = norito_core::header_flags::PACKED_STRUCT;
@@ -11711,7 +11166,6 @@ fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
             }
         }
     }
-
     match try_decode_signed_transaction_adaptive_with_flags(bytes, 0) {
         Ok(decoded) => Ok(decoded),
         Err(err) => {
@@ -11726,7 +11180,6 @@ fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
         }
     }
 }
-
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
 fn configure_transaction_builder(
     mut builder: TransactionBuilder,
@@ -11740,7 +11193,6 @@ fn configure_transaction_builder(
         let millis = js_number_to_u64(ms, "creation_time_ms")?;
         builder.set_creation_time(Duration::from_millis(millis));
     }
-
     if let Some(ms) = ttl_ms {
         let millis = js_number_to_u64(ms, "ttl_ms")?;
         if millis == 0 {
@@ -11751,7 +11203,6 @@ fn configure_transaction_builder(
         }
         builder.set_ttl(Duration::from_millis(millis));
     }
-
     if let Some(value) = nonce {
         let nonce = NonZeroU32::new(value).ok_or_else(|| {
             napi::Error::new(
@@ -11761,14 +11212,12 @@ fn configure_transaction_builder(
         })?;
         builder.set_nonce(nonce);
     }
-
     builder = builder.with_metadata(metadata);
     if let Some(attachments) = attachments {
         builder = builder.with_attachments(attachments);
     }
     Ok(builder)
 }
-
 fn parse_fee_payment_intent(fee_payment_json: &str) -> napi::Result<FeePaymentIntent> {
     let intent = norito::json::from_str::<FeePaymentIntent>(fee_payment_json).map_err(|err| {
         napi::Error::new(
@@ -11784,7 +11233,6 @@ fn parse_fee_payment_intent(fee_payment_json: &str) -> napi::Result<FeePaymentIn
     })?;
     Ok(intent)
 }
-
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
 fn assemble_executable_transaction(
     network_id: NetworkId,
@@ -11807,19 +11255,16 @@ fn assemble_executable_transaction(
         ttl_ms,
         nonce,
     )?;
-
     let algorithm = parse_crypto_algorithm(algorithm.as_deref())?;
     let private_key = PrivateKey::from_bytes(algorithm, secret).map_err(norito_to_napi)?;
     let signed = sign_js_transaction(builder, &private_key, "JavaScript host assembled")?;
     let signed_bytes = Encode::encode(&signed);
     let hash = Buffer::from(signed.hash().as_ref().to_vec());
-
     Ok(JsSignedTransaction {
         signed_transaction: Buffer::from(signed_bytes),
         hash,
     })
 }
-
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
 fn assemble_transaction(
     network_id: NetworkId,
@@ -11839,7 +11284,6 @@ fn assemble_transaction(
             "instructions must be a non-empty array",
         ));
     }
-
     assemble_executable_transaction(
         network_id,
         authority,
@@ -11854,7 +11298,6 @@ fn assemble_transaction(
         algorithm,
     )
 }
-
 fn checked_batch_executable(
     entries: Vec<ExecutableBatchItem>,
     fee_payment: &FeePaymentIntent,
@@ -11874,7 +11317,6 @@ fn checked_batch_executable(
     }
     Ok(executable)
 }
-
 /// Compute the canonical pipeline hash for a Norito-serialized signed transaction.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
@@ -11883,7 +11325,6 @@ pub fn hash_signed_transaction(bytes: Uint8Array) -> napi::Result<Buffer> {
     let hash = tx.hash();
     Ok(Buffer::from(hash.as_ref().to_vec()))
 }
-
 /// Compute the detached-signature preimage used by Torii for a signed
 /// transaction scaffold: `HashOf::new(tx.payload())`.
 #[napi]
@@ -11893,7 +11334,6 @@ pub fn hash_signed_transaction_payload(bytes: Uint8Array) -> napi::Result<Buffer
     let hash = iroha_crypto::HashOf::new(tx.payload());
     Ok(Buffer::from(hash.as_ref().to_vec()))
 }
-
 /// Compute the canonical identity of an authorized instruction batch. Torii
 /// uses this hash as both the multisig `instructions_hash` and `proposal_id`.
 #[napi]
@@ -11902,7 +11342,6 @@ pub fn hash_instruction_batch(instructions_json: Vec<String>) -> napi::Result<Bu
     let hash = iroha_crypto::HashOf::new(&instructions);
     Ok(Buffer::from(hash.as_ref().to_vec()))
 }
-
 /// Decode a Norito-serialized signed transaction into its JSON representation.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -11911,7 +11350,6 @@ pub fn decode_signed_transaction_json(bytes: Uint8Array) -> napi::Result<String>
     let tx = decode_signed_transaction(bytes.as_ref())?;
     json::to_json(&tx).map_err(norito_to_napi)
 }
-
 /// Encode one JSON contract-call payload with the exact Kotodama entrypoint
 /// schema into the canonical signed `EntrypointArgumentRecordV1` bytes.
 #[napi]
@@ -11928,7 +11366,6 @@ pub fn encode_contract_argument_record_json(
         iroha_core::encode_argument_record_from_json(&schema, &payload).map_err(norito_to_napi)?;
     Ok(Buffer::from(record))
 }
-
 /// Convert a versioned signed transaction payload into Norito bytes.
 ///
 /// This is used by Torii deployments that expose legacy `/transaction` submit
@@ -11941,7 +11378,6 @@ pub fn encode_signed_transaction_norito(bytes: Uint8Array) -> napi::Result<Buffe
     let encoded = norito::to_bytes(&tx).map_err(norito_to_napi)?;
     Ok(Buffer::from(encoded))
 }
-
 /// Convert a signed transaction payload into versioned adaptive Norito bytes.
 ///
 /// This is the public `/transaction` payload shape accepted by Torii routes
@@ -11955,7 +11391,6 @@ pub fn encode_signed_transaction_versioned(bytes: Uint8Array) -> napi::Result<Bu
         <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&tx);
     Ok(Buffer::from(encoded))
 }
-
 /// Encode a `/v1/pipeline/transactions/batch` payload as a framed Norito
 /// `Vec<Vec<u8>>`, where every item is a versioned signed transaction payload.
 #[napi]
@@ -11975,7 +11410,6 @@ pub fn encode_transaction_payload_batch(payloads: Vec<Buffer>) -> napi::Result<B
     let encoded = norito::to_bytes(&payloads).map_err(norito_to_napi)?;
     Ok(Buffer::from(encoded))
 }
-
 /// Decode a Norito-framed transaction submission receipt into its JSON representation.
 #[napi]
 #[allow(clippy::needless_pass_by_value)] // Uint8Array boundary requires ownership
@@ -11985,7 +11419,6 @@ pub fn decode_transaction_receipt_json(bytes: Uint8Array) -> napi::Result<String
         decode_from_bytes(bytes.as_ref()).map_err(norito_to_napi)?;
     json::to_json(&receipt).map_err(norito_to_napi)
 }
-
 /// Re-sign a Norito-serialized transaction with the provided Ed25519 private key
 /// and return the updated signed transaction bytes.
 ///
@@ -12006,13 +11439,11 @@ pub fn sign_transaction(
         "JavaScript transaction re-signer",
     )?;
     let builder = TransactionBuilder::from_payload(tx.payload().clone()).map_err(norito_to_napi)?;
-
     let private_key =
         PrivateKey::from_bytes(Algorithm::Ed25519, secret.as_ref()).map_err(norito_to_napi)?;
     let signed = sign_js_transaction(builder, &private_key, "JavaScript host re-signed")?;
     Ok(Buffer::from(Encode::encode(&signed)))
 }
-
 fn privacy_compiled_profile_catalog() -> napi::Result<PrivacyCompiledProfileCatalogV1> {
     let catalog = compiled_privacy_profile_catalog_v1().map_err(|error| {
         napi::Error::new(
@@ -12030,7 +11461,6 @@ fn privacy_compiled_profile_catalog() -> napi::Result<PrivacyCompiledProfileCata
     );
     Ok(catalog)
 }
-
 fn encode_privacy_compiled_profile_catalog_archive(
     value: &PrivacyCompiledProfileCatalogV1,
     context: &str,
@@ -12060,7 +11490,6 @@ fn encode_privacy_compiled_profile_catalog_archive(
     }
     Ok(Buffer::from(bytes))
 }
-
 #[napi]
 /// Return this binary's canonical typed Norito V1 privacy compiled-profile catalog.
 ///
@@ -12074,13 +11503,11 @@ pub fn privacy_compiled_profile_catalog_v1() -> napi::Result<Buffer> {
         "encode local privacy compiled-profile catalog",
     )
 }
-
 #[napi]
 /// Validate an archive as this binary's exact canonical local compiled-profile catalog.
 pub fn privacy_validate_compiled_profile_catalog_v1(archive: Uint8Array) -> i32 {
     validate_local_privacy_compiled_profile_catalog_archive_v1(archive.as_ref()).code()
 }
-
 fn decode_privacy_exact12_capability_manifest_v1(
     archive: &[u8],
 ) -> napi::Result<PrivacyExact12CapabilityManifestV1> {
@@ -12115,20 +11542,17 @@ fn decode_privacy_exact12_capability_manifest_v1(
     }
     Ok(manifest)
 }
-
 #[napi(js_name = "privacyValidateExact12CapabilityManifestV1")]
 /// Validate an archive as the exact canonical public Exact12 capability manifest.
 pub fn privacy_validate_exact12_capability_manifest_v1(archive: Uint8Array) -> i32 {
     validate_privacy_capability_archive_v1(archive.as_ref()).code()
 }
-
 #[napi(js_name = "privacyExact12CapabilityManifestJsonV1")]
 /// Decode a validated canonical Exact12 manifest to its lossless typed JSON projection.
 pub fn privacy_exact12_capability_manifest_json_v1(archive: Uint8Array) -> napi::Result<String> {
     let manifest = decode_privacy_exact12_capability_manifest_v1(archive.as_ref())?;
     json::to_json(&manifest).map_err(norito_to_napi)
 }
-
 #[napi(js_name = "privacyRequireExact12CapabilityTupleV1")]
 /// Require active committed admission and exact equality with this binary's local profile row.
 pub fn privacy_require_exact12_capability_tuple_v1(
@@ -12183,7 +11607,6 @@ pub fn privacy_require_exact12_capability_tuple_v1(
     }
     Ok(true)
 }
-
 /// Result of signing a transaction via the native helper.
 #[napi(object)]
 pub struct JsSignedTransaction {
@@ -12192,7 +11615,6 @@ pub struct JsSignedTransaction {
     /// Canonical pipeline hash for the signed transaction.
     pub hash: Buffer,
 }
-
 /// Canonical transaction payload prepared for an external signer.
 #[napi(object)]
 pub struct JsTransactionPayload {
@@ -12201,7 +11623,6 @@ pub struct JsTransactionPayload {
     /// Iroha transaction prehash signed by an external signer.
     pub payload_hash: Buffer,
 }
-
 /// Exact unsigned transaction draft used by the fee quote-to-sign flow.
 #[napi(object)]
 pub struct JsTransactionPayloadDraft {
@@ -12212,7 +11633,6 @@ pub struct JsTransactionPayloadDraft {
     /// Iroha transaction prehash for the draft payload.
     pub payload_hash: Buffer,
 }
-
 /// Input accepted by the external-signature transaction finalizer.
 #[napi(object)]
 pub struct JsExternalTransactionSignature {
@@ -12229,7 +11649,6 @@ pub struct JsExternalTransactionSignature {
     /// Optional authority assertion used to detect caller-side transaction mixups.
     pub authority: Option<String>,
 }
-
 /// Input note material for confidential transfer/unshield proof construction.
 #[napi(object)]
 #[derive(Clone)]
@@ -12243,7 +11662,6 @@ pub struct JsConfidentialTransferInputV2 {
     /// Current note leaf index inside the confidential tree.
     pub leaf_index: u32,
 }
-
 /// Output note material for confidential transfer proof construction.
 #[napi(object)]
 #[derive(Clone)]
@@ -12255,7 +11673,6 @@ pub struct JsConfidentialTransferOutputV2 {
     /// Recipient owner tag rendered as 32-byte hexadecimal.
     pub owner_tag_hex: String,
 }
-
 /// Output note material for confidential unshield v3 change-note construction.
 #[napi(object)]
 #[derive(Clone)]
@@ -12265,7 +11682,6 @@ pub struct JsConfidentialUnshieldOutputV3 {
     /// Fresh note rho rendered as 32-byte hexadecimal.
     pub rho_hex: String,
 }
-
 /// Diversified confidential v2 payment address material.
 #[napi(object)]
 pub struct JsConfidentialReceiveAddressV2 {
@@ -12274,7 +11690,6 @@ pub struct JsConfidentialReceiveAddressV2 {
     /// Note diversifier rendered as 32-byte hexadecimal.
     pub diversifier_hex: String,
 }
-
 /// Result of building a confidential transfer v2 proof envelope.
 #[napi(object)]
 pub struct JsConfidentialTransferProofEnvelopeV2 {
@@ -12287,7 +11702,6 @@ pub struct JsConfidentialTransferProofEnvelopeV2 {
     /// Norito-encoded `OpenVerifyEnvelope` payload.
     pub proof: Buffer,
 }
-
 /// Result of building a confidential unshield v2 proof envelope.
 #[napi(object)]
 pub struct JsConfidentialUnshieldProofEnvelopeV2 {
@@ -12298,7 +11712,6 @@ pub struct JsConfidentialUnshieldProofEnvelopeV2 {
     /// Norito-encoded `OpenVerifyEnvelope` payload.
     pub proof: Buffer,
 }
-
 /// Result of building a confidential unshield v3 proof envelope.
 #[napi(object)]
 pub struct JsConfidentialUnshieldProofEnvelopeV3 {
@@ -12311,7 +11724,6 @@ pub struct JsConfidentialUnshieldProofEnvelopeV3 {
     /// Norito-encoded `OpenVerifyEnvelope` payload.
     pub proof: Buffer,
 }
-
 fn parse_fixed_32_hex(context: &str, value: &str) -> napi::Result<[u8; 32]> {
     let normalized = value.trim();
     let normalized = normalized.strip_prefix("0x").unwrap_or(normalized);
@@ -12331,7 +11743,6 @@ fn parse_fixed_32_hex(context: &str, value: &str) -> napi::Result<[u8; 32]> {
     out.copy_from_slice(&decoded);
     Ok(out)
 }
-
 fn parse_confidential_amount_u128(context: &str, value: &str) -> napi::Result<u128> {
     let normalized = value.trim();
     if normalized.is_empty() {
@@ -12347,13 +11758,11 @@ fn parse_confidential_amount_u128(context: &str, value: &str) -> napi::Result<u1
         )
     })
 }
-
 fn parse_confidential_tree_commitments(
     commitments_hex: Vec<String>,
 ) -> napi::Result<Vec<[u8; 32]>> {
     parse_fixed_32_hex_list("tree_commitments_hex", commitments_hex)
 }
-
 fn parse_fixed_32_hex_list(context: &str, values: Vec<String>) -> napi::Result<Vec<[u8; 32]>> {
     values
         .into_iter()
@@ -12361,7 +11770,6 @@ fn parse_fixed_32_hex_list(context: &str, values: Vec<String>) -> napi::Result<V
         .map(|(index, value)| parse_fixed_32_hex(&format!("{context}[{index}]"), &value))
         .collect()
 }
-
 fn parse_required_confidential_diversifier_hex(
     context: &str,
     value: Option<&str>,
@@ -12383,7 +11791,6 @@ fn parse_required_confidential_diversifier_hex(
     }
     parse_fixed_32_hex(context, value)
 }
-
 fn parse_confidential_transfer_inputs_v2(
     inputs: Vec<JsConfidentialTransferInputV2>,
 ) -> napi::Result<Vec<ConfidentialTransferInputV2>> {
@@ -12411,7 +11818,6 @@ fn parse_confidential_transfer_inputs_v2(
         })
         .collect()
 }
-
 fn parse_confidential_unshield_inputs_v2(
     inputs: Vec<JsConfidentialTransferInputV2>,
 ) -> napi::Result<Vec<ConfidentialUnshieldInputV2>> {
@@ -12439,7 +11845,6 @@ fn parse_confidential_unshield_inputs_v2(
         })
         .collect()
 }
-
 fn parse_confidential_transfer_outputs_v2(
     outputs: Vec<JsConfidentialTransferOutputV2>,
 ) -> napi::Result<Vec<ConfidentialTransferOutputV2>> {
@@ -12461,7 +11866,6 @@ fn parse_confidential_transfer_outputs_v2(
         })
         .collect()
 }
-
 fn parse_confidential_unshield_outputs_v3(
     outputs: Vec<JsConfidentialUnshieldOutputV3>,
 ) -> napi::Result<Vec<ConfidentialUnshieldOutputV3>> {
@@ -12479,10 +11883,8 @@ fn parse_confidential_unshield_outputs_v3(
         })
         .collect()
 }
-
 const EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES: usize = 1024 * 1024;
 const EXTERNAL_TRANSACTION_METADATA_MAX_BYTES: usize = 64 * 1024;
-
 fn parse_transaction_network_id_bytes(value: &[u8]) -> napi::Result<NetworkId> {
     let bytes: [u8; Hash::LENGTH] = value.try_into().map_err(|_| {
         napi::Error::new(
@@ -12500,7 +11902,6 @@ fn parse_transaction_network_id_bytes(value: &[u8]) -> napi::Result<NetworkId> {
         HashOf::<BlockHeader>::from_untyped_unchecked(hash),
     ))
 }
-
 fn require_expected_transaction_network_id(
     actual: Option<&NetworkId>,
     expected: &NetworkId,
@@ -12518,7 +11919,6 @@ fn require_expected_transaction_network_id(
         )),
     }
 }
-
 fn require_matching_i105_discriminant(
     expected: u16,
     account: &str,
@@ -12533,7 +11933,6 @@ fn require_matching_i105_discriminant(
     }
     Ok(())
 }
-
 /// Build the exact transparent asset-transfer payload consumed by an external signer.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
@@ -12586,7 +11985,6 @@ pub fn build_transfer_asset_payload(
             "transparent browser transfer requires the source asset owner to equal authority",
         ));
     }
-
     let _chain_guard = ChainDiscriminantGuard::enter(authority_discriminant);
     let authority = parse_account_id(&authority, "authority account id")?;
     let authority_signatory = authority.try_signatory().ok_or_else(|| {
@@ -12653,7 +12051,6 @@ pub fn build_transfer_asset_payload(
         payload_bytes: Buffer::from(payload_bytes),
     })
 }
-
 fn parse_positive_transfer_quantity(source: &str) -> napi::Result<Quantity> {
     let quantity = Quantity::from_str(source).map_err(|err| {
         napi::Error::new(
@@ -12675,7 +12072,6 @@ fn parse_positive_transfer_quantity(source: &str) -> napi::Result<Quantity> {
     }
     Ok(quantity)
 }
-
 /// Finalize an externally signed Ed25519 transaction into exact versioned Norito bytes.
 /// The payload must bind the caller's exact expected NetworkId and cannot use the genesis domain.
 #[napi]
@@ -12749,7 +12145,6 @@ pub fn finalize_signed_transaction(
         hash: Buffer::from(tx.hash().as_ref().to_vec()),
     })
 }
-
 /// Build and sign a single-instruction `RegisterDomain` transaction.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)] // JS bindings expose this exact surface to callers
@@ -12773,7 +12168,6 @@ pub fn build_register_domain_transaction(
             format!("invalid domain id: {err}"),
         )
     })?;
-
     let domain_metadata = parse_metadata_payload("domain", metadata_json)?;
     let new_domain = Domain::new(domain_id).with_metadata(domain_metadata);
     let instruction: InstructionBox = Register::<Domain>::domain(new_domain).into();
@@ -12791,7 +12185,6 @@ pub fn build_register_domain_transaction(
         private_key_algorithm,
     )
 }
-
 #[allow(clippy::too_many_arguments)] // helper mirrors the JS surface for clarity
 fn build_transaction_from_instructions_json(
     network_id: NetworkId,
@@ -12806,7 +12199,6 @@ fn build_transaction_from_instructions_json(
     private_key_algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
     let instructions = parse_instruction_payloads(instructions_json)?;
-
     let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
     assemble_transaction(
@@ -12822,7 +12214,6 @@ fn build_transaction_from_instructions_json(
         private_key_algorithm,
     )
 }
-
 #[allow(clippy::too_many_arguments)]
 fn build_transaction_payload_from_instructions_json(
     network_id: NetworkId,
@@ -12865,7 +12256,6 @@ fn build_transaction_payload_from_instructions_json(
         payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 fn build_transaction_payload_from_batch_json(
     network_id: NetworkId,
@@ -12903,7 +12293,6 @@ fn build_transaction_payload_from_batch_json(
         payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
     })
 }
-
 /// Build, but do not sign, the exact arbitrary-instruction payload sent to fee quoting.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
@@ -12931,7 +12320,6 @@ pub fn build_transaction_payload(
         nonce,
     )
 }
-
 /// Build, but do not sign, an exact ordered mixed executable-batch payload.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
@@ -12959,11 +12347,9 @@ pub fn build_executable_batch_transaction_payload(
         nonce,
     )
 }
-
 fn same_fee_payer_selection(draft: &FeePaymentIntent, quoted: &FeePaymentIntent) -> bool {
     draft.has_same_payer_and_gas_bound(quoted)
 }
-
 /// Replace only an unsigned payload's fee limits with the quote result and sign it.
 /// The payload must bind the caller's exact expected NetworkId and cannot use the genesis domain.
 #[napi]
@@ -13005,7 +12391,6 @@ pub fn sign_quoted_transaction_payload(
         hash: Buffer::from(signed.hash().as_ref().to_vec()),
     })
 }
-
 /// Replace only an unsigned proved-IVM payload's fee limits, reattach its proof, and sign it.
 /// The payload must bind the caller's exact expected NetworkId and cannot use the genesis domain.
 #[napi]
@@ -13066,7 +12451,6 @@ pub fn sign_quoted_ivm_proved_transaction_payload(
         hash: Buffer::from(signed.hash().as_ref().to_vec()),
     })
 }
-
 /// Build and sign a transaction from an array of instruction JSON payloads.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)] // JS bindings expose this exact surface to callers
@@ -13085,7 +12469,6 @@ pub fn build_transaction(
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
     let authority = parse_account_id(&authority, "authority account id")?;
-
     build_transaction_from_instructions_json(
         network_id,
         authority,
@@ -13099,7 +12482,6 @@ pub fn build_transaction(
         private_key_algorithm,
     )
 }
-
 /// Build and sign a transaction from ordered instruction and contract-call entries.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
@@ -13136,7 +12518,6 @@ pub fn build_executable_batch_transaction(
         private_key_algorithm,
     )
 }
-
 /// Build, but do not sign, an `Executable::IvmProved` payload and its proof attachment.
 ///
 /// The returned payload is the exact payload that must be submitted to the fee-quote endpoint
@@ -13194,7 +12575,6 @@ pub fn build_ivm_proved_transaction_payload(
         payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
     })
 }
-
 /// Build and sign a transaction carrying an `Executable::IvmProved` payload and its proof attachment.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)] // JS bindings expose this exact surface to callers
@@ -13228,7 +12608,6 @@ pub fn build_ivm_proved_transaction(
     })?;
     let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
-
     assemble_executable_transaction(
         network_id,
         authority,
@@ -13243,7 +12622,6 @@ pub fn build_ivm_proved_transaction(
         private_key_algorithm,
     )
 }
-
 /// Build a Norito-encoded trigger action that executes on a time schedule.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -13261,7 +12639,6 @@ pub fn build_time_trigger_action(
     } else {
         None
     };
-
     let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
     let authority = parse_account_id(&authority, "trigger authority")?;
     let instructions = parse_instruction_payloads(instructions_json)?;
@@ -13277,12 +12654,10 @@ pub fn build_time_trigger_action(
         None => Repeats::Indefinitely,
     };
     let metadata = parse_metadata_payload("trigger", metadata_json)?;
-
     let mut schedule = TimeSchedule::starting_at(Duration::from_millis(start_timestamp_ms));
     if let Some(period) = period_ms {
         schedule = schedule.with_period(Duration::from_millis(period));
     }
-
     let action = Action::new(
         executable,
         repeats,
@@ -13293,7 +12668,6 @@ pub fn build_time_trigger_action(
     .with_metadata(metadata);
     encode_trigger_action(&action)
 }
-
 /// Build a Norito-encoded trigger action that fires at the pre-commit stage.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
@@ -13318,7 +12692,6 @@ pub fn build_precommit_trigger_action(
         None => Repeats::Indefinitely,
     };
     let metadata = parse_metadata_payload("trigger", metadata_json)?;
-
     let action = Action::new(
         executable,
         repeats,
@@ -13329,7 +12702,6 @@ pub fn build_precommit_trigger_action(
     .with_metadata(metadata);
     encode_trigger_action(&action)
 }
-
 #[cfg(test)]
 mod tests {
     fn test_network_id(label: &[u8]) -> NetworkId {
@@ -13337,11 +12709,9 @@ mod tests {
             label,
         )))
     }
-
     fn test_network_id_bytes(label: &[u8]) -> Uint8Array {
         Uint8Array::from(test_network_id(label).as_bytes().to_vec())
     }
-
     #[test]
     fn transaction_network_id_requires_exact_marked_32_bytes() {
         let expected = test_network_id(b"js-network-id-boundary");
@@ -13350,7 +12720,6 @@ mod tests {
                 .expect("canonical network id bytes"),
             expected
         );
-
         for invalid in [vec![], vec![0; Hash::LENGTH - 1], vec![0; Hash::LENGTH + 1]] {
             assert!(
                 parse_transaction_network_id_bytes(&invalid).is_err(),
@@ -13365,7 +12734,6 @@ mod tests {
             "an unmarked digest must not be normalized into a NetworkId"
         );
     }
-
     #[test]
     fn axt_touch_manifest_trims_drops_and_orders_unicode_paths() {
         let bmp_private_use = "\u{e000}/bmp-private-use";
@@ -13385,14 +12753,12 @@ mod tests {
         .expect("canonical touch manifest");
         let decoded: TouchManifest =
             json::from_json(&manifest.manifest_json).expect("decode touch manifest JSON");
-
         assert_eq!(
             decoded.read,
             vec![bmp_private_use.to_owned(), astral.to_owned()]
         );
         assert_eq!(decoded.write, vec!["write/path".to_owned()]);
     }
-
     #[test]
     fn axt_compute_binding_rejects_alternate_norito_layout() {
         let descriptor = AxtDescriptorBuilder::new()
@@ -13421,7 +12787,6 @@ mod tests {
                 .expect("ordinary Norito accepts its advertised layout"),
             descriptor
         );
-
         let canonical_binding =
             axt_compute_binding(Buffer::from(canonical.clone())).expect("canonical descriptor");
         let error = match axt_compute_binding(Buffer::from(alternate)) {
@@ -13430,7 +12795,6 @@ mod tests {
         };
         assert_eq!(error.status, napi::Status::InvalidArg);
         assert!(error.reason.contains("canonical Norito V1 layout"));
-
         let _ambient = norito::core::DecodeFlagsGuard::enter(alternate_flags);
         let ambient_before = norito::to_bytes(&descriptor).expect("encode ambient descriptor");
         let ambient_binding = axt_compute_binding(Buffer::from(canonical))
@@ -13446,7 +12810,6 @@ mod tests {
             "canonical decoding must restore the caller's ambient layout"
         );
     }
-
     #[test]
     fn validation_fee_hash_roles_distinguish_raw_digests_from_iroha_hashes() {
         let hash = Uint8Array::from(vec![0x02; 32]);
@@ -13463,7 +12826,6 @@ mod tests {
             [0x03; 32],
         );
     }
-
     fn replication_order_with_timestamps(issued_at: u64, deadline_at: u64) -> ReplicationOrderV1 {
         ReplicationOrderV1 {
             version: 1,
@@ -13483,7 +12845,6 @@ mod tests {
             metadata: Vec::new(),
         }
     }
-
     fn transaction_builder_for_number_boundary() -> TransactionBuilder {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         TransactionBuilder::new(
@@ -13492,7 +12853,6 @@ mod tests {
             FeePaymentIntent::authority(Vec::new(), None),
         )
     }
-
     #[test]
     fn alias_policy_number_fields_accept_js_max_safe_integer() {
         let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
@@ -13507,10 +12867,8 @@ mod tests {
             successor_grace_secs: Some(maximum),
             governance_grace_secs: Some(maximum),
         };
-
         let policy = alias_policy_from_js(Some(&options))
             .expect("policy fields at JavaScript's safe integer limit must be accepted");
-
         for duration in [
             policy.positive_ttl(),
             policy.refresh_window(),
@@ -13524,7 +12882,6 @@ mod tests {
             assert_eq!(duration.as_secs(), JS_MAX_SAFE_INTEGER_U64);
         }
     }
-
     #[test]
     fn alias_policy_number_fields_above_js_max_safe_integer_return_errors() {
         let over_limit = i64::try_from(JS_MAX_SAFE_INTEGER_U64 + 1)
@@ -13587,7 +12944,6 @@ mod tests {
                 },
             ),
         ];
-
         for (field, options) in cases {
             let error = alias_policy_from_js(Some(&options))
                 .expect_err("policy field above JavaScript's safe integer limit must be rejected");
@@ -13596,30 +12952,25 @@ mod tests {
             assert!(error.reason.contains("safe integer"));
         }
     }
-
     #[test]
     fn sorafs_generated_at_input_enforces_js_safe_integer_range() {
         let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
             .expect("JavaScript safe integer must fit in i64");
-
         assert_eq!(
             parse_sorafs_generated_at_unix(maximum)
                 .expect("JavaScript max safe integer must be accepted"),
             JS_MAX_SAFE_INTEGER_U64
         );
-
         let error = parse_sorafs_generated_at_unix(maximum + 1)
             .expect_err("timestamp above JavaScript's safe integer limit must be rejected");
         assert_eq!(error.status, napi::Status::InvalidArg);
         assert!(error.reason.contains("generated_at_unix"));
         assert!(error.reason.contains("safe integer"));
     }
-
     #[test]
     fn transaction_timestamp_inputs_enforce_js_safe_integer_range() {
         let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
             .expect("JavaScript safe integer must fit in i64");
-
         let _ = configure_transaction_builder(
             transaction_builder_for_number_boundary(),
             Metadata::default(),
@@ -13629,7 +12980,6 @@ mod tests {
             None,
         )
         .expect("transaction timestamps at JavaScript's safe integer limit must be accepted");
-
         for (field, creation_time_ms, ttl_ms) in [
             ("creation_time_ms", Some(maximum + 1), None),
             ("ttl_ms", None, Some(maximum + 1)),
@@ -13648,12 +12998,10 @@ mod tests {
             assert!(error.reason.contains("safe integer"));
         }
     }
-
     #[test]
     fn time_trigger_inputs_enforce_js_safe_integer_range() {
         let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
             .expect("JavaScript safe integer must fit in i64");
-
         let accepted_error = build_time_trigger_action(
             String::new(),
             Vec::new(),
@@ -13664,7 +13012,6 @@ mod tests {
         )
         .expect_err("invalid authority must fail after accepting safe timestamp inputs");
         assert!(!accepted_error.reason.contains("safe integer"));
-
         for (field, start_timestamp_ms, period_ms) in [
             ("start_timestamp_ms", maximum + 1, None),
             ("period_ms", 1, Some(maximum + 1)),
@@ -13683,7 +13030,6 @@ mod tests {
             assert!(error.reason.contains("safe integer"));
         }
     }
-
     #[test]
     fn alias_evaluation_dto_accepts_js_max_safe_integer_fields() {
         let maximum = JS_MAX_SAFE_INTEGER_U64;
@@ -13696,16 +13042,13 @@ mod tests {
             expires_at_unix: maximum,
             expires_in: Some(std::time::Duration::from_secs(maximum)),
         };
-
         let dto = alias_evaluation_to_js(evaluation)
             .expect("JavaScript max safe integer should be representable by the binding");
-
         assert_eq!(dto.age_seconds, expected);
         assert_eq!(dto.generated_at_unix, expected);
         assert_eq!(dto.expires_at_unix, expected);
         assert_eq!(dto.expires_in_seconds, Some(expected));
     }
-
     #[test]
     fn alias_evaluation_dto_fields_above_js_max_safe_integer_return_errors() {
         let over_limit = JS_MAX_SAFE_INTEGER_U64 + 1;
@@ -13747,7 +13090,6 @@ mod tests {
                 },
             ),
         ];
-
         for (field, evaluation) in cases {
             let error = alias_evaluation_to_js(evaluation)
                 .err()
@@ -13759,17 +13101,14 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn alias_evaluation_now_secs_enforces_js_safe_integer_range() {
         let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
             .expect("JavaScript safe integer must fit in i64");
-
         let accepted_error = sorafs_evaluate_alias_proof(String::new(), None, Some(maximum))
             .err()
             .expect("empty proof must be rejected after accepting the timestamp");
         assert!(accepted_error.reason.contains("proof must not be empty"));
-
         let rejected_error = sorafs_evaluate_alias_proof(String::new(), None, Some(maximum + 1))
             .err()
             .expect("timestamp above JavaScript's safe integer limit must be rejected");
@@ -13777,7 +13116,6 @@ mod tests {
         assert!(rejected_error.reason.contains("now_secs"));
         assert!(rejected_error.reason.contains("safe integer"));
     }
-
     #[test]
     fn alias_fixture_explicit_timestamps_enforce_js_safe_integer_range() {
         let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
@@ -13796,7 +13134,6 @@ mod tests {
             accepted,
             (JS_MAX_SAFE_INTEGER_U64 - 1, JS_MAX_SAFE_INTEGER_U64)
         );
-
         for (field, options) in [
             (
                 "generatedAtUnix",
@@ -13822,18 +13159,15 @@ mod tests {
             assert!(error.reason.contains("safe integer"));
         }
     }
-
     #[test]
     fn alias_fixture_default_manifest_cid_is_canonical() {
         let cid = resolve_manifest_cid(&JsAliasProofFixtureOptions::default())
             .expect("default manifest CID should resolve");
-
         assert_eq!(
             cid,
             sorafs_manifest::canonical_manifest_root_cid([0xAA; 32])
         );
     }
-
     #[test]
     fn alias_fixture_epoch_overrides_enforce_js_safe_integer_range() {
         let maximum = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
@@ -13846,7 +13180,6 @@ mod tests {
         })
         .expect("epoch overrides through JavaScript's safe integer limit must be accepted");
         assert_eq!(accepted, (JS_MAX_SAFE_INTEGER_U64, JS_MAX_SAFE_INTEGER_U64));
-
         for (field, options) in [
             (
                 "boundAtEpoch",
@@ -13870,7 +13203,6 @@ mod tests {
             assert!(error.reason.contains("safe integer"));
         }
     }
-
     #[test]
     fn alias_fixture_default_expiry_accepts_js_max_safe_integer() {
         let generated_at_unix =
@@ -13878,34 +13210,28 @@ mod tests {
                 .expect("JavaScript safe integer must fit in i64");
         let expected_expiry = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
             .expect("JavaScript safe integer must fit in i64");
-
         let fixture = sorafs_alias_proof_fixture(Some(JsAliasProofFixtureOptions {
             generated_at_unix: Some(generated_at_unix),
             ..Default::default()
         }))
         .expect("default expiry at the JavaScript safe integer limit should be representable");
-
         assert_eq!(fixture.generated_at_unix, generated_at_unix);
         assert_eq!(fixture.expires_at_unix, expected_expiry);
     }
-
     #[test]
     fn alias_fixture_default_expiry_above_js_max_safe_integer_returns_error() {
         let generated_at_unix =
             i64::try_from(JS_MAX_SAFE_INTEGER_U64 - SORAFS_ALIAS_POSITIVE_TTL_SECS + 1)
                 .expect("JavaScript safe integer must fit in i64");
-
         let error = sorafs_alias_proof_fixture(Some(JsAliasProofFixtureOptions {
             generated_at_unix: Some(generated_at_unix),
             ..Default::default()
         }))
         .err()
         .expect("out-of-range default expiry must return an error");
-
         assert_eq!(error.status, napi::Status::InvalidArg);
         assert!(error.reason.contains("default expiresAtUnix"));
     }
-
     #[test]
     fn replication_assignment_slice_gib_accepts_js_max_safe_integer() {
         let assignments = to_js_replication_assignments(vec![
@@ -13916,7 +13242,6 @@ mod tests {
             },
         ])
         .expect("JavaScript max safe integer should be representable by the binding");
-
         assert_eq!(assignments.len(), 1);
         assert_eq!(
             assignments[0].slice_gib,
@@ -13924,7 +13249,6 @@ mod tests {
                 .expect("JavaScript safe integer must fit in i64")
         );
     }
-
     #[test]
     fn replication_assignment_slice_gib_above_js_max_safe_integer_returns_error() {
         let error = to_js_replication_assignments(vec![
@@ -13936,11 +13260,9 @@ mod tests {
         ])
         .err()
         .expect("slice_gib above JavaScript's safe integer limit must return an error");
-
         assert_eq!(error.status, napi::Status::GenericFailure);
         assert!(error.reason.contains("slice_gib"));
     }
-
     #[test]
     fn replication_order_timestamps_accept_js_max_safe_integer() {
         let order = to_js_replication_order(replication_order_with_timestamps(
@@ -13950,11 +13272,9 @@ mod tests {
         .expect("JavaScript max safe integer should be representable by the binding");
         let expected = i64::try_from(JS_MAX_SAFE_INTEGER_U64)
             .expect("JavaScript safe integer must fit in i64");
-
         assert_eq!(order.issued_at_unix, expected);
         assert_eq!(order.deadline_at_unix, expected);
     }
-
     #[test]
     fn replication_order_timestamps_above_js_max_safe_integer_return_errors() {
         let over_limit = JS_MAX_SAFE_INTEGER_U64 + 1;
@@ -13976,7 +13296,6 @@ mod tests {
             assert!(error.reason.contains("safe integer"));
         }
     }
-
     #[test]
     fn confidential_network_tags_bind_the_exact_network() {
         let first = test_network_id(b"same-label-first-genesis");
@@ -14091,7 +13410,6 @@ mod tests {
             assert_eq!(error.status, napi::Status::InvalidArg);
             assert_eq!(error.reason, "unsupported zk instruction variant");
         }
-
         let source = include_str!("lib.rs");
         for retired_type_use in [
             ["let instruction: ", "Sh", "ield"].concat(),
@@ -14109,7 +13427,6 @@ mod tests {
         assert!(source.contains("RegisterZkAsset"));
         assert!(source.contains("build_confidential_unshield_proof_v3_with_paths"));
     }
-
     #[test]
     fn subscription_draft_instruction_json_roundtrips() {
         let authority = AccountId::new(
@@ -14149,7 +13466,6 @@ mod tests {
             InstructionTrait::dyn_encode(&*register),
             InstructionTrait::dyn_encode(&*reparsed_register),
         );
-
         let nft_id: NftId = "sub_demo$subscriptions.universal"
             .parse()
             .expect("subscription NFT id");
@@ -14177,14 +13493,12 @@ mod tests {
             InstructionTrait::dyn_encode(&*reparsed_set),
         );
     }
-
     #[test]
     fn subscription_trigger_action_inspection_binds_first_release_semantics() {
         use iroha_data_model::{
             events::execute_trigger::ExecuteTriggerEventFilter,
             subscription::{SUBSCRIPTION_TRIGGER_REF_METADATA_KEY, SubscriptionTriggerRef},
         };
-
         let authority = AccountId::new(
             KeyPair::random_with_algorithm(Algorithm::Ed25519)
                 .public_key()
@@ -14239,7 +13553,6 @@ mod tests {
             billing_summary["subscription_id"].as_str(),
             Some(subscription_id_literal.as_str())
         );
-
         let usage_trigger_id: TriggerId = "sub_usage_demo".parse().expect("usage trigger id");
         let usage_action = Action::new(
             Executable::Ivm(IvmBytecode::from_compiled(
@@ -14275,7 +13588,6 @@ mod tests {
             Some(usage_trigger_id_literal.as_str())
         );
     }
-
     #[test]
     fn soracloud_hf_deploy_request_uses_current_quantity_contract() {
         let request_json = soracloud_build_hf_deploy_request_json(
@@ -14302,7 +13614,6 @@ mod tests {
         );
         assert!(!payload.contains_key("base_fee_nanos"));
     }
-
     #[test]
     fn soracloud_hf_draft_instruction_json_roundtrips() {
         let request_json = soracloud_build_hf_deploy_request_json(
@@ -14354,7 +13665,6 @@ mod tests {
             InstructionTrait::dyn_encode(&*reparsed),
         );
     }
-
     fn canonical_kotodama_request(source: &str) -> JsKotodamaCompileRequest {
         JsKotodamaCompileRequest {
             source: source.to_owned(),
@@ -14362,7 +13672,6 @@ mod tests {
             zk: false,
         }
     }
-
     #[test]
     fn multi_source_invalid_plan_is_a_structured_non_retryable_error() {
         let error = multi_source_js_error(MultiSourceError::InvalidPlan(
@@ -14378,7 +13687,6 @@ mod tests {
             Value::String("input payload is empty".to_owned())
         );
     }
-
     #[test]
     fn canonical_kotodama_binding_returns_full_artifact_manifest() {
         let request = canonical_kotodama_request(
@@ -14418,7 +13726,6 @@ mod tests {
         assert!(output.budget_report_json.contains("\"kind\": \"budget\""));
         assert!(output.budget_report_json.contains(&output.code_hash));
     }
-
     #[test]
     fn canonical_kotodama_binding_preserves_structured_unicode_diagnostics() {
         let source = "seiyaku Demo {\n🙂\n🙂\n}";
@@ -14441,7 +13748,6 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(spans.contains(&(2, 1, 2)));
         assert!(spans.contains(&(3, 1, 2)));
-
         let result = compile_kotodama_request(&canonical_kotodama_request(source))
             .expect("render compiler diagnostics");
         assert!(!result.ok);
@@ -14453,7 +13759,6 @@ mod tests {
             "the binding must expose the canonical Norito JSON without reformatting fields"
         );
     }
-
     #[test]
     fn canonical_kotodama_request_preserves_source_name_and_selects_zk_policy() {
         let source = r#"
@@ -14476,7 +13781,6 @@ seiyaku Privacy {
         let output = result.output.expect("successful ZK compiler output");
         assert!(output.source_map_json.contains("contracts/privacy.ko"));
         assert!(output.budget_report_json.contains("contracts/privacy.ko"));
-
         let non_zk = JsKotodamaCompileRequest {
             zk: false,
             ..request
@@ -14490,7 +13794,6 @@ seiyaku Privacy {
                 .is_some_and(|diagnostics| diagnostics.contains("E_SECRET_REQUIRES_ZK"))
         );
     }
-
     #[test]
     fn canonical_kotodama_request_rejects_unbounded_or_control_source_names() {
         for source_name in [
@@ -14506,7 +13809,6 @@ seiyaku Privacy {
             assert!(compile_kotodama_request(&request).is_err());
         }
     }
-
     #[test]
     fn disabled_local_fetch_integrity_checks_are_invalid_arguments() {
         for field in ["verify_digests", "verify_lengths"] {
@@ -14517,7 +13819,6 @@ seiyaku Privacy {
             assert!(error.reason.contains("must remain enabled"));
         }
     }
-
     #[test]
     fn privacy_compiled_profile_catalog_is_the_exact_closed_local_registry() {
         let catalog = privacy_compiled_profile_catalog().expect("compiled-profile catalog");
@@ -14533,7 +13834,6 @@ seiyaku Privacy {
                 .eq(PrivacyProtocolIdV1::ALL)
         );
     }
-
     #[test]
     fn privacy_compiled_profile_catalog_napi_archive_round_trips_and_rejects_substitution() {
         let bytes = privacy_compiled_profile_catalog_v1()
@@ -14559,7 +13859,6 @@ seiyaku Privacy {
             !iroha_data_model::privacy::validate_privacy_capability_archive_v1(&bytes).is_valid(),
             "a local compiled-profile catalog must not pass snapshot admission"
         );
-
         let mut one_byte_fake = norito::encode_canonical(&0_u8).expect("encode one-byte fake");
         one_byte_fake[6..22].copy_from_slice(&bytes[6..22]);
         assert_ne!(
@@ -14567,7 +13866,6 @@ seiyaku Privacy {
             iroha_data_model::privacy::PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid
                 .code()
         );
-
         let mut substituted = catalog;
         let profile = substituted
             .protocols
@@ -14599,14 +13897,12 @@ seiyaku Privacy {
                 .code()
         );
     }
-
     fn active_exact12_capability_manifest_archive() -> (PrivacyProtocolIdV1, Vec<u8>) {
         use iroha_data_model::privacy::{
             PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PrivacyActiveLifecycleV1,
             PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1, PrivacyConsensusPolicyV1,
             PrivacyProtocolLifecycleV1,
         };
-
         let active_protocol = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
         let catalog = privacy_compiled_profile_catalog().expect("compiled-profile catalog");
         let protocols = catalog
@@ -14646,7 +13942,6 @@ seiyaku Privacy {
                 .expect("canonical manifest bytes"),
         )
     }
-
     #[test]
     fn privacy_exact12_manifest_napi_validates_decodes_and_requires_local_tuple() {
         let (active_protocol, archive) = active_exact12_capability_manifest_archive();
@@ -14698,12 +13993,10 @@ seiyaku Privacy {
             iroha_data_model::privacy::PrivacyCapabilityArchiveValidationStatusV1::Valid.code()
         );
     }
-
     fn disable_packed_struct_once() {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(ensure_packed_struct_disabled);
     }
-
     fn hash_literal(byte: u8) -> String {
         let mut buf = [byte; Hash::LENGTH];
         buf[buf.len() - 1] |= 1;
@@ -14713,32 +14006,26 @@ seiyaku Privacy {
             other => panic!("expected hash literal string, got {other:?}"),
         }
     }
-
     #[test]
     fn build_kaigi_roster_join_proof_emits_envelope() {
         let proof = build_kaigi_roster_join_proof_bytes(&[0x42; 32], &empty_roster_root_hash())
             .expect("build proof");
-
         assert_eq!(proof.commitment.len(), Hash::LENGTH);
         assert_eq!(proof.nullifier.len(), Hash::LENGTH);
         assert_eq!(proof.roster_root.len(), Hash::LENGTH);
         assert!(!proof.proof.is_empty());
-
         let envelope: iroha_data_model::zk::OpenVerifyEnvelope =
             norito::decode_from_bytes(proof.proof.as_ref()).expect("decode envelope");
         assert_eq!(envelope.circuit_id, KAIGI_ROSTER_BACKEND);
         assert_eq!(envelope.public_inputs, KAIGI_ROSTER_PUBLIC_INPUTS_DESC);
     }
-
     #[test]
     fn lane_relay_envelope_sample_uses_checked_validator_generation() {
         let sample =
             lane_relay_envelope_sample().expect("checked validator generation for relay sample");
-
         assert!(!sample.valid.is_empty());
         assert!(!sample.tampered.is_empty());
     }
-
     #[test]
     fn crypto_keypair_exports_checked_public_key_payload() {
         let seed = vec![0xA5; 32];
@@ -14748,14 +14035,11 @@ seiyaku Privacy {
             .public_key()
             .try_to_bytes()
             .expect("checked public-key payload");
-
         let keypair = crypto_keypair(Some("ed25519".to_owned()), Some(Uint8Array::from(seed)))
             .expect("derive keypair");
-
         assert_eq!(keypair.algorithm, Algorithm::Ed25519.as_static_str());
         assert_eq!(keypair.public_key.as_ref(), expected_public_key);
     }
-
     #[test]
     fn ed25519_keypair_derives_checked_public_key_payload() {
         let seed = vec![0x5C; 32];
@@ -14765,13 +14049,10 @@ seiyaku Privacy {
             .public_key()
             .try_to_bytes()
             .expect("checked public-key payload");
-
         let keypair = ed25519_keypair(Some(Uint8Array::from(seed))).expect("derive keypair");
-
         assert_eq!(keypair.algorithm, Algorithm::Ed25519.as_static_str());
         assert_eq!(keypair.public_key.as_ref(), expected_public_key);
     }
-
     #[test]
     fn keypair_bindings_reject_non_cryptographic_seed_lengths() {
         let short = Uint8Array::from(b"human password".to_vec());
@@ -14779,23 +14060,19 @@ seiyaku Privacy {
             .err()
             .expect("short Ed25519 seed must fail");
         assert!(err.reason.contains("exactly 32 bytes"));
-
         let short = Uint8Array::from(b"human password".to_vec());
         let err = crypto_keypair(Some("secp256k1".to_owned()), Some(short))
             .err()
             .expect("short generic seed must fail");
         assert!(err.reason.contains("exactly 32 bytes"));
     }
-
     #[test]
     fn crypto_keypair_random_path_uses_checked_generation() {
         let keypair = crypto_keypair(Some("ed25519".to_owned()), None)
             .expect("checked random keypair generation");
-
         assert_eq!(keypair.algorithm, Algorithm::Ed25519.as_static_str());
         assert_eq!(keypair.public_key.len(), 32);
     }
-
     #[test]
     fn crypto_public_key_from_private_exports_checked_payload() {
         let mut private_key_bytes = [0u8; 32];
@@ -14806,16 +14083,13 @@ seiyaku Privacy {
         let (_, expected_public_key) = public_key
             .try_to_bytes()
             .expect("checked public-key payload");
-
         let public_key = crypto_public_key_from_private(
             "secp256k1".to_owned(),
             Uint8Array::from(private_key_bytes.to_vec()),
         )
         .expect("derive public key");
-
         assert_eq!(public_key.as_ref(), expected_public_key);
     }
-
     #[test]
     fn crypto_sign_exports_verifiable_signature() {
         let seed = vec![0x33; 32];
@@ -14826,14 +14100,12 @@ seiyaku Privacy {
             .public_key()
             .try_to_bytes()
             .expect("checked public-key payload");
-
         let signature = crypto_sign(
             "ed25519".to_owned(),
             Uint8Array::from(seed),
             Uint8Array::from(message.to_vec()),
         )
         .expect("crypto sign");
-
         let verified = crypto_verify(
             "ed25519".to_owned(),
             Uint8Array::from(public_key.to_vec()),
@@ -14843,7 +14115,6 @@ seiyaku Privacy {
         .expect("crypto verify");
         assert!(verified);
     }
-
     #[test]
     fn crypto_verify_rejects_all_zero_signature_material() {
         let seed = vec![0x33; 32];
@@ -14855,7 +14126,6 @@ seiyaku Privacy {
             .try_to_bytes()
             .expect("checked public-key payload");
         let signature = vec![0_u8; 64];
-
         let verified = crypto_verify(
             "ed25519".to_owned(),
             Uint8Array::from(public_key.to_vec()),
@@ -14863,10 +14133,8 @@ seiyaku Privacy {
             Uint8Array::from(signature),
         )
         .expect("crypto verify");
-
         assert!(!verified);
     }
-
     #[test]
     fn crypto_verify_rejects_malformed_ed25519_signature_r() {
         const SMALL_ORDER_R: [u8; 32] = [
@@ -14878,7 +14146,6 @@ seiyaku Privacy {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         let seed = vec![0x33; 32];
         let message = b"js-host-crypto-sign";
         let keypair =
@@ -14889,7 +14156,6 @@ seiyaku Privacy {
             .expect("checked public-key payload");
         let valid_signature = Signature::try_new(keypair.private_key(), message)
             .expect("checked Ed25519 JS host fixture signature");
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
@@ -14903,11 +14169,9 @@ seiyaku Privacy {
                 Uint8Array::from(signature),
             )
             .expect("crypto verify should return false for malformed material");
-
             assert!(!verified, "{label} Ed25519 signature R must not verify");
         }
     }
-
     #[test]
     fn crypto_verify_rejects_malformed_mldsa_signature_lengths() {
         let seed = vec![0x44; 32];
@@ -14940,7 +14204,6 @@ seiyaku Privacy {
         short.pop();
         let mut overlong = signature.as_ref().to_vec();
         overlong.push(0x42);
-
         for (label, malformed) in [
             ("short", short),
             ("overlong", overlong),
@@ -14953,11 +14216,9 @@ seiyaku Privacy {
                 Uint8Array::from(malformed),
             )
             .expect("crypto verify should return false for malformed material");
-
             assert!(!verified, "{label} ML-DSA signature must not verify");
         }
     }
-
     #[test]
     fn crypto_verify_rejects_malformed_ed25519_public_key_material() {
         const SMALL_ORDER_PUBLIC_KEY: [u8; 32] = [
@@ -14969,14 +14230,12 @@ seiyaku Privacy {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         let seed = vec![0x33; 32];
         let message = b"js-host-crypto-public-key-admission";
         let keypair =
             KeyPair::try_from_seed(seed, Algorithm::Ed25519).expect("checked seed keypair");
         let signature = Signature::try_new(keypair.private_key(), message)
             .expect("checked Ed25519 JS host fixture signature");
-
         for (label, public_key, expected) in [
             ("all-zero", [0_u8; 32], "all zero"),
             ("small-order", SMALL_ORDER_PUBLIC_KEY, "small-order"),
@@ -14990,14 +14249,12 @@ seiyaku Privacy {
             )
             .expect_err("malformed Ed25519 public key must fail admission");
             let message = err.to_string();
-
             assert!(
                 message.contains(expected),
                 "{label} public key produced unexpected error: {message}"
             );
         }
     }
-
     #[test]
     fn crypto_public_key_multihash_rejects_malformed_ed25519_public_key_material() {
         const SMALL_ORDER_PUBLIC_KEY: [u8; 32] = [
@@ -15009,7 +14266,6 @@ seiyaku Privacy {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         for (label, public_key, expected) in [
             ("all-zero", [0_u8; 32], "all zero"),
             ("small-order", SMALL_ORDER_PUBLIC_KEY, "small-order"),
@@ -15021,14 +14277,12 @@ seiyaku Privacy {
             )
             .expect_err("malformed Ed25519 public key must fail multihash admission");
             let message = err.to_string();
-
             assert!(
                 message.contains(expected),
                 "{label} public key produced unexpected multihash error: {message}"
             );
         }
     }
-
     #[test]
     fn crypto_multihash_helpers_use_checked_formatters() {
         let seed = vec![0x5A; 32];
@@ -15046,7 +14300,6 @@ seiyaku Privacy {
             .try_to_multihash_string()
             .expect("checked private-key multihash");
         let (_, private_payload) = keypair.private_key().to_bytes();
-
         assert_eq!(
             crypto_public_key_multihash(
                 "ed25519".to_owned(),
@@ -15061,7 +14314,6 @@ seiyaku Privacy {
             expected_private
         );
     }
-
     #[test]
     fn sm2_fixture_from_seed_uses_checked_public_key_formatters() {
         let distid = "js-sm2-fixture".to_owned();
@@ -15073,13 +14325,11 @@ seiyaku Privacy {
             Uint8Array::from(message),
         )
         .expect("build SM2 fixture");
-
         let private = Sm2PrivateKey::from_seed(&distid, &seed).expect("derive SM2 key");
         let public_bytes = private.public_key().to_sec1_bytes(false);
         let payload =
             encode_sm2_public_key_payload(&distid, &public_bytes).expect("SM2 public payload");
         let public_key = PublicKey::from_bytes(Algorithm::Sm2, &payload).expect("SM2 public key");
-
         assert_eq!(
             fixture.public_key_multihash,
             public_key
@@ -15093,21 +14343,18 @@ seiyaku Privacy {
                 .expect("checked SM2 public-key prefixed multihash")
         );
     }
-
     #[test]
     fn sm2_sign_uses_checked_signing_and_verifies() {
         let distid = "js-sm2-checked-signing".to_owned();
         let private =
             Sm2PrivateKey::from_seed(&distid, b"js-sm2-checked-signing-seed").expect("SM2 key");
         let message = b"js-host SM2 checked signing";
-
         let signature = sm2_sign(
             Uint8Array::from(private.secret_bytes().to_vec()),
             Uint8Array::from(message.to_vec()),
             Some(distid.clone()),
         )
         .expect("checked SM2 signing");
-
         let verified = sm2_verify(
             Uint8Array::from(private.public_key().to_sec1_bytes(false)),
             Uint8Array::from(message.to_vec()),
@@ -15117,7 +14364,6 @@ seiyaku Privacy {
         .expect("SM2 verify");
         assert!(verified);
     }
-
     #[test]
     fn sm2_verify_rejects_zero_scalar_signature_material() {
         let distid = "js-sm2-zero-scalar-signature".to_owned();
@@ -15125,12 +14371,10 @@ seiyaku Privacy {
             Sm2PrivateKey::from_seed(&distid, b"js-sm2-zero-scalar-seed").expect("SM2 key");
         let public_key = private.public_key().to_sec1_bytes(false);
         let message = b"js-host SM2 zero-scalar signature";
-
         let mut zero_r = [0u8; SM2_SIGNATURE_LENGTH];
         zero_r[SM2_SIGNATURE_LENGTH - 1] = 1;
         let mut zero_s = [0u8; SM2_SIGNATURE_LENGTH];
         zero_s[31] = 1;
-
         for (label, signature) in [
             ("all-zero", [0u8; SM2_SIGNATURE_LENGTH]),
             ("zero-r", zero_r),
@@ -15143,14 +14387,12 @@ seiyaku Privacy {
                 Some(distid.clone()),
             )
             .expect_err("zero-scalar SM2 signature must fail before verification");
-
             assert!(
                 err.to_string().contains("SM2 signature"),
                 "{label} signature produced unexpected error: {err}"
             );
         }
     }
-
     #[test]
     fn alias_proof_fixture_uses_checked_council_signer_payload() {
         let fixture = sorafs_alias_proof_fixture(Some(JsAliasProofFixtureOptions {
@@ -15172,25 +14414,21 @@ seiyaku Privacy {
             .public_key()
             .try_to_bytes()
             .expect("checked public-key payload");
-
         assert_eq!(bundle.council_signatures.len(), 1);
         assert_eq!(
             bundle.council_signatures[0].signer.as_slice(),
             expected_signer
         );
     }
-
     fn sample_hash(byte: u8) -> [u8; Hash::LENGTH] {
         let mut buf = [byte; Hash::LENGTH];
         buf[buf.len() - 1] |= 1;
         buf
     }
-
     fn sample_account(_domain: &str) -> AccountId {
         let keypair = KeyPair::random();
         AccountId::new(keypair.public_key().clone())
     }
-
     fn cast_plain_ballot_json(owner: &AccountId, amount: json::Value) -> json::Value {
         let mut fields = json::Map::new();
         fields.insert(
@@ -15215,7 +14453,6 @@ seiyaku Privacy {
             json::Value::Object(fields),
         )]))
     }
-
     fn governance_selector_instruction_json(variant: &str, selector: &str) -> json::Value {
         match variant {
             "CastZkBallot" => norito_json!({
@@ -15245,7 +14482,6 @@ seiyaku Privacy {
             _ => panic!("unsupported governance selector instruction {variant}"),
         }
     }
-
     fn account_json_literal(account: &AccountId) -> String {
         json::to_value(account)
             .expect("serialize account id")
@@ -15253,7 +14489,6 @@ seiyaku Privacy {
             .expect("account id json literal should be string")
             .to_owned()
     }
-
     fn register_citizen_json(owner: &AccountId, amount: json::Value) -> json::Value {
         json::Value::Object(json::Map::from_iter([(
             "RegisterCitizen".to_owned(),
@@ -15266,29 +14501,24 @@ seiyaku Privacy {
             ])),
         )]))
     }
-
     fn canonical_owner_literal(_domain: &str) -> String {
         account_json_literal(&sample_account("wonderland"))
     }
-
     fn noncanonical_owner_literal(domain: &str) -> String {
         let account = sample_account(domain);
         format!("{}@{domain}", account_json_literal(&account))
     }
-
     fn sample_rwa_id(domain: &str, byte: u8) -> RwaId {
         RwaId::generated(
             DomainId::try_new(domain, "universal").expect("valid domain id"),
             Hash::prehashed(sample_hash(byte)),
         )
     }
-
     fn sample_kaigi_id(domain: &str, call_name: &str) -> KaigiId {
         let domain_id = DomainId::try_new(domain, "universal").expect("valid domain id");
         let call = Name::from_str(call_name).expect("valid kaigi name");
         KaigiId::new(domain_id, call)
     }
-
     fn sample_agenda_proposal() -> AgendaProposalV1 {
         AgendaProposalV1 {
             version: 1,
@@ -15325,7 +14555,6 @@ seiyaku Privacy {
             duplicates: vec!["AC-2025-014".to_owned()],
         }
     }
-
     fn sample_taikai_cache_options() -> JsTaikaiCacheConfig {
         JsTaikaiCacheConfig {
             hot_capacity_bytes: JsU64(8_388_608),
@@ -15343,7 +14572,6 @@ seiyaku Privacy {
             reliability: None,
         }
     }
-
     #[test]
     fn gateway_options_apply_taikai_cache_config() {
         let mut config = OrchestratorConfig::default();
@@ -15357,7 +14585,6 @@ seiyaku Privacy {
         assert_eq!(cache.cold_retention.as_secs(), 3_600);
         assert_eq!(cache.qos.burst_multiplier, 4);
     }
-
     #[test]
     fn gateway_policy_block_uses_canonical_compliance_evidence_only() {
         let value = attempt_failure_to_value(AttemptFailure::Provider {
@@ -15374,7 +14601,6 @@ seiyaku Privacy {
             .get("policyBlock")
             .and_then(Value::as_object)
             .expect("policy block object");
-
         assert_eq!(policy.len(), 4);
         assert_eq!(
             policy.get("observedStatus").and_then(Value::as_u64),
@@ -15405,7 +14631,6 @@ seiyaku Privacy {
             );
         }
     }
-
     #[test]
     fn taikai_cache_validation_rejects_invalid_values() {
         let mut config = OrchestratorConfig::default();
@@ -15422,7 +14647,6 @@ seiyaku Privacy {
             "unexpected error: {err}"
         );
     }
-
     fn make_stream_token_b64(
         manifest_id_hex: &str,
         provider_id_hex: &str,
@@ -15458,23 +14682,19 @@ seiyaku Privacy {
         let bytes = norito::to_bytes(&token).expect("encode stream token");
         BASE64.encode(bytes)
     }
-
     fn da_fixture_path(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../fixtures/da/reconstruct/rs_parity_v1")
             .join(name)
     }
-
     fn load_da_manifest_fixture() -> Vec<u8> {
         let hex_str =
             fs::read_to_string(da_fixture_path("manifest.norito.hex")).expect("read manifest hex");
         hex::decode(hex_str.trim()).expect("decode manifest hex")
     }
-
     fn load_da_payload_fixture() -> Vec<u8> {
         fs::read(da_fixture_path("payload.bin")).expect("read payload fixture")
     }
-
     #[test]
     fn da_fixtures_are_readable() {
         let manifest = load_da_manifest_fixture();
@@ -15488,7 +14708,6 @@ seiyaku Privacy {
             "DA payload fixture should not be empty"
         );
     }
-
     fn empty_gateway_options() -> JsGatewayFetchOptions {
         JsGatewayFetchOptions {
             manifest_envelope_b64: None,
@@ -15511,7 +14730,6 @@ seiyaku Privacy {
             allow_single_source_fallback: None,
         }
     }
-
     #[test]
     fn gateway_rollout_phase_updates_default_anonymity() {
         let mut config = OrchestratorConfig {
@@ -15519,11 +14737,9 @@ seiyaku Privacy {
             ..OrchestratorConfig::default()
         };
         assert!(config.anonymity_policy_override.is_none());
-
         let mut opts = empty_gateway_options();
         opts.rollout_phase = Some("ramp".to_string());
         apply_gateway_options(&mut config, &opts).expect("apply rollout phase");
-
         assert_eq!(config.rollout_phase, RolloutPhase::Ramp);
         assert_eq!(
             config.anonymity_policy,
@@ -15531,7 +14747,6 @@ seiyaku Privacy {
         );
         assert!(config.anonymity_policy_override.is_none());
     }
-
     #[test]
     fn gateway_rollout_phase_respects_anonymity_override() {
         let mut config = OrchestratorConfig {
@@ -15539,11 +14754,9 @@ seiyaku Privacy {
             anonymity_policy_override: Some(AnonymityPolicy::StrictPq),
             ..OrchestratorConfig::default()
         };
-
         let mut opts = empty_gateway_options();
         opts.rollout_phase = Some("canary".to_string());
         apply_gateway_options(&mut config, &opts).expect("apply rollout phase");
-
         assert_eq!(config.rollout_phase, RolloutPhase::Canary);
         assert_eq!(config.anonymity_policy, AnonymityPolicy::StrictPq);
         assert_eq!(
@@ -15551,17 +14764,14 @@ seiyaku Privacy {
             Some(AnonymityPolicy::StrictPq)
         );
     }
-
     #[test]
     fn gateway_retry_budget_zero_disables_cap() {
         let mut config = OrchestratorConfig::default();
         let mut opts = empty_gateway_options();
         opts.retry_budget = Some(0);
         apply_gateway_options(&mut config, &opts).expect("apply retry budget");
-
         assert!(config.fetch.per_chunk_retry_limit.is_none());
     }
-
     #[test]
     fn gateway_retry_budget_sets_positive_limit() {
         let mut config = OrchestratorConfig::default();
@@ -15570,7 +14780,6 @@ seiyaku Privacy {
         apply_gateway_options(&mut config, &opts).expect("apply retry budget");
         assert_eq!(config.fetch.per_chunk_retry_limit, Some(3));
     }
-
     #[test]
     fn gateway_write_mode_parses_upload_hint() {
         let mut config = OrchestratorConfig::default();
@@ -15579,7 +14788,6 @@ seiyaku Privacy {
         apply_gateway_options(&mut config, &opts).expect("apply write mode");
         assert_eq!(config.write_mode, WriteModeHint::UploadPqOnly);
     }
-
     #[test]
     fn gateway_policy_options_accept_exact_v1_labels() {
         let mut config = OrchestratorConfig::default();
@@ -15588,9 +14796,7 @@ seiyaku Privacy {
         opts.transport_policy = Some("direct-only".to_string());
         opts.anonymity_policy = Some("anon-strict-pq".to_string());
         opts.write_mode = Some("read-only".to_string());
-
         apply_gateway_options(&mut config, &opts).expect("apply exact V1 policy labels");
-
         assert_eq!(config.rollout_phase, RolloutPhase::Default);
         assert_eq!(config.transport_policy, TransportPolicy::DirectOnly);
         assert_eq!(config.anonymity_policy, AnonymityPolicy::StrictPq);
@@ -15600,7 +14806,6 @@ seiyaku Privacy {
         );
         assert_eq!(config.write_mode, WriteModeHint::ReadOnly);
     }
-
     #[test]
     fn gateway_policy_options_reject_all_noncanonical_labels() {
         for alias in [
@@ -15693,7 +14898,6 @@ seiyaku Privacy {
             );
         }
     }
-
     #[test]
     fn scoreboard_metadata_records_effective_policy_labels() {
         let config = OrchestratorConfig {
@@ -15766,7 +14970,6 @@ seiyaku Privacy {
             Some("iad-prod")
         );
     }
-
     #[test]
     fn scoreboard_metadata_records_policy_overrides() {
         let config = OrchestratorConfig {
@@ -15834,7 +15037,6 @@ seiyaku Privacy {
         assert!(map.get("gateway_manifest_cid").is_some_and(Value::is_null));
         assert!(map.get("telemetry_region").is_some_and(Value::is_null));
     }
-
     #[test]
     fn mint_asset_instruction_json_roundtrip() {
         let account_id = sample_account("wonderland");
@@ -15843,24 +15045,20 @@ seiyaku Privacy {
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_definition, account_id.clone());
-
         let mint_box: MintBox =
             Mint::asset_quantity("10".parse::<Quantity>().expect("valid quantity"), asset_id)
                 .into();
         let instruction = InstructionBox::from(mint_box);
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize instruction to json");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Mint"));
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize instruction from json");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn transfer_asset_batch_instruction_json_roundtrip() {
         let source = sample_account("wonderland");
@@ -15877,18 +15075,15 @@ seiyaku Privacy {
                 "1.25".parse::<Quantity>().expect("valid quantity"),
             )]);
         let instruction = InstructionBox::from(batch);
-
         let mut json_value =
             instruction_to_json_value(&instruction).expect("serialize batch instruction to json");
         assert!(
             json_value.get("TransferAssetBatch").is_some(),
             "batch instruction JSON must retain its native variant"
         );
-
         let reconstructed = value_to_instruction(json_value.clone())
             .expect("deserialize batch instruction from native JSON");
         assert_eq!(reconstructed, instruction);
-
         let malformed = json_value
             .get_mut("TransferAssetBatch")
             .and_then(json::Value::as_object_mut)
@@ -15899,7 +15094,6 @@ seiyaku Privacy {
             "batch decoder must reject fields outside the native batch schema"
         );
     }
-
     #[test]
     fn kaigi_commitment_option_roundtrip() {
         disable_packed_struct_once();
@@ -15916,7 +15110,6 @@ seiyaku Privacy {
             NoritoDecode::decode(&mut cursor).expect("decode option bytes");
         assert_eq!(decoded, Some(commitment));
     }
-
     #[test]
     fn burn_asset_instruction_json_roundtrip() {
         let account_id = sample_account("wonderland");
@@ -15925,23 +15118,19 @@ seiyaku Privacy {
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_definition, account_id.clone());
-
         let burn_box: BurnBox =
             Burn::asset_quantity("5".parse::<Quantity>().expect("valid quantity"), asset_id).into();
         let instruction = InstructionBox::from(burn_box);
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize instruction to json");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Burn"));
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize instruction from json");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn custom_instruction_json_roundtrip() {
         let account = sample_account("wonderland");
@@ -15963,7 +15152,6 @@ seiyaku Privacy {
         let mut payload = json::Map::new();
         payload.insert("Propose".to_owned(), json::Value::Object(propose));
         let instruction_json = custom_json_value(json::Value::Object(payload));
-
         let instruction =
             value_to_instruction(instruction_json.clone()).expect("parse Custom instruction");
         assert!(
@@ -15973,17 +15161,14 @@ seiyaku Privacy {
                 .is_some(),
             "instruction must decode as CustomInstruction"
         );
-
         let rendered =
             instruction_to_json_value(&instruction).expect("render custom instruction to JSON");
         assert_eq!(rendered, instruction_json);
     }
-
     #[test]
     fn multisig_alias_payloads_decode_as_custom_instruction() {
         let account = sample_account("wonderland");
         let account_literal = account_json_literal(&account);
-
         let mut propose_fields = json::Map::new();
         propose_fields.insert(
             "account".to_owned(),
@@ -16012,7 +15197,6 @@ seiyaku Privacy {
                 .is_some(),
             "MultisigPropose alias must map to Custom.payload.Propose"
         );
-
         let mut cancel_fields = json::Map::new();
         cancel_fields.insert(
             "account".to_owned(),
@@ -16040,7 +15224,6 @@ seiyaku Privacy {
                 .is_some(),
             "MultisigCancel alias must map to Custom.payload.Cancel"
         );
-
         let mut approve_fields = json::Map::new();
         approve_fields.insert("account".to_owned(), json::Value::String(account_literal));
         approve_fields.insert(
@@ -16064,7 +15247,6 @@ seiyaku Privacy {
             "Multisig alias must map to Custom.payload.Approve"
         );
     }
-
     #[test]
     fn sorafs_multi_fetch_local_executes_plan() {
         let tempdir = tempdir().expect("tempdir");
@@ -16075,11 +15257,9 @@ seiyaku Privacy {
         let beta_path = tempdir.path().join("beta.bin");
         fs::write(&alpha_path, &payload).expect("write alpha payload");
         fs::write(&beta_path, &payload).expect("write beta payload");
-
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_json = chunk_fetch_plan_to_string(&plan).expect("serialize plan");
-
         let providers = vec![
             JsLocalProviderSpec {
                 name: "alpha".to_owned(),
@@ -16096,7 +15276,6 @@ seiyaku Privacy {
                 metadata: None,
             },
         ];
-
         let result = sorafs_multi_fetch_local(
             plan_json,
             providers,
@@ -16106,7 +15285,6 @@ seiyaku Privacy {
             }),
         )
         .expect("multi-fetch succeeds");
-
         assert_eq!(
             result.chunk_count as usize,
             plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
@@ -16115,7 +15293,6 @@ seiyaku Privacy {
         assert_eq!(result.provider_reports[0].provider, "alpha");
         assert_eq!(result.provider_reports[0].failures, 0);
         assert!(!result.provider_reports[0].disabled);
-
         assert_eq!(
             result.chunk_receipts.len(),
             plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
@@ -16126,23 +15303,19 @@ seiyaku Privacy {
                 .iter()
                 .all(|receipt| receipt.provider == "alpha")
         );
-
         let payload_bytes = result.payload.to_vec();
         assert_eq!(payload_bytes, payload);
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn sorafs_gateway_fetch_returns_manifest_and_car_verification() {
         use sorafs_car::multi_fetch::{ChunkReceipt, FetchOutcome, FetchProvider, ProviderReport};
 
         ensure_packed_struct_disabled();
-
         let payload_len = 32 * 1024;
         let payload: Vec<u8> = (0..payload_len)
             .map(|idx| u8::try_from(idx % 251).expect("payload byte fits in u8"))
             .collect();
-
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let descriptor = chunker_registry::lookup_by_profile(
@@ -16154,10 +15327,8 @@ seiyaku Privacy {
             "{}.{}@{}",
             descriptor.namespace, descriptor.name, descriptor.semver
         );
-
         let writer = CarWriter::new(&plan, &payload).expect("car writer");
         let car_stats = writer.write_to(std::io::sink()).expect("write car bytes");
-
         let manifest = ManifestBuilder::new()
             .root_cid(car_stats.root_cids[0].clone())
             .dag_codec(sorafs_manifest::DagCodecId(car_stats.dag_codec))
@@ -16191,7 +15362,6 @@ seiyaku Privacy {
         let manifest_id_hex = hex::encode(manifest_digest.as_bytes());
         let manifest_governance = manifest.governance.clone();
         let manifest_digest_copy = manifest_digest;
-
         let provider_id_hex = "aa".repeat(32);
         let stream_token_b64 = make_stream_token_b64(
             &manifest_id_hex,
@@ -16199,7 +15369,6 @@ seiyaku Privacy {
             &chunker_handle,
             u16::try_from(plan.chunks.len()).expect("chunk count fits in u16"),
         );
-
         let plan_json = chunk_fetch_plan_to_string(&plan).expect("serialize plan");
         let tempdir = tempdir().expect("tempdir");
         let norito_dir = tempdir.path().join("norito");
@@ -16207,7 +15376,6 @@ seiyaku Privacy {
         let scoreboard_path = tempdir.path().join("scoreboard").join("scoreboard.json");
         fs::create_dir_all(&norito_dir).expect("create norito directory");
         fs::create_dir_all(&car_dir).expect("create car directory");
-
         let options = JsGatewayFetchOptions {
             manifest_envelope_b64: None,
             manifest_cid_hex: None,
@@ -16247,14 +15415,12 @@ seiyaku Privacy {
             scoreboard_allow_implicit_metadata: Some(true),
             allow_single_source_fallback: Some(false),
         };
-
         let manifest_bytes_clone = manifest_bytes.clone();
         let car_stats_clone = car_stats.clone();
         let payload_clone = payload.clone();
         let chunker_handle_clone = chunker_handle.clone();
         let override_guard = set_fetch_via_gateway_override(move |_, plan_override, _, _, _, _| {
             let provider = Arc::new(FetchProvider::new("alpha"));
-
             let chunk_specs = plan_override
                 .try_chunk_fetch_specs()
                 .expect("valid CAR plan");
@@ -16280,7 +15446,6 @@ seiyaku Privacy {
                     bytes: spec.length,
                 });
             }
-
             let outcome = FetchOutcome {
                 chunks,
                 chunk_receipts: receipts,
@@ -16291,7 +15456,6 @@ seiyaku Privacy {
                     disabled: false,
                 }],
             };
-
             let policy_report = PolicyReport {
                 policy: AnonymityPolicy::GuardPq,
                 effective_policy: AnonymityPolicy::GuardPq,
@@ -16302,10 +15466,8 @@ seiyaku Privacy {
                 status: PolicyStatus::Met,
                 fallback_reason: None,
             };
-
             let mut manifest_car_digest = [0u8; 32];
             manifest_car_digest.copy_from_slice(car_stats_clone.car_archive_digest.as_bytes());
-
             let car_verification = GatewayCarVerification {
                 manifest_digest: manifest_digest_copy,
                 manifest_payload_digest: plan_override.payload_digest,
@@ -16318,7 +15480,6 @@ seiyaku Privacy {
                 car_stats: car_stats_clone.clone(),
                 por_leaf_count: 0,
             };
-
             let manifest_stub = BrowserExtensionManifest {
                 version: 1,
                 authority: "127.0.0.1:9000".into(),
@@ -16336,7 +15497,6 @@ seiyaku Privacy {
                 cache_tagging: None,
                 telemetry_v2: None,
             };
-
             Ok(FetchSession {
                 outcome,
                 policy_report,
@@ -16346,7 +15506,6 @@ seiyaku Privacy {
                 taikai_cache_queue: None,
             })
         });
-
         let result = sorafs_gateway_fetch(
             manifest_id_hex.clone(),
             chunker_handle.clone(),
@@ -16364,7 +15523,6 @@ seiyaku Privacy {
         )
         .expect("gateway fetch result");
         drop(override_guard);
-
         assert_eq!(result.manifest_id_hex, manifest_id_hex);
         assert_eq!(result.chunker_handle, chunker_handle);
         assert_eq!(
@@ -16374,7 +15532,6 @@ seiyaku Privacy {
         assert_eq!(result.payload.len(), payload.len());
         assert_eq!(result.payload.as_ref(), payload.as_slice());
         assert_eq!(result.telemetry_region.as_deref(), Some("ci-region"));
-
         let manifest_json = result
             .local_proxy_manifest_json
             .as_ref()
@@ -16388,7 +15545,6 @@ seiyaku Privacy {
             authority.starts_with("127.0.0.1:"),
             "expected loopback authority, got {authority}"
         );
-
         let verification = result
             .car_verification
             .expect("car verification should be present");
@@ -16412,7 +15568,6 @@ seiyaku Privacy {
         );
         assert_eq!(verification.car_archive.size.0, car_stats.car_size);
     }
-
     fn sample_js_range_capability() -> JsRangeCapability {
         let profile = ChunkProfile::DEFAULT;
         JsRangeCapability {
@@ -16423,7 +15578,6 @@ seiyaku Privacy {
             supports_merkle_proof: Some(true),
         }
     }
-
     fn sample_js_stream_budget() -> JsStreamBudget {
         JsStreamBudget {
             max_in_flight: 4,
@@ -16431,7 +15585,6 @@ seiyaku Privacy {
             burst_bytes: Some(JsU64(5_000_000)),
         }
     }
-
     fn sample_provider_metadata(name: &str, issued_at: u64) -> JsProviderMetadata {
         JsProviderMetadata {
             provider_id: Some(name.to_string()),
@@ -16452,7 +15605,6 @@ seiyaku Privacy {
             transport_hints: None,
         }
     }
-
     struct DaManifestFixture {
         manifest_bytes: Vec<u8>,
         payload: Vec<u8>,
@@ -16460,7 +15612,6 @@ seiyaku Privacy {
         chunk_root: [u8; 32],
         leaf_count: usize,
     }
-
     #[allow(clippy::too_many_lines)]
     fn build_da_manifest_fixture() -> DaManifestFixture {
         let payload: Vec<u8> = (0..16 * 1024)
@@ -16566,14 +15717,12 @@ seiyaku Privacy {
             leaf_count: store.por_tree().leaf_count(),
         }
     }
-
     fn unix_time_now() -> Option<u64> {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
             .map(|duration| duration.as_secs())
     }
-
     #[test]
     fn sorafs_multi_fetch_local_scoreboard_prefers_eligible_provider() {
         let tempdir = tempdir().expect("tempdir");
@@ -16584,11 +15733,9 @@ seiyaku Privacy {
         let beta_path = tempdir.path().join("beta.bin");
         fs::write(&alpha_path, &payload).expect("write alpha payload");
         fs::write(&beta_path, &payload).expect("write beta payload");
-
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_json = chunk_fetch_plan_to_string(&plan).expect("serialize plan");
-
         let issued_at = unix_time_now().unwrap_or(1_700_000_000);
         let providers = vec![
             JsLocalProviderSpec {
@@ -16606,7 +15753,6 @@ seiyaku Privacy {
                 metadata: Some(sample_provider_metadata("beta", issued_at)),
             },
         ];
-
         let telemetry = vec![
             JsTelemetryEntry {
                 provider_id: "alpha".into(),
@@ -16631,7 +15777,6 @@ seiyaku Privacy {
                 last_updated_unix: Some(JsU64(issued_at)),
             },
         ];
-
         let result = sorafs_multi_fetch_local(
             plan_json,
             providers,
@@ -16643,7 +15788,6 @@ seiyaku Privacy {
             }),
         )
         .expect("multi-fetch succeeds with scoreboard");
-
         assert_eq!(
             result.chunk_count as usize,
             plan.try_chunk_fetch_specs().expect("valid CAR plan").len()
@@ -16658,7 +15802,6 @@ seiyaku Privacy {
                 .iter()
                 .all(|receipt| receipt.provider == "beta")
         );
-
         let scoreboard = result
             .scoreboard
             .expect("scoreboard entries should be returned");
@@ -16670,7 +15813,6 @@ seiyaku Privacy {
         assert!(scoreboard.iter().any(|entry| entry.alias == "alpha"
             && entry.eligibility.to_ascii_lowercase().contains("penalty")));
     }
-
     #[test]
     fn sorafs_multi_fetch_local_policy_denies_provider() {
         let tempdir = tempdir().expect("tempdir");
@@ -16681,11 +15823,9 @@ seiyaku Privacy {
         let beta_path = tempdir.path().join("beta.bin");
         fs::write(&alpha_path, &payload).expect("write alpha payload");
         fs::write(&beta_path, &payload).expect("write beta payload");
-
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_json = chunk_fetch_plan_to_string(&plan).expect("serialize plan");
-
         let providers = vec![
             JsLocalProviderSpec {
                 name: "alpha".to_owned(),
@@ -16702,7 +15842,6 @@ seiyaku Privacy {
                 metadata: None,
             },
         ];
-
         let result = sorafs_multi_fetch_local(
             plan_json,
             providers,
@@ -16712,7 +15851,6 @@ seiyaku Privacy {
             }),
         )
         .expect("multi-fetch succeeds with deny policy");
-
         assert_eq!(result.provider_reports.len(), 2);
         let alpha_report = result
             .provider_reports
@@ -16738,7 +15876,6 @@ seiyaku Privacy {
                 .all(|receipt| receipt.provider == "beta")
         );
     }
-
     #[test]
     fn transfer_asset_instruction_json_roundtrip() {
         let source_account = sample_account("wonderland");
@@ -16748,7 +15885,6 @@ seiyaku Privacy {
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_definition, source_account.clone());
-
         let transfer_box: TransferBox = Transfer::asset_quantity(
             asset_id,
             Quantity::from_str("25").expect("valid quantity"),
@@ -16756,19 +15892,16 @@ seiyaku Privacy {
         )
         .into();
         let instruction = InstructionBox::from(transfer_box);
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize instruction to json");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Transfer"));
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize instruction from json");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     #[allow(clippy::too_many_lines)] // End-to-end JSON roundtrip coverage is easier to read as one consolidated case table.
     fn rwa_instruction_json_roundtrip() {
@@ -16874,7 +16007,6 @@ seiyaku Privacy {
                 })
             }),
         ];
-
         for json_value in cases {
             let instruction =
                 value_to_instruction(json_value.clone()).expect("deserialize RWA instruction");
@@ -16882,7 +16014,6 @@ seiyaku Privacy {
                 instruction_to_json_value(&instruction).expect("serialize RWA instruction");
             assert_eq!(rendered, json_value);
         }
-
         let negative = norito_json!({
             "TransferRwa": norito_json!({
                 "source": source_account.canonical_i105().expect("canonical I105 source"),
@@ -16898,7 +16029,6 @@ seiyaku Privacy {
             "RWA instructions must reject negative signed quantity payloads"
         );
     }
-
     #[test]
     fn rwa_instruction_json_rejects_non_quantity_spellings() {
         disable_packed_struct_once();
@@ -16911,7 +16041,6 @@ seiyaku Privacy {
             "01".to_owned(),
             format!("0.{}1", "0".repeat(28)),
         ];
-
         for quantity in invalid_quantities {
             let instruction = norito_json!({
                 "RedeemRwa": norito_json!({
@@ -16923,7 +16052,6 @@ seiyaku Privacy {
                 value_to_instruction(instruction).is_err(),
                 "RWA instruction must reject invalid quantity spelling {quantity:?}",
             );
-
             let parent = norito_json!({
                 "rwa": parent_rwa_id.to_string(),
                 "quantity": quantity.clone(),
@@ -16938,24 +16066,19 @@ seiyaku Privacy {
             );
         }
     }
-
     #[test]
     fn kaigi_join_instruction_json_roundtrip() {
         disable_packed_struct_once();
         let mut call_id = json::Map::new();
         call_id.insert("domain_id".into(), Value::String("wonderland.sora".into()));
         call_id.insert("call_name".into(), Value::String("weekly-sync".into()));
-
         let mut commitment = json::Map::new();
         commitment.insert("commitment".into(), Value::String(hash_literal(0x11)));
         commitment.insert("alias_tag".into(), Value::String("alice".into()));
-
         let mut nullifier = json::Map::new();
         nullifier.insert("digest".into(), Value::String(hash_literal(0x22)));
         nullifier.insert("issued_at_ms".into(), Value::Number(json::Number::U64(99)));
-
         let participant = sample_account("wonderland");
-
         let mut join = json::Map::new();
         join.insert("call_id".into(), Value::Object(call_id));
         join.insert(
@@ -16966,47 +16089,38 @@ seiyaku Privacy {
         join.insert("nullifier".into(), Value::Object(nullifier));
         join.insert("roster_root".into(), Value::String(hash_literal(0x33)));
         join.insert("proof".into(), Value::String("qrvM".into()));
-
         let mut kaigi = json::Map::new();
         kaigi.insert("JoinKaigi".into(), Value::Object(join));
-
         let mut outer = json::Map::new();
         outer.insert("Kaigi".into(), Value::Object(kaigi));
         let json_value = Value::Object(outer);
-
         let instruction = value_to_instruction(json_value.clone()).expect("parse join json");
         let bytes = norito::to_bytes(&instruction).expect("encode join json");
         let decoded: InstructionBox = decode_from_bytes(&bytes).expect("decode join instruction");
         let rendered = instruction_to_json_value(&decoded).expect("render join json");
         assert_eq!(rendered, json_value);
     }
-
     #[test]
     fn mint_trigger_instruction_json_roundtrip() {
         let trigger_id: TriggerId = "notify-users".parse().expect("valid trigger id");
-
         let mint_box: MintBox = Mint::trigger_repetitions(3, trigger_id.clone()).into();
         let instruction = InstructionBox::from(mint_box);
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize instruction to json");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Mint"));
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize instruction from json");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn transfer_domain_instruction_json_roundtrip() {
         let source_account = sample_account("wonderland");
         let destination = sample_account("wonderland");
         let domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("valid domain id");
-
         let transfer_box: TransferBox = Transfer::domain(
             source_account.clone(),
             domain_id.clone(),
@@ -17014,41 +16128,34 @@ seiyaku Privacy {
         )
         .into();
         let instruction = InstructionBox::from(transfer_box);
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize instruction to json");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Transfer"));
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize instruction from json");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn register_peer_instruction_json_roundtrip() {
         let keypair = KeyPair::random();
         let peer_id = PeerId::from(keypair.public_key().clone());
         let register = RegisterPeerWithPop::new(peer_id.clone(), vec![0xAA, 0xBB]);
         let instruction = InstructionBox::from(RegisterBox::Peer(register));
-
         let json_value = instruction_to_json_value(&instruction).expect("serialize register peer");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Register"));
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize register peer");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn register_nft_instruction_json_roundtrip() {
         let nft_id: NftId = "collectible$wonderland".parse().expect("valid nft id");
-
         let mut nft_fields = json::Map::new();
         nft_fields.insert(
             "id".to_owned(),
@@ -17060,59 +16167,49 @@ seiyaku Privacy {
         );
         let mut register_map = json::Map::new();
         register_map.insert("Nft".to_owned(), json::Value::Object(nft_fields));
-
         let mut outer = json::Map::new();
         outer.insert("Register".to_owned(), json::Value::Object(register_map));
         let json_value = json::Value::Object(outer);
-
         let instruction =
             value_to_instruction(json_value.clone()).expect("parse register nft instruction");
         let rendered =
             instruction_to_json_value(&instruction).expect("render register nft instruction");
         assert_eq!(rendered, json_value);
     }
-
     #[test]
     fn unregister_peer_instruction_json_roundtrip() {
         let keypair = KeyPair::random();
         let peer_id = PeerId::from(keypair.public_key().clone());
         let unregister = Unregister::<Peer>::peer(peer_id);
         let instruction = InstructionBox::from(UnregisterBox::Peer(unregister));
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize unregister peer");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Unregister"));
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize unregister peer");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn transfer_nft_instruction_json_roundtrip() {
         let source_account = sample_account("wonderland");
         let destination = sample_account("wonderland");
         let nft_id: NftId = "dragon$wonderland".parse().expect("valid nft id");
-
         let transfer_box: TransferBox =
             Transfer::nft(source_account.clone(), nft_id.clone(), destination.clone()).into();
         let instruction = InstructionBox::from(transfer_box);
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize instruction to json");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Transfer"));
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize instruction from json");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn create_kaigi_instruction_json_roundtrip() {
         let host = sample_account("wonderland");
@@ -17156,19 +16253,16 @@ seiyaku Privacy {
             proof: Some(vec![0xFA, 0xCE]),
         })
         .into_instruction_box();
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize Kaigi instruction");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Kaigi"));
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize Kaigi instruction");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn join_kaigi_instruction_json_roundtrip() {
         disable_packed_struct_once();
@@ -17193,19 +16287,16 @@ seiyaku Privacy {
             proof: Some(proof),
         };
         let instruction: InstructionBox = Box::new(join).into_instruction_box();
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize Kaigi join instruction");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Kaigi"));
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize Kaigi join instruction");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn join_kaigi_instruction_norito_roundtrip_from_json() {
         disable_packed_struct_once();
@@ -17232,7 +16323,6 @@ seiyaku Privacy {
             }
         }"#;
         let payload = payload.replace("__PARTICIPANT__", &participant);
-
         let instruction =
             instruction_from_json(&payload).expect("builder JSON must translate into instruction");
         if let Some(join) = instruction.as_any().downcast_ref::<JoinKaigi>() {
@@ -17257,7 +16347,6 @@ seiyaku Privacy {
             decode_from_bytes(&encoded).expect("deserialize JoinKaigi instruction");
         assert_eq!(decoded, instruction);
     }
-
     #[test]
     fn leave_kaigi_instruction_json_roundtrip() {
         let call_id = sample_kaigi_id("wonderland", "weekly-sync");
@@ -17281,19 +16370,16 @@ seiyaku Privacy {
             proof: Some(proof),
         };
         let instruction: InstructionBox = Box::new(leave).into_instruction_box();
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize Kaigi leave instruction");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Kaigi"));
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize Kaigi leave instruction");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn end_kaigi_instruction_json_roundtrip() {
         let call_id = sample_kaigi_id("wonderland", "weekly-sync");
@@ -17314,19 +16400,16 @@ seiyaku Privacy {
             proof: Some(vec![0xDE, 0xAD, 0xBE, 0xEF]),
         };
         let instruction: InstructionBox = Box::new(end).into_instruction_box();
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize Kaigi end instruction");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Kaigi"));
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize Kaigi end instruction");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn record_kaigi_usage_instruction_json_roundtrip() {
         let call_id = sample_kaigi_id("wonderland", "weekly-sync");
@@ -17340,19 +16423,16 @@ seiyaku Privacy {
             proof: Some(proof),
         };
         let instruction: InstructionBox = Box::new(usage).into_instruction_box();
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize Kaigi usage instruction");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Kaigi"));
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize Kaigi usage instruction");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn report_kaigi_relay_health_instruction_json_roundtrip() {
         let call_id = sample_kaigi_id("wonderland", "weekly-sync");
@@ -17365,19 +16445,16 @@ seiyaku Privacy {
             notes: Some("latency spike observed".to_owned()),
         };
         let instruction: InstructionBox = Box::new(report).into_instruction_box();
-
         let json_value = instruction_to_json_value(&instruction)
             .expect("serialize Kaigi relay health instruction");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Kaigi"));
-
         let reconstructed = value_to_instruction(json_value.clone())
             .expect("deserialize Kaigi relay health instruction");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn set_kaigi_relay_manifest_instruction_json_roundtrip() {
         let call_id = sample_kaigi_id("wonderland", "weekly-sync");
@@ -17395,19 +16472,16 @@ seiyaku Privacy {
             relay_manifest: Some(manifest),
         })
         .into_instruction_box();
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize Kaigi manifest instruction");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Kaigi"));
-
         let reconstructed = value_to_instruction(json_value.clone())
             .expect("deserialize Kaigi manifest instruction");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn register_kaigi_relay_instruction_json_roundtrip() {
         let relay = sample_account("wonderland");
@@ -17419,19 +16493,16 @@ seiyaku Privacy {
             },
         })
         .into_instruction_box();
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize Kaigi relay instruction");
         let outer = json_value
             .as_object()
             .expect("instruction JSON should be an object");
         assert!(outer.contains_key("Kaigi"));
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize Kaigi relay instruction");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn governance_propose_deploy_contract_instruction_json_roundtrip() {
         let instruction: InstructionBox = Box::new(ProposeDeployContract {
@@ -17449,7 +16520,6 @@ seiyaku Privacy {
             manifest_provenance: None,
         })
         .into_instruction_box();
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize governance instruction");
         assert!(
@@ -17458,25 +16528,21 @@ seiyaku Privacy {
                 .and_then(|map| map.get("ProposeDeployContract"))
                 .is_some()
         );
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize governance instruction");
         assert_eq!(reconstructed, instruction);
     }
-
     fn validation_fee_account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("validation-fee fixture keypair");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn validation_fee_asset(domain: &str, name: &str) -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new(domain, "universal").expect("validation-fee fixture domain"),
             name.parse().expect("validation-fee fixture asset name"),
         )
     }
-
     fn validation_fee_plain_electorate_rules_fixture() -> ValidationFeePlainElectorateRulesV1 {
         ValidationFeePlainElectorateRulesV1 {
             voting_asset_id: "5dHF5UNffENuEg9mhjYwY1jcZ1K5"
@@ -17499,7 +16565,6 @@ seiyaku Privacy {
                 ValidationFeePlainElectorateEligibilityRuleV1::ProposalOperatorAtOrBeforeGateOthersAfterGate,
         }
     }
-
     fn validation_fee_payout_binding_fixture() -> ValidationFeeTreasuryPayoutBindingV1 {
         let contract_address: ContractAddress =
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
@@ -17526,7 +16591,6 @@ seiyaku Privacy {
                 .collect(),
         }
     }
-
     fn validation_fee_policy_fixture(
         payout_binding: Option<ValidationFeeTreasuryPayoutBindingV1>,
     ) -> ValidationFeePolicyV1 {
@@ -17555,7 +16619,6 @@ seiyaku Privacy {
             treasury_payout_binding: payout_binding,
         }
     }
-
     fn assert_validation_fee_policy_instruction_roundtrip(
         policy: ValidationFeePolicyV1,
         payout_lifecycle_proposal_id: Option<[u8; 32]>,
@@ -17574,7 +16637,6 @@ seiyaku Privacy {
         .into();
         let original_dyn_bytes = InstructionTrait::dyn_encode(&*instruction);
         assert_eq!(InstructionTrait::id(&*instruction), WIRE_ID);
-
         let framed = iroha_data_model::isi::frame_instruction_payload(
             WIRE_ID,
             original_dyn_bytes.as_slice(),
@@ -17588,7 +16650,6 @@ seiyaku Privacy {
             original_dyn_bytes,
             "typed frame decode must preserve exact native instruction bytes"
         );
-
         let json_value =
             instruction_to_json_value(&decoded).expect("render validation-fee instruction JSON");
         let json_payload = json::to_json(&json_value).expect("encode validation-fee JSON");
@@ -17600,7 +16661,6 @@ seiyaku Privacy {
             original_dyn_bytes,
             "decoded JSON must rebuild the exact native instruction bytes"
         );
-
         let network_id = test_network_id(b"validation-fee-js-test");
         let draft = build_transaction_payload_from_instructions_json(
             network_id,
@@ -17634,7 +16694,6 @@ seiyaku Privacy {
             "buildTransactionPayload path must preserve exact native instruction bytes"
         );
     }
-
     #[test]
     fn validation_fee_policy_instruction_roundtrips_without_payout() {
         assert_validation_fee_policy_instruction_roundtrip(
@@ -17642,7 +16701,6 @@ seiyaku Privacy {
             None,
         );
     }
-
     #[test]
     fn validation_fee_policy_instruction_roundtrips_with_payout_and_even_hashes() {
         assert_validation_fee_policy_instruction_roundtrip(
@@ -17650,7 +16708,6 @@ seiyaku Privacy {
             Some([0x56; 32]),
         );
     }
-
     #[test]
     fn validation_fee_policy_instruction_json_rejects_unknown_and_legacy_fields() {
         let instruction: InstructionBox = ProposeValidationFeePolicy {
@@ -17673,7 +16730,6 @@ seiyaku Privacy {
             .insert("window".to_owned(), json::Value::Null);
         let error = value_to_instruction(value).expect_err("legacy window alias must be rejected");
         assert!(error.reason.contains("must contain exactly"));
-
         let mut value =
             instruction_to_json_value(&instruction).expect("validation-fee instruction JSON");
         let policy = value
@@ -17694,7 +16750,6 @@ seiyaku Privacy {
             value_to_instruction(value).expect_err("legacy dual identity fields must be rejected");
         assert!(error.reason.contains("must contain exactly"));
     }
-
     #[test]
     fn validation_fee_policy_proposal_fingerprint_matches_native_kind() {
         for (policy, payout_lifecycle_proposal_id) in [
@@ -17723,7 +16778,6 @@ seiyaku Privacy {
             assert_eq!(actual.as_ref(), expected);
         }
     }
-
     #[test]
     fn validation_fee_payout_lifecycle_proposal_fingerprint_matches_native_kind() {
         let payout_binding = validation_fee_payout_binding_fixture();
@@ -17741,7 +16795,6 @@ seiyaku Privacy {
         .expect("validation-fee payout lifecycle fingerprint");
         assert_eq!(actual.as_ref(), expected);
     }
-
     #[test]
     fn validation_fee_proposal_fingerprints_match_wallet_release_vectors() {
         let plain_electorate_rules = validation_fee_plain_electorate_rules_fixture();
@@ -17756,7 +16809,6 @@ seiyaku Privacy {
             hex::encode(policy_fingerprint.as_ref()),
             "85ecc42a75d3e0da96349b75f0c1ccd1ffb6dff2334486b67edb39f7a86f6a90"
         );
-
         let payout_binding = validation_fee_payout_binding_fixture();
         let payout_fingerprint = validation_fee_payout_lifecycle_proposal_fingerprint_v1(
             json::to_json(&payout_binding).expect("validation-fee payout binding JSON"),
@@ -17768,7 +16820,6 @@ seiyaku Privacy {
             "fa1e71c8bec0601d590038626c2a8d3a4b2350f5dd23f76b0a2dfdbbf9e5a84b"
         );
     }
-
     #[test]
     fn validation_fee_policy_proposal_fingerprint_rejects_unknown_policy_fields() {
         let policy = validation_fee_policy_fixture(None);
@@ -17792,7 +16843,6 @@ seiyaku Privacy {
         };
         assert!(error.reason.contains("must contain exactly"));
     }
-
     #[test]
     fn validation_fee_policy_proposal_fingerprint_rejects_wrong_contract_subject() {
         let mut policy =
@@ -17814,7 +16864,6 @@ seiyaku Privacy {
                 .contains("contract subject must equal the policy treasury")
         );
     }
-
     #[test]
     fn validation_fee_proposal_fingerprints_reject_non_exact_plain_rules() {
         let rules = validation_fee_plain_electorate_rules_fixture();
@@ -17838,7 +16887,6 @@ seiyaku Privacy {
         };
         assert!(error.reason.contains("must contain exactly"));
     }
-
     #[test]
     fn validation_fee_payout_lifecycle_fingerprint_rejects_invalid_binding() {
         let mut payout_binding = validation_fee_payout_binding_fixture();
@@ -17854,7 +16902,6 @@ seiyaku Privacy {
         };
         assert!(error.reason.contains("code hash must be non-zero"));
     }
-
     #[test]
     fn retired_sccp_route_manifest_instructions_are_rejected() {
         for retired in ["UpsertSccpRouteManifest", "RemoveSccpRouteManifest"] {
@@ -17871,7 +16918,6 @@ seiyaku Privacy {
             );
         }
     }
-
     #[test]
     fn retired_sns_mutation_instructions_are_rejected() {
         for retired in [
@@ -17895,7 +16941,6 @@ seiyaku Privacy {
             );
         }
     }
-
     #[test]
     fn governance_cast_zk_ballot_instruction_json_roundtrip() {
         let instruction: InstructionBox = Box::new(CastZkBallot {
@@ -17904,7 +16949,6 @@ seiyaku Privacy {
             public_inputs_json: r#"{"tally":"aye"}"#.to_owned(),
         })
         .into_instruction_box();
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize CastZkBallot instruction");
         assert!(
@@ -17913,11 +16957,9 @@ seiyaku Privacy {
                 .and_then(|map| map.get("CastZkBallot"))
                 .is_some()
         );
-
         let reconstructed = value_to_instruction(json_value).expect("deserialize CastZkBallot");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn governance_selectors_are_canonical_at_instruction_construction() {
         const VARIANTS: [&str; 6] = [
@@ -17941,7 +16983,6 @@ seiyaku Privacy {
                 });
             }
         }
-
         let overlong = "a".repeat(129);
         for (case, selector) in [
             ("empty", ""),
@@ -17971,7 +17012,6 @@ seiyaku Privacy {
             }
         }
     }
-
     #[test]
     fn governance_cast_zk_ballot_public_inputs_rejects_deprecated_keys() {
         let mut inner = json::Map::new();
@@ -17992,10 +17032,8 @@ seiyaku Privacy {
         );
         let mut outer = json::Map::new();
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
-
         assert!(value_to_instruction(json::Value::Object(outer)).is_err());
     }
-
     #[test]
     fn governance_cast_zk_ballot_public_inputs_canonicalizes_hex_hints() {
         let mut inner = json::Map::new();
@@ -18020,7 +17058,6 @@ seiyaku Privacy {
         );
         let mut outer = json::Map::new();
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
-
         let instruction =
             value_to_instruction(json::Value::Object(outer)).expect("deserialize CastZkBallot");
         let ballot = instruction
@@ -18040,7 +17077,6 @@ seiyaku Privacy {
         assert_eq!(root_hint, "aa".repeat(32));
         assert_eq!(nullifier, "bb".repeat(32));
     }
-
     #[test]
     fn governance_cast_zk_ballot_public_inputs_rejects_noncanonical_owner() {
         let mut inner = json::Map::new();
@@ -18061,10 +17097,8 @@ seiyaku Privacy {
         );
         let mut outer = json::Map::new();
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
-
         assert!(value_to_instruction(json::Value::Object(outer)).is_err());
     }
-
     #[test]
     fn governance_cast_zk_ballot_public_inputs_accepts_fractional_and_wide_quantity_hints() {
         let owner = canonical_owner_literal("wonderland");
@@ -18083,7 +17117,6 @@ seiyaku Privacy {
             );
         }
     }
-
     #[test]
     fn governance_cast_zk_ballot_public_inputs_rejects_invalid_quantity_hints() {
         let owner = canonical_owner_literal("wonderland");
@@ -18127,7 +17160,6 @@ seiyaku Privacy {
             );
         }
     }
-
     #[test]
     fn governance_cast_zk_ballot_public_inputs_rejects_partial_hints() {
         let mut inner = json::Map::new();
@@ -18146,10 +17178,8 @@ seiyaku Privacy {
         );
         let mut outer = json::Map::new();
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
-
         assert!(value_to_instruction(json::Value::Object(outer)).is_err());
     }
-
     #[test]
     fn governance_cast_zk_ballot_public_inputs_rejects_deprecated_aliases() {
         let mut inner = json::Map::new();
@@ -18170,10 +17200,8 @@ seiyaku Privacy {
         );
         let mut outer = json::Map::new();
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
-
         assert!(value_to_instruction(json::Value::Object(outer)).is_err());
     }
-
     #[test]
     fn governance_cast_zk_ballot_public_inputs_rejects_invalid_hex() {
         let mut inner = json::Map::new();
@@ -18194,10 +17222,8 @@ seiyaku Privacy {
         );
         let mut outer = json::Map::new();
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
-
         assert!(value_to_instruction(json::Value::Object(outer)).is_err());
     }
-
     #[test]
     fn governance_cast_zk_ballot_public_inputs_rejects_non_object_json() {
         let mut inner = json::Map::new();
@@ -18215,10 +17241,8 @@ seiyaku Privacy {
         );
         let mut outer = json::Map::new();
         outer.insert("CastZkBallot".to_owned(), json::Value::Object(inner));
-
         assert!(value_to_instruction(json::Value::Object(outer)).is_err());
     }
-
     #[test]
     fn governance_cast_plain_ballot_instruction_json_roundtrip() {
         let owner = sample_account("wonderland");
@@ -18230,7 +17254,6 @@ seiyaku Privacy {
             direction: 1,
         })
         .into_instruction_box();
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize CastPlainBallot instruction");
         assert!(
@@ -18239,11 +17262,9 @@ seiyaku Privacy {
                 .and_then(|map| map.get("CastPlainBallot"))
                 .is_some()
         );
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize CastPlainBallot");
         assert_eq!(reconstructed, instruction);
-
         // Ensure owner round-tripped correctly.
         let owner_json = json_value
             .as_object()
@@ -18254,7 +17275,6 @@ seiyaku Privacy {
             .expect("owner string present");
         assert_eq!(owner_json, account_json_literal(&owner));
     }
-
     #[test]
     fn governance_cast_plain_ballot_accepts_fractional_and_wide_quantities() {
         let owner = sample_account("wonderland");
@@ -18270,7 +17290,6 @@ seiyaku Privacy {
                 .downcast_ref::<CastPlainBallot>()
                 .expect("CastPlainBallot");
             assert_eq!(ballot.amount.to_string(), amount);
-
             let encoded =
                 instruction_to_json_value(&instruction).expect("serialize CastPlainBallot");
             assert_eq!(
@@ -18282,7 +17301,6 @@ seiyaku Privacy {
             );
         }
     }
-
     #[test]
     fn governance_cast_plain_ballot_rejects_invalid_quantity_shapes_and_text() {
         let owner = sample_account("wonderland");
@@ -18314,7 +17332,6 @@ seiyaku Privacy {
             );
         }
     }
-
     #[test]
     fn governance_register_citizen_instruction_json_roundtrip() {
         let owner = sample_account("wonderland");
@@ -18323,7 +17340,6 @@ seiyaku Privacy {
             amount: "10000.25".parse().expect("canonical Quantity"),
         })
         .into_instruction_box();
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize RegisterCitizen instruction");
         assert!(
@@ -18332,11 +17348,9 @@ seiyaku Privacy {
                 .and_then(|map| map.get("RegisterCitizen"))
                 .is_some()
         );
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize RegisterCitizen");
         assert_eq!(reconstructed, instruction);
-
         let owner_json = json_value
             .as_object()
             .unwrap()
@@ -18346,7 +17360,6 @@ seiyaku Privacy {
             .expect("owner string present");
         assert_eq!(owner_json, account_json_literal(&owner));
     }
-
     #[test]
     fn governance_register_citizen_accepts_fractional_and_wide_quantities() {
         let owner = sample_account("wonderland");
@@ -18364,7 +17377,6 @@ seiyaku Privacy {
             assert_eq!(register.amount.to_string(), amount);
         }
     }
-
     #[test]
     fn governance_register_citizen_rejects_invalid_quantity_shapes_and_text() {
         let owner = sample_account("wonderland");
@@ -18398,7 +17410,6 @@ seiyaku Privacy {
             );
         }
     }
-
     #[test]
     fn governance_enact_referendum_instruction_json_roundtrip() {
         let instruction: InstructionBox = Box::new(EnactReferendum {
@@ -18410,7 +17421,6 @@ seiyaku Privacy {
             },
         })
         .into_instruction_box();
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize EnactReferendum");
         assert!(
@@ -18419,11 +17429,9 @@ seiyaku Privacy {
                 .and_then(|map| map.get("EnactReferendum"))
                 .is_some()
         );
-
         let reconstructed = value_to_instruction(json_value).expect("deserialize EnactReferendum");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn governance_finalize_referendum_instruction_json_roundtrip() {
         let instruction: InstructionBox = Box::new(FinalizeReferendum {
@@ -18431,7 +17439,6 @@ seiyaku Privacy {
             proposal_id: sample_hash(0x33),
         })
         .into_instruction_box();
-
         let json_value =
             instruction_to_json_value(&instruction).expect("serialize FinalizeReferendum");
         assert!(
@@ -18440,12 +17447,10 @@ seiyaku Privacy {
                 .and_then(|map| map.get("FinalizeReferendum"))
                 .is_some()
         );
-
         let reconstructed =
             value_to_instruction(json_value).expect("deserialize FinalizeReferendum");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn governance_persist_council_instruction_json_roundtrip() {
         let member = sample_account("wonderland");
@@ -18455,7 +17460,6 @@ seiyaku Privacy {
             alternates: vec![member.clone()],
         })
         .into_instruction_box();
-
         let json_value = instruction_to_json_value(&instruction)
             .expect("serialize PersistCouncilForEpoch instruction");
         assert!(
@@ -18464,11 +17468,9 @@ seiyaku Privacy {
                 .and_then(|map| map.get("PersistCouncilForEpoch"))
                 .is_some()
         );
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize PersistCouncilForEpoch");
         assert_eq!(reconstructed, instruction);
-
         let member_json = json_value
             .as_object()
             .unwrap()
@@ -18480,14 +17482,12 @@ seiyaku Privacy {
             .expect("member string present");
         assert_eq!(member_json, account_json_literal(&member));
     }
-
     #[test]
     fn governance_submit_agenda_proposal_instruction_json_roundtrip() {
         let instruction: InstructionBox = Box::new(SubmitAgendaProposal {
             proposal: sample_agenda_proposal(),
         })
         .into_instruction_box();
-
         let json_value = instruction_to_json_value(&instruction)
             .expect("serialize SubmitAgendaProposal instruction");
         assert!(
@@ -18496,11 +17496,9 @@ seiyaku Privacy {
                 .and_then(|map| map.get("SubmitAgendaProposal"))
                 .is_some()
         );
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize SubmitAgendaProposal");
         assert_eq!(reconstructed, instruction);
-
         let proposal_id = json_value
             .as_object()
             .unwrap()
@@ -18511,7 +17509,6 @@ seiyaku Privacy {
             .expect("proposal id present");
         assert_eq!(proposal_id, "AC-2026-001");
     }
-
     #[test]
     fn smart_contract_code_instruction_json_roundtrip() {
         let signing_key = KeyPair::try_from_seed(vec![0x33; 32], Algorithm::Ed25519)
@@ -18578,7 +17575,6 @@ seiyaku Privacy {
             manifest: manifest.clone(),
         })
         .into_instruction_box();
-
         let json_value = instruction_to_json_value(&instruction)
             .expect("serialize RegisterSmartContractCode instruction");
         assert!(
@@ -18587,12 +17583,10 @@ seiyaku Privacy {
                 .and_then(|map| map.get("RegisterSmartContractCode"))
                 .is_some()
         );
-
         let reconstructed = value_to_instruction(json_value.clone())
             .expect("deserialize RegisterSmartContractCode");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn decode_signed_transaction_accepts_supported_norito_rpc_fixture_subset() {
         let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -18606,7 +17600,6 @@ seiyaku Privacy {
             .get("fixtures")
             .and_then(Value::as_array)
             .expect("norito fixture manifest fixtures array");
-
         for name in names {
             let matches: Vec<_> = fixtures
                 .iter()
@@ -18634,7 +17627,6 @@ seiyaku Privacy {
                 .unwrap_or_else(|err| panic!("failed to decode fixture {name}: {err}"));
         }
     }
-
     #[test]
     fn external_transfer_quantity_parser_enforces_nominal_positive_domain() {
         let quantity =
@@ -18643,11 +17635,9 @@ seiyaku Privacy {
             quantity,
             Quantity::from_str("1.25").expect("canonical quantity")
         );
-
         let zero = parse_positive_transfer_quantity("0").expect_err("zero must be rejected");
         assert_eq!(zero.status, napi::Status::InvalidArg);
         assert_eq!(zero.reason, "transfer quantity must be greater than zero");
-
         for source in ["-1", "1e3", "0.00000000000000000000000000001"] {
             let error = parse_positive_transfer_quantity(source)
                 .expect_err("non-quantity input must be rejected");
@@ -18659,12 +17649,10 @@ seiyaku Privacy {
             );
         }
     }
-
     fn authority_fee_payment_json() -> String {
         norito::json::to_json(&FeePaymentIntent::authority(Vec::new(), None))
             .expect("serialize authority fee payment")
     }
-
     fn authority_fee_payment_json_with_gas(gas_limit: u64) -> String {
         norito::json::to_json(&FeePaymentIntent::authority(
             Vec::new(),
@@ -18672,7 +17660,6 @@ seiyaku Privacy {
         ))
         .expect("serialize authority fee payment with gas")
     }
-
     #[test]
     fn quoted_payload_signer_changes_only_fee_limits_and_rejects_payer_substitution() {
         let keypair =
@@ -18733,7 +17720,6 @@ seiyaku Privacy {
         signed
             .verify_signature()
             .expect("quoted signature verifies");
-
         let foreign_error = sign_quoted_transaction_payload(
             test_network_id_bytes(b"foreign-quote-flow-network"),
             draft.payload_json.clone(),
@@ -18743,7 +17729,6 @@ seiyaku Privacy {
         )
         .expect_err("quoted signer must reject a foreign NetworkId");
         assert!(foreign_error.reason.contains("does not match"));
-
         let genesis_payload = TransactionBuilder::new_genesis(
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
@@ -18757,7 +17742,6 @@ seiyaku Privacy {
         )
         .expect_err("quoted signer must reject the genesis domain");
         assert!(genesis_error.reason.contains("genesis-domain"));
-
         let gas_error = match sign_quoted_transaction_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             draft.payload_json.clone(),
@@ -18769,7 +17753,6 @@ seiyaku Privacy {
             Err(error) => error,
         };
         assert!(gas_error.reason.contains("gas bound"));
-
         let substituted = FeePaymentIntent::sponsor(
             iroha_data_model::nexus::FeeSponsorProgramId::new(
                 authority,
@@ -18791,7 +17774,6 @@ seiyaku Privacy {
         };
         assert!(error.reason.contains("changed the selected payer"));
     }
-
     #[test]
     fn external_transfer_payload_builder_and_finalizer_match_native_transaction_model() {
         let authority_key =
@@ -18812,7 +17794,6 @@ seiyaku Privacy {
             .parse()
             .expect("asset definition address");
         let source = AssetId::new(definition, authority.clone()).canonical_literal();
-
         let network_id = test_network_id(b"browser-native-parity");
         let built = build_transfer_asset_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),
@@ -18829,7 +17810,6 @@ seiyaku Privacy {
         .expect("build external transfer payload");
         assert!(!built.payload_bytes.is_empty());
         assert_eq!(built.payload_hash.len(), Hash::LENGTH);
-
         let builder = TransactionBuilder::decode_payload(built.payload_bytes.as_ref())
             .expect("native payload builder must emit canonical bytes");
         assert_eq!(builder.encode_payload(), built.payload_bytes.as_ref());
@@ -18837,7 +17817,6 @@ seiyaku Privacy {
             builder.payload_hash_bytes().as_slice(),
             built.payload_hash.as_ref()
         );
-
         let signature =
             Signature::try_new(authority_key.private_key(), built.payload_hash.as_ref())
                 .expect("external payload signature");
@@ -18854,7 +17833,6 @@ seiyaku Privacy {
             authority: Some(authority_i105),
         })
         .expect("finalize externally signed transaction");
-
         let transaction = decode_signed_transaction(finalized.signed_transaction.as_ref())
             .expect("finalized versioned transaction must decode");
         transaction
@@ -18869,7 +17847,6 @@ seiyaku Privacy {
         );
         assert_eq!(finalized.hash.as_ref(), transaction.hash().as_ref());
     }
-
     #[test]
     fn external_transfer_builder_and_finalizer_reject_adversarial_inputs() {
         let authority_key =
@@ -18895,7 +17872,6 @@ seiyaku Privacy {
             .expect("asset definition address");
         let source = AssetId::new(definition.clone(), authority.clone()).canonical_literal();
         let other_source = AssetId::new(definition, other.clone()).canonical_literal();
-
         let network_id = test_network_id(b"browser-native-adversarial");
         assert!(
             build_transfer_asset_payload(
@@ -18966,7 +17942,6 @@ seiyaku Privacy {
             )
             .is_err()
         );
-
         let built = build_transfer_asset_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             authority_i105.clone(),
@@ -18999,19 +17974,15 @@ seiyaku Privacy {
             public_key: Buffer::from(public_key_bytes.to_vec()),
             authority: Some(authority_i105.clone()),
         };
-
         let mut mismatched_hash = valid_input();
         mismatched_hash.payload_hash_hex = Some("00".repeat(Hash::LENGTH));
         assert!(finalize_signed_transaction(mismatched_hash).is_err());
-
         let mut wrong_public_key = valid_input();
         wrong_public_key.public_key = Buffer::from(other_public_key_bytes.to_vec());
         assert!(finalize_signed_transaction(wrong_public_key).is_err());
-
         let mut bad_signature = valid_input();
         bad_signature.signature[0] ^= 0x80;
         assert!(finalize_signed_transaction(bad_signature).is_err());
-
         let mut overlong_payload = valid_input();
         let canonical = overlong_payload.payload_bytes.as_ref();
         assert!(
@@ -19024,7 +17995,6 @@ seiyaku Privacy {
         overlong_payload.payload_bytes = Buffer::from(overlong);
         overlong_payload.payload_hash_hex = None;
         assert!(finalize_signed_transaction(overlong_payload).is_err());
-
         let mut foreign_network = valid_input();
         foreign_network.network_id = Buffer::from(
             test_network_id(b"foreign-browser-network")
@@ -19034,7 +18004,6 @@ seiyaku Privacy {
         let error = finalize_signed_transaction(foreign_network)
             .expect_err("external finalizer must reject a foreign NetworkId");
         assert!(error.reason.contains("does not match"));
-
         let genesis_builder = TransactionBuilder::new_genesis(
             authority.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
@@ -19053,10 +18022,8 @@ seiyaku Privacy {
         })
         .expect_err("external finalizer must reject the genesis domain");
         assert!(genesis_error.reason.contains("genesis-domain"));
-
         assert!(finalize_signed_transaction(valid_input()).is_ok());
     }
-
     #[test]
     fn decode_signed_transaction_accepts_versioned_bytes() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -19071,13 +18038,10 @@ seiyaku Privacy {
         let signed = builder.sign(keypair.private_key());
         let mut versioned = vec![1];
         versioned.extend(norito::codec::encode_adaptive(&signed));
-
         let decoded = decode_signed_transaction(&versioned)
             .expect("versioned signed transaction must decode");
-
         assert_eq!(decoded, signed);
     }
-
     #[test]
     fn sign_js_transaction_checked_signing_verifies() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -19091,7 +18055,6 @@ seiyaku Privacy {
         let instruction: InstructionBox =
             Mint::asset_quantity("10".parse::<Quantity>().expect("valid quantity"), asset_id)
                 .into();
-
         let tx = sign_js_transaction(
             TransactionBuilder::new(
                 network_id,
@@ -19103,12 +18066,10 @@ seiyaku Privacy {
             "test",
         )
         .expect("checked signing should succeed");
-
         assert_eq!(tx.authority(), &authority);
         tx.verify_signature()
             .expect("checked signed JS transaction should verify");
     }
-
     #[test]
     fn sign_transaction_preserves_exact_fee_payment_intent() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -19130,7 +18091,6 @@ seiyaku Privacy {
         builder.set_creation_time(Duration::from_millis(1));
         let original = builder.sign(keypair.private_key());
         let (_, secret) = keypair.private_key().to_bytes();
-
         let resigned = sign_transaction(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             Uint8Array::from(Encode::encode(&original)),
@@ -19139,13 +18099,11 @@ seiyaku Privacy {
         .expect("re-sign transaction");
         let decoded =
             decode_signed_transaction(resigned.as_ref()).expect("decode re-signed transaction");
-
         assert_eq!(decoded.fee_payment_intent(), &intent);
         decoded
             .verify_signature()
             .expect("re-signed transaction verifies");
     }
-
     #[test]
     fn sign_transaction_rejects_foreign_and_genesis_domains() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -19163,7 +18121,6 @@ seiyaku Privacy {
         )
         .sign(keypair.private_key());
         let (_, secret) = keypair.private_key().to_bytes();
-
         let foreign_error = sign_transaction(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             Uint8Array::from(Encode::encode(&foreign)),
@@ -19172,21 +18129,18 @@ seiyaku Privacy {
         .expect_err("JavaScript host must reject a foreign NetworkId");
         assert_eq!(foreign_error.status, napi::Status::InvalidArg);
         assert!(foreign_error.reason.contains("does not match"));
-
         let error = sign_transaction(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             Uint8Array::from(Encode::encode(&transaction)),
             Uint8Array::from(secret),
         )
         .expect_err("JavaScript host must reject the genesis transaction domain");
-
         assert_eq!(error.status, napi::Status::InvalidArg);
         assert_eq!(
             error.reason,
             "JavaScript transaction re-signer cannot accept a genesis-domain transaction"
         );
     }
-
     #[test]
     fn smart_contract_bytes_instruction_json_roundtrip() {
         let code_bytes = vec![0xDE, 0xAD, 0xBE, 0xEF];
@@ -19195,7 +18149,6 @@ seiyaku Privacy {
             code: code_bytes.clone(),
         })
         .into_instruction_box();
-
         let json_value = instruction_to_json_value(&instruction)
             .expect("serialize RegisterSmartContractBytes instruction");
         let payload = json_value
@@ -19211,12 +18164,10 @@ seiyaku Privacy {
             payload.get("code"),
             Some(&json::Value::String(STANDARD.encode(&code_bytes))),
         );
-
         let reconstructed = value_to_instruction(json_value.clone())
             .expect("deserialize RegisterSmartContractBytes");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn activate_contract_instance_instruction_json_roundtrip() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
@@ -19232,7 +18183,6 @@ seiyaku Privacy {
             code_hash: Hash::prehashed(sample_hash(0x44)),
         })
         .into_instruction_box();
-
         let json_value = instruction_to_json_value(&instruction)
             .expect("serialize ActivateContractInstance instruction");
         assert!(
@@ -19241,12 +18191,10 @@ seiyaku Privacy {
                 .and_then(|map| map.get("ActivateContractInstance"))
                 .is_some()
         );
-
         let reconstructed =
             value_to_instruction(json_value.clone()).expect("deserialize ActivateContractInstance");
         assert_eq!(reconstructed, instruction);
     }
-
     #[test]
     fn js_builder_create_kaigi_payload_matches() {
         // Mirrors the payload assembled by the JavaScript builders/tests.
@@ -19288,7 +18236,6 @@ seiyaku Privacy {
             })
         });
         let json_payload = json::to_json(&payload).expect("serialize payload to json");
-
         let value: json::Value =
             norito::json::from_json(&json_payload).expect("parse builder json into Value");
         if let Some(host) = value
@@ -19327,10 +18274,8 @@ seiyaku Privacy {
                 .map(iroha_data_model::account::ParsedAccountId::into_account_id)
                 .expect("relay account id");
         }
-
         instruction_from_json(&json_payload).expect("JS builder payload must be parsable");
     }
-
     #[test]
     fn decode_signed_contract_call_json_exposes_expected_code_hash() {
         disable_packed_struct_once();
@@ -19365,7 +18310,6 @@ seiyaku Privacy {
         let value: json::Value = json::from_str(&decoded).expect("parse decoder JSON");
         let expected_code_hash_literal =
             json::to_value(&expected_code_hash).expect("serialize expected code hash");
-
         assert_eq!(
             value
                 .get("payload")
@@ -19376,31 +18320,25 @@ seiyaku Privacy {
             expected_code_hash_literal.as_str()
         );
     }
-
     #[test]
     fn build_transaction_from_instructions_json_roundtrip() {
         disable_packed_struct_once();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let network_id = test_network_id(b"instruction-json-roundtrip");
         let authority = AccountId::new(keypair.public_key().clone());
-
         let asset_definition: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_definition, authority.clone());
-
         let instruction_box: InstructionBox = Mint::asset_quantity(
             Quantity::from_str("10").expect("valid quantity"),
             asset_id.clone(),
         )
         .into();
-
         let instruction_json = json::to_json(&instruction_to_json_value(&instruction_box).unwrap())
             .expect("instruction json");
-
         let (_, secret_bytes) = keypair.private_key().to_bytes();
-
         let result = build_transaction_from_instructions_json(
             network_id,
             authority.clone(),
@@ -19414,7 +18352,6 @@ seiyaku Privacy {
             None,
         )
         .expect("transaction built");
-
         let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
         assert_eq!(tx.authority(), &authority);
         assert_eq!(tx.network_id(), Some(&network_id));
@@ -19433,7 +18370,6 @@ seiyaku Privacy {
             "hash must match signed transaction hash"
         );
     }
-
     #[test]
     fn build_executable_batch_transaction_preserves_mixed_order_and_tag() {
         disable_packed_struct_once();
@@ -19464,7 +18400,6 @@ seiyaku Privacy {
         }))
         .expect("contract-call entry JSON");
         let (_, secret) = keypair.private_key().to_bytes();
-
         let result = build_executable_batch_transaction(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             account_json_literal(&authority),
@@ -19478,7 +18413,6 @@ seiyaku Privacy {
             Some("ed25519".to_owned()),
         )
         .expect("mixed batch transaction");
-
         let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
         assert_eq!(&tx.instructions().encode()[..4], &4_u32.to_le_bytes());
         let Executable::Batch(entries) = tx.instructions() else {
@@ -19498,7 +18432,6 @@ seiyaku Privacy {
         );
         assert!(matches!(entries[2], ExecutableBatchItem::Instruction(_)));
     }
-
     #[test]
     fn executable_batch_parser_requires_gas_for_contract_calls() {
         let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
@@ -19516,7 +18449,6 @@ seiyaku Privacy {
         .expect_err("contract call requires gas");
         assert!(error.reason.contains("gas limit is required"));
     }
-
     #[test]
     fn build_ivm_proved_transaction_roundtrip() {
         disable_packed_struct_once();
@@ -19540,7 +18472,6 @@ seiyaku Privacy {
         let proved_json = json::to_json(&proved).expect("proved json");
         let attachment_json = json::to_json(&attachment).expect("attachment json");
         let (_, secret_bytes) = keypair.private_key().to_bytes();
-
         let draft = build_ivm_proved_transaction_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             account_json_literal(&authority),
@@ -19566,7 +18497,6 @@ seiyaku Privacy {
             draft_payload.instructions,
             Executable::IvmProved(proved.clone())
         );
-
         let quoted = FeePaymentIntent::authority(
             vec![iroha_data_model::transaction::FeeChargeLimit::new(
                 iroha_data_model::transaction::FeeChargeKind::PipelineGas,
@@ -19588,7 +18518,6 @@ seiyaku Privacy {
         )
         .expect_err("proved-IVM signer must reject a foreign NetworkId");
         assert!(foreign_error.reason.contains("does not match"));
-
         let mut genesis_payload = draft_payload.clone();
         genesis_payload.domain = iroha_data_model::transaction::TransactionDomain::Genesis;
         let genesis_error = sign_quoted_ivm_proved_transaction_payload(
@@ -19601,7 +18530,6 @@ seiyaku Privacy {
         )
         .expect_err("proved-IVM signer must reject the genesis domain");
         assert!(genesis_error.reason.contains("genesis-domain"));
-
         let quoted_result = sign_quoted_ivm_proved_transaction_payload(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             draft.payload_json,
@@ -19624,7 +18552,6 @@ seiyaku Privacy {
         quoted_tx
             .verify_signature()
             .expect("quoted transaction signature verifies");
-
         let result = build_ivm_proved_transaction(
             Uint8Array::from(network_id.as_bytes().to_vec()),
             account_json_literal(&authority),
@@ -19639,7 +18566,6 @@ seiyaku Privacy {
             None,
         )
         .expect("transaction built");
-
         let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
         assert_eq!(tx.authority(), &authority);
         assert_eq!(tx.network_id(), Some(&network_id));
@@ -19657,7 +18583,6 @@ seiyaku Privacy {
             "hash must match signed transaction hash"
         );
     }
-
     #[test]
     fn parse_account_id_accepts_taira_i105_literals() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -19666,13 +18591,10 @@ seiyaku Privacy {
             .expect("account address")
             .to_i105_for_discriminant(369)
             .expect("taira i105");
-
         let parsed = parse_account_id(&authority_i105, "authority account id")
             .expect("parse Taira I105 account id");
-
         assert_eq!(parsed, authority);
     }
-
     #[test]
     fn i105_discriminant_hint_decodes_valid_literals_only() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -19681,13 +18603,11 @@ seiyaku Privacy {
             .expect("account address")
             .to_i105_for_discriminant(42)
             .expect("custom i105");
-
         assert_eq!(i105_discriminant_hint(&authority_i105), Some(42));
         assert_eq!(
             i105_discriminant_hint(&authority_i105.replacen("n42", "n00042", 1)),
             None
         );
-
         let mut chars = authority_i105.chars().collect::<Vec<_>>();
         let last = chars.len().saturating_sub(1);
         chars[last] = if chars[last] == '1' { '2' } else { '1' };
@@ -19697,7 +18617,6 @@ seiyaku Privacy {
         assert_eq!(i105_discriminant_hint("nabc"), None);
         assert_eq!(i105_discriminant_hint("n65536payload"), None);
     }
-
     #[test]
     fn account_address_parse_encoded_reports_embedded_numeric_prefix() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -19706,16 +18625,13 @@ seiyaku Privacy {
             .expect("account address")
             .to_i105_for_discriminant(42)
             .expect("custom i105");
-
         let inferred = account_address_parse_encoded(authority_i105.clone(), None)
             .expect("parse custom I105 address");
         assert_eq!(inferred.network_prefix, Some(42));
-
         let explicit =
             account_address_parse_encoded(authority_i105, Some(42)).expect("parse explicit I105");
         assert_eq!(explicit.network_prefix, Some(42));
     }
-
     #[test]
     fn parse_account_id_accepts_numeric_custom_i105_literals() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -19728,13 +18644,10 @@ seiyaku Privacy {
             authority_i105.starts_with("n42"),
             "custom I105 account must use the numeric sentinel"
         );
-
         let parsed = parse_account_id(&authority_i105, "authority account id")
             .expect("parse custom I105 account id");
-
         assert_eq!(parsed, authority);
     }
-
     #[test]
     fn parse_account_id_rejects_noncanonical_and_tampered_numeric_custom_i105_literals() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -19743,13 +18656,11 @@ seiyaku Privacy {
             .expect("account address")
             .to_i105_for_discriminant(42)
             .expect("custom i105");
-
         let noncanonical = authority_i105.replacen("n42", "n00042", 1);
         assert!(
             parse_account_id(&noncanonical, "authority account id").is_err(),
             "noncanonical numeric sentinel must be rejected"
         );
-
         let mut chars = authority_i105.chars().collect::<Vec<_>>();
         let last = chars.len().saturating_sub(1);
         chars[last] = if chars[last] == '1' { '2' } else { '1' };
@@ -19759,7 +18670,6 @@ seiyaku Privacy {
             "payload/checksum tampering must be rejected"
         );
     }
-
     #[test]
     fn decode_transaction_receipt_json_roundtrip() {
         let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -19778,14 +18688,12 @@ seiyaku Privacy {
         let expected = json::to_json(&receipt).expect("serialize receipt json");
         assert_eq!(decoded, expected);
     }
-
     #[test]
     fn build_transaction_with_empty_instructions_fails() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let network_id = test_network_id(b"empty-instructions");
         let (_, secret_bytes) = keypair.private_key().to_bytes();
-
         let result = build_transaction_from_instructions_json(
             network_id,
             authority,
@@ -19798,10 +18706,8 @@ seiyaku Privacy {
             &secret_bytes,
             None,
         );
-
         assert!(result.is_err());
     }
-
     #[test]
     fn instruction_batch_hash_binds_every_authorized_instruction() {
         let first = hash_instruction_batch(vec![
@@ -19814,12 +18720,10 @@ seiyaku Privacy {
                 .to_owned(),
         ])
         .expect("hash second instruction batch");
-
         assert_eq!(first.len(), 32);
         assert_eq!(second.len(), 32);
         assert_ne!(first.as_ref(), second.as_ref());
     }
-
     #[test]
     fn cancel_asset_lock_json_uses_exact_compare_and_cancel_shape() {
         let cancel = CancelAssetLock::new(
@@ -19841,7 +18745,6 @@ seiyaku Privacy {
             instruction_to_json_value(&instruction).expect("render CancelAssetLock"),
             input
         );
-
         let bytes = norito::to_bytes(&InstructionBox::from(cancel))
             .expect("encode CancelAssetLock instruction");
         let decoded =
@@ -19851,7 +18754,6 @@ seiyaku Privacy {
             "native decoder must preserve the typed CancelAssetLock"
         );
     }
-
     #[test]
     fn cancel_asset_lock_json_rejects_legacy_zero_and_noncanonical_inputs() {
         let cancel = CancelAssetLock::new(
@@ -19859,7 +18761,6 @@ seiyaku Privacy {
             Quantity::from(15_u32),
         );
         let canonical_payload = json::to_value(&cancel).expect("cancel JSON");
-
         for missing in ["escrow_id", "expected_remaining_amount"] {
             let mut payload = canonical_payload.clone();
             payload
@@ -19876,7 +18777,6 @@ seiyaku Privacy {
                 error.reason
             );
         }
-
         for amount in [
             json::Value::String("0".to_owned()),
             json::Value::String("-1".to_owned()),
@@ -19894,7 +18794,6 @@ seiyaku Privacy {
             }))
             .expect_err("invalid CancelAssetLock quantity must be rejected");
         }
-
         let mut payload = canonical_payload.clone();
         payload
             .as_object_mut()
@@ -19905,7 +18804,6 @@ seiyaku Privacy {
         }))
         .expect_err("CancelAssetLock must reject compatibility fields");
         assert!(error.reason.contains("unexpected field"));
-
         let canonical_escrow = canonical_payload
             .as_object()
             .and_then(|payload| payload.get("escrow_id"))
@@ -19935,14 +18833,12 @@ seiyaku Privacy {
                 error.reason
             );
         }
-
         let error = value_to_instruction(norito_json!({
             "CancelAssetLock": canonical_payload,
             "compatibility": true
         }))
         .expect_err("CancelAssetLock envelope must contain one instruction");
         assert!(error.reason.contains("envelope contains unexpected field"));
-
         let zero: InstructionBox = CancelAssetLock::new(
             EscrowId::new(Hash::new(b"js-host-zero-cancel-asset-lock")),
             Quantity::from(0_u32),
@@ -19952,7 +18848,6 @@ seiyaku Privacy {
             .expect_err("native renderer must reject a zero precondition");
         assert!(error.reason.contains("must be positive"));
     }
-
     #[test]
     fn settlement_instruction_json_is_explicit_and_canonical() {
         let request_hash = Hash::new(b"js-host-fx-oracle-request");
@@ -20011,7 +18906,6 @@ seiyaku Privacy {
             instruction_to_json_value(&instruction).expect("render settlement"),
             input
         );
-
         let multiple = norito_json!({
             "Settlement": norito_json!({
                 "SettleFxCorridor": json::to_value(&settle).expect("settle JSON"),
@@ -20019,7 +18913,6 @@ seiyaku Privacy {
             })
         });
         assert!(value_to_instruction(multiple).is_err());
-
         let mut invalid = json::to_value(&settle).expect("settle JSON");
         invalid
             .as_object_mut()
@@ -20031,7 +18924,6 @@ seiyaku Privacy {
             })
         });
         assert!(value_to_instruction(negative).is_err());
-
         let mut unknown_payload = json::to_value(&settle).expect("settle JSON");
         unknown_payload
             .as_object_mut()
@@ -20045,7 +18937,6 @@ seiyaku Privacy {
         let error = value_to_instruction(unknown_field)
             .expect_err("SettleFxCorridor must reject unknown fields");
         assert!(error.reason.contains("unexpected field"));
-
         let mut missing_payload = json::to_value(&settle).expect("settle JSON");
         missing_payload
             .as_object_mut()
@@ -20059,7 +18950,6 @@ seiyaku Privacy {
         let error = value_to_instruction(missing_field)
             .expect_err("SettleFxCorridor must reject missing fields");
         assert!(error.reason.contains("missing field"));
-
         let extra_envelope = norito_json!({
             "Settlement": norito_json!({
                 "SettleFxCorridor": json::to_value(&settle).expect("settle JSON")
@@ -20070,7 +18960,6 @@ seiyaku Privacy {
             .expect_err("Settlement must use the explicit envelope parser");
         assert!(error.reason.contains("envelope contains unexpected field"));
     }
-
     #[test]
     fn embedded_source_revision_reports_the_build_marker() {
         assert_eq!(
@@ -20078,7 +18967,6 @@ seiyaku Privacy {
             option_env!("IROHA_GIT_COMMIT_HASH").unwrap_or("unknown")
         );
     }
-
     #[test]
     fn register_account_json_uses_the_explicit_strict_envelope_parser() {
         let account = NewAccount::new(AccountId::new(
@@ -20093,7 +18981,6 @@ seiyaku Privacy {
             })
         });
         value_to_instruction(canonical).expect("parse canonical account registration");
-
         let account_id = account_json
             .get("id")
             .cloned()
@@ -20106,7 +18993,6 @@ seiyaku Privacy {
             })
         });
         value_to_instruction(defaults).expect("current optional account defaults");
-
         let mut unknown_account_json = account_json.clone();
         unknown_account_json
             .as_object_mut()
@@ -20118,7 +19004,6 @@ seiyaku Privacy {
             })
         });
         assert!(value_to_instruction(unknown_field).is_err());
-
         let extra_variant = norito_json!({
             "Register": norito_json!({
                 "Account": account_json.clone(),
@@ -20126,7 +19011,6 @@ seiyaku Privacy {
             })
         });
         assert!(value_to_instruction(extra_variant).is_err());
-
         let extra_envelope = norito_json!({
             "Register": norito_json!({
                 "Account": account_json
@@ -20138,7 +19022,6 @@ seiyaku Privacy {
         assert!(error.reason.contains("envelope contains unexpected field"));
         assert!(value_to_instruction(norito_json!({"Register": json::Value::Null})).is_err());
     }
-
     #[test]
     fn build_time_trigger_action_encodes_expected_schedule() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -20173,7 +19056,6 @@ seiyaku Privacy {
                 .contains(&"label".parse().expect("label key"))
         );
     }
-
     #[test]
     fn build_precommit_trigger_action_encodes_filter() {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -20198,7 +19080,6 @@ seiyaku Privacy {
             other => panic!("unexpected filter: {other:?}"),
         }
     }
-
     #[test]
     fn da_manifest_chunker_handle_binding_resolves_profile() {
         ensure_packed_struct_disabled();
@@ -20208,20 +19089,17 @@ seiyaku Privacy {
                 .expect("chunker handle");
         assert_eq!(handle, "sorafs.sf1@1.0.0");
     }
-
     #[test]
     fn local_fetch_integrity_error_maps_to_invalid_argument() {
         let error = map_local_fetch_error(LocalFetchError::IntegrityVerificationDisabled(
             "verify_digests",
         ));
-
         assert_eq!(error.status, napi::Status::InvalidArg);
         assert_eq!(
             error.reason,
             "verify_digests must remain enabled for first-release SoraFS fetch integrity"
         );
     }
-
     #[test]
     fn da_proof_summary_binding_verifies_payload() {
         ensure_packed_struct_disabled();
@@ -20243,7 +19121,6 @@ seiyaku Privacy {
         assert!(!summary.proofs.is_empty());
         assert!(summary.proofs.iter().all(|proof| proof.verified));
     }
-
     #[test]
     fn taikai_cache_stats_conversion_populates_js_struct() {
         let mut evictions = EvictionStats::default();
@@ -20253,7 +19130,6 @@ seiyaku Privacy {
         evictions.warm.capacity = 4;
         evictions.cold.expired = 5;
         evictions.cold.capacity = 6;
-
         let stats = TaikaiCacheStatsSnapshot {
             hits: TierStats {
                 hot: 7,
@@ -20278,7 +19154,6 @@ seiyaku Privacy {
                 bulk: 19,
             },
         };
-
         let js = JsTaikaiCacheStats::from(stats);
         assert_eq!(js.hits.hot.0, 7);
         assert_eq!(js.evictions.warm.capacity.0, 4);
@@ -20286,6 +19161,5 @@ seiyaku Privacy {
         assert_eq!(js.qos_denials.standard.0, 18);
         assert_eq!(js.misses.0, 10);
     }
-
     include!("taikai_queue_stats_test.rs");
 }

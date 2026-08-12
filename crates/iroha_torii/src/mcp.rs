@@ -45,10 +45,8 @@ use governance_ballot_tools::{
     governance_selector_v1_schema, iroha_gov_ballots_plain_tool,
     iroha_gov_ballots_zk_v1_ballot_proof_tool, iroha_gov_ballots_zk_v1_tool,
 };
-
 const JSONRPC_VERSION: &str = "2.0";
 const MCP_PROTOCOL_VERSION: &str = "2025-06-18";
-
 const JSONRPC_PARSE_ERROR: i64 = -32700;
 const JSONRPC_INVALID_REQUEST: i64 = -32600;
 const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
@@ -61,7 +59,6 @@ const MCP_TOOL_NOT_FOUND: &str = "tool_not_found";
 const MCP_TOOL_EXECUTION_ERROR_CODE: &str = "tool_execution_error";
 const MCP_STRICT_BODY_SCHEMA_EXTENSION: &str = "x-iroha-mcp-strict-body";
 const GOVERNANCE_PROPOSAL_ID_V1_PATTERN: &str = "^[0-9a-f]{64}$";
-
 const HEADER_X_API_TOKEN: &str = "x-api-token";
 const HEADER_X_IROHA_ACCOUNT: &str = "x-iroha-account";
 const HEADER_X_IROHA_SIGNATURE: &str = "x-iroha-signature";
@@ -82,7 +79,6 @@ const SUPPORTED_PIPELINE_STATUS_KINDS: &[&str] = &[
     "Rejected",
     "Expired",
 ];
-
 /// OpenAPI-derived tool metadata used for MCP dispatch.
 #[derive(Debug, Clone)]
 pub(crate) struct ToolSpec {
@@ -93,7 +89,6 @@ pub(crate) struct ToolSpec {
     pub(crate) path_template: String,
     pub(crate) input_schema: Value,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolEffect {
     Read,
@@ -101,7 +96,6 @@ pub(crate) enum ToolEffect {
     Write,
     Operator,
 }
-
 #[derive(Debug, Clone, Copy)]
 struct MusubiV1ToolDefinition {
     name: &'static str,
@@ -109,7 +103,6 @@ struct MusubiV1ToolDefinition {
     path: &'static str,
     effect: ToolEffect,
 }
-
 const MUSUBI_V1_TOOL_DEFINITIONS: &[MusubiV1ToolDefinition] = &[
     MusubiV1ToolDefinition {
         name: "iroha.musubi.queries.exact_package",
@@ -298,13 +291,11 @@ const MUSUBI_V1_TOOL_DEFINITIONS: &[MusubiV1ToolDefinition] = &[
         effect: ToolEffect::BuildInstruction,
     },
 ];
-
 fn musubi_v1_tool_definition(name: &str) -> Option<&'static MusubiV1ToolDefinition> {
     MUSUBI_V1_TOOL_DEFINITIONS
         .iter()
         .find(|definition| definition.name == name)
 }
-
 impl ToolSpec {
     pub(crate) fn descriptor(&self) -> Value {
         let mut obj = Map::new();
@@ -321,7 +312,6 @@ impl ToolSpec {
         Value::Object(obj)
     }
 }
-
 fn sanitize_tool_input_schema(schema: &Value) -> Value {
     let root = match schema {
         Value::Object(map) => map,
@@ -333,7 +323,6 @@ fn sanitize_tool_input_schema(schema: &Value) -> Value {
             });
         }
     };
-
     let strict_body = root
         .get(MCP_STRICT_BODY_SCHEMA_EXTENSION)
         .and_then(Value::as_bool)
@@ -350,14 +339,12 @@ fn sanitize_tool_input_schema(schema: &Value) -> Value {
         stricten_tool_input_schema(&mut strict, false, strict_body);
         return strict;
     }
-
     let mut schema_obj = root.clone();
     let mut properties = schema_obj
         .get("properties")
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-
     for keyword in ["anyOf", "oneOf", "allOf"] {
         let Some(branches) = root.get(keyword).and_then(Value::as_array) else {
             continue;
@@ -377,7 +364,6 @@ fn sanitize_tool_input_schema(schema: &Value) -> Value {
             }
         }
     }
-
     schema_obj.remove("anyOf");
     schema_obj.remove("oneOf");
     schema_obj.remove("allOf");
@@ -389,12 +375,10 @@ fn sanitize_tool_input_schema(schema: &Value) -> Value {
     schema_obj
         .entry("additionalProperties".into())
         .or_insert(Value::Bool(false));
-
     let mut schema = Value::Object(schema_obj);
     stricten_tool_input_schema(&mut schema, false, strict_body);
     schema
 }
-
 fn stricten_tool_input_schema(schema: &mut Value, inside_body: bool, strict_body: bool) {
     let Some(object) = schema.as_object_mut() else {
         return;
@@ -426,7 +410,6 @@ fn stricten_tool_input_schema(schema: &mut Value, inside_body: bool, strict_body
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParameterInfo {
     name: String,
@@ -434,13 +417,11 @@ struct ParameterInfo {
     required: bool,
     schema: Value,
 }
-
 #[derive(Debug, Clone, Copy)]
 struct CatalogProjectionGroup {
     routes: &'static [RouteDescriptor],
     enabled_features: EnabledFeatures<'static>,
 }
-
 const COMPILED_CATALOG_FEATURES: &[&str] = &[
     #[cfg(feature = "app_api")]
     "app_api",
@@ -455,7 +436,6 @@ const COMPILED_CATALOG_FEATURES: &[&str] = &[
     #[cfg(feature = "connect")]
     "connect",
 ];
-
 // OpenAPI-derived tools fail closed against this catalog. A route which has not
 // entered the authoritative catalog is not an MCP operation; adding it to
 // OpenAPI alone can never expand the agent-facing tool surface.
@@ -463,7 +443,6 @@ const CATALOG_PROJECTION_GROUPS: &[CatalogProjectionGroup] = &[CatalogProjection
     routes: route_catalog::CATALOGED_ROUTES,
     enabled_features: EnabledFeatures::new(COMPILED_CATALOG_FEATURES),
 }];
-
 static VALIDATED_MCP_ROUTE_CATALOG: LazyLock<()> = LazyLock::new(|| {
     for group in CATALOG_PROJECTION_GROUPS {
         if let Err(errors) = RouteCatalog::new(group.routes).validate() {
@@ -471,25 +450,21 @@ static VALIDATED_MCP_ROUTE_CATALOG: LazyLock<()> = LazyLock::new(|| {
         }
     }
 });
-
 /// Build the MCP tool registry from OpenAPI operations.
 pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp) -> Vec<ToolSpec> {
     LazyLock::force(&VALIDATED_MCP_ROUTE_CATALOG);
     let mut tools = Vec::new();
-    let spec = openapi::generate_spec();
+    let spec = openapi::compiled_spec();
     let Some(paths) = spec.get("paths").and_then(Value::as_object) else {
         return tools;
     };
     let allow_operator_routes = cfg.expose_operator_routes
         || cfg.profile == iroha_config::parameters::actual::ToriiMcpProfile::Operator;
-
     for (path, path_item) in paths {
         let Some(path_map) = path_item.as_object() else {
             continue;
         };
-
-        let path_parameters = parse_parameters(&spec, path_map.get("parameters"));
-
+        let path_parameters = parse_parameters(spec, path_map.get("parameters"));
         for method_key in ["get", "post", "put", "patch", "delete", "head", "options"] {
             let Some(operation) = path_map.get(method_key).and_then(Value::as_object) else {
                 continue;
@@ -497,7 +472,7 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
             let Some(method) = method_from_key(method_key) else {
                 continue;
             };
-            if should_skip_operation(&spec, path, operation, allow_operator_routes)
+            if should_skip_operation(spec, path, operation, allow_operator_routes)
                 || catalog_mcp_projection_decision(
                     CATALOG_PROJECTION_GROUPS,
                     &method,
@@ -506,7 +481,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
             {
                 continue;
             }
-
             // Keep OpenAPI-derived names stable regardless of mutable `operationId` fields.
             let operation_id = generated_operation_id(method_key, path);
             let description = operation
@@ -515,13 +489,11 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
                 .or_else(|| operation.get("description").and_then(Value::as_str))
                 .unwrap_or("Torii API operation")
                 .to_owned();
-
             let mut parameters = path_parameters.clone();
-            parameters.extend(parse_parameters(&spec, operation.get("parameters")));
+            parameters.extend(parse_parameters(spec, operation.get("parameters")));
             let mut input_schema =
-                build_input_schema(&spec, path, &parameters, operation.get("requestBody"));
+                build_input_schema(spec, path, &parameters, operation.get("requestBody"));
             harden_governance_openapi_input_schema(&method, path, &mut input_schema);
-
             let effect = openapi_tool_effect(path, method_key, operation);
             tools.push(ToolSpec {
                 name: format!("torii.{operation_id}"),
@@ -533,7 +505,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
             });
         }
     }
-
     tools.push(connect_ws_ticket_tool());
     tools.push(connect_session_create_tool());
     tools.push(connect_session_create_and_ticket_tool());
@@ -630,7 +601,7 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_domains_list_tool());
     tools.push(iroha_domains_get_tool());
     tools.push(iroha_domains_query_tool());
-    tools.extend(iroha_musubi_v1_tools(&spec));
+    tools.extend(iroha_musubi_v1_tools(spec));
     tools.push(iroha_subscriptions_plans_list_tool());
     tools.push(iroha_subscriptions_plans_create_tool());
     tools.push(iroha_subscriptions_list_tool());
@@ -678,7 +649,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_transactions_submit_and_wait_tool());
     tools.push(iroha_transactions_wait_tool());
     tools.push(iroha_transactions_status_tool());
-
     // Manual tools share the same projection boundary as OpenAPI-derived tools.
     // Keep this final guard so a custom dispatcher cannot bypass the catalog.
     retain_catalog_mcp_tools(&mut tools, CATALOG_PROJECTION_GROUPS);
@@ -689,7 +659,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     }
     tools
 }
-
 fn visible_tools_for_policy<'a>(
     cfg: &iroha_config::parameters::actual::ToriiMcp,
     tools: &'a [ToolSpec],
@@ -699,21 +668,17 @@ fn visible_tools_for_policy<'a>(
         .filter(|tool| is_tool_allowed_by_policy(cfg, tool))
         .collect()
 }
-
 pub(crate) fn capabilities_payload(tools: &[&ToolSpec]) -> Value {
     let toolset_version = compute_toolset_version(tools);
     let mut server_info = Map::new();
     server_info.insert("name".into(), Value::String("iroha-torii-mcp".to_owned()));
     server_info.insert("version".into(), Value::String("0.0.0-dev".to_owned()));
-
     let mut tools_cap = Map::new();
     tools_cap.insert("listChanged".into(), Value::Bool(false));
     tools_cap.insert("count".into(), Value::from(tools.len() as u64));
     tools_cap.insert("toolsetVersion".into(), Value::String(toolset_version));
-
     let mut capabilities = Map::new();
     capabilities.insert("tools".into(), Value::Object(tools_cap));
-
     let mut out = Map::new();
     out.insert(
         "protocolVersion".into(),
@@ -723,7 +688,6 @@ pub(crate) fn capabilities_payload(tools: &[&ToolSpec]) -> Value {
     out.insert("capabilities".into(), Value::Object(capabilities));
     Value::Object(out)
 }
-
 pub(crate) fn capabilities_payload_for_state(app: &SharedAppState) -> Value {
     let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
     let mut payload = capabilities_payload(&visible_tools);
@@ -733,7 +697,6 @@ pub(crate) fn capabilities_payload_for_state(app: &SharedAppState) -> Value {
         .insert("enabled".into(), Value::Bool(app.mcp.enabled));
     payload
 }
-
 fn default_tool_output_schema() -> Value {
     norito::json!({
         "type": "object",
@@ -752,7 +715,6 @@ fn default_tool_output_schema() -> Value {
         "additionalProperties": true
     })
 }
-
 fn compute_toolset_version(tools: &[&ToolSpec]) -> String {
     let mut hasher = Blake3Hasher::new();
     for tool in tools {
@@ -763,7 +725,6 @@ fn compute_toolset_version(tools: &[&ToolSpec]) -> String {
     }
     hasher.finalize().to_hex().to_string()
 }
-
 fn is_tool_allowed_by_policy(
     cfg: &iroha_config::parameters::actual::ToriiMcp,
     tool: &ToolSpec,
@@ -780,7 +741,6 @@ fn is_tool_allowed_by_policy(
     if !profile_allowed {
         return false;
     }
-
     if cfg
         .deny_tool_prefixes
         .iter()
@@ -790,18 +750,15 @@ fn is_tool_allowed_by_policy(
     {
         return false;
     }
-
     if cfg.allow_tool_prefixes.is_empty() {
         return true;
     }
-
     cfg.allow_tool_prefixes
         .iter()
         .map(String::as_str)
         .map(str::trim)
         .any(|prefix| !prefix.is_empty() && tool.name.starts_with(prefix))
 }
-
 fn openapi_tool_effect(path: &str, method_key: &str, operation: &Map) -> ToolEffect {
     let value = operation
         .get(openapi::TOOL_EFFECT_EXTENSION)
@@ -819,7 +776,6 @@ fn openapi_tool_effect(path: &str, method_key: &str, operation: &Map) -> ToolEff
         )
     })
 }
-
 fn parse_tool_effect(value: &str) -> Option<ToolEffect> {
     match value {
         "read" => Some(ToolEffect::Read),
@@ -829,7 +785,6 @@ fn parse_tool_effect(value: &str) -> Option<ToolEffect> {
         _ => None,
     }
 }
-
 fn manual_tool_effect_from_name(name: &str) -> ToolEffect {
     if is_operator_tool_name(name) {
         return ToolEffect::Operator;
@@ -842,11 +797,9 @@ fn manual_tool_effect_from_name(name: &str) -> ToolEffect {
     }
     ToolEffect::Write
 }
-
 fn is_operator_tool_name(name: &str) -> bool {
     matches!(name, "iroha.gov.protected_namespaces.update")
 }
-
 fn is_manual_read_tool_name(name: &str) -> bool {
     matches!(
         name,
@@ -926,15 +879,12 @@ fn is_manual_read_tool_name(name: &str) -> bool {
         || name.ends_with(".chain.list")
         || name.ends_with(".wait")
 }
-
 pub(crate) fn jsonrpc_invalid_request(message: &str) -> Value {
     jsonrpc_error_response(None, JSONRPC_INVALID_REQUEST, message, None)
 }
-
 pub(crate) fn jsonrpc_parse_error(message: &str) -> Value {
     jsonrpc_error_response(None, JSONRPC_PARSE_ERROR, message, None)
 }
-
 pub(crate) fn jsonrpc_rate_limited() -> Value {
     jsonrpc_error_response(
         None,
@@ -945,7 +895,6 @@ pub(crate) fn jsonrpc_rate_limited() -> Value {
         })),
     )
 }
-
 /// Execute one MCP JSON-RPC request value.
 pub(crate) async fn handle_jsonrpc_request(
     app: SharedAppState,
@@ -963,7 +912,6 @@ pub(crate) async fn handle_jsonrpc_request(
             None,
         );
     }
-
     let id = req_obj.get("id").cloned();
     let Some(method) = req_obj.get("method").and_then(Value::as_str) else {
         return jsonrpc_error_response(
@@ -978,7 +926,6 @@ pub(crate) async fn handle_jsonrpc_request(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-
     match method {
         "initialize" => {
             let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
@@ -996,7 +943,6 @@ pub(crate) async fn handle_jsonrpc_request(
         ),
     }
 }
-
 /// Return true when the payload is the MCP post-initialize notification.
 pub(crate) fn is_initialized_notification(request: &Value) -> bool {
     let Some(req_obj) = request.as_object() else {
@@ -1005,11 +951,9 @@ pub(crate) fn is_initialized_notification(request: &Value) -> bool {
     if req_obj.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
         return false;
     }
-
     req_obj.get("id").is_none()
         && req_obj.get("method").and_then(Value::as_str) == Some("notifications/initialized")
 }
-
 fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> Value {
     let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
     let toolset_version = compute_toolset_version(&visible_tools);
@@ -1026,7 +970,6 @@ fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> V
     let start = requested_start.min(visible_tools.len());
     let page_size = app.mcp.max_tools_per_list.max(1);
     let end = start.saturating_add(page_size).min(visible_tools.len());
-
     let tools = visible_tools[start..end]
         .iter()
         .map(|tool| tool.descriptor())
@@ -1036,7 +979,6 @@ fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> V
     } else {
         Value::Null
     };
-
     jsonrpc_result_response(
         id,
         norito::json!({
@@ -1047,7 +989,6 @@ fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> V
         }),
     )
 }
-
 async fn handle_tools_call(
     id: Option<Value>,
     app: SharedAppState,
@@ -1083,7 +1024,6 @@ async fn handle_tools_call(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-
     let tool_result = match name {
         "connect.ws.ticket" | "iroha.connect.ws.ticket" => {
             build_connect_ws_ticket(&arguments, inbound_headers)
@@ -2004,10 +1944,8 @@ async fn handle_tools_call(
             Err(err) => mcp_tool_error(err),
         },
     };
-
     jsonrpc_result_response(id, tool_result)
 }
-
 async fn handle_tools_call_batch(
     id: Option<Value>,
     app: SharedAppState,
@@ -2022,7 +1960,6 @@ async fn handle_tools_call_batch(
             None,
         );
     };
-
     let mut results = Vec::with_capacity(calls.len());
     for call in calls {
         let Some(call_obj) = call.as_object() else {
@@ -2035,7 +1972,6 @@ async fn handle_tools_call_batch(
             }));
             continue;
         };
-
         let Some(name) = call_obj.get("name").and_then(Value::as_str) else {
             results.push(norito::json!({
                 "error": {
@@ -2046,7 +1982,6 @@ async fn handle_tools_call_batch(
             }));
             continue;
         };
-
         let args = call_obj
             .get("arguments")
             .and_then(Value::as_object)
@@ -2055,7 +1990,6 @@ async fn handle_tools_call_batch(
         let mut call_params = Map::new();
         call_params.insert("name".into(), Value::String(name.to_owned()));
         call_params.insert("arguments".into(), Value::Object(args));
-
         let response = handle_tools_call(None, app.clone(), inbound_headers, &call_params).await;
         if let Some(result) = response.get("result") {
             let result_value = result.clone();
@@ -2073,10 +2007,8 @@ async fn handle_tools_call_batch(
             }));
         }
     }
-
     jsonrpc_result_response(id, norito::json!({ "results": results }))
 }
-
 fn mcp_tool_success(structured: Value) -> Value {
     let status = structured.get("status").and_then(Value::as_u64);
     let is_http_error = status.is_some_and(|code| code >= 400);
@@ -2105,7 +2037,6 @@ fn mcp_tool_success(structured: Value) -> Value {
         "structuredContent": structured
     })
 }
-
 fn mcp_tool_error(message: String) -> Value {
     let error_message = message.clone();
     let envelope = error_envelope_value(
@@ -2126,7 +2057,6 @@ fn mcp_tool_error(message: String) -> Value {
         "structuredContent": envelope
     })
 }
-
 fn error_envelope_value(code: &str, message: &str, details: Option<Value>) -> Value {
     let mut envelope = Map::new();
     envelope.insert("code".into(), Value::String(code.to_owned()));
@@ -2136,7 +2066,6 @@ fn error_envelope_value(code: &str, message: &str, details: Option<Value>) -> Va
     }
     Value::Object(envelope)
 }
-
 fn jsonrpc_result_response(id: Option<Value>, result: Value) -> Value {
     let mut obj = Map::new();
     obj.insert("jsonrpc".into(), Value::String(JSONRPC_VERSION.to_owned()));
@@ -2144,7 +2073,6 @@ fn jsonrpc_result_response(id: Option<Value>, result: Value) -> Value {
     obj.insert("result".into(), result);
     Value::Object(obj)
 }
-
 fn jsonrpc_error_response(
     id: Option<Value>,
     code: i64,
@@ -2186,7 +2114,6 @@ fn jsonrpc_error_response(
     data_object
         .entry("error_code".into())
         .or_insert_with(|| Value::String(label));
-
     let mut err = Map::new();
     err.insert("code".into(), Value::from(code));
     err.insert("message".into(), Value::String(message.to_owned()));
@@ -2197,7 +2124,6 @@ fn jsonrpc_error_response(
     obj.insert("error".into(), Value::Object(err));
     Value::Object(obj)
 }
-
 fn jsonrpc_error_code_label(code: i64) -> &'static str {
     match code {
         JSONRPC_PARSE_ERROR => "parse_error",
@@ -2210,7 +2136,6 @@ fn jsonrpc_error_code_label(code: i64) -> &'static str {
         _ => "unknown_error",
     }
 }
-
 fn http_status_error_code(status: u64) -> &'static str {
     match status {
         400 => "bad_request",
@@ -2227,12 +2152,10 @@ fn http_status_error_code(status: u64) -> &'static str {
         _ => "http_error",
     }
 }
-
 fn parse_parameters(spec: &Value, value: Option<&Value>) -> Vec<ParameterInfo> {
     let Some(array) = value.and_then(Value::as_array) else {
         return Vec::new();
     };
-
     array
         .iter()
         .map(|param| deref_openapi_value(spec, param))
@@ -2257,7 +2180,6 @@ fn parse_parameters(spec: &Value, value: Option<&Value>) -> Vec<ParameterInfo> {
         })
         .collect()
 }
-
 fn build_input_schema(
     spec: &Value,
     path: &str,
@@ -2268,7 +2190,6 @@ fn build_input_schema(
     let mut path_required = Vec::new();
     let mut query_props = Map::new();
     let mut header_props = Map::new();
-
     for param in parameters {
         match param.location.as_str() {
             "path" => {
@@ -2286,10 +2207,8 @@ fn build_input_schema(
             _ => {}
         }
     }
-
     let mut properties = Map::new();
     let mut required = Vec::new();
-
     if !path_props.is_empty() {
         let mut path_schema = Map::new();
         path_schema.insert("type".into(), Value::String("object".to_owned()));
@@ -2301,7 +2220,6 @@ fn build_input_schema(
         properties.insert("path".into(), Value::Object(path_schema));
         required.push(Value::String("path".to_owned()));
     }
-
     if !query_props.is_empty() {
         let mut query_schema = Map::new();
         query_schema.insert("type".into(), Value::String("object".to_owned()));
@@ -2309,7 +2227,6 @@ fn build_input_schema(
         query_schema.insert("additionalProperties".into(), Value::Bool(false));
         properties.insert("query".into(), Value::Object(query_schema));
     }
-
     if !header_props.is_empty() {
         let mut headers_schema = Map::new();
         headers_schema.insert("type".into(), Value::String("object".to_owned()));
@@ -2325,7 +2242,6 @@ fn build_input_schema(
             }),
         );
     }
-
     if let Some(request_body) = request_body {
         let body_schema = build_request_body_schema(spec, request_body);
         properties.insert(
@@ -2344,7 +2260,6 @@ fn build_input_schema(
             }),
         );
     }
-
     properties.insert("content_type".into(), string_schema());
     properties.insert("accept".into(), string_schema());
     properties.insert(
@@ -2355,7 +2270,6 @@ fn build_input_schema(
             "items": { "type": "string" }
         }),
     );
-
     let mut schema = Map::new();
     schema.insert("type".into(), Value::String("object".to_owned()));
     schema.insert("properties".into(), Value::Object(properties));
@@ -2365,7 +2279,6 @@ fn build_input_schema(
     }
     Value::Object(schema)
 }
-
 fn build_request_body_schema(spec: &Value, request_body: &Value) -> Option<Value> {
     let request_body = deref_openapi_value(spec, request_body);
     let content = request_body.get("content").and_then(Value::as_object)?;
@@ -2385,7 +2298,6 @@ fn build_request_body_schema(spec: &Value, request_body: &Value) -> Option<Value
         _ => Some(norito::json!({ "oneOf": schemas })),
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GovernanceOpenapiValidation {
     ProposalPath {
@@ -2403,7 +2315,6 @@ enum GovernanceOpenapiValidation {
     },
     FinalizeBody,
 }
-
 impl GovernanceOpenapiValidation {
     const fn requires_body(self) -> bool {
         matches!(
@@ -2412,7 +2323,6 @@ impl GovernanceOpenapiValidation {
         )
     }
 }
-
 fn governance_openapi_validation(
     method: &Method,
     path: &str,
@@ -2450,7 +2360,6 @@ fn governance_openapi_validation(
         _ => None,
     }
 }
-
 fn harden_governance_openapi_input_schema(method: &Method, path: &str, schema: &mut Value) {
     let Some(validation) = governance_openapi_validation(method, path) else {
         return;
@@ -2458,7 +2367,6 @@ fn harden_governance_openapi_input_schema(method: &Method, path: &str, schema: &
     if !validation.requires_body() {
         return;
     }
-
     let schema = schema
         .as_object_mut()
         .expect("OpenAPI-derived MCP input schema is an object");
@@ -2479,7 +2387,6 @@ fn harden_governance_openapi_input_schema(method: &Method, path: &str, schema: &
             "description": "Governance identifier preflight requires the exact JSON body representation."
         }),
     );
-
     let required = schema
         .entry("required".to_owned())
         .or_insert_with(|| Value::Array(Vec::new()))
@@ -2489,7 +2396,6 @@ fn harden_governance_openapi_input_schema(method: &Method, path: &str, schema: &
         required.push(Value::String("body".to_owned()));
     }
 }
-
 fn deref_openapi_value<'a>(spec: &'a Value, value: &'a Value) -> &'a Value {
     let mut current = value;
     for _ in 0..8 {
@@ -2507,7 +2413,6 @@ fn deref_openapi_value<'a>(spec: &'a Value, value: &'a Value) -> &'a Value {
     }
     current
 }
-
 fn inline_openapi_schema(spec: &Value, value: &Value, depth: usize) -> Value {
     const MAX_INLINE_SCHEMA_DEPTH: usize = 64;
     if depth >= MAX_INLINE_SCHEMA_DEPTH {
@@ -2537,7 +2442,6 @@ fn inline_openapi_schema(spec: &Value, value: &Value, depth: usize) -> Value {
         _ => value.clone(),
     }
 }
-
 fn resolve_openapi_ref<'a>(spec: &'a Value, reference: &str) -> Option<&'a Value> {
     let path = reference.strip_prefix("#/")?;
     let mut current = spec;
@@ -2547,11 +2451,9 @@ fn resolve_openapi_ref<'a>(spec: &'a Value, reference: &str) -> Option<&'a Value
     }
     Some(current)
 }
-
 fn string_schema() -> Value {
     norito::json!({ "type": "string" })
 }
-
 fn method_from_key(key: &str) -> Option<Method> {
     match key {
         "get" => Some(Method::GET),
@@ -2564,7 +2466,6 @@ fn method_from_key(key: &str) -> Option<Method> {
         _ => None,
     }
 }
-
 fn catalog_method(method: &Method) -> Option<CatalogHttpMethod> {
     match *method {
         Method::GET => Some(CatalogHttpMethod::Get),
@@ -2575,7 +2476,6 @@ fn catalog_method(method: &Method) -> Option<CatalogHttpMethod> {
         _ => None,
     }
 }
-
 /// Return the explicit MCP decision for a cataloged method/path pair.
 ///
 /// `None` means the operation is not represented by one of `groups`. Callers
@@ -2587,7 +2487,6 @@ fn catalog_mcp_projection_decision(
     path: &str,
 ) -> Option<bool> {
     let method = catalog_method(method)?;
-
     for group in groups {
         let catalog = RouteCatalog::new(group.routes);
         let is_cataloged = catalog
@@ -2597,7 +2496,6 @@ fn catalog_mcp_projection_decision(
         if !is_cataloged {
             continue;
         }
-
         return Some(
             catalog
                 .project(CatalogProjection::Mcp, group.enabled_features)
@@ -2605,10 +2503,8 @@ fn catalog_mcp_projection_decision(
                 .any(|route| route.method() == method && route.path() == path),
         );
     }
-
     None
 }
-
 fn retain_catalog_mcp_tools(tools: &mut Vec<ToolSpec>, groups: &[CatalogProjectionGroup]) {
     tools.retain(|tool| {
         !matches!(
@@ -2617,7 +2513,6 @@ fn retain_catalog_mcp_tools(tools: &mut Vec<ToolSpec>, groups: &[CatalogProjecti
         )
     });
 }
-
 fn apply_catalog_operator_effects_to_manual_tools(
     tools: &mut [ToolSpec],
     groups: &[CatalogProjectionGroup],
@@ -2633,7 +2528,6 @@ fn apply_catalog_operator_effects_to_manual_tools(
         }
     }
 }
-
 fn validate_tool_registry(
     tools: &[ToolSpec],
     groups: &[CatalogProjectionGroup],
@@ -2643,7 +2537,6 @@ fn validate_tool_registry(
         if !names.insert(tool.name.as_str()) {
             return Err(format!("duplicate tool name `{}`", tool.name));
         }
-
         let descriptor =
             catalog_descriptor_for_method_path(groups, &tool.method, tool.path_template.as_str());
         if descriptor.is_some_and(|route| route.surface() == ApiSurface::Operator)
@@ -2654,7 +2547,6 @@ fn validate_tool_registry(
                 tool.name, tool.effect
             ));
         }
-
         if !tool.name.starts_with("torii.") {
             if !tool.name.starts_with("iroha.") && !tool.name.starts_with("connect.") {
                 return Err(format!(
@@ -2664,7 +2556,6 @@ fn validate_tool_registry(
             }
             continue;
         }
-
         if catalog_mcp_projection_decision(groups, &tool.method, tool.path_template.as_str())
             != Some(true)
         {
@@ -2673,9 +2564,7 @@ fn validate_tool_registry(
                 tool.name, tool.method, tool.path_template
             ));
         }
-
         descriptor.expect("an enabled catalog MCP projection has an exact descriptor");
-
         let Some(method_key) = canonical_tool_method_key(&tool.method) else {
             return Err(format!(
                 "OpenAPI-derived tool `{}` uses unsupported HTTP method {}",
@@ -2695,7 +2584,6 @@ fn validate_tool_registry(
     }
     Ok(())
 }
-
 fn catalog_descriptor_for_method_path(
     groups: &[CatalogProjectionGroup],
     method: &Method,
@@ -2707,7 +2595,6 @@ fn catalog_descriptor_for_method_path(
         .flat_map(|group| group.routes)
         .find(|route| route.method() == method && route.path() == path)
 }
-
 fn catalog_descriptor_for_dispatch(
     groups: &[CatalogProjectionGroup],
     method: &Method,
@@ -2725,7 +2612,6 @@ fn catalog_descriptor_for_dispatch(
     {
         return Ok(exact);
     }
-
     let mut matches = routes
         .filter(|route| route.method() == method && route_template_matches(route.path(), path));
     let method_name = method.as_str();
@@ -2741,7 +2627,6 @@ fn catalog_descriptor_for_dispatch(
     }
     Ok(first)
 }
-
 fn route_template_matches(template: &str, path: &str) -> bool {
     let mut template_segments = template.trim_start_matches('/').split('/');
     let mut path_segments = path.trim_start_matches('/').split('/');
@@ -2765,7 +2650,6 @@ fn route_template_matches(template: &str, path: &str) -> bool {
         }
     }
 }
-
 fn canonical_tool_method_key(method: &Method) -> Option<&'static str> {
     match *method {
         Method::GET => Some("get"),
@@ -2776,7 +2660,6 @@ fn canonical_tool_method_key(method: &Method) -> Option<&'static str> {
         _ => None,
     }
 }
-
 fn operation_uses_streaming_transport(spec: &Value, operation: &Map) -> bool {
     operation
         .get("responses")
@@ -2800,7 +2683,6 @@ fn operation_uses_streaming_transport(spec: &Value, operation: &Map) -> bool {
             })
         })
 }
-
 fn should_skip_operation(
     spec: &Value,
     path: &str,
@@ -2842,7 +2724,6 @@ fn should_skip_operation(
     }
     false
 }
-
 fn generated_operation_id(method: &str, path: &str) -> String {
     let mut out = String::new();
     out.push_str(method);
@@ -2859,11 +2740,9 @@ fn generated_operation_id(method: &str, path: &str) -> String {
     }
     out.trim_matches('_').to_owned()
 }
-
 fn find_tool_spec_by_name<'a>(tools: &'a [ToolSpec], requested_name: &str) -> Option<&'a ToolSpec> {
     tools.iter().find(|tool| tool.name == requested_name)
 }
-
 async fn dispatch_openapi_tool(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -2878,7 +2757,6 @@ async fn dispatch_openapi_tool(
         .get("accept")
         .and_then(Value::as_str)
         .map(str::to_owned);
-
     let structured = dispatch_route(
         app,
         inbound_headers,
@@ -2890,10 +2768,8 @@ async fn dispatch_openapi_tool(
         accept,
     )
     .await?;
-
     Ok(apply_body_projection(structured, arguments.get("project")))
 }
-
 async fn dispatch_connect_session_create(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -2916,7 +2792,6 @@ async fn dispatch_connect_session_create(
     )
     .await
 }
-
 async fn dispatch_connect_session_create_and_ticket(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -2929,13 +2804,11 @@ async fn dispatch_connect_session_create_and_ticket(
     if role != "app" && role != "wallet" {
         return Err("`role` must be `app` or `wallet`".to_owned());
     }
-
     let create = dispatch_connect_session_create(app, inbound_headers, arguments).await?;
     let create_status = create.get("status").and_then(Value::as_u64).unwrap_or(0);
     if !(200..300).contains(&create_status) {
         return Ok(create);
     }
-
     let (sid, token, create_node) = {
         let create_body = create
             .get("body")
@@ -2964,7 +2837,6 @@ async fn dispatch_connect_session_create_and_ticket(
             .map(str::to_owned);
         (sid, token, create_node)
     };
-
     let mut ticket_arguments = Map::new();
     ticket_arguments.insert("sid".into(), Value::String(sid.clone()));
     ticket_arguments.insert("role".into(), Value::String(role.to_owned()));
@@ -2977,7 +2849,6 @@ async fn dispatch_connect_session_create_and_ticket(
     {
         ticket_arguments.insert("node_url".into(), Value::String(node_url.to_owned()));
     }
-
     let ticket = build_connect_ws_ticket(&ticket_arguments, inbound_headers)?;
     Ok(norito::json!({
         "status": create_status,
@@ -2987,7 +2858,6 @@ async fn dispatch_connect_session_create_and_ticket(
         "ticket": ticket
     }))
 }
-
 async fn dispatch_connect_session_delete(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3013,9 +2883,7 @@ async fn dispatch_connect_session_delete(
     )
     .await
 }
-
 include!("mcp/connect_status_tools.rs");
-
 async fn dispatch_iroha_vpn_profile(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3036,7 +2904,6 @@ async fn dispatch_iroha_vpn_profile(
     )
     .await
 }
-
 fn vpn_canonical_auth_headers(arguments: &Map) -> Result<Value, String> {
     let auth = arguments
         .get("canonical_auth")
@@ -3051,7 +2918,6 @@ fn vpn_canonical_auth_headers(arguments: &Map) -> Result<Value, String> {
         &["account", "signature", "timestamp_ms", "nonce", "witness"],
         "VPN canonical authentication",
     )?;
-
     let string_field = |name: &str| -> Result<Option<String>, String> {
         auth.get(name)
             .map(|value| {
@@ -3074,7 +2940,6 @@ fn vpn_canonical_auth_headers(arguments: &Map) -> Result<Value, String> {
             })
         })
         .transpose()?;
-
     let mut headers = Map::new();
     match (signature, timestamp_ms, nonce, witness) {
         (Some(signature), Some(timestamp_ms), Some(nonce), None) => {
@@ -3113,10 +2978,8 @@ fn vpn_canonical_auth_headers(arguments: &Map) -> Result<Value, String> {
             );
         }
     }
-
     Ok(Value::Object(headers))
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_vpn_route_with_canonical_auth(
     app: &SharedAppState,
@@ -3141,7 +3004,6 @@ async fn dispatch_vpn_route_with_canonical_auth(
     )
     .await
 }
-
 async fn dispatch_iroha_vpn_quotes_create(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3175,7 +3037,6 @@ async fn dispatch_iroha_vpn_quotes_create(
     )
     .await
 }
-
 async fn dispatch_iroha_vpn_sessions_create(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3214,7 +3075,6 @@ async fn dispatch_iroha_vpn_sessions_create(
     )
     .await
 }
-
 async fn dispatch_iroha_vpn_sessions_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3246,7 +3106,6 @@ async fn dispatch_iroha_vpn_sessions_get(
     )
     .await
 }
-
 async fn dispatch_iroha_vpn_sessions_delete(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3278,7 +3137,6 @@ async fn dispatch_iroha_vpn_sessions_delete(
     )
     .await
 }
-
 async fn dispatch_iroha_vpn_receipts_submit(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3312,7 +3170,6 @@ async fn dispatch_iroha_vpn_receipts_submit(
     )
     .await
 }
-
 async fn dispatch_iroha_vpn_receipts_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3339,7 +3196,6 @@ async fn dispatch_iroha_vpn_receipts_list(
     )
     .await
 }
-
 async fn dispatch_iroha_health(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3360,7 +3216,6 @@ async fn dispatch_iroha_health(
     )
     .await
 }
-
 async fn dispatch_iroha_status(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3381,7 +3236,6 @@ async fn dispatch_iroha_status(
     )
     .await
 }
-
 async fn dispatch_iroha_parameters_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3402,7 +3256,6 @@ async fn dispatch_iroha_parameters_get(
     )
     .await
 }
-
 async fn dispatch_iroha_node_capabilities(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3423,7 +3276,6 @@ async fn dispatch_iroha_node_capabilities(
     )
     .await
 }
-
 async fn dispatch_iroha_node_query_projection_checkpoint_plan(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3446,7 +3298,6 @@ async fn dispatch_iroha_node_query_projection_checkpoint_plan(
     )
     .await
 }
-
 async fn dispatch_iroha_node_query_projection_checkpoint_publish(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3469,7 +3320,6 @@ async fn dispatch_iroha_node_query_projection_checkpoint_publish(
     )
     .await
 }
-
 fn build_iroha_node_query_projection_checkpoint_body(arguments: &Map) -> Result<Value, String> {
     let mut body = arguments
         .get("body")
@@ -3478,7 +3328,6 @@ fn build_iroha_node_query_projection_checkpoint_body(arguments: &Map) -> Result<
     let payload = body
         .as_object_mut()
         .ok_or_else(|| "`body` must be an object".to_owned())?;
-
     if !payload.contains_key("emitted_at_unix")
         && let Some(emitted_at_unix) = arguments.get("emitted_at_unix")
     {
@@ -3492,10 +3341,8 @@ fn build_iroha_node_query_projection_checkpoint_body(arguments: &Map) -> Result<
     if !payload.contains_key("shards") {
         return Err("`shards` is required".to_owned());
     }
-
     Ok(body)
 }
-
 async fn dispatch_iroha_node_query_projection_shard_catalog(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3510,7 +3357,6 @@ async fn dispatch_iroha_node_query_projection_shard_catalog(
         "/v1/node/query/projection/catalog/{resource}",
         Some(&path_value),
     )?;
-
     let mut query = Map::new();
     if let Some(asset_definition_id) = arguments.get("asset_definition_id") {
         query.insert("asset_definition_id".into(), asset_definition_id.clone());
@@ -3523,7 +3369,6 @@ async fn dispatch_iroha_node_query_projection_shard_catalog(
     }
     let query_value = (!query.is_empty()).then(|| Value::Object(query));
     let route = append_query(route, query_value.as_ref())?;
-
     dispatch_route(
         app,
         inbound_headers,
@@ -3539,7 +3384,6 @@ async fn dispatch_iroha_node_query_projection_shard_catalog(
     )
     .await
 }
-
 async fn dispatch_iroha_node_query_projection_checkpoint(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3560,7 +3404,6 @@ async fn dispatch_iroha_node_query_projection_checkpoint(
     )
     .await
 }
-
 async fn dispatch_iroha_time_now(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3581,7 +3424,6 @@ async fn dispatch_iroha_time_now(
     )
     .await
 }
-
 async fn dispatch_iroha_sumeragi_pacemaker(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3602,7 +3444,6 @@ async fn dispatch_iroha_sumeragi_pacemaker(
     )
     .await
 }
-
 async fn dispatch_iroha_sumeragi_phases(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3623,7 +3464,6 @@ async fn dispatch_iroha_sumeragi_phases(
     )
     .await
 }
-
 async fn dispatch_iroha_da_proof_policies(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3644,7 +3484,6 @@ async fn dispatch_iroha_da_proof_policies(
     )
     .await
 }
-
 async fn dispatch_iroha_da_ingest(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3667,7 +3506,6 @@ async fn dispatch_iroha_da_ingest(
     )
     .await
 }
-
 async fn dispatch_iroha_da_proof_policy_snapshot(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3688,7 +3526,6 @@ async fn dispatch_iroha_da_proof_policy_snapshot(
     )
     .await
 }
-
 async fn dispatch_iroha_da_manifests_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3714,7 +3551,6 @@ async fn dispatch_iroha_da_manifests_get(
     )
     .await
 }
-
 async fn dispatch_iroha_da_commitments_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3737,7 +3573,6 @@ async fn dispatch_iroha_da_commitments_list(
     )
     .await
 }
-
 async fn dispatch_iroha_da_commitments_prove(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3760,7 +3595,6 @@ async fn dispatch_iroha_da_commitments_prove(
     )
     .await
 }
-
 async fn dispatch_iroha_da_commitments_verify(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3783,7 +3617,6 @@ async fn dispatch_iroha_da_commitments_verify(
     )
     .await
 }
-
 async fn dispatch_iroha_da_pin_intents_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3806,7 +3639,6 @@ async fn dispatch_iroha_da_pin_intents_list(
     )
     .await
 }
-
 async fn dispatch_iroha_da_pin_intents_prove(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3829,7 +3661,6 @@ async fn dispatch_iroha_da_pin_intents_prove(
     )
     .await
 }
-
 async fn dispatch_iroha_da_pin_intents_verify(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3852,7 +3683,6 @@ async fn dispatch_iroha_da_pin_intents_verify(
     )
     .await
 }
-
 async fn dispatch_iroha_runtime_abi_active(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3873,7 +3703,6 @@ async fn dispatch_iroha_runtime_abi_active(
     )
     .await
 }
-
 async fn dispatch_iroha_runtime_abi_hash(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3894,7 +3723,6 @@ async fn dispatch_iroha_runtime_abi_hash(
     )
     .await
 }
-
 async fn dispatch_iroha_runtime_metrics(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3915,7 +3743,6 @@ async fn dispatch_iroha_runtime_metrics(
     )
     .await
 }
-
 async fn dispatch_iroha_runtime_upgrades_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3936,7 +3763,6 @@ async fn dispatch_iroha_runtime_upgrades_list(
     )
     .await
 }
-
 async fn dispatch_iroha_runtime_upgrades_propose(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3959,7 +3785,6 @@ async fn dispatch_iroha_runtime_upgrades_propose(
     )
     .await
 }
-
 async fn dispatch_iroha_runtime_upgrades_activate(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3973,7 +3798,6 @@ async fn dispatch_iroha_runtime_upgrades_activate(
     )
     .await
 }
-
 async fn dispatch_iroha_runtime_upgrades_cancel(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -3987,7 +3811,6 @@ async fn dispatch_iroha_runtime_upgrades_cancel(
     )
     .await
 }
-
 async fn dispatch_iroha_runtime_upgrades_action(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4019,7 +3842,6 @@ async fn dispatch_iroha_runtime_upgrades_action(
     )
     .await
 }
-
 async fn dispatch_iroha_ledger_headers(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4042,7 +3864,6 @@ async fn dispatch_iroha_ledger_headers(
     )
     .await
 }
-
 async fn dispatch_iroha_ledger_state_root(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4068,7 +3889,6 @@ async fn dispatch_iroha_ledger_state_root(
     )
     .await
 }
-
 async fn dispatch_iroha_ledger_state_proof(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4094,7 +3914,6 @@ async fn dispatch_iroha_ledger_state_proof(
     )
     .await
 }
-
 async fn dispatch_iroha_ledger_block_proof(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4125,7 +3944,6 @@ async fn dispatch_iroha_ledger_block_proof(
     )
     .await
 }
-
 async fn dispatch_iroha_bridge_finality_proof(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4151,7 +3969,6 @@ async fn dispatch_iroha_bridge_finality_proof(
     )
     .await
 }
-
 async fn dispatch_iroha_bridge_finality_bundle(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4177,7 +3994,6 @@ async fn dispatch_iroha_bridge_finality_bundle(
     )
     .await
 }
-
 async fn dispatch_iroha_proofs_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4203,7 +4019,6 @@ async fn dispatch_iroha_proofs_get(
     )
     .await
 }
-
 async fn dispatch_iroha_proofs_query(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4226,7 +4041,6 @@ async fn dispatch_iroha_proofs_query(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_contract_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4252,7 +4066,6 @@ async fn dispatch_iroha_gov_contract_get(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_proposals_deploy_contract(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4275,7 +4088,6 @@ async fn dispatch_iroha_gov_proposals_deploy_contract(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_proposals_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4301,7 +4113,6 @@ async fn dispatch_iroha_gov_proposals_get(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_locks_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4332,7 +4143,6 @@ async fn dispatch_iroha_gov_locks_get(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_referenda_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4363,7 +4173,6 @@ async fn dispatch_iroha_gov_referenda_get(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_tally_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4390,7 +4199,6 @@ async fn dispatch_iroha_gov_tally_get(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_ballots_zk_v1(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4414,7 +4222,6 @@ async fn dispatch_iroha_gov_ballots_zk_v1(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_ballots_zk_v1_ballot_proof(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4438,7 +4245,6 @@ async fn dispatch_iroha_gov_ballots_zk_v1_ballot_proof(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_ballots_plain(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4462,7 +4268,6 @@ async fn dispatch_iroha_gov_ballots_plain(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_protected_namespaces_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4483,7 +4288,6 @@ async fn dispatch_iroha_gov_protected_namespaces_list(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_protected_namespaces_update(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4506,7 +4310,6 @@ async fn dispatch_iroha_gov_protected_namespaces_update(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_unlocks_stats(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4527,7 +4330,6 @@ async fn dispatch_iroha_gov_unlocks_stats(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_council_current(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4548,7 +4350,6 @@ async fn dispatch_iroha_gov_council_current(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_citizens_count(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4569,7 +4370,6 @@ async fn dispatch_iroha_gov_citizens_count(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_enact(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4593,7 +4393,6 @@ async fn dispatch_iroha_gov_enact(
     )
     .await
 }
-
 async fn dispatch_iroha_gov_finalize(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4623,7 +4422,6 @@ async fn dispatch_iroha_gov_finalize(
     )
     .await
 }
-
 async fn dispatch_iroha_aliases_resolve(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4646,7 +4444,6 @@ async fn dispatch_iroha_aliases_resolve(
     )
     .await
 }
-
 async fn dispatch_iroha_aliases_resolve_index(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4669,7 +4466,6 @@ async fn dispatch_iroha_aliases_resolve_index(
     )
     .await
 }
-
 async fn dispatch_iroha_aliases_by_account(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4692,7 +4488,6 @@ async fn dispatch_iroha_aliases_by_account(
     )
     .await
 }
-
 async fn dispatch_iroha_contracts_code_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4718,7 +4513,6 @@ async fn dispatch_iroha_contracts_code_get(
     )
     .await
 }
-
 async fn dispatch_iroha_contracts_code_bytes_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4744,7 +4538,6 @@ async fn dispatch_iroha_contracts_code_bytes_get(
     )
     .await
 }
-
 async fn dispatch_iroha_contracts_call(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4752,7 +4545,6 @@ async fn dispatch_iroha_contracts_call(
 ) -> Result<Value, String> {
     dispatch_iroha_contracts_post(app, inbound_headers, arguments, "/v1/contracts/call").await
 }
-
 async fn dispatch_iroha_contracts_call_and_wait(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4761,20 +4553,17 @@ async fn dispatch_iroha_contracts_call_and_wait(
     let timeout_ms = resolve_submit_wait_timeout_ms(arguments)?;
     let poll_interval_ms = resolve_submit_wait_poll_interval_ms(arguments)?;
     let terminal_statuses = resolve_submit_wait_terminal_statuses(arguments)?;
-
     let submit = dispatch_iroha_contracts_call(app, inbound_headers, arguments).await?;
     let submit_status = submit.get("status").and_then(Value::as_u64).unwrap_or(0);
     if !(200..300).contains(&submit_status) {
         return Ok(submit);
     }
-
     let tx_hash = extract_optional_transaction_hash_argument(arguments)
         .or_else(|| extract_transaction_hash_from_submit_result(&submit).ok())
         .ok_or_else(|| {
             "could not resolve transaction hash; provide `hash`/`transaction_hash` explicitly"
                 .to_owned()
         })?;
-
     wait_for_terminal_transaction_status(
         app,
         inbound_headers,
@@ -4787,7 +4576,6 @@ async fn dispatch_iroha_contracts_call_and_wait(
     )
     .await
 }
-
 async fn dispatch_iroha_contracts_state_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4810,7 +4598,6 @@ async fn dispatch_iroha_contracts_state_get(
     )
     .await
 }
-
 async fn dispatch_iroha_contracts_post(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4834,7 +4621,6 @@ async fn dispatch_iroha_contracts_post(
     )
     .await
 }
-
 async fn dispatch_iroha_accounts_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4857,7 +4643,6 @@ async fn dispatch_iroha_accounts_list(
     )
     .await
 }
-
 async fn dispatch_iroha_accounts_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4883,7 +4668,6 @@ async fn dispatch_iroha_accounts_get(
     )
     .await
 }
-
 async fn dispatch_iroha_accounts_qr(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4909,7 +4693,6 @@ async fn dispatch_iroha_accounts_qr(
     )
     .await
 }
-
 async fn dispatch_iroha_accounts_query(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4932,7 +4715,6 @@ async fn dispatch_iroha_accounts_query(
     )
     .await
 }
-
 async fn dispatch_iroha_accounts_onboard(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4955,7 +4737,6 @@ async fn dispatch_iroha_accounts_onboard(
     )
     .await
 }
-
 async fn dispatch_iroha_accounts_onboard_plan(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -4978,7 +4759,6 @@ async fn dispatch_iroha_accounts_onboard_plan(
     )
     .await
 }
-
 async fn dispatch_iroha_accounts_faucet(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5001,7 +4781,6 @@ async fn dispatch_iroha_accounts_faucet(
     )
     .await
 }
-
 async fn dispatch_iroha_account_transactions(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5032,7 +4811,6 @@ async fn dispatch_iroha_account_transactions(
     )
     .await
 }
-
 async fn dispatch_iroha_account_history(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5063,7 +4841,6 @@ async fn dispatch_iroha_account_history(
     )
     .await
 }
-
 async fn dispatch_iroha_account_transactions_query(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5094,7 +4871,6 @@ async fn dispatch_iroha_account_transactions_query(
     )
     .await
 }
-
 async fn dispatch_iroha_transactions_query(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5108,7 +4884,6 @@ async fn dispatch_iroha_transactions_query(
     )
     .await
 }
-
 async fn dispatch_iroha_transactions_visible_query(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5122,7 +4897,6 @@ async fn dispatch_iroha_transactions_visible_query(
     )
     .await
 }
-
 async fn dispatch_iroha_transactions_query_path(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5146,7 +4920,6 @@ async fn dispatch_iroha_transactions_query_path(
     )
     .await
 }
-
 async fn dispatch_iroha_account_assets(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5177,7 +4950,6 @@ async fn dispatch_iroha_account_assets(
     )
     .await
 }
-
 async fn dispatch_iroha_account_assets_query(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5205,7 +4977,6 @@ async fn dispatch_iroha_account_assets_query(
     )
     .await
 }
-
 async fn dispatch_iroha_account_permissions(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5231,7 +5002,6 @@ async fn dispatch_iroha_account_permissions(
     )
     .await
 }
-
 async fn dispatch_iroha_account_portfolio(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5260,7 +5030,6 @@ async fn dispatch_iroha_account_portfolio(
     )
     .await
 }
-
 async fn dispatch_iroha_domains_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5283,7 +5052,6 @@ async fn dispatch_iroha_domains_list(
     )
     .await
 }
-
 async fn dispatch_iroha_domains_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5309,7 +5077,6 @@ async fn dispatch_iroha_domains_get(
     )
     .await
 }
-
 async fn dispatch_iroha_domains_query(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5332,7 +5099,6 @@ async fn dispatch_iroha_domains_query(
     )
     .await
 }
-
 async fn dispatch_iroha_musubi_v1(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5370,7 +5136,6 @@ async fn dispatch_iroha_musubi_v1(
     )
     .await
 }
-
 async fn dispatch_iroha_subscriptions_plans_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5393,7 +5158,6 @@ async fn dispatch_iroha_subscriptions_plans_list(
     )
     .await
 }
-
 async fn dispatch_iroha_subscriptions_plans_create(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5416,7 +5180,6 @@ async fn dispatch_iroha_subscriptions_plans_create(
     )
     .await
 }
-
 async fn dispatch_iroha_subscriptions_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5439,7 +5202,6 @@ async fn dispatch_iroha_subscriptions_list(
     )
     .await
 }
-
 async fn dispatch_iroha_subscriptions_create(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5480,7 +5242,6 @@ async fn dispatch_iroha_subscriptions_create(
     )
     .await
 }
-
 async fn dispatch_iroha_subscriptions_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5506,7 +5267,6 @@ async fn dispatch_iroha_subscriptions_get(
     )
     .await
 }
-
 async fn dispatch_iroha_subscriptions_cancel(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5514,7 +5274,6 @@ async fn dispatch_iroha_subscriptions_cancel(
 ) -> Result<Value, String> {
     dispatch_iroha_subscription_draft_action(app, inbound_headers, arguments, "cancel").await
 }
-
 async fn dispatch_iroha_subscriptions_pause(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5522,7 +5281,6 @@ async fn dispatch_iroha_subscriptions_pause(
 ) -> Result<Value, String> {
     dispatch_iroha_subscription_draft_action(app, inbound_headers, arguments, "pause").await
 }
-
 async fn dispatch_iroha_subscriptions_resume(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5530,7 +5288,6 @@ async fn dispatch_iroha_subscriptions_resume(
 ) -> Result<Value, String> {
     dispatch_iroha_subscription_draft_action(app, inbound_headers, arguments, "resume").await
 }
-
 async fn dispatch_iroha_subscriptions_keep(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5538,7 +5295,6 @@ async fn dispatch_iroha_subscriptions_keep(
 ) -> Result<Value, String> {
     dispatch_iroha_subscription_draft_action(app, inbound_headers, arguments, "keep").await
 }
-
 async fn dispatch_iroha_subscriptions_usage(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5546,7 +5302,6 @@ async fn dispatch_iroha_subscriptions_usage(
 ) -> Result<Value, String> {
     dispatch_iroha_subscription_action(app, inbound_headers, arguments, "usage").await
 }
-
 async fn dispatch_iroha_subscriptions_charge_now(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5554,7 +5309,6 @@ async fn dispatch_iroha_subscriptions_charge_now(
 ) -> Result<Value, String> {
     dispatch_iroha_subscription_draft_action(app, inbound_headers, arguments, "charge-now").await
 }
-
 async fn dispatch_iroha_subscription_draft_action(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5602,7 +5356,6 @@ async fn dispatch_iroha_subscription_draft_action(
     )
     .await
 }
-
 async fn dispatch_iroha_subscription_action(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5634,7 +5387,6 @@ async fn dispatch_iroha_subscription_action(
     )
     .await
 }
-
 async fn dispatch_iroha_asset_definitions(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5657,7 +5409,6 @@ async fn dispatch_iroha_asset_definitions(
     )
     .await
 }
-
 async fn dispatch_iroha_asset_definitions_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5686,7 +5437,6 @@ async fn dispatch_iroha_asset_definitions_get(
     )
     .await
 }
-
 async fn dispatch_iroha_asset_definitions_query(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5709,7 +5459,6 @@ async fn dispatch_iroha_asset_definitions_query(
     )
     .await
 }
-
 async fn dispatch_iroha_asset_holders(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5740,7 +5489,6 @@ async fn dispatch_iroha_asset_holders(
     )
     .await
 }
-
 async fn dispatch_iroha_asset_holders_query(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5771,7 +5519,6 @@ async fn dispatch_iroha_asset_holders_query(
     )
     .await
 }
-
 async fn dispatch_iroha_assets_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5794,7 +5541,6 @@ async fn dispatch_iroha_assets_list(
     )
     .await
 }
-
 async fn dispatch_iroha_assets_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5820,7 +5566,6 @@ async fn dispatch_iroha_assets_get(
     )
     .await
 }
-
 async fn dispatch_iroha_nfts_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5843,7 +5588,6 @@ async fn dispatch_iroha_nfts_list(
     )
     .await
 }
-
 async fn dispatch_iroha_nfts_chain_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5864,7 +5608,6 @@ async fn dispatch_iroha_nfts_chain_list(
     )
     .await
 }
-
 async fn dispatch_iroha_nfts_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5890,7 +5633,6 @@ async fn dispatch_iroha_nfts_get(
     )
     .await
 }
-
 async fn dispatch_iroha_nfts_query(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5913,7 +5655,6 @@ async fn dispatch_iroha_nfts_query(
     )
     .await
 }
-
 async fn dispatch_iroha_rwas_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5936,7 +5677,6 @@ async fn dispatch_iroha_rwas_list(
     )
     .await
 }
-
 async fn dispatch_iroha_rwas_chain_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5957,7 +5697,6 @@ async fn dispatch_iroha_rwas_chain_list(
     )
     .await
 }
-
 async fn dispatch_iroha_rwas_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5983,7 +5722,6 @@ async fn dispatch_iroha_rwas_get(
     )
     .await
 }
-
 async fn dispatch_iroha_rwas_query(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6006,7 +5744,6 @@ async fn dispatch_iroha_rwas_query(
     )
     .await
 }
-
 async fn dispatch_iroha_transactions_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6029,7 +5766,6 @@ async fn dispatch_iroha_transactions_list(
     )
     .await
 }
-
 async fn dispatch_iroha_transactions_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6055,7 +5791,6 @@ async fn dispatch_iroha_transactions_get(
     )
     .await
 }
-
 async fn dispatch_iroha_instructions_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6078,7 +5813,6 @@ async fn dispatch_iroha_instructions_list(
     )
     .await
 }
-
 async fn dispatch_iroha_instructions_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6109,7 +5843,6 @@ async fn dispatch_iroha_instructions_get(
     )
     .await
 }
-
 async fn dispatch_iroha_blocks_list(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6132,7 +5865,6 @@ async fn dispatch_iroha_blocks_list(
     )
     .await
 }
-
 async fn dispatch_iroha_blocks_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6158,7 +5890,6 @@ async fn dispatch_iroha_blocks_get(
     )
     .await
 }
-
 async fn dispatch_iroha_transactions_submit(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6184,7 +5915,6 @@ async fn dispatch_iroha_transactions_submit(
     )
     .await
 }
-
 async fn dispatch_iroha_queries_submit(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6210,7 +5940,6 @@ async fn dispatch_iroha_queries_submit(
     )
     .await
 }
-
 fn canonical_norito_body_base64(
     arguments: &Map,
     label: &str,
@@ -6228,7 +5957,6 @@ fn canonical_norito_body_base64(
     decode_base64_any(encoded)
         .ok_or_else(|| "body_base64 must be valid base64/base64url".to_owned())
 }
-
 fn reject_unknown_arguments(
     arguments: &Map,
     allowed_fields: &[&str],
@@ -6244,7 +5972,6 @@ fn reject_unknown_arguments(
     }
     Ok(())
 }
-
 fn build_iso20022_payload_body(arguments: &Map) -> Result<(Vec<u8>, Option<String>), String> {
     reject_unknown_arguments(
         arguments,
@@ -6279,14 +6006,11 @@ fn build_iso20022_payload_body(arguments: &Map) -> Result<(Vec<u8>, Option<Strin
             }
         }
     }
-
     if !adapted.contains_key("body_base64") && !adapted.contains_key("body") {
         return Err("one of `body_base64`, `message_xml`, `xml`, or `body` is required".to_owned());
     }
-
     build_request_body(&adapted)
 }
-
 fn iso20022_operator_auth_headers(arguments: &Map) -> Result<Value, String> {
     let auth = arguments
         .get("operator_auth")
@@ -6301,7 +6025,6 @@ fn iso20022_operator_auth_headers(arguments: &Map) -> Result<Value, String> {
         &["public_key", "timestamp_ms", "nonce", "signature"],
         "ISO 20022 operator authentication",
     )?;
-
     let required_string = |name: &str| -> Result<String, String> {
         auth.get(name)
             .and_then(Value::as_str)
@@ -6332,7 +6055,6 @@ fn iso20022_operator_auth_headers(arguments: &Map) -> Result<Value, String> {
     );
     Ok(Value::Object(headers))
 }
-
 fn iso20022_route_with_profile(base: &str, arguments: &Map) -> Result<String, String> {
     let Some(raw_profile) = arguments.get("profile") else {
         return Ok(base.to_owned());
@@ -6346,7 +6068,6 @@ fn iso20022_route_with_profile(base: &str, arguments: &Map) -> Result<String, St
     }
     Ok(format!("{base}?profile={}", urlencoding::encode(profile)))
 }
-
 async fn dispatch_iroha_iso20022_pacs008_submit(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6370,7 +6091,6 @@ async fn dispatch_iroha_iso20022_pacs008_submit(
     )
     .await
 }
-
 async fn dispatch_iroha_iso20022_pacs009_submit(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6394,7 +6114,6 @@ async fn dispatch_iroha_iso20022_pacs009_submit(
     )
     .await
 }
-
 async fn dispatch_iroha_iso20022_lifecycle_submit(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6419,7 +6138,6 @@ async fn dispatch_iroha_iso20022_lifecycle_submit(
     )
     .await
 }
-
 async fn dispatch_iroha_iso20022_status_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6458,7 +6176,6 @@ async fn dispatch_iroha_iso20022_status_get(
     )
     .await
 }
-
 async fn dispatch_iroha_transactions_submit_and_wait(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6467,7 +6184,6 @@ async fn dispatch_iroha_transactions_submit_and_wait(
     let timeout_ms = resolve_submit_wait_timeout_ms(arguments)?;
     let poll_interval_ms = resolve_submit_wait_poll_interval_ms(arguments)?;
     let terminal_statuses = resolve_submit_wait_terminal_statuses(arguments)?;
-
     reject_unknown_arguments(
         arguments,
         &[
@@ -6490,14 +6206,12 @@ async fn dispatch_iroha_transactions_submit_and_wait(
     if !(200..300).contains(&submit_status) {
         return Ok(submit);
     }
-
     let tx_hash = extract_optional_transaction_hash_argument(arguments)
         .or_else(|| extract_transaction_hash_from_submit_result(&submit).ok())
         .ok_or_else(|| {
             "could not resolve transaction hash; provide `hash`/`transaction_hash` explicitly"
                 .to_owned()
         })?;
-
     wait_for_terminal_transaction_status(
         app,
         inbound_headers,
@@ -6510,7 +6224,6 @@ async fn dispatch_iroha_transactions_submit_and_wait(
     )
     .await
 }
-
 fn canonical_submit_arguments(arguments: &Map) -> Map {
     let mut submit_arguments = Map::new();
     for field in ["body_base64", "headers", "accept"] {
@@ -6520,7 +6233,6 @@ fn canonical_submit_arguments(arguments: &Map) -> Map {
     }
     submit_arguments
 }
-
 async fn dispatch_iroha_transactions_wait(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6532,7 +6244,6 @@ async fn dispatch_iroha_transactions_wait(
     let tx_hash = extract_optional_transaction_hash_argument(arguments).ok_or_else(|| {
         "`hash` is required (provide `hash`, `transaction_hash`, `query.hash`, or `query.transaction_hash`)".to_owned()
     })?;
-
     wait_for_terminal_transaction_status(
         app,
         inbound_headers,
@@ -6545,7 +6256,6 @@ async fn dispatch_iroha_transactions_wait(
     )
     .await
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn wait_for_terminal_transaction_status(
     app: &SharedAppState,
@@ -6568,10 +6278,8 @@ async fn wait_for_terminal_transaction_status(
         .and_then(Value::as_str)
         .unwrap_or("application/json")
         .to_owned();
-
     loop {
         attempts = attempts.saturating_add(1);
-
         let mut status_arguments = Map::new();
         status_arguments.insert("hash".into(), Value::String(tx_hash.clone()));
         status_arguments.insert("scope".into(), Value::String("local".to_owned()));
@@ -6579,14 +6287,12 @@ async fn wait_for_terminal_transaction_status(
         if let Some(headers) = arguments.get("headers") {
             status_arguments.insert("headers".into(), headers.clone());
         }
-
         let status_result =
             dispatch_iroha_transactions_status(app, inbound_headers, &status_arguments).await?;
         let status_code = status_result
             .get("status")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-
         if (200..300).contains(&status_code) {
             let kind = extract_pipeline_status_kind(&status_result).ok_or_else(|| {
                 format!(
@@ -6652,14 +6358,12 @@ async fn wait_for_terminal_transaction_status(
                 return Ok(status_result);
             }
         }
-
         if start.elapsed() >= timeout {
             break;
         }
         let remaining = timeout.saturating_sub(start.elapsed());
         tokio::time::sleep(poll_interval.min(remaining)).await;
     }
-
     let last_kind = last_kind
         .map(|kind| format!(" (last status kind: `{kind}`)"))
         .unwrap_or_else(|| " (last status kind: `not_observed`)".to_owned());
@@ -6667,7 +6371,6 @@ async fn wait_for_terminal_transaction_status(
         "timed out waiting for terminal transaction status after {timeout_ms}ms for `{tx_hash}`{last_kind}"
     ))
 }
-
 async fn dispatch_iroha_transactions_status(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -6698,7 +6401,6 @@ async fn dispatch_iroha_transactions_status(
                 .to_owned(),
         );
     }
-
     let query_value = Value::Object(query);
     let route = append_query(
         "/v1/pipeline/transactions/status".to_owned(),
@@ -6719,7 +6421,6 @@ async fn dispatch_iroha_transactions_status(
     )
     .await
 }
-
 fn resolve_submit_wait_timeout_ms(arguments: &Map) -> Result<u64, String> {
     let timeout_ms = match arguments.get("timeout_ms") {
         Some(value) => value
@@ -6737,7 +6438,6 @@ fn resolve_submit_wait_timeout_ms(arguments: &Map) -> Result<u64, String> {
     }
     Ok(timeout_ms)
 }
-
 fn resolve_submit_wait_poll_interval_ms(arguments: &Map) -> Result<u64, String> {
     let poll_interval_ms = match arguments.get("poll_interval_ms") {
         Some(value) => value
@@ -6752,7 +6452,6 @@ fn resolve_submit_wait_poll_interval_ms(arguments: &Map) -> Result<u64, String> 
     }
     Ok(poll_interval_ms)
 }
-
 fn resolve_submit_wait_terminal_statuses(arguments: &Map) -> Result<Vec<String>, String> {
     let statuses = match arguments.get("terminal_statuses") {
         Some(value) => {
@@ -6787,7 +6486,6 @@ fn resolve_submit_wait_terminal_statuses(arguments: &Map) -> Result<Vec<String>,
     };
     Ok(statuses)
 }
-
 fn extract_optional_transaction_hash_argument(arguments: &Map) -> Option<String> {
     if let Some(query) = arguments.get("query").and_then(Value::as_object)
         && let Some(hash) = query.get("hash").and_then(Value::as_str)
@@ -6801,7 +6499,6 @@ fn extract_optional_transaction_hash_argument(arguments: &Map) -> Option<String>
     {
         return Some(hash.to_owned());
     }
-
     arguments
         .get("hash")
         .or_else(|| arguments.get("transaction_hash"))
@@ -6809,7 +6506,6 @@ fn extract_optional_transaction_hash_argument(arguments: &Map) -> Option<String>
         .filter(|hash| !hash.is_empty())
         .map(str::to_owned)
 }
-
 fn extract_connect_sid_argument(arguments: &Map) -> Result<&str, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -6826,7 +6522,6 @@ fn extract_connect_sid_argument(arguments: &Map) -> Result<&str, String> {
             return Ok(sid);
         }
     }
-
     arguments
         .get("sid")
         .or_else(|| arguments.get("session_id"))
@@ -6837,7 +6532,6 @@ fn extract_connect_sid_argument(arguments: &Map) -> Result<&str, String> {
                 .to_owned()
         })
 }
-
 fn connect_management_headers(arguments: &Map) -> Result<Option<Value>, String> {
     let token = arguments
         .get("token_management")
@@ -6847,7 +6541,6 @@ fn connect_management_headers(arguments: &Map) -> Result<Option<Value>, String> 
     let Some(token) = token else {
         return Ok(arguments.get("headers").cloned());
     };
-
     let mut headers = match arguments.get("headers") {
         Some(Value::Object(headers)) => headers.clone(),
         Some(_) => return Err("`headers` must be an object".to_owned()),
@@ -6861,7 +6554,6 @@ fn connect_management_headers(arguments: &Map) -> Result<Option<Value>, String> 
     }
     Ok(Some(Value::Object(headers)))
 }
-
 fn extract_vpn_session_id_argument(arguments: &Map) -> Result<String, String> {
     let session_id = arguments
         .get("session_id")
@@ -6877,7 +6569,6 @@ fn extract_vpn_session_id_argument(arguments: &Map) -> Result<String, String> {
     }
     Ok(session_id.to_owned())
 }
-
 fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<String, String> {
     let status = submit_result
         .get("status")
@@ -6888,11 +6579,9 @@ fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<
             "submit response status `{status}` is not successful"
         ));
     }
-
     let body = submit_result
         .get("body")
         .ok_or_else(|| "submit response missing `body`".to_owned())?;
-
     if let Some(hash) = body
         .get("tx_hash_hex")
         .and_then(Value::as_str)
@@ -6907,7 +6596,6 @@ fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<
     {
         return normalize_submission_receipt_hash(hash);
     }
-
     if let Some(encoded) = body.as_str().filter(|body| !body.is_empty()) {
         let bytes = decode_base64_any(encoded)
             .ok_or_else(|| "submission response body is not valid base64/base64url".to_owned())?;
@@ -6916,22 +6604,18 @@ fn extract_transaction_hash_from_submit_result(submit_result: &Value) -> Result<
                 .map_err(|err| format!("decode submission receipt: {err}"))?;
         return Ok(receipt.payload.tx_hash.to_string());
     }
-
     Err("submission response missing transaction hash field (`tx_hash_hex`, `tx_hash`, `transaction_hash`, `payload.tx_hash`, or base64 Norito receipt body)".to_owned())
 }
-
 fn normalize_submission_receipt_hash(hash: &str) -> Result<String, String> {
     if !hash.starts_with("hash:") {
         return Ok(hash.to_owned());
     }
-
     let body = norito::literal::parse("hash", hash)
         .map_err(|err| format!("decode submission receipt hash literal: {err}"))?;
     body.parse::<iroha_crypto::Hash>()
         .map(|hash| hash.to_string())
         .map_err(|err| format!("decode submission receipt hash literal body: {err}"))
 }
-
 fn extract_pipeline_status_kind(status_result: &Value) -> Option<&str> {
     let body = status_result.get("body")?;
     body.get("status")
@@ -6939,13 +6623,11 @@ fn extract_pipeline_status_kind(status_result: &Value) -> Option<&str> {
         .and_then(|status| status.get("kind"))
         .and_then(Value::as_str)
 }
-
 fn is_terminal_pipeline_status(status: &str, terminal_statuses: &[String]) -> bool {
     terminal_statuses
         .iter()
         .any(|terminal| terminal.eq_ignore_ascii_case(status))
 }
-
 fn should_error_on_unrequested_terminal_failure(
     status: &str,
     terminal_statuses: &[String],
@@ -6953,11 +6635,9 @@ fn should_error_on_unrequested_terminal_failure(
     matches!(status, "Rejected" | "Expired")
         && !is_terminal_pipeline_status(status, terminal_statuses)
 }
-
 fn format_submit_wait_terminal_statuses(terminal_statuses: &[String]) -> String {
     terminal_statuses.join(", ")
 }
-
 fn extract_account_id_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -6975,7 +6655,6 @@ fn extract_account_id_argument(arguments: &Map) -> Result<String, String> {
             "`account_id` is required (provide `account_id` or `path.account_id`)".to_owned()
         })
 }
-
 fn extract_uaid_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -6991,7 +6670,6 @@ fn extract_uaid_argument(arguments: &Map) -> Result<String, String> {
         .map(str::to_owned)
         .ok_or_else(|| "`uaid` is required (provide `uaid` or `path.uaid`)".to_owned())
 }
-
 fn extract_domain_id_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7011,7 +6689,6 @@ fn extract_domain_id_argument(arguments: &Map) -> Result<String, String> {
                 .to_owned()
         })
 }
-
 fn extract_subscription_id_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7030,7 +6707,6 @@ fn extract_subscription_id_argument(arguments: &Map) -> Result<String, String> {
             "`subscription_id` is required (provide `subscription_id`, `id`, or `path.subscription_id`)".to_owned()
         })
 }
-
 fn extract_exact_subscription_id_argument(arguments: &Map) -> Result<String, String> {
     if arguments.contains_key("id") || arguments.contains_key("path") {
         return Err(
@@ -7045,7 +6721,6 @@ fn extract_exact_subscription_id_argument(arguments: &Map) -> Result<String, Str
         .map(str::to_owned)
         .ok_or_else(|| "non-empty `subscription_id` is required".to_owned())
 }
-
 fn extract_iso20022_message_id_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7066,7 +6741,6 @@ fn extract_iso20022_message_id_argument(arguments: &Map) -> Result<String, Strin
                 .to_owned()
         })
 }
-
 fn extract_ticket_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7087,7 +6761,6 @@ fn extract_ticket_argument(arguments: &Map) -> Result<String, String> {
                 .to_owned()
         })
 }
-
 fn extract_proof_record_id_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7104,7 +6777,6 @@ fn extract_proof_record_id_argument(arguments: &Map) -> Result<String, String> {
         .map(str::to_owned)
         .ok_or_else(|| "`id` is required (provide `id`, `proof_id`, or `path.id`)".to_owned())
 }
-
 fn extract_exact_string_alias_argument(
     arguments: &Map,
     path_keys: &[&str],
@@ -7118,7 +6790,6 @@ fn extract_exact_string_alias_argument(
             return Err(format!("unexpected `{key}` for {label}"));
         }
     }
-
     let mut selected: Option<(String, String)> = None;
     let mut consider = |location: &str, value: &Value| -> Result<(), String> {
         let value = value
@@ -7135,7 +6806,6 @@ fn extract_exact_string_alias_argument(
         }
         Ok(())
     };
-
     if let Some(path) = arguments.get("path") {
         let path = path
             .as_object()
@@ -7165,12 +6835,10 @@ fn extract_exact_string_alias_argument(
             consider(key, value)?;
         }
     }
-
     selected
         .map(|(_, value)| value)
         .ok_or_else(|| format!("`{label}` is required"))
 }
-
 fn require_governance_selector_v1(label: &str, value: &str) -> Result<(), String> {
     if !iroha_data_model::governance::is_valid_governance_selector_v1(value) {
         return Err(format!(
@@ -7180,7 +6848,6 @@ fn require_governance_selector_v1(label: &str, value: &str) -> Result<(), String
     }
     Ok(())
 }
-
 fn require_governance_proposal_id_v1(label: &str, value: &str) -> Result<(), String> {
     if value.len() != 64
         || !value
@@ -7193,7 +6860,6 @@ fn require_governance_proposal_id_v1(label: &str, value: &str) -> Result<(), Str
     }
     Ok(())
 }
-
 fn extract_governance_selector_argument(
     arguments: &Map,
     path_keys: &[&str],
@@ -7204,7 +6870,6 @@ fn extract_governance_selector_argument(
     require_governance_selector_v1(label, &value)?;
     Ok(value)
 }
-
 fn extract_governance_proposal_id_argument(arguments: &Map) -> Result<String, String> {
     let value = extract_exact_string_alias_argument(
         arguments,
@@ -7215,7 +6880,6 @@ fn extract_governance_proposal_id_argument(arguments: &Map) -> Result<String, St
     require_governance_proposal_id_v1("proposal id", &value)?;
     Ok(value)
 }
-
 fn require_governance_body_string<'a>(body: &'a Value, field: &str) -> Result<&'a str, String> {
     let body = body
         .as_object()
@@ -7224,13 +6888,11 @@ fn require_governance_body_string<'a>(body: &'a Value, field: &str) -> Result<&'
         .and_then(Value::as_str)
         .ok_or_else(|| format!("`{field}` must be a string"))
 }
-
 fn require_governance_selector_body<'a>(body: &'a Value, field: &str) -> Result<&'a str, String> {
     let value = require_governance_body_string(body, field)?;
     require_governance_selector_v1(field, value)?;
     Ok(value)
 }
-
 fn require_governance_proposal_id_body<'a>(
     body: &'a Value,
     field: &str,
@@ -7239,7 +6901,6 @@ fn require_governance_proposal_id_body<'a>(
     require_governance_proposal_id_v1(field, value)?;
     Ok(value)
 }
-
 fn require_governance_openapi_path_string<'a>(
     arguments: &'a Map,
     field: &str,
@@ -7252,7 +6913,6 @@ fn require_governance_openapi_path_string<'a>(
         .and_then(Value::as_str)
         .ok_or_else(|| format!("`path.{field}` must be a string"))
 }
-
 fn require_governance_openapi_json_body(arguments: &Map) -> Result<&Value, String> {
     if arguments.contains_key("body_base64") {
         return Err(
@@ -7272,13 +6932,11 @@ fn require_governance_openapi_json_body(arguments: &Map) -> Result<&Value, Strin
         .get("body")
         .ok_or_else(|| "`body` is required for governance MCP identifier preflight".to_owned())
 }
-
 fn validate_governance_openapi_dispatch(tool: &ToolSpec, arguments: &Map) -> Result<(), String> {
     let Some(validation) = governance_openapi_validation(&tool.method, tool.path_template.as_str())
     else {
         return Ok(());
     };
-
     match validation {
         GovernanceOpenapiValidation::ProposalPath { field } => {
             let value = require_governance_openapi_path_string(arguments, field)?;
@@ -7310,7 +6968,6 @@ fn validate_governance_openapi_dispatch(tool: &ToolSpec, arguments: &Map) -> Res
         }
     }
 }
-
 fn extract_runtime_upgrade_id_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7327,7 +6984,6 @@ fn extract_runtime_upgrade_id_argument(arguments: &Map) -> Result<String, String
         .map(str::to_owned)
         .ok_or_else(|| "`id` is required (provide `id`, `upgrade_id`, or `path.id`)".to_owned())
 }
-
 fn extract_height_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7345,7 +7001,6 @@ fn extract_height_argument(arguments: &Map) -> Result<String, String> {
             "`height` is required (provide `height`, `block_height`, or `path.height`)".to_owned()
         })
 }
-
 fn extract_view_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7360,7 +7015,6 @@ fn extract_view_argument(arguments: &Map) -> Result<String, String> {
         .and_then(value_to_string)
         .ok_or_else(|| "`view` is required (provide `view` or `path.view`)".to_owned())
 }
-
 fn extract_entry_hash_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7380,7 +7034,6 @@ fn extract_entry_hash_argument(arguments: &Map) -> Result<String, String> {
             "`entry_hash` is required (provide `entry_hash`, `tx_hash`, `hash`, or `path.entry_hash`)".to_owned()
         })
 }
-
 fn extract_definition_id_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7399,7 +7052,6 @@ fn extract_definition_id_argument(arguments: &Map) -> Result<String, String> {
                 .to_owned()
         })
 }
-
 fn extract_asset_id_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7418,7 +7070,6 @@ fn extract_asset_id_argument(arguments: &Map) -> Result<String, String> {
             "`asset_id` is required (provide `asset_id`, `id`, or `path.asset_id`)".to_owned()
         })
 }
-
 fn extract_nft_id_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7435,7 +7086,6 @@ fn extract_nft_id_argument(arguments: &Map) -> Result<String, String> {
         .map(str::to_owned)
         .ok_or_else(|| "`nft_id` is required (provide `nft_id`, `id`, or `path.nft_id`)".to_owned())
 }
-
 fn extract_rwa_id_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7452,7 +7102,6 @@ fn extract_rwa_id_argument(arguments: &Map) -> Result<String, String> {
         .map(str::to_owned)
         .ok_or_else(|| "`rwa_id` is required (provide `rwa_id`, `id`, or `path.rwa_id`)".to_owned())
 }
-
 fn extract_bundle_id_hex_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7471,7 +7120,6 @@ fn extract_bundle_id_hex_argument(arguments: &Map) -> Result<String, String> {
             "`bundle_id_hex` is required (provide `bundle_id_hex`, `bundle_id`, or `path.bundle_id_hex`)".to_owned()
         })
 }
-
 fn extract_certificate_id_hex_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7491,7 +7139,6 @@ fn extract_certificate_id_hex_argument(arguments: &Map) -> Result<String, String
             "`certificate_id_hex` is required (provide `certificate_id_hex`, `certificate_id`, `id`, or `path.certificate_id_hex`)".to_owned()
         })
 }
-
 fn extract_transaction_hash_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7513,7 +7160,6 @@ fn extract_transaction_hash_argument(arguments: &Map) -> Result<String, String> 
             "`hash` is required (provide `hash`, `transaction_hash`, `path.hash`, or `path.transaction_hash`)".to_owned()
         })
 }
-
 fn extract_code_hash_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7532,7 +7178,6 @@ fn extract_code_hash_argument(arguments: &Map) -> Result<String, String> {
             "`code_hash` is required (provide `code_hash`, `hash`, or `path.code_hash`)".to_owned()
         })
 }
-
 fn extract_contract_address_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7551,7 +7196,6 @@ fn extract_contract_address_argument(arguments: &Map) -> Result<String, String> 
                 .to_owned()
         })
 }
-
 fn extract_instruction_index_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7569,7 +7213,6 @@ fn extract_instruction_index_argument(arguments: &Map) -> Result<String, String>
             "`index` is required (provide `index`, `instruction_index`, or `path.index`)".to_owned()
         })
 }
-
 fn extract_block_identifier_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -7589,7 +7232,6 @@ fn extract_block_identifier_argument(arguments: &Map) -> Result<String, String> 
             "`identifier` is required (provide `identifier`, `block_identifier`, `block_height`, `block_hash`, or `path.identifier`)".to_owned()
         })
 }
-
 fn build_query_envelope_body(arguments: &Map) -> Result<Value, String> {
     if let Some(body) = arguments.get("body") {
         return body
@@ -7597,7 +7239,6 @@ fn build_query_envelope_body(arguments: &Map) -> Result<Value, String> {
             .map(|_| body.clone())
             .ok_or_else(|| "`body` must be an object".to_owned());
     }
-
     let mut env = Map::new();
     for key in [
         "query",
@@ -7611,7 +7252,6 @@ fn build_query_envelope_body(arguments: &Map) -> Result<Value, String> {
             env.insert(key.to_owned(), value.clone());
         }
     }
-
     if let Some(pagination) = arguments.get("pagination") {
         let pagination_obj = pagination
             .as_object()
@@ -7632,10 +7272,8 @@ fn build_query_envelope_body(arguments: &Map) -> Result<Value, String> {
             env.insert("pagination".to_owned(), Value::Object(pagination));
         }
     }
-
     Ok(Value::Object(env))
 }
-
 fn build_object_body_or_default(arguments: &Map) -> Result<Value, String> {
     if let Some(body) = arguments.get("body") {
         return body
@@ -7645,7 +7283,6 @@ fn build_object_body_or_default(arguments: &Map) -> Result<Value, String> {
     }
     Ok(Value::Object(Map::new()))
 }
-
 fn build_required_object_body(arguments: &Map) -> Result<Value, String> {
     arguments
         .get("body")
@@ -7654,7 +7291,6 @@ fn build_required_object_body(arguments: &Map) -> Result<Value, String> {
         .map(|body| Value::Object(body.clone()))
         .ok_or_else(|| "`body` must be an object".to_owned())
 }
-
 fn build_required_exact_object_body(
     arguments: &Map,
     allowed_fields: &[&str],
@@ -7672,7 +7308,6 @@ fn build_required_exact_object_body(
     }
     Ok(Value::Object(body.clone()))
 }
-
 fn build_object_body_or_flat_shortcuts(
     arguments: &Map,
     ignored_keys: &[&str],
@@ -7683,7 +7318,6 @@ fn build_object_body_or_flat_shortcuts(
             .map(|_| body.clone())
             .ok_or_else(|| "`body` must be an object".to_owned());
     }
-
     let mut payload = Map::new();
     for (key, value) in arguments {
         if ignored_keys.iter().any(|ignored| key == ignored) {
@@ -7694,14 +7328,11 @@ fn build_object_body_or_flat_shortcuts(
         }
         payload.insert(key.clone(), value.clone());
     }
-
     if payload.is_empty() {
         return Err("`body` is required (or provide flat top-level fields)".to_owned());
     }
-
     Ok(Value::Object(payload))
 }
-
 fn build_accounts_onboard_exact_body(
     arguments: &Map,
     allowed_fields: &[&str],
@@ -7737,7 +7368,6 @@ fn build_accounts_onboard_exact_body(
     }
     Ok(Value::Object(body))
 }
-
 fn build_accounts_onboard_plan_body(arguments: &Map) -> Result<Value, String> {
     build_accounts_onboard_exact_body(
         arguments,
@@ -7745,11 +7375,9 @@ fn build_accounts_onboard_plan_body(arguments: &Map) -> Result<Value, String> {
         &["version", "alias", "account_id"],
     )
 }
-
 fn build_accounts_onboard_apply_body(arguments: &Map) -> Result<Value, String> {
     build_accounts_onboard_exact_body(arguments, &["receipt"], &["receipt"])
 }
-
 fn build_accounts_faucet_body(arguments: &Map) -> Result<Value, String> {
     if let Some(body) = arguments.get("body") {
         return body
@@ -7757,12 +7385,10 @@ fn build_accounts_faucet_body(arguments: &Map) -> Result<Value, String> {
             .map(|_| body.clone())
             .ok_or_else(|| "`body` must be an object".to_owned());
     }
-
     let account_id = arguments
         .get("account_id")
         .and_then(Value::as_str)
         .ok_or_else(|| "`account_id` is required (or provide `body.account_id`)".to_owned())?;
-
     let mut payload = Map::new();
     payload.insert(
         "account_id".to_owned(),
@@ -7770,7 +7396,6 @@ fn build_accounts_faucet_body(arguments: &Map) -> Result<Value, String> {
     );
     Ok(Value::Object(payload))
 }
-
 fn collect_query_arguments(
     arguments: &Map,
     ignored_keys: &[&str],
@@ -7781,7 +7406,6 @@ fn collect_query_arguments(
     }
     Ok(Some(Value::Object(query)))
 }
-
 fn collect_query_map(arguments: &Map, ignored_keys: &[&str]) -> Result<Map, String> {
     if let Some(query) = arguments.get("query") {
         return query
@@ -7789,7 +7413,6 @@ fn collect_query_map(arguments: &Map, ignored_keys: &[&str]) -> Result<Map, Stri
             .cloned()
             .ok_or_else(|| "`query` must be an object".to_owned());
     }
-
     let mut query = Map::new();
     for (key, value) in arguments {
         if ignored_keys.iter().any(|ignored| key == ignored) {
@@ -7802,7 +7425,6 @@ fn collect_query_map(arguments: &Map, ignored_keys: &[&str]) -> Result<Map, Stri
     }
     Ok(query)
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_route(
     app: &SharedAppState,
@@ -7827,7 +7449,6 @@ async fn dispatch_route(
     )
     .await
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExtraHeaderPolicy {
     Default,
@@ -7835,7 +7456,6 @@ enum ExtraHeaderPolicy {
     CanonicalAccountAuthentication,
     OperatorAuthentication,
 }
-
 impl ExtraHeaderPolicy {
     fn allows_reserved_extra_header(self, lowered: &str) -> bool {
         match self {
@@ -7846,7 +7466,6 @@ impl ExtraHeaderPolicy {
         }
     }
 }
-
 fn target_extra_header_policy(
     method: &Method,
     path_and_query: &str,
@@ -7864,7 +7483,6 @@ fn target_extra_header_policy(
         _ => ExtraHeaderPolicy::Default,
     })
 }
-
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_route_with_extra_header_policy(
     app: &SharedAppState,
@@ -7889,7 +7507,6 @@ async fn dispatch_route_with_extra_header_policy(
         .uri(path_and_query)
         .body(Body::from(body))
         .map_err(|err| format!("build request: {err}"))?;
-
     {
         let headers = request.headers_mut();
         forward_dispatch_auth_headers(headers, inbound_headers, &method, path_and_query)?;
@@ -7912,7 +7529,6 @@ async fn dispatch_route_with_extra_header_policy(
             headers.insert(remote_addr_header, value);
         }
     }
-
     let router = {
         let guard = app
             .mcp_dispatch_router
@@ -7922,31 +7538,26 @@ async fn dispatch_route_with_extra_header_policy(
             .clone()
             .ok_or_else(|| "mcp router unavailable".to_owned())?
     };
-
     let service = router
         .into_make_service_with_connect_info::<SocketAddr>()
         .oneshot(dispatched_connect_addr)
         .await
         .map_err(|err| format!("dispatch connect-info failed: {err}"))?;
-
     let response = service
         .oneshot(request)
         .await
         .map_err(|err| format!("dispatch failed: {err}"))?;
     response_to_value(response).await
 }
-
 fn dispatched_remote_ip(inbound_headers: &HeaderMap) -> Option<IpAddr> {
     inbound_headers
         .get(limits::REMOTE_ADDR_HEADER)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse().ok())
 }
-
 fn dispatched_connect_addr(remote_ip: Option<IpAddr>) -> SocketAddr {
     SocketAddr::new(remote_ip.unwrap_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED)), 0)
 }
-
 fn build_request_body(arguments: &Map) -> Result<(Vec<u8>, Option<String>), String> {
     if let Some(encoded) = arguments.get("body_base64").and_then(Value::as_str) {
         let bytes = decode_base64_any(encoded)
@@ -7958,7 +7569,6 @@ fn build_request_body(arguments: &Map) -> Result<(Vec<u8>, Option<String>), Stri
             .or_else(|| Some(crate::utils::NORITO_MIME_TYPE.to_owned()));
         return Ok((bytes, content_type));
     }
-
     if let Some(body_value) = arguments.get("body") {
         let bytes = json::to_vec(body_value).map_err(|err| format!("encode body: {err}"))?;
         let content_type = arguments
@@ -7968,10 +7578,8 @@ fn build_request_body(arguments: &Map) -> Result<(Vec<u8>, Option<String>), Stri
             .or_else(|| Some("application/json".to_owned()));
         return Ok((bytes, content_type));
     }
-
     Ok((Vec::new(), None))
 }
-
 fn decode_base64_any(input: &str) -> Option<Vec<u8>> {
     base64::engine::general_purpose::STANDARD
         .decode(input)
@@ -7983,7 +7591,6 @@ fn decode_base64_any(input: &str) -> Option<Vec<u8>> {
                 .ok()
         })
 }
-
 fn fill_path_template(path_template: &str, path_args: Option<&Value>) -> Result<String, String> {
     let args = path_args
         .and_then(Value::as_object)
@@ -7991,7 +7598,6 @@ fn fill_path_template(path_template: &str, path_args: Option<&Value>) -> Result<
         .unwrap_or_default();
     let mut out = String::with_capacity(path_template.len() + 16);
     let mut chars = path_template.chars().peekable();
-
     while let Some(ch) = chars.next() {
         if ch != '{' {
             out.push(ch);
@@ -8013,10 +7619,8 @@ fn fill_path_template(path_template: &str, path_args: Option<&Value>) -> Result<
             .ok_or_else(|| format!("missing required path argument `{key}`"))?;
         out.push_str(&urlencoding::encode(&value));
     }
-
     Ok(out)
 }
-
 fn append_query(path: String, query: Option<&Value>) -> Result<String, String> {
     let Some(map) = query.and_then(Value::as_object) else {
         return Ok(path);
@@ -8039,7 +7643,6 @@ fn append_query(path: String, query: Option<&Value>) -> Result<String, String> {
     }
     Ok(format!("{path}?{encoded}"))
 }
-
 fn value_to_string(value: &Value) -> Option<String> {
     if value.is_null() {
         return None;
@@ -8061,7 +7664,6 @@ fn value_to_string(value: &Value) -> Option<String> {
     }
     json::to_string(value).ok()
 }
-
 fn forward_auth_headers(out: &mut HeaderMap, inbound: &HeaderMap) -> Result<(), String> {
     for name in [
         header::AUTHORIZATION,
@@ -8079,7 +7681,6 @@ fn forward_auth_headers(out: &mut HeaderMap, inbound: &HeaderMap) -> Result<(), 
     }
     Ok(())
 }
-
 fn forward_dispatch_auth_headers(
     out: &mut HeaderMap,
     inbound: &HeaderMap,
@@ -8092,7 +7693,6 @@ fn forward_dispatch_auth_headers(
     }
     Ok(())
 }
-
 fn is_onboarding_dispatch_route(method: &Method, path_and_query: &str) -> bool {
     let path = path_and_query
         .split_once('?')
@@ -8101,7 +7701,6 @@ fn is_onboarding_dispatch_route(method: &Method, path_and_query: &str) -> bool {
         && (path == "/v1/accounts/onboard" || path == "/v1/accounts/onboard/plan"))
         || (method == Method::GET && path == "/v1/accounts/onboarding/readiness")
 }
-
 fn forward_onboarding_auth_header(out: &mut HeaderMap, inbound: &HeaderMap) -> Result<(), String> {
     let header_name = HeaderName::from_static(crate::HEADER_ONBOARDING_API_TOKEN);
     let mut supplied = inbound.get_all(&header_name).iter();
@@ -8114,17 +7713,14 @@ fn forward_onboarding_auth_header(out: &mut HeaderMap, inbound: &HeaderMap) -> R
             crate::HEADER_ONBOARDING_API_TOKEN
         ));
     }
-
     let mut value = value.clone();
     value.set_sensitive(true);
     out.insert(header_name, value);
     Ok(())
 }
-
 fn apply_extra_headers(out: &mut HeaderMap, value: Option<&Value>) -> Result<(), String> {
     apply_extra_headers_with_policy(out, value, ExtraHeaderPolicy::Default)
 }
-
 fn apply_extra_headers_with_policy(
     out: &mut HeaderMap,
     value: Option<&Value>,
@@ -8158,9 +7754,7 @@ fn apply_extra_headers_with_policy(
         }
         _ => return Ok(()),
     };
-
     validate_target_authentication_headers(headers_obj, policy)?;
-
     for (raw_name, raw_value) in headers_obj {
         let lowered = raw_name.to_ascii_lowercase();
         if matches!(
@@ -8194,7 +7788,6 @@ fn apply_extra_headers_with_policy(
     }
     Ok(())
 }
-
 fn validate_target_authentication_headers(
     headers: &Map,
     policy: ExtraHeaderPolicy,
@@ -8208,7 +7801,6 @@ fn validate_target_authentication_headers(
             ));
         }
     }
-
     match policy {
         ExtraHeaderPolicy::CanonicalAccountAuthentication => {
             let has = |name: &str| names.contains(name);
@@ -8246,7 +7838,6 @@ fn validate_target_authentication_headers(
     }
     Ok(())
 }
-
 fn is_canonical_account_auth_header(lowered: &str) -> bool {
     matches!(
         lowered,
@@ -8257,12 +7848,10 @@ fn is_canonical_account_auth_header(lowered: &str) -> bool {
             | HEADER_X_IROHA_WITNESS
     )
 }
-
 const HEADER_X_IROHA_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
 const HEADER_X_IROHA_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_X_IROHA_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_X_IROHA_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
-
 fn is_operator_auth_header(lowered: &str) -> bool {
     matches!(
         lowered,
@@ -8272,7 +7861,6 @@ fn is_operator_auth_header(lowered: &str) -> bool {
             | HEADER_X_IROHA_OPERATOR_SIGNATURE
     )
 }
-
 fn remove_canonical_account_auth_headers(headers: &mut HeaderMap) {
     for name in [
         HEADER_X_IROHA_ACCOUNT,
@@ -8284,7 +7872,6 @@ fn remove_canonical_account_auth_headers(headers: &mut HeaderMap) {
         headers.remove(HeaderName::from_static(name));
     }
 }
-
 fn remove_operator_auth_headers(headers: &mut HeaderMap) {
     for name in [
         HEADER_X_IROHA_OPERATOR_PUBLIC_KEY,
@@ -8295,7 +7882,6 @@ fn remove_operator_auth_headers(headers: &mut HeaderMap) {
         headers.remove(HeaderName::from_static(name));
     }
 }
-
 /// Prevent intermediaries from retaining target-derived MCP responses.
 pub(crate) fn private_no_store_response(response: impl IntoResponse) -> Response {
     let mut response = response.into_response();
@@ -8305,7 +7891,6 @@ pub(crate) fn private_no_store_response(response: impl IntoResponse) -> Response
     );
     response
 }
-
 fn is_reserved_extra_header(lowered: &str) -> bool {
     matches!(
         lowered,
@@ -8329,7 +7914,6 @@ fn is_reserved_extra_header(lowered: &str) -> bool {
         || lowered == limits::REMOTE_ADDR_HEADER
         || lowered.starts_with("x-iroha-internal-")
 }
-
 async fn response_to_value(response: Response) -> Result<Value, String> {
     let status = response.status();
     let headers = response.headers().clone();
@@ -8339,14 +7923,12 @@ async fn response_to_value(response: Response) -> Result<Value, String> {
         .await
         .map_err(|err| format!("read response body: {err}"))?
         .to_bytes();
-
     let headers_value = headers_to_value(&headers);
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
     let body_value = decode_response_body(&body_bytes, content_type.as_deref());
-
     let mut structured = Map::new();
     structured.insert("status".into(), Value::from(u64::from(status.as_u16())));
     structured.insert("headers".into(), headers_value);
@@ -8355,10 +7937,8 @@ async fn response_to_value(response: Response) -> Result<Value, String> {
         content_type.map(Value::String).unwrap_or(Value::Null),
     );
     structured.insert("body".into(), body_value);
-
     Ok(Value::Object(structured))
 }
-
 fn headers_to_value(headers: &HeaderMap) -> Value {
     let mut out = Map::new();
     for (name, value) in headers {
@@ -8368,7 +7948,6 @@ fn headers_to_value(headers: &HeaderMap) -> Value {
     }
     Value::Object(out)
 }
-
 fn decode_response_body(bytes: &[u8], content_type: Option<&str>) -> Value {
     if bytes.is_empty() {
         return Value::Null;
@@ -8386,7 +7965,6 @@ fn decode_response_body(bytes: &[u8], content_type: Option<&str>) -> Value {
     }
     Value::String(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
-
 fn apply_body_projection(mut structured: Value, projection: Option<&Value>) -> Value {
     let Some(keys) = projection.and_then(parse_projection_keys) else {
         return structured;
@@ -8402,7 +7980,6 @@ fn apply_body_projection(mut structured: Value, projection: Option<&Value>) -> V
     }
     structured
 }
-
 fn parse_projection_keys(value: &Value) -> Option<Vec<String>> {
     let keys = value
         .as_array()?
@@ -8414,7 +7991,6 @@ fn parse_projection_keys(value: &Value) -> Option<Vec<String>> {
         .collect::<Vec<_>>();
     Some(keys)
 }
-
 fn project_value_keys(value: &mut Value, keys: &[String]) {
     match value {
         Value::Object(object) => {
@@ -8430,7 +8006,6 @@ fn project_value_keys(value: &mut Value, keys: &[String]) {
         _ => {}
     }
 }
-
 fn build_connect_ws_ticket(arguments: &Map, inbound_headers: &HeaderMap) -> Result<Value, String> {
     let sid = extract_connect_sid_argument(arguments)?;
     let role = arguments
@@ -8457,7 +8032,6 @@ fn build_connect_ws_ticket(arguments: &Map, inbound_headers: &HeaderMap) -> Resu
         .and_then(Value::as_str)
         .map(str::to_owned)
         .unwrap_or_else(|| infer_node_url(inbound_headers));
-
     let mut url = parse_node_url(&node)?;
     url.set_path("/v1/connect/ws");
     {
@@ -8466,16 +8040,13 @@ fn build_connect_ws_ticket(arguments: &Map, inbound_headers: &HeaderMap) -> Resu
         query.append_pair("sid", sid);
         query.append_pair("role", role);
     }
-
     let protocol_token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(token.as_bytes());
-
     Ok(norito::json!({
         "ws_url": (url.to_string()),
         "authorization_header": (format!("Bearer {token}")),
         "sec_websocket_protocol": (format!("iroha-connect.token.v1.{protocol_token}"))
     }))
 }
-
 fn infer_node_url(inbound_headers: &HeaderMap) -> String {
     let host = inbound_headers
         .get(header::HOST)
@@ -8487,7 +8058,6 @@ fn infer_node_url(inbound_headers: &HeaderMap) -> String {
         .unwrap_or("http");
     format!("{proto}://{host}")
 }
-
 fn parse_node_url(raw: &str) -> Result<url::Url, String> {
     let parsed = if raw.contains("://") {
         url::Url::parse(raw)
@@ -8497,7 +8067,6 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
         url::Url::parse(&with_scheme)
     }
     .map_err(|err| format!("invalid node url `{raw}`: {err}"))?;
-
     let mut url = parsed;
     match url.scheme() {
         "http" => {
@@ -8517,7 +8086,6 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
     }
     Ok(url)
 }
-
 fn connect_ws_ticket_tool() -> ToolSpec {
     ToolSpec {
         name: "connect.ws.ticket".to_owned(),
@@ -8555,7 +8123,6 @@ fn connect_ws_ticket_tool() -> ToolSpec {
         }),
     }
 }
-
 fn connect_session_create_tool() -> ToolSpec {
     ToolSpec {
         name: "connect.session.create".to_owned(),
@@ -8597,7 +8164,6 @@ fn connect_session_create_tool() -> ToolSpec {
         }),
     }
 }
-
 fn connect_session_create_and_ticket_tool() -> ToolSpec {
     ToolSpec {
         name: "connect.session.create_and_ticket".to_owned(),
@@ -8649,7 +8215,6 @@ fn connect_session_create_and_ticket_tool() -> ToolSpec {
         }),
     }
 }
-
 fn connect_session_delete_tool() -> ToolSpec {
     ToolSpec {
         name: "connect.session.delete".to_owned(),
@@ -8680,35 +8245,30 @@ fn connect_session_delete_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_connect_ws_ticket_tool() -> ToolSpec {
     let mut tool = connect_ws_ticket_tool();
     tool.name = "iroha.connect.ws.ticket".to_owned();
     tool.description = "Alias for connect.ws.ticket.".to_owned();
     tool
 }
-
 fn iroha_connect_session_create_tool() -> ToolSpec {
     let mut tool = connect_session_create_tool();
     tool.name = "iroha.connect.session.create".to_owned();
     tool.description = "Alias for connect.session.create.".to_owned();
     tool
 }
-
 fn iroha_connect_session_create_and_ticket_tool() -> ToolSpec {
     let mut tool = connect_session_create_and_ticket_tool();
     tool.name = "iroha.connect.session.create_and_ticket".to_owned();
     tool.description = "Alias for connect.session.create_and_ticket.".to_owned();
     tool
 }
-
 fn iroha_connect_session_delete_tool() -> ToolSpec {
     let mut tool = connect_session_delete_tool();
     tool.name = "iroha.connect.session.delete".to_owned();
     tool.description = "Alias for connect.session.delete.".to_owned();
     tool
 }
-
 fn iroha_vpn_profile_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.vpn.profile".to_owned(),
@@ -8729,7 +8289,6 @@ fn iroha_vpn_profile_tool() -> ToolSpec {
         }),
     }
 }
-
 fn vpn_canonical_auth_schema() -> Value {
     norito::json!({
         "type": "object",
@@ -8776,7 +8335,6 @@ fn vpn_canonical_auth_schema() -> Value {
         ]
     })
 }
-
 fn iroha_vpn_quotes_create_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.vpn.quotes.create".to_owned(),
@@ -8807,7 +8365,6 @@ fn iroha_vpn_quotes_create_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_vpn_sessions_create_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.vpn.sessions.create".to_owned(),
@@ -8840,7 +8397,6 @@ fn iroha_vpn_sessions_create_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_vpn_sessions_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.vpn.sessions.get".to_owned(),
@@ -8862,7 +8418,6 @@ fn iroha_vpn_sessions_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_vpn_sessions_delete_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.vpn.sessions.delete".to_owned(),
@@ -8884,7 +8439,6 @@ fn iroha_vpn_sessions_delete_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_vpn_receipts_submit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.vpn.receipts.submit".to_owned(),
@@ -8916,7 +8470,6 @@ fn iroha_vpn_receipts_submit_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_vpn_receipts_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.vpn.receipts.list".to_owned(),
@@ -8936,7 +8489,6 @@ fn iroha_vpn_receipts_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_health_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.health".to_owned(),
@@ -8957,7 +8509,6 @@ fn iroha_health_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_status_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.status".to_owned(),
@@ -8978,7 +8529,6 @@ fn iroha_status_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_parameters_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.parameters.get".to_owned(),
@@ -8999,7 +8549,6 @@ fn iroha_parameters_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_node_capabilities_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.node.capabilities".to_owned(),
@@ -9020,7 +8569,6 @@ fn iroha_node_capabilities_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_node_query_projection_checkpoint_plan_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.node.query_projection_checkpoint_plan".to_owned(),
@@ -9075,7 +8623,6 @@ fn iroha_node_query_projection_checkpoint_plan_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_node_query_projection_checkpoint_publish_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.node.query_projection_checkpoint_publish".to_owned(),
@@ -9130,7 +8677,6 @@ fn iroha_node_query_projection_checkpoint_publish_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_node_query_projection_shard_catalog_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.node.query_projection_shard_catalog".to_owned(),
@@ -9172,7 +8718,6 @@ fn iroha_node_query_projection_shard_catalog_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_node_query_projection_checkpoint_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.node.query_projection_checkpoint".to_owned(),
@@ -9195,7 +8740,6 @@ fn iroha_node_query_projection_checkpoint_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_time_now_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.time.now".to_owned(),
@@ -9216,7 +8760,6 @@ fn iroha_time_now_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_sumeragi_pacemaker_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.pacemaker".to_owned(),
@@ -9237,7 +8780,6 @@ fn iroha_sumeragi_pacemaker_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_sumeragi_phases_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.sumeragi.phases".to_owned(),
@@ -9258,7 +8800,6 @@ fn iroha_sumeragi_phases_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_da_ingest_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.ingest".to_owned(),
@@ -9286,7 +8827,6 @@ fn iroha_da_ingest_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_da_proof_policies_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.proof_policies".to_owned(),
@@ -9307,7 +8847,6 @@ fn iroha_da_proof_policies_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_da_proof_policy_snapshot_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.proof_policy_snapshot".to_owned(),
@@ -9329,7 +8868,6 @@ fn iroha_da_proof_policy_snapshot_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_da_manifests_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.manifests.get".to_owned(),
@@ -9372,7 +8910,6 @@ fn iroha_da_manifests_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_da_commitments_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.commitments.list".to_owned(),
@@ -9400,7 +8937,6 @@ fn iroha_da_commitments_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_da_commitments_prove_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.commitments.prove".to_owned(),
@@ -9428,7 +8964,6 @@ fn iroha_da_commitments_prove_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_da_commitments_verify_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.commitments.verify".to_owned(),
@@ -9456,7 +8991,6 @@ fn iroha_da_commitments_verify_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_da_pin_intents_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.pin_intents.list".to_owned(),
@@ -9484,7 +9018,6 @@ fn iroha_da_pin_intents_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_da_pin_intents_prove_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.pin_intents.prove".to_owned(),
@@ -9512,7 +9045,6 @@ fn iroha_da_pin_intents_prove_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_da_pin_intents_verify_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.da.pin_intents.verify".to_owned(),
@@ -9540,7 +9072,6 @@ fn iroha_da_pin_intents_verify_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_runtime_abi_active_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.abi.active".to_owned(),
@@ -9561,7 +9092,6 @@ fn iroha_runtime_abi_active_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_runtime_abi_hash_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.abi.hash".to_owned(),
@@ -9582,7 +9112,6 @@ fn iroha_runtime_abi_hash_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_runtime_metrics_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.metrics".to_owned(),
@@ -9603,7 +9132,6 @@ fn iroha_runtime_metrics_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_runtime_upgrades_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.upgrades.list".to_owned(),
@@ -9624,7 +9152,6 @@ fn iroha_runtime_upgrades_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_runtime_upgrades_propose_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.upgrades.propose".to_owned(),
@@ -9652,7 +9179,6 @@ fn iroha_runtime_upgrades_propose_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_runtime_upgrades_activate_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.upgrades.activate".to_owned(),
@@ -9694,7 +9220,6 @@ fn iroha_runtime_upgrades_activate_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_runtime_upgrades_cancel_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.runtime.upgrades.cancel".to_owned(),
@@ -9736,7 +9261,6 @@ fn iroha_runtime_upgrades_cancel_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_ledger_headers_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.ledger.headers".to_owned(),
@@ -9765,7 +9289,6 @@ fn iroha_ledger_headers_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_ledger_state_root_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.ledger.state_root".to_owned(),
@@ -9802,7 +9325,6 @@ fn iroha_ledger_state_root_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_ledger_state_proof_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.ledger.state_proof".to_owned(),
@@ -9839,7 +9361,6 @@ fn iroha_ledger_state_proof_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_ledger_block_proof_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.ledger.block_proof".to_owned(),
@@ -9889,7 +9410,6 @@ fn iroha_ledger_block_proof_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_bridge_finality_proof_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.bridge.finality.proof".to_owned(),
@@ -9926,7 +9446,6 @@ fn iroha_bridge_finality_proof_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_bridge_finality_bundle_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.bridge.finality.bundle".to_owned(),
@@ -9963,7 +9482,6 @@ fn iroha_bridge_finality_bundle_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_proofs_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.proofs.get".to_owned(),
@@ -10002,7 +9520,6 @@ fn iroha_proofs_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_proofs_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.proofs.query".to_owned(),
@@ -10030,7 +9547,6 @@ fn iroha_proofs_query_tool() -> ToolSpec {
         }),
     }
 }
-
 fn governance_proposal_id_v1_schema(description: &str) -> Value {
     norito::json!({
         "type": "string",
@@ -10040,7 +9556,6 @@ fn governance_proposal_id_v1_schema(description: &str) -> Value {
         "description": description
     })
 }
-
 fn required_property_schema(field: &str) -> Value {
     let mut schema = Map::new();
     schema.insert(
@@ -10049,7 +9564,6 @@ fn required_property_schema(field: &str) -> Value {
     );
     Value::Object(schema)
 }
-
 fn add_path_or_flat_alias_requiredness(schema: &mut Value, flat_keys: &[&str]) {
     let Some((last, preceding)) = flat_keys.split_last() else {
         return;
@@ -10061,14 +9575,12 @@ fn add_path_or_flat_alias_requiredness(schema: &mut Value, flat_keys: &[&str]) {
         branch.insert("else".to_owned(), fallback);
         fallback = Value::Object(branch);
     }
-
     let schema = schema
         .as_object_mut()
         .expect("governance MCP input schema is an object");
     schema.insert("if".to_owned(), required_property_schema("path"));
     schema.insert("else".to_owned(), fallback);
 }
-
 fn iroha_gov_post_tool_with_fields(
     name: &str,
     description: &str,
@@ -10136,11 +9648,9 @@ fn iroha_gov_post_tool_with_fields(
         input_schema,
     }
 }
-
 fn iroha_gov_post_tool(name: &str, description: &str, path_template: &str) -> ToolSpec {
     iroha_gov_post_tool_with_fields(name, description, path_template, &[])
 }
-
 fn iroha_gov_contract_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.contract.get".to_owned(),
@@ -10175,7 +9685,6 @@ fn iroha_gov_contract_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_gov_proposals_deploy_contract_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.proposals.deploy_contract",
@@ -10183,7 +9692,6 @@ fn iroha_gov_proposals_deploy_contract_tool() -> ToolSpec {
         "/v1/gov/proposals/deploy-contract",
     )
 }
-
 fn iroha_gov_proposals_get_tool() -> ToolSpec {
     let proposal_id_schema = governance_proposal_id_v1_schema(
         "Exact 64-character lowercase hexadecimal governance proposal id.",
@@ -10221,7 +9729,6 @@ fn iroha_gov_proposals_get_tool() -> ToolSpec {
     add_path_or_flat_alias_requiredness(&mut tool.input_schema, &["id", "proposal_id"]);
     tool
 }
-
 fn iroha_gov_locks_get_tool() -> ToolSpec {
     let referendum_id_schema =
         governance_selector_v1_schema("Canonical first-release governance referendum selector.");
@@ -10259,7 +9766,6 @@ fn iroha_gov_locks_get_tool() -> ToolSpec {
     add_path_or_flat_alias_requiredness(&mut tool.input_schema, &["rid", "id", "referendum_id"]);
     tool
 }
-
 fn iroha_gov_referenda_get_tool() -> ToolSpec {
     let referendum_id_schema =
         governance_selector_v1_schema("Canonical first-release governance referendum selector.");
@@ -10296,7 +9802,6 @@ fn iroha_gov_referenda_get_tool() -> ToolSpec {
     add_path_or_flat_alias_requiredness(&mut tool.input_schema, &["id", "referendum_id"]);
     tool
 }
-
 fn iroha_gov_tally_get_tool() -> ToolSpec {
     let tally_id_schema =
         governance_selector_v1_schema("Canonical first-release governance tally selector.");
@@ -10333,7 +9838,6 @@ fn iroha_gov_tally_get_tool() -> ToolSpec {
     add_path_or_flat_alias_requiredness(&mut tool.input_schema, &["id", "tally_id"]);
     tool
 }
-
 fn iroha_gov_protected_namespaces_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.protected_namespaces.list".to_owned(),
@@ -10355,7 +9859,6 @@ fn iroha_gov_protected_namespaces_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_gov_protected_namespaces_update_tool() -> ToolSpec {
     iroha_gov_post_tool(
         "iroha.gov.protected_namespaces.update",
@@ -10363,7 +9866,6 @@ fn iroha_gov_protected_namespaces_update_tool() -> ToolSpec {
         "/v1/gov/protected-namespaces",
     )
 }
-
 fn iroha_gov_unlocks_stats_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.unlocks.stats".to_owned(),
@@ -10384,7 +9886,6 @@ fn iroha_gov_unlocks_stats_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_gov_council_current_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.council.current".to_owned(),
@@ -10405,7 +9906,6 @@ fn iroha_gov_council_current_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_gov_citizens_count_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.gov.citizens.count".to_owned(),
@@ -10427,7 +9927,6 @@ fn iroha_gov_citizens_count_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_gov_enact_tool() -> ToolSpec {
     iroha_gov_post_tool_with_fields(
         "iroha.gov.enact",
@@ -10441,7 +9940,6 @@ fn iroha_gov_enact_tool() -> ToolSpec {
         )],
     )
 }
-
 fn iroha_gov_finalize_tool() -> ToolSpec {
     iroha_gov_post_tool_with_fields(
         "iroha.gov.finalize",
@@ -10463,7 +9961,6 @@ fn iroha_gov_finalize_tool() -> ToolSpec {
         ],
     )
 }
-
 fn iroha_aliases_resolve_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.aliases.resolve".to_owned(),
@@ -10493,7 +9990,6 @@ fn iroha_aliases_resolve_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_aliases_resolve_index_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.aliases.resolve_index".to_owned(),
@@ -10524,7 +10020,6 @@ fn iroha_aliases_resolve_index_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_aliases_by_account_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.aliases.by_account".to_owned(),
@@ -10562,7 +10057,6 @@ fn iroha_aliases_by_account_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_contracts_post_tool(name: &str, description: &str, path_template: &str) -> ToolSpec {
     ToolSpec {
         name: name.to_owned(),
@@ -10588,7 +10082,6 @@ fn iroha_contracts_post_tool(name: &str, description: &str, path_template: &str)
         }),
     }
 }
-
 fn iroha_contracts_code_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.contracts.code.get".to_owned(),
@@ -10625,7 +10118,6 @@ fn iroha_contracts_code_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_contracts_code_bytes_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.contracts.code.bytes.get".to_owned(),
@@ -10664,7 +10156,6 @@ fn iroha_contracts_code_bytes_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_contracts_call_tool() -> ToolSpec {
     iroha_contracts_post_tool(
         "iroha.contracts.call",
@@ -10672,7 +10163,6 @@ fn iroha_contracts_call_tool() -> ToolSpec {
         "/v1/contracts/call",
     )
 }
-
 fn iroha_contracts_call_and_wait_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.contracts.call_and_wait".to_owned(),
@@ -10725,7 +10215,6 @@ fn iroha_contracts_call_and_wait_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_contracts_state_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.contracts.state.get".to_owned(),
@@ -10758,7 +10247,6 @@ fn iroha_contracts_state_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_accounts_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.list".to_owned(),
@@ -10788,7 +10276,6 @@ fn iroha_accounts_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_accounts_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.get".to_owned(),
@@ -10823,7 +10310,6 @@ fn iroha_accounts_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_accounts_qr_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.qr".to_owned(),
@@ -10856,7 +10342,6 @@ fn iroha_accounts_qr_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_accounts_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.query".to_owned(),
@@ -10893,7 +10378,6 @@ fn iroha_accounts_query_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_accounts_onboard_plan_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.onboard.plan".to_owned(),
@@ -10935,7 +10419,6 @@ fn iroha_accounts_onboard_plan_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_accounts_onboard_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.onboard".to_owned(),
@@ -10971,7 +10454,6 @@ fn iroha_accounts_onboard_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_accounts_faucet_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.faucet".to_owned(),
@@ -11003,7 +10485,6 @@ fn iroha_accounts_faucet_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_account_transactions_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.transactions".to_owned(),
@@ -11042,7 +10523,6 @@ fn iroha_account_transactions_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_account_history_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.history".to_owned(),
@@ -11084,7 +10564,6 @@ fn iroha_account_history_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_account_transactions_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.transactions.query".to_owned(),
@@ -11131,7 +10610,6 @@ fn iroha_account_transactions_query_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_transactions_query_tool() -> ToolSpec {
     transactions_query_tool(
         "iroha.transactions.query",
@@ -11139,7 +10617,6 @@ fn iroha_transactions_query_tool() -> ToolSpec {
         "Query committed transactions with QueryEnvelope shortcuts. Intended for privileged operator and developer use.",
     )
 }
-
 fn iroha_transactions_visible_query_tool() -> ToolSpec {
     transactions_query_tool(
         "iroha.transactions.visible.query",
@@ -11147,7 +10624,6 @@ fn iroha_transactions_visible_query_tool() -> ToolSpec {
         "Query committed transactions visible to the authenticated viewer with QueryEnvelope shortcuts.",
     )
 }
-
 fn transactions_query_tool(name: &str, path_template: &str, description: &str) -> ToolSpec {
     ToolSpec {
         name: name.to_owned(),
@@ -11182,7 +10658,6 @@ fn transactions_query_tool(name: &str, path_template: &str, description: &str) -
         }),
     }
 }
-
 fn iroha_account_assets_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.assets".to_owned(),
@@ -11223,7 +10698,6 @@ fn iroha_account_assets_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_account_assets_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.assets.query".to_owned(),
@@ -11270,7 +10744,6 @@ fn iroha_account_assets_query_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_account_permissions_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.permissions".to_owned(),
@@ -11305,7 +10778,6 @@ fn iroha_account_permissions_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_account_portfolio_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.portfolio".to_owned(),
@@ -11346,7 +10818,6 @@ fn iroha_account_portfolio_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_domains_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.domains.list".to_owned(),
@@ -11373,7 +10844,6 @@ fn iroha_domains_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_domains_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.domains.get".to_owned(),
@@ -11410,7 +10880,6 @@ fn iroha_domains_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_domains_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.domains.query".to_owned(),
@@ -11447,7 +10916,6 @@ fn iroha_domains_query_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_musubi_v1_tools(spec: &Value) -> impl Iterator<Item = ToolSpec> + '_ {
     MUSUBI_V1_TOOL_DEFINITIONS.iter().map(|definition| {
         let request_body = spec
@@ -11495,7 +10963,6 @@ fn iroha_musubi_v1_tools(spec: &Value) -> impl Iterator<Item = ToolSpec> + '_ {
         }
     })
 }
-
 fn iroha_subscriptions_plans_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.subscriptions.plans.list".to_owned(),
@@ -11523,7 +10990,6 @@ fn iroha_subscriptions_plans_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_subscriptions_plans_create_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.subscriptions.plans.create".to_owned(),
@@ -11549,7 +11015,6 @@ fn iroha_subscriptions_plans_create_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_subscriptions_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.subscriptions.list".to_owned(),
@@ -11579,7 +11044,6 @@ fn iroha_subscriptions_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_subscriptions_create_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.subscriptions.create".to_owned(),
@@ -11618,7 +11082,6 @@ fn iroha_subscriptions_create_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_subscriptions_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.subscriptions.get".to_owned(),
@@ -11656,7 +11119,6 @@ fn iroha_subscriptions_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_subscriptions_cancel_tool() -> ToolSpec {
     iroha_subscription_draft_action_tool(
         "iroha.subscriptions.cancel",
@@ -11664,7 +11126,6 @@ fn iroha_subscriptions_cancel_tool() -> ToolSpec {
         "cancel",
     )
 }
-
 fn iroha_subscriptions_pause_tool() -> ToolSpec {
     iroha_subscription_draft_action_tool(
         "iroha.subscriptions.pause",
@@ -11672,7 +11133,6 @@ fn iroha_subscriptions_pause_tool() -> ToolSpec {
         "pause",
     )
 }
-
 fn iroha_subscriptions_resume_tool() -> ToolSpec {
     iroha_subscription_draft_action_tool(
         "iroha.subscriptions.resume",
@@ -11680,7 +11140,6 @@ fn iroha_subscriptions_resume_tool() -> ToolSpec {
         "resume",
     )
 }
-
 fn iroha_subscriptions_keep_tool() -> ToolSpec {
     iroha_subscription_draft_action_tool(
         "iroha.subscriptions.keep",
@@ -11688,7 +11147,6 @@ fn iroha_subscriptions_keep_tool() -> ToolSpec {
         "keep",
     )
 }
-
 fn iroha_subscriptions_usage_tool() -> ToolSpec {
     iroha_subscription_action_tool(
         "iroha.subscriptions.usage",
@@ -11697,7 +11155,6 @@ fn iroha_subscriptions_usage_tool() -> ToolSpec {
         "Optional usage payload. When omitted, `{}` is submitted.",
     )
 }
-
 fn iroha_subscriptions_charge_now_tool() -> ToolSpec {
     iroha_subscription_draft_action_tool(
         "iroha.subscriptions.charge_now",
@@ -11705,7 +11162,6 @@ fn iroha_subscriptions_charge_now_tool() -> ToolSpec {
         "charge-now",
     )
 }
-
 fn iroha_subscription_draft_action_tool(name: &str, description: &str, action: &str) -> ToolSpec {
     let mut body_properties = Map::new();
     body_properties.insert(
@@ -11751,7 +11207,6 @@ fn iroha_subscription_draft_action_tool(name: &str, description: &str, action: &
         "pause" | "keep" => {}
         _ => unreachable!("subscription draft action tool uses a closed action set"),
     }
-
     ToolSpec {
         name: name.to_owned(),
         effect: manual_tool_effect_from_name(name),
@@ -11784,7 +11239,6 @@ fn iroha_subscription_draft_action_tool(name: &str, description: &str, action: &
         }),
     }
 }
-
 fn iroha_subscription_action_tool(
     name: &str,
     description: &str,
@@ -11831,7 +11285,6 @@ fn iroha_subscription_action_tool(
         }),
     }
 }
-
 fn iroha_asset_definitions_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.definitions".to_owned(),
@@ -11862,7 +11315,6 @@ fn iroha_asset_definitions_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_asset_definitions_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.definitions.get".to_owned(),
@@ -11896,7 +11348,6 @@ fn iroha_asset_definitions_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_asset_definitions_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.definitions.query".to_owned(),
@@ -11932,7 +11383,6 @@ fn iroha_asset_definitions_query_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_asset_holders_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.holders".to_owned(),
@@ -11973,7 +11423,6 @@ fn iroha_asset_holders_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_asset_holders_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.holders.query".to_owned(),
@@ -12020,7 +11469,6 @@ fn iroha_asset_holders_query_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_assets_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.list".to_owned(),
@@ -12050,7 +11498,6 @@ fn iroha_assets_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_assets_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.assets.get".to_owned(),
@@ -12087,7 +11534,6 @@ fn iroha_assets_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_nfts_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.nfts.list".to_owned(),
@@ -12116,7 +11562,6 @@ fn iroha_nfts_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_nfts_chain_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.nfts.chain.list".to_owned(),
@@ -12137,7 +11582,6 @@ fn iroha_nfts_chain_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_nfts_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.nfts.get".to_owned(),
@@ -12174,7 +11618,6 @@ fn iroha_nfts_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_nfts_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.nfts.query".to_owned(),
@@ -12211,7 +11654,6 @@ fn iroha_nfts_query_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_rwas_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.rwas.list".to_owned(),
@@ -12240,7 +11682,6 @@ fn iroha_rwas_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_rwas_chain_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.rwas.chain.list".to_owned(),
@@ -12261,7 +11702,6 @@ fn iroha_rwas_chain_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_rwas_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.rwas.get".to_owned(),
@@ -12298,7 +11738,6 @@ fn iroha_rwas_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_rwas_query_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.rwas.query".to_owned(),
@@ -12335,9 +11774,7 @@ fn iroha_rwas_query_tool() -> ToolSpec {
         }),
     }
 }
-
 include!("mcp/iso20022_tools.rs");
-
 fn iroha_queries_submit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.queries.submit".to_owned(),
@@ -12365,7 +11802,6 @@ fn iroha_queries_submit_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_transactions_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.list".to_owned(),
@@ -12396,7 +11832,6 @@ fn iroha_transactions_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_transactions_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.get".to_owned(),
@@ -12440,7 +11875,6 @@ fn iroha_transactions_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_instructions_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.instructions.list".to_owned(),
@@ -12474,7 +11908,6 @@ fn iroha_instructions_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_instructions_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.instructions.get".to_owned(),
@@ -12528,7 +11961,6 @@ fn iroha_instructions_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_blocks_list_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.blocks.list".to_owned(),
@@ -12555,7 +11987,6 @@ fn iroha_blocks_list_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_blocks_get_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.blocks.get".to_owned(),
@@ -12600,7 +12031,6 @@ fn iroha_blocks_get_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_transactions_submit_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.submit".to_owned(),
@@ -12626,7 +12056,6 @@ fn iroha_transactions_submit_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.submit_and_wait".to_owned(),
@@ -12677,7 +12106,6 @@ fn iroha_transactions_submit_and_wait_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_transactions_wait_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.wait".to_owned(),
@@ -12736,7 +12164,6 @@ fn iroha_transactions_wait_tool() -> ToolSpec {
         }),
     }
 }
-
 fn iroha_transactions_status_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.transactions.status".to_owned(),
@@ -12778,7 +12205,6 @@ fn iroha_transactions_status_tool() -> ToolSpec {
         }),
     }
 }
-
 /// Build the HTTP status + JSON-RPC error payload for oversized requests.
 pub(crate) fn oversized_payload_response(max_request_bytes: usize) -> (StatusCode, Value) {
     (
@@ -12793,7 +12219,6 @@ pub(crate) fn oversized_payload_response(max_request_bytes: usize) -> (StatusCod
         ),
     )
 }
-
 /// Build the JSON-RPC payload for internal dispatch failures.
 pub(crate) fn internal_error_payload(message: &str) -> Value {
     jsonrpc_error_response(
@@ -12805,7 +12230,6 @@ pub(crate) fn internal_error_payload(message: &str) -> Value {
         })),
     )
 }
-
 pub(crate) fn method_not_allowed_payload() -> Value {
     jsonrpc_error_response(
         None,
@@ -12814,22 +12238,15 @@ pub(crate) fn method_not_allowed_payload() -> Value {
         None,
     )
 }
-
 pub(crate) fn invalid_json_payload(err: &json::Error) -> Value {
     let mut msg = String::from("invalid json payload: ");
     let _ = write!(msg, "{err}");
     jsonrpc_error_response(None, JSONRPC_PARSE_ERROR, &msg, None)
 }
-
-#[cfg(all(test, feature = "app_api"))]
-#[path = "mcp/dispatch_security_tests.rs"]
-mod dispatch_security_tests;
-
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
     include!("mcp/catalog_and_policy_tests.rs");
     include!("mcp/dispatch_and_argument_tests.rs");
     include!("mcp/iso20022_operator_auth_tests.rs");
-
     include!("mcp/body_builder_tests.rs");
 }

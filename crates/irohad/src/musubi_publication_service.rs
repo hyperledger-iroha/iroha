@@ -53,10 +53,7 @@ pub use finality::{
 
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
-use iroha_core::{
-    queue::Queue,
-    state::{State, StateReadOnly as _},
-};
+use iroha_core::{queue::Queue, state::State};
 use iroha_data_model::NetworkId;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 

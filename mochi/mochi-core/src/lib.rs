@@ -51,7 +51,7 @@ pub use supervisor::{
     Result as SupervisorResult, SelectedPeerStoragePaths, Supervisor, SupervisorBuilder,
     SupervisorError, SupervisorSessionInfo, resolve_selected_peer_storage_paths,
 };
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "test"))]
 pub use supervisor::{
     kagami_stub_genesis_policies_from_config, sign_kagami_stub_genesis_from_config,
 };

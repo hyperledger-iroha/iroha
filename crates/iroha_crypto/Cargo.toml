@@ -70,7 +70,6 @@ iroha_primitives = { workspace = true }
 iroha_macro = { workspace = true }
 iroha_ffi = { workspace = true, optional = true }
 iroha_schema = { workspace = true }
-iroha_confidential_spool = { workspace = true }
 
 derive_more = { workspace = true, features = ["deref", "deref_mut", "display", "debug"] }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }

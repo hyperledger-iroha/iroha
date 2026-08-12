@@ -121,26 +121,24 @@ mod model {
         AccountDoesNotExist(
             #[skip_from]
             #[skip_try_from]
-            #[cfg_attr(not(feature = "fast_dsl"), source)]
+            #[source]
             crate::query::error::FindError,
         ),
         /// Failed to validate transaction limits
         ///
         /// e.g. number of instructions
-        LimitCheck(#[cfg_attr(not(feature = "fast_dsl"), source)] TransactionLimitError),
+        LimitCheck(#[source] TransactionLimitError),
         /// Validation failed
-        Validation(#[cfg_attr(not(feature = "fast_dsl"), source)] ValidationFail),
+        Validation(#[source] ValidationFail),
         /// Failure in instruction execution
         ///
         /// In practice should be fully replaced by [`crate::ValidationFail::InstructionFailed`]
         /// and will be removed soon.
-        InstructionExecution(
-            #[cfg_attr(not(feature = "fast_dsl"), source)] InstructionExecutionFail,
-        ),
+        InstructionExecution(#[source] InstructionExecutionFail),
         /// Failure in IVM execution
-        IvmExecution(#[cfg_attr(not(feature = "fast_dsl"), source)] IvmExecutionFail),
+        IvmExecution(#[source] IvmExecutionFail),
         /// Execution of a time trigger or an invoked data trigger failed.
-        TriggerExecution(#[cfg_attr(not(feature = "fast_dsl"), source)] TriggerExecutionFail),
+        TriggerExecution(#[source] TriggerExecutionFail),
     }
 }
 
@@ -236,7 +234,6 @@ impl norito::json::JsonDeserialize for IvmExecutionFail {
 
 impl std::error::Error for TransactionLimitError {}
 
-#[cfg(not(feature = "fast_dsl"))]
 impl std::error::Error for InstructionExecutionFail {}
 
 impl std::error::Error for IvmExecutionFail {}

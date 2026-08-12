@@ -104,7 +104,7 @@ pub(super) fn build_operator_get_request(
         )));
     }
     if let Some(name) = FORBIDDEN_DEFAULT_AUTH_HEADERS
-        .iter()
+        .into_iter()
         .find(|name| default_headers.contains_key(*name))
     {
         return Err(ToriiError::SignedQueryContext(format!(

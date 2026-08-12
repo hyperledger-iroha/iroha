@@ -1,6 +1,4 @@
-//! Iroha node executable, startup wiring, and command-line interface.
-
-/// Feature-isolated real-network consensus fault-injection control.
+// Iroha node executable and feature-isolated consensus fault-injection control.
 #[cfg(feature = "test-network-message-control")]
 mod consensus_message_control;
 /// Iroha server command-line interface and node bootstrap entrypoint.
@@ -44,45 +42,11 @@ pub mod sorafs_reserve_transparency_runtime;
 /// Qualified stream-token gateway admission and durable callback reconciliation.
 mod sorafs_stream_token_gateway_runtime;
 /// Bounded local readers for startup trust-root artifacts.
+#[path = "main/startup_artifact.rs"]
 mod startup_artifact;
 /// Native Falcon-backed standalone Taira Bootle/Lantern issuer broker.
 #[cfg(feature = "daemon")]
 pub mod taira_bootle_lantern_broker;
-
-pub use runtime_provider_broker::{
-    BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
-    RuntimeProviderBrokerBackendRegistryV1, RuntimeProviderBrokerBackendsV1,
-    RuntimeProviderBrokerDeploymentV1, RuntimeProviderBrokerExecutableArgsV1,
-    RuntimeProviderBrokerExecutableErrorV1, RuntimeProviderBrokerExecutableV1,
-    RuntimeProviderBrokerLauncherErrorV1, RuntimeProviderBrokerLifecycleV1,
-    RuntimeProviderBrokerReadinessErrorV1, RuntimeProviderBrokerServerErrorV1,
-    StockGovernanceDagServiceRuntimeProviderRegistryV1,
-    load_runtime_provider_broker_catalog_file_v1, serve_runtime_provider_broker_v1,
-    serve_runtime_provider_broker_with_fallible_readiness_v1,
-    serve_runtime_provider_broker_with_lifecycle_v1,
-};
-pub use runtime_provider_registry::{
-    IrohaRuntimeProviderBindingV1, IrohaRuntimeProviderBindingsV1,
-    IrohaRuntimeProviderCatalogErrorV1, IrohaRuntimeProviderRegistryErrorV1,
-    IrohaRuntimeProviderRegistryV1, IrohaRuntimeProviderSlotV1,
-    RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1,
-};
-#[cfg(target_os = "windows")]
-use std::os::windows::{ffi::OsStrExt, fs::MetadataExt as _};
-use std::{
-    borrow::Cow,
-    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
-    convert::TryFrom,
-    env,
-    ffi::OsString,
-    fs,
-    future::Future,
-    num::NonZeroU64,
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex, Weak},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-
 use crate::soracloud_runtime::{
     QueuedSoracloudRuntimeMutationSink, SoracloudRuntimeManager, SoracloudRuntimeManagerHandle,
 };
@@ -158,24 +122,53 @@ use iroha_torii::Torii;
 pub use iroha_version::BuildLine;
 use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
-use tokio::{
-    sync::{Semaphore, broadcast, mpsc, oneshot},
-    task,
+pub use runtime_provider_broker::{
+    BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
+    RuntimeProviderBrokerBackendRegistryV1, RuntimeProviderBrokerBackendsV1,
+    RuntimeProviderBrokerDeploymentV1, RuntimeProviderBrokerExecutableArgsV1,
+    RuntimeProviderBrokerExecutableErrorV1, RuntimeProviderBrokerExecutableV1,
+    RuntimeProviderBrokerLauncherErrorV1, RuntimeProviderBrokerLifecycleV1,
+    RuntimeProviderBrokerReadinessErrorV1, RuntimeProviderBrokerServerErrorV1,
+    StockGovernanceDagServiceRuntimeProviderRegistryV1,
+    load_runtime_provider_broker_catalog_file_v1, serve_runtime_provider_broker_v1,
+    serve_runtime_provider_broker_with_fallible_readiness_v1,
+    serve_runtime_provider_broker_with_lifecycle_v1,
 };
-
+pub use runtime_provider_registry::{
+    IrohaRuntimeProviderBindingV1, IrohaRuntimeProviderBindingsV1,
+    IrohaRuntimeProviderCatalogErrorV1, IrohaRuntimeProviderRegistryErrorV1,
+    IrohaRuntimeProviderRegistryV1, IrohaRuntimeProviderSlotV1,
+    RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1,
+};
 use startup_artifact::{
     INTEGRITY_BOUND_CONFIG_MAX_BYTES_V1, read_bounded_startup_artifact, read_genesis_manifest,
     read_genesis_unlocked,
 };
-
+#[cfg(target_os = "windows")]
+use std::os::windows::{ffi::OsStrExt, fs::MetadataExt as _};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    convert::TryFrom,
+    env,
+    ffi::OsString,
+    fs,
+    future::Future,
+    num::NonZeroU64,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, Weak},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+use tokio::{
+    sync::{Semaphore, broadcast, mpsc, oneshot},
+    task,
+};
 const NODE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 /// Build-time source identity embedded for release artifact validation.
 const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
-
 fn startup_trace_enabled() -> bool {
     env::var_os("IROHA_STARTUP_TRACE").is_some()
 }
-
 fn log_startup_trace(stage: &'static str, started_at: Instant) {
     if startup_trace_enabled() {
         iroha_logger::info!(
@@ -185,7 +178,6 @@ fn log_startup_trace(stage: &'static str, started_at: Instant) {
         );
     }
 }
-
 fn torii_receipt_signer_or_derived(
     receipt_signer: Option<KeyPair>,
     node_key_pair: &KeyPair,
@@ -193,7 +185,6 @@ fn torii_receipt_signer_or_derived(
     if let Some(receipt_signer) = receipt_signer {
         return Ok(receipt_signer);
     }
-
     // A receipt key must survive process restarts because the durable DA log verifies historical
     // receipts during startup. Derive a separate key from the node identity instead of generating
     // an ephemeral key; the BLAKE3 KDF context prevents the derived key from being reused as the
@@ -219,7 +210,6 @@ fn torii_receipt_signer_or_derived(
     );
     Ok(key)
 }
-
 type ConsensusHandshakeMeta = ConsensusHandshakeMetadata;
 
 fn parse_handshake_meta_str(raw: &str) -> Result<ConsensusHandshakeMeta, norito::Error> {
@@ -10369,19 +10359,26 @@ impl Iroha {
             runtime_manager
         };
         let runtime_manager = if let Some(signer) = soracloud_runtime_mutation_signer {
-            let runtime_mutation_sink = Arc::new(
-                QueuedSoracloudRuntimeMutationSink::new(
-                    Arc::clone(&queue),
-                    Arc::clone(&state),
-                    signer,
-                    config.soracloud_runtime.submission.clone(),
-                )
-                .map_err(|error| {
-                    Report::new(StartError::StartTorii).attach(format!(
-                        "failed to construct qualified Soracloud runtime mutation sink: {error:#}"
-                    ))
-                })?,
+            #[cfg(feature = "embedded-soracloud-runtime")]
+            let runtime_mutation_sink = QueuedSoracloudRuntimeMutationSink::new(
+                Arc::clone(&queue),
+                Arc::clone(&state),
+                signer,
+                config.soracloud_runtime.submission.clone(),
             );
+            #[cfg(not(feature = "embedded-soracloud-runtime"))]
+            let runtime_mutation_sink = QueuedSoracloudRuntimeMutationSink::new(
+                Arc::new(config.common.chain.clone()),
+                Arc::clone(&queue),
+                Arc::clone(&state),
+                signer,
+                config.soracloud_runtime.submission.clone(),
+            );
+            let runtime_mutation_sink = Arc::new(runtime_mutation_sink.map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "failed to construct qualified Soracloud runtime mutation sink: {error:#}"
+                ))
+            })?);
             runtime_manager.with_mutation_sink(runtime_mutation_sink)
         } else {
             runtime_manager
@@ -10663,7 +10660,7 @@ impl Iroha {
         ) {
             supervisor.monitor(Child::new(child, OnShutdown::Wait(Duration::from_secs(1))));
         }
-        include!("main/online_peers_provider.rs");
+        let online_peers_provider = include!("main/online_peers_provider.rs");
         let torii = Torii::new_with_handle(
             config.common.chain.clone(),
             NetworkId::from_genesis_hash(config.genesis.expected_hash),

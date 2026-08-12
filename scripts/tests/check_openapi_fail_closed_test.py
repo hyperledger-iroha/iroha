@@ -12,6 +12,11 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 and older
 REPO_ROOT = Path(__file__).resolve().parents[2]
 XTASK = REPO_ROOT / "xtask" / "src" / "main.rs"
 TORII_OPENAPI = REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs"
+OPENAPI_AUTHORITIES = (
+    REPO_ROOT / "artifacts" / "openapi" / "torii.json",
+    REPO_ROOT / "artifacts" / "openapi" / "versions" / "current" / "torii.json",
+    REPO_ROOT / "crates" / "iroha_torii" / "assets" / "openapi" / "torii.json",
+)
 OPENAPI_GATE = REPO_ROOT / "ci" / "check_openapi_spec.sh"
 OPENAPI_GENERATOR_WRAPPER = REPO_ROOT / "ci" / "run_openapi_generator.sh"
 RELEASE_PROCESS_POLICY = (
@@ -90,6 +95,23 @@ def test_openapi_generator_has_no_stub_fallback() -> None:
     assert xtask.count('"--allow-stub"') == 1
     assert 'let args = ["xtask", "openapi", "--allow-stub"];' in xtask
     assert "require_release_router_openapi(try_generate_router_openapi())?" in xtask
+
+
+def test_openapi_static_authorities_are_exact_package_mirrors() -> None:
+    authority_bytes = [path.read_bytes() for path in OPENAPI_AUTHORITIES]
+
+    assert authority_bytes[0] == authority_bytes[1] == authority_bytes[2]
+    torii_openapi = TORII_OPENAPI.read_text(encoding="utf-8")
+    release_gate = OPENAPI_GATE.read_text(encoding="utf-8")
+    assert 'include_str!("../assets/openapi/torii.json")' in torii_openapi
+    assert "pub(crate) fn compiled_spec() -> &'static Value" in torii_openapi
+    assert "pub(crate) fn compiled_spec_json() -> &'static str" in torii_openapi
+    assert (
+        'PACKAGE_SPEC_PATH="${REPLAY_SOURCE_FIRST}/crates/iroha_torii/assets/openapi/torii.json"'
+        in release_gate
+    )
+    assert 'for authority in "${CURRENT_SPEC_PATH}" "${PACKAGE_SPEC_PATH}"' in release_gate
+    assert 'cmp -s "${SPEC_PATH}" "${authority}"' in release_gate
 
 
 def test_every_openapi_manifest_boundary_validates_release_shape() -> None:
@@ -413,11 +435,20 @@ def test_openapi_cargo_and_owner_surfaces_obey_release_process_policy() -> None:
     )
     assert wrapper_before < wrapper_receipt < wrapper_after
 
-    assert 'process_snapshot="$(ps -axo pid,etime,command)"' in policy
-    assert 'executable == "cargo"' in policy
-    assert 'executable == "rustc"' in policy
-    assert 'executable == "rustfmt"' in policy
-    assert 'command cargo +1.93.1 "${pinned_arguments[@]}"' in policy
+    assert policy.count("acquire_invocation_cargo_lock() {") == 1
+    assert policy.count("release_invocation_cargo_lock() {") == 1
+    assert 'lock_path="${artifact_root}/.sumeragi-v2-cargo.lock"' in policy
+    assert "lock.mkdir(mode=0o700)" in policy
+    assert "wait_for_external_cargo" not in policy
+    assert "ps -" not in policy
+    assert "pgrep" not in policy
+    assert "/proc/" not in policy
+    assert "process_snapshot" not in policy
+    assert 'if "$IROHA_RELEASE_CARGO_BIN" "$@"; then' in policy
+    assert (
+        '( _run_cargo_with_scoped_lock "$label" "${pinned_arguments[@]}" )'
+        in policy
+    )
     assert 'pinned_arguments=("$subcommand" -j1)' in policy
     assert 'pinned_arguments+=("$@")' in policy
     assert "local status" not in policy

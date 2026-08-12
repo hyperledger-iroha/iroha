@@ -17,8 +17,6 @@ mod contracts;
 mod debug_genesis;
 #[path = "domain_links.rs"]
 mod domain_links;
-#[path = "fast_dsl_build.rs"]
-mod fast_dsl_build;
 #[path = "fraud_monitoring.rs"]
 mod fraud_monitoring;
 #[path = "genesis_json.rs"]

@@ -1,0 +1,5 @@
+
+        seiyaku Treasury {
+            kotoage fn sweep() authorize("TreasuryOperator") {}
+        }
+        

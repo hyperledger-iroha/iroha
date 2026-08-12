@@ -35,7 +35,8 @@ pub(crate) struct SoranetPrivacyCollectorAuthState {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct VerifiedSoranetPrivacyCollector;
+/// Marker inserted only after a collector passes secondary privacy admission.
+pub(crate) struct VerifiedSoranetPrivacyCollector;
 
 fn privacy_reject(status: StatusCode, code: &'static str, message: impl Into<String>) -> Response {
     let payload = ErrorEnvelope::new(code, message.into());

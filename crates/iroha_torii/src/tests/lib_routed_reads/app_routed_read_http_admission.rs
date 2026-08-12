@@ -3,12 +3,11 @@
 mod app_routed_read_http_admission_tests {
     use std::{
         convert::Infallible,
-        pin::Pin,
         sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
         },
-        task::{Context, Poll},
+        task::Poll,
     };
 
     use axum::{
@@ -19,37 +18,16 @@ mod app_routed_read_http_admission_tests {
         response::{IntoResponse as _, Response},
         routing::any,
     };
-    use http_body::Frame;
     use tower::ServiceExt as _;
 
     use super::*;
 
-    #[derive(Debug)]
-    struct PendingCountingBody {
-        polls: Arc<AtomicUsize>,
-    }
-
-    impl http_body::Body for PendingCountingBody {
-        type Data = Bytes;
-        type Error = Infallible;
-
-        fn poll_frame(
-            self: Pin<&mut Self>,
-            _cx: &mut Context<'_>,
-        ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-            self.polls.fetch_add(1, Ordering::SeqCst);
-            Poll::Pending
-        }
-
-        fn is_end_stream(&self) -> bool {
-            false
-        }
-    }
-
     fn pending_body(polls: &Arc<AtomicUsize>) -> Body {
-        Body::new(PendingCountingBody {
-            polls: Arc::clone(polls),
-        })
+        let polls = Arc::clone(polls);
+        Body::from_stream(futures::stream::poll_fn(move |_| {
+            polls.fetch_add(1, Ordering::SeqCst);
+            Poll::<Option<Result<Bytes, Infallible>>>::Pending
+        }))
     }
 
     async fn insert_test_route_metadata(
@@ -362,7 +340,7 @@ mod app_routed_read_http_admission_tests {
             } else {
                 Bytes::new()
             };
-            Ok::<_, Infallible>(Frame::data(data))
+            Ok::<_, Infallible>(hyper::body::Frame::data(data))
         }));
         let body = Body::new(http_body_util::StreamBody::new(frames));
         let admitted = collect_app_routed_read_body(body, BYTES, Some(BYTES))

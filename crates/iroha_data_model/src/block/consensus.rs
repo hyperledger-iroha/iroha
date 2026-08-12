@@ -51,198 +51,6 @@ pub type View = u64;
 /// Validator index within the active set.
 pub type ValidatorIndex = u32;
 
-/// Stable identifier for the validator set active in a consensus round.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct ValidatorSetId {
-    /// Hash of the deterministically ordered validator roster.
-    pub hash: HashOf<Vec<PeerId>>,
-}
-
-impl ValidatorSetId {
-    /// Build a validator-set id from a canonical roster.
-    #[must_use]
-    pub fn from_roster(roster: &[PeerId]) -> Self {
-        Self {
-            hash: HashOf::new(&roster.to_vec()),
-        }
-    }
-}
-
-/// Consensus height/view/epoch identity under a specific validator set.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct RoundId {
-    /// Block height.
-    pub height: Height,
-    /// Consensus view.
-    pub view: View,
-    /// Epoch index.
-    pub epoch: u64,
-    /// Active validator-set identifier.
-    pub validator_set_id: ValidatorSetId,
-}
-
-/// Quorum policy for the active validator set.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[norito(tag = "kind", content = "policy", rename_all = "snake_case")]
-pub enum QuorumPolicy {
-    /// Permissioned count quorum over the active validator count.
-    PermissionedCount(
-        /// Number of validators in the active set.
-        u32,
-    ),
-    /// `NPoS` stake quorum over the active stake snapshot.
-    NposStake(
-        /// Total stake in the active set.
-        Quantity,
-    ),
-}
-
-impl QuorumPolicy {
-    /// Return the strict supermajority threshold for a permissioned validator count.
-    #[must_use]
-    pub fn permissioned_threshold(validators: u32) -> Option<u32> {
-        if validators == 0 {
-            return None;
-        }
-        u32::try_from(u64::from(validators) * 2 / 3 + 1).ok()
-    }
-
-    /// Return true when `signed_count` satisfies this policy's count quorum.
-    #[must_use]
-    pub fn is_satisfied_by_count(&self, signed_count: u32) -> bool {
-        let Self::PermissionedCount(validators) = self else {
-            return false;
-        };
-        Self::permissioned_threshold(*validators)
-            .is_some_and(|required| signed_count <= *validators && signed_count >= required)
-    }
-
-    /// Return true when `signed_stake` strictly exceeds two thirds of total stake.
-    ///
-    /// Missing signed stake, zero total stake, and exact two-thirds stake all
-    /// fail closed. The ratio comparison uses unbounded conceptual products,
-    /// so valid stake at the 512-bit boundary remains usable.
-    #[must_use]
-    pub fn is_satisfied_by_stake(&self, signed_stake: Option<Quantity>) -> bool {
-        let Self::NposStake(total_stake) = self else {
-            return false;
-        };
-        if total_stake.is_zero() {
-            return false;
-        }
-        let Some(signed_stake) = signed_stake else {
-            return false;
-        };
-        if &signed_stake > total_stake {
-            return false;
-        }
-        signed_stake.cmp_mul_u64(3, total_stake, 2).is_gt()
-    }
-}
-
-/// Consensus subject identified by parent, block, and payload commitment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct BlockSubject {
-    /// Parent block hash.
-    pub parent_block: HashOf<BlockHeader>,
-    /// Subject block hash.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Deterministic payload hash transported by RBC.
-    pub payload_hash: Hash,
-}
-
-/// Canonical first-release consensus vote.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct Vote {
-    /// Voted phase.
-    pub phase: CertPhase,
-    /// Voted round.
-    pub round: RoundId,
-    /// Voted block subject.
-    pub subject: BlockSubject,
-    /// Highest QC bound into `NewView` votes.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub highest_qc: Option<QcRef>,
-    /// Signer index within the active validator set.
-    pub signer: ValidatorIndex,
-    /// BLS signature over the canonical vote preimage.
-    pub bls_sig: Vec<u8>,
-}
-
-/// Canonical first-release aggregate certificate.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct Certificate {
-    /// Certified phase.
-    pub phase: CertPhase,
-    /// Certified round.
-    pub round: RoundId,
-    /// Certified block subject.
-    pub subject: BlockSubject,
-    /// Quorum policy used to validate this certificate.
-    pub quorum_policy: QuorumPolicy,
-    /// Highest QC carried by a `NewView` certificate.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub highest_qc: Option<QcRef>,
-    /// Compact signer bitmap (LSB-first).
-    pub signers_bitmap: Vec<u8>,
-    /// BLS12-381 aggregate signature bytes (compressed).
-    pub bls_aggregate_signature: Vec<u8>,
-}
-
-/// Request a missing consensus payload by round and subject hash.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct PayloadRequest {
-    /// Requested round.
-    pub round: RoundId,
-    /// Requested block hash.
-    pub block_hash: HashOf<BlockHeader>,
-    /// Expected payload hash.
-    pub payload_hash: Hash,
-}
-
-/// Response carrying a requested consensus payload.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct PayloadResponse {
-    /// Request this response satisfies.
-    pub request: PayloadRequest,
-    /// Canonical payload bytes.
-    pub payload: Vec<u8>,
-}
-
 /// Canonical consensus parameters included in the genesis fingerprint.
 ///
 /// These parameters are encoded with Norito (binary) in a fixed order to
@@ -5352,41 +5160,6 @@ pub struct RbcDeliver {
     pub ready_signatures: Vec<RbcReadySignature>,
 }
 
-#[cfg(feature = "sumeragi-multiproof")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct BlockMultiproof {
-    pub reads: Vec<ReadNode>,
-    pub read_keys: Vec<Vec<u8>>, // canonical bytes for keys
-    pub writes: Vec<WriteEntry>,
-    pub per_tx_read_index: Option<Vec<TxReadSpan>>,
-    pub proof_aux: Vec<u8>,
-}
-
-#[cfg(feature = "sumeragi-multiproof")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct ReadNode {
-    /// Opaque encoding of a Verkle/SMT node needed for verification
-    pub node_bytes: Vec<u8>,
-}
-
-#[cfg(feature = "sumeragi-multiproof")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct WriteEntry {
-    pub key: Vec<u8>,
-    pub value_bytes: Vec<u8>,
-    pub pre_version: u64,
-    pub new_version: u64,
-}
-
-#[cfg(feature = "sumeragi-multiproof")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct TxReadSpan {
-    /// start index (inclusive) into `BlockMultiproof::read_keys`
-    pub start: u32,
-    /// end index (exclusive)
-    pub end: u32,
-}
-
 // --- Helpers for Norito slice decoding bridges ---
 fn decode_from_slice_canonical<T>(bytes: &[u8]) -> Result<(T, usize), norito::core::Error>
 where
@@ -5417,14 +5190,6 @@ macro_rules! impl_decode_from_slice_via_codec {
 }
 
 impl_decode_from_slice_via_codec!(QcRef);
-impl_decode_from_slice_via_codec!(ValidatorSetId);
-impl_decode_from_slice_via_codec!(RoundId);
-impl_decode_from_slice_via_codec!(QuorumPolicy);
-impl_decode_from_slice_via_codec!(BlockSubject);
-impl_decode_from_slice_via_codec!(Vote);
-impl_decode_from_slice_via_codec!(Certificate);
-impl_decode_from_slice_via_codec!(PayloadRequest);
-impl_decode_from_slice_via_codec!(PayloadResponse);
 impl_decode_from_slice_via_codec!(ConsensusBlockHeader);
 impl_decode_from_slice_via_codec!(Proposal);
 impl_decode_from_slice_via_codec!(QcVote);
@@ -5444,14 +5209,6 @@ impl_decode_from_slice_via_codec!(RbcChunk);
 impl_decode_from_slice_via_codec!(RbcReady);
 impl_decode_from_slice_via_codec!(RbcReadySignature);
 impl_decode_from_slice_via_codec!(RbcDeliver);
-#[cfg(feature = "sumeragi-multiproof")]
-impl_decode_from_slice_via_codec!(BlockMultiproof);
-#[cfg(feature = "sumeragi-multiproof")]
-impl_decode_from_slice_via_codec!(ReadNode);
-#[cfg(feature = "sumeragi-multiproof")]
-impl_decode_from_slice_via_codec!(WriteEntry);
-#[cfg(feature = "sumeragi-multiproof")]
-impl_decode_from_slice_via_codec!(TxReadSpan);
 impl_decode_from_slice_via_codec!(ConsensusGenesisParams);
 impl_decode_from_slice_via_codec!(NposGenesisParams);
 impl_decode_from_slice_via_codec!(SumeragiMembershipStatus);

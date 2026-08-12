@@ -221,7 +221,6 @@ pub(crate) const QUANTITY_DIV_ROUND_INTRINSIC: &str = "__kotodama_quantity_div_r
 pub(crate) const QUANTITY_RATIO_ROUND_INTRINSIC: &str = "__kotodama_quantity_ratio_round";
 pub(crate) const DECIMAL_TO_INT_TRUNC_INTRINSIC: &str = "__kotodama_decimal_to_int_trunc";
 pub(crate) const DECIMAL_TO_INT_ROUND_INTRINSIC: &str = "__kotodama_decimal_to_int_round";
-
 fn is_list_intrinsic(name: &str) -> bool {
     matches!(
         name,
@@ -235,7 +234,6 @@ fn is_list_intrinsic(name: &str) -> bool {
             | LIST_ENUMERATE_INTRINSIC
     )
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CompilerIntrinsicKind {
     StateMap,
@@ -243,7 +241,6 @@ enum CompilerIntrinsicKind {
     Numeric,
     Sum,
 }
-
 /// Classify calls owned by typed semantic lowering rather than by the source
 /// function graph or the public builtin surface.
 ///
@@ -275,7 +272,6 @@ fn compiler_intrinsic_kind(name: &str) -> Option<CompilerIntrinsicKind> {
     }
     None
 }
-
 /// Return whether a source declaration collides with compiler-owned names.
 pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
     name.starts_with(LINKED_SYMBOL_PREFIX)
@@ -286,7 +282,6 @@ pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
         || (is_function
             && (Builtin::from_name(name).is_some() || Builtin::from_source_name(name).is_some()))
 }
-
 /// Return whether a declared source type collides with an active or retired
 /// compiler-owned type spelling.
 ///
@@ -296,7 +291,6 @@ pub fn is_reserved_source_declaration(name: &str, is_function: bool) -> bool {
 pub fn is_reserved_source_type_declaration(name: &str) -> bool {
     is_reserved_source_declaration(name, false) || V1_RETIRED_NUMERIC_TYPE_NAMES.contains(&name)
 }
-
 fn enforce_static_iteration_limit(form: &str, span: u128) -> Result<(), SemanticError> {
     let limit = u128::try_from(COLLECTION_ITERATION_LIMIT).expect("positive V1 iteration limit");
     if span > limit {
@@ -307,14 +301,12 @@ fn enforce_static_iteration_limit(form: &str, span: u128) -> Result<(), Semantic
     }
     Ok(())
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FunctionEffects {
     host_side_effects: bool,
     emits_instructions: bool,
     mutates_durable_state: bool,
 }
-
 impl FunctionEffects {
     fn merge_from(&mut self, other: Self) -> bool {
         let merged = Self {
@@ -326,22 +318,18 @@ impl FunctionEffects {
         *self = merged;
         changed
     }
-
     fn requires_permission(self) -> bool {
         self.host_side_effects || self.emits_instructions || self.mutates_durable_state
     }
-
     fn forbids_view(self) -> bool {
         self.host_side_effects || self.emits_instructions || self.mutates_durable_state
     }
 }
-
 #[derive(Clone, Default)]
 struct FunctionSummary {
     direct_effects: FunctionEffects,
     calls: IndexSet<String>,
 }
-
 fn collect_source_expr_summary(expr: &Expr, summary: &mut FunctionSummary) {
     match expr {
         Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
@@ -458,7 +446,6 @@ fn collect_source_expr_summary(expr: &Expr, summary: &mut FunctionSummary) {
         | Expr::Ident(_) => {}
     }
 }
-
 fn collect_source_statement_summary(statement: &Statement, summary: &mut FunctionSummary) {
     match statement.kind() {
         Statement::Source { .. } | Statement::Resolved { .. } => {
@@ -524,7 +511,6 @@ fn collect_source_statement_summary(statement: &Statement, summary: &mut Functio
         Statement::Return(None) | Statement::Break | Statement::Continue => {}
     }
 }
-
 fn collect_source_block_summary(block: &Block, summary: &mut FunctionSummary) {
     for statement in &block.statements {
         collect_source_statement_summary(statement, summary);
@@ -533,14 +519,12 @@ fn collect_source_block_summary(block: &Block, summary: &mut FunctionSummary) {
         collect_source_expr_summary(tail, summary);
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TypedParam {
     pub name: String,
     pub ty: Type,
     pub is_state: bool,
 }
-
 /// Resolved type signature made available to a separately analyzed module.
 ///
 /// Module bodies are type checked before linking.  Consequently an imported
@@ -560,7 +544,6 @@ pub struct FunctionSignature {
     /// Source-level function kind and authorization retained for test linking.
     pub modifiers: FunctionModifiers,
 }
-
 /// Complete typed interface exposed by a deployable target to local test modules.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TestTargetEnvironment {
@@ -570,7 +553,6 @@ pub(crate) struct TestTargetEnvironment {
     pub(crate) consts: IndexMap<String, TypedExpr>,
     pub(crate) error_codes: HashMap<String, u32>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     /// Signed adaptive-width integer in `-2^511..=2^511-1`.
@@ -622,13 +604,11 @@ pub enum Type {
     /// Forward reference to a declared struct, resolved before typed HIR leaves analysis.
     NamedStruct(String),
 }
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedExpr {
     pub expr: ExprKind,
     pub ty: Type,
 }
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExprKind {
     Binary {
@@ -749,21 +729,18 @@ pub enum ExprKind {
     Bytes(Vec<u8>),
     Ident(String),
 }
-
 /// Semantically checked sum pattern and its active payload type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedSumPattern {
     pub pattern: SumPattern,
     pub payload_type: Option<Type>,
 }
-
 /// One typed exhaustive match arm.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedMatchArm {
     pub pattern: TypedSumPattern,
     pub body: TypedBlock,
 }
-
 /// One typed/effect-analysis failure with an explicit stable identity.
 #[derive(Debug, PartialEq, Eq)]
 pub struct SemanticError {
@@ -772,39 +749,32 @@ pub struct SemanticError {
     /// Human-readable diagnostic message without an embedded code prefix.
     pub(crate) message: String,
 }
-
 impl SemanticError {
     /// Return the stable machine-readable code.
     pub const fn code(&self) -> &'static str {
         self.code
     }
-
     /// Return the human-readable, prefix-free message.
     pub fn message(&self) -> &str {
         &self.message
     }
 }
-
 impl std::fmt::Display for SemanticError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "[{}] {}", self.code, self.message)
     }
 }
-
 impl std::error::Error for SemanticError {}
-
 #[derive(Debug, PartialEq)]
 pub(crate) struct SemanticFailure {
     pub(crate) error: SemanticError,
     pub(crate) location: Option<SourceLocation>,
     pub(crate) diagnostic: Option<crate::semantic_diagnostics::SemanticDiagnostic>,
 }
-
 #[derive(Debug, PartialEq)]
 pub(crate) struct SemanticFailures {
     pub(crate) failures: Vec<SemanticFailure>,
 }
-
 impl From<SemanticError> for SemanticFailures {
     fn from(error: SemanticError) -> Self {
         Self {
@@ -816,7 +786,6 @@ impl From<SemanticError> for SemanticFailures {
         }
     }
 }
-
 impl SemanticFailures {
     fn into_first(self) -> SemanticError {
         self.failures
@@ -826,7 +795,6 @@ impl SemanticFailures {
             .error
     }
 }
-
 fn record_semantic_failure(
     failures: &mut Vec<SemanticFailure>,
     omitted: &mut usize,
@@ -838,7 +806,6 @@ fn record_semantic_failure(
         *omitted = omitted.saturating_add(1);
     }
 }
-
 fn attach_pending_diagnostic(
     failures: &mut SemanticFailures,
     pending: Option<crate::semantic_diagnostics::SemanticDiagnostic>,
@@ -854,7 +821,6 @@ fn attach_pending_diagnostic(
         failure.diagnostic = Some(pending);
     }
 }
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedProgram {
     pub unit: SourceUnit,
@@ -876,7 +842,6 @@ pub struct TypedProgram {
     /// linking and compiler-internal typed-HIR builds.
     pub test_support_enabled: bool,
 }
-
 /// Graph-stable identity of one typed HIR node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypedHirNodeId {
@@ -885,7 +850,6 @@ pub struct TypedHirNodeId {
     /// Stable source-unit-local identity.
     pub local: HirId,
 }
-
 /// Type and resolver target retained for one successfully typed expression.
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedHirNode {
@@ -898,7 +862,6 @@ pub struct TypedHirNode {
     /// Final semantic type.
     pub ty: Type,
 }
-
 /// Stable source-declared application error emitted in the seiyaku interface.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct TypedErrorCode {
@@ -906,7 +869,6 @@ pub struct TypedErrorCode {
     pub name: String,
     pub code: u32,
 }
-
 #[derive(Debug, PartialEq, Clone)]
 pub struct TypedStateDecl {
     pub name: String,
@@ -914,7 +876,6 @@ pub struct TypedStateDecl {
     /// Exact source range of the state declaration, when source-backed.
     pub source: Option<crate::source::SourceRange>,
 }
-
 /// Mutable semantic state for exactly one compilation.
 ///
 /// Keeping these registries in an owned context prevents independent compiler
@@ -950,13 +911,11 @@ pub struct SemanticContext {
     resolved_named_type_resources: RefCell<HashMap<String, ExpandedTypeResources>>,
     next_synthetic_binding: Cell<usize>,
 }
-
 impl SemanticContext {
     /// Construct an empty per-compilation semantic context.
     pub fn new() -> Self {
         Self::default()
     }
-
     /// Construct a context with ZK-only language capabilities enabled by build policy.
     pub fn with_zk_enabled(zk_enabled: bool) -> Self {
         Self {
@@ -964,7 +923,6 @@ impl SemanticContext {
             ..Self::default()
         }
     }
-
     /// Construct a context with compiler-owned execution capabilities.
     pub fn with_capabilities(zk_enabled: bool, test_builtins_enabled: bool) -> Self {
         Self {
@@ -973,7 +931,6 @@ impl SemanticContext {
             ..Self::default()
         }
     }
-
     /// Analyze one parsed program using only state owned by this context.
     ///
     /// The context is reset before every call so callers may reuse it
@@ -982,7 +939,6 @@ impl SemanticContext {
         self.analyze_all(program)
             .map_err(SemanticFailures::into_first)
     }
-
     /// Analyze one source unit with explicitly resolved imported functions.
     ///
     /// The external names must be fully qualified source names such as
@@ -998,7 +954,6 @@ impl SemanticContext {
         self.analyze_all_with_external_functions(program, external_functions)
             .map_err(SemanticFailures::into_first)
     }
-
     pub(crate) fn analyze_all_with_external_functions(
         &self,
         program: &Program,
@@ -1006,7 +961,6 @@ impl SemanticContext {
     ) -> Result<TypedProgram, SemanticFailures> {
         self.analyze_all_with_external_environment(program, external_functions, &IndexMap::new())
     }
-
     fn analyze_all_with_external_environment(
         &self,
         program: &Program,
@@ -1018,7 +972,6 @@ impl SemanticContext {
         self.external_states.replace(external_states.clone());
         analyze_with_context(self, program)
     }
-
     /// Resolve the function interface of one source unit without inspecting
     /// function bodies.
     ///
@@ -1037,7 +990,6 @@ impl SemanticContext {
                 .map(|name| (name, Vec::new()))
                 .collect(),
         );
-
         let mut structs = HashMap::new();
         for item in &program.items {
             let Item::Struct(definition) = item else {
@@ -1055,7 +1007,6 @@ impl SemanticContext {
             .map_err(|failure| failure.error)?;
         install_canonical_struct_types(self, resolution_plan);
         validate_declared_struct_list_schemas(self)?;
-
         let source_summaries = program
             .items
             .iter()
@@ -1101,7 +1052,6 @@ impl SemanticContext {
         }
         Ok(signatures)
     }
-
     pub(crate) fn resolve_resolved_function_signatures(
         &self,
         program: &crate::resolved::ResolvedProgram,
@@ -1109,7 +1059,6 @@ impl SemanticContext {
         self.resolve_resolved_function_signatures_all(program)
             .map_err(SemanticFailures::into_first)
     }
-
     pub(crate) fn resolve_resolved_function_signatures_all(
         &self,
         program: &crate::resolved::ResolvedProgram,
@@ -1125,7 +1074,6 @@ impl SemanticContext {
             failures
         })
     }
-
     pub(crate) fn analyze_resolved_with_external_functions(
         &self,
         program: &crate::resolved::ResolvedProgram,
@@ -1137,7 +1085,6 @@ impl SemanticContext {
         };
         self.analyze_resolved_environment(program, &environment)
     }
-
     pub(crate) fn analyze_resolved_with_test_target(
         &self,
         program: &crate::resolved::ResolvedProgram,
@@ -1145,7 +1092,6 @@ impl SemanticContext {
     ) -> Result<TypedProgram, SemanticFailures> {
         self.analyze_resolved_environment(program, environment)
     }
-
     pub(crate) fn test_target_environment(
         &self,
         functions: BTreeMap<String, FunctionSignature>,
@@ -1159,12 +1105,10 @@ impl SemanticContext {
             error_codes: self.error_codes.borrow().clone(),
         }
     }
-
     pub(crate) fn analyze_all(&self, program: &Program) -> Result<TypedProgram, SemanticFailures> {
         self.reset();
         analyze_with_context(self, program)
     }
-
     /// Type and effect-check a program only after fail-closed named-HIR resolution.
     pub(crate) fn analyze_resolved(
         &self,
@@ -1172,7 +1116,6 @@ impl SemanticContext {
     ) -> Result<TypedProgram, SemanticFailures> {
         self.analyze_resolved_environment(program, &TestTargetEnvironment::default())
     }
-
     fn analyze_resolved_environment(
         &self,
         program: &crate::resolved::ResolvedProgram,
@@ -1200,19 +1143,15 @@ impl SemanticContext {
             typed
         })
     }
-
     fn expression_source(&self, expression: &Expr) -> Option<crate::source::SourceRange> {
         self.resolved_source(expression.hir_id(), expression.source())
     }
-
     fn statement_source(&self, statement: &Statement) -> Option<crate::source::SourceRange> {
         self.resolved_source(statement.hir_id(), statement.source())
     }
-
     fn type_source(&self, ty: &TypeExpr) -> Option<crate::source::SourceRange> {
         self.resolved_source(ty.hir_id(), ty.source())
     }
-
     fn resolved_source(
         &self,
         id: Option<HirId>,
@@ -1225,7 +1164,6 @@ impl SemanticContext {
         id.and_then(|id| arena.node(id))
             .and_then(|node| node.source)
     }
-
     fn resolved_node(
         &self,
         id: Option<HirId>,
@@ -1258,7 +1196,6 @@ impl SemanticContext {
         }
         Ok(Some(node))
     }
-
     fn expression_target(
         &self,
         expression: &Expr,
@@ -1271,7 +1208,6 @@ impl SemanticContext {
             )?
             .and_then(|node| node.target))
     }
-
     fn validate_statement_node(
         &self,
         statement: &Statement,
@@ -1282,7 +1218,6 @@ impl SemanticContext {
             statement.source(),
         )
     }
-
     fn validate_type_node(
         &self,
         ty: &TypeExpr,
@@ -1293,7 +1228,6 @@ impl SemanticContext {
             ty.source(),
         )
     }
-
     fn validate_value_target(
         &self,
         expression: &Expr,
@@ -1386,7 +1320,6 @@ impl SemanticContext {
         };
         Ok(Some((target, ty)))
     }
-
     fn list_receiver_is_mutable(
         &self,
         expression: &Expr,
@@ -1411,7 +1344,6 @@ impl SemanticContext {
             })?;
         Ok(binding.mutable)
     }
-
     fn validate_call_target(
         &self,
         expression: &Expr,
@@ -1490,7 +1422,6 @@ impl SemanticContext {
         }
         Ok(())
     }
-
     fn validate_assignment_target(
         &self,
         node: Option<&crate::resolved::ResolvedNode>,
@@ -1556,7 +1487,6 @@ impl SemanticContext {
         }
         Ok(())
     }
-
     fn validate_struct_literal_target(
         &self,
         expression: &Expr,
@@ -1613,7 +1543,6 @@ impl SemanticContext {
         }
         Ok(())
     }
-
     fn validate_named_type_target(
         &self,
         node: Option<&crate::resolved::ResolvedNode>,
@@ -1675,7 +1604,6 @@ impl SemanticContext {
         }
         Ok(())
     }
-
     fn record_typed_hir_node(&self, expression: &Expr, ty: &Type) -> Result<(), SemanticError> {
         // Explicit annotations are checked while they are resolved, but an
         // inferred tuple or sum can also combine many references to the same
@@ -1705,7 +1633,6 @@ impl SemanticContext {
         }
         Ok(())
     }
-
     fn capture_diagnostic(
         &self,
         primary: Option<crate::source::SourceRange>,
@@ -1723,7 +1650,6 @@ impl SemanticContext {
             });
         }
     }
-
     fn replace_diagnostic(
         &self,
         primary: Option<crate::source::SourceRange>,
@@ -1739,7 +1665,6 @@ impl SemanticContext {
                 fix,
             }));
     }
-
     fn capture_expression_diagnostic(
         &self,
         expression: &Expr,
@@ -1747,7 +1672,6 @@ impl SemanticContext {
     ) {
         self.capture_diagnostic(self.expression_source(expression), fix);
     }
-
     fn capture_statement_diagnostic(
         &self,
         statement: &Statement,
@@ -1755,15 +1679,12 @@ impl SemanticContext {
     ) {
         self.capture_diagnostic(self.statement_source(statement), fix);
     }
-
     fn take_diagnostic(&self) -> Option<crate::semantic_diagnostics::SemanticDiagnostic> {
         self.pending_diagnostic.borrow_mut().take()
     }
-
     fn discard_diagnostic(&self) {
         self.pending_diagnostic.borrow_mut().take();
     }
-
     fn fresh_aggregate_capture(&self) -> String {
         let index = self.next_synthetic_binding.get();
         self.next_synthetic_binding.set(
@@ -1775,7 +1696,6 @@ impl SemanticContext {
         // binding cannot collide with a user local in any nested scope.
         format!("\0aggregate_capture#{index}")
     }
-
     /// Check whether one expression can initialize `expected` without letting
     /// a speculative error replace the diagnostic for the enclosing invalid
     /// construct. Typed expression analysis is otherwise side-effect free; a
@@ -1796,7 +1716,6 @@ impl SemanticContext {
         self.required_list_capacity.replace(required_capacity);
         result.is_ok()
     }
-
     fn reset(&self) {
         self.structs.borrow_mut().clear();
         self.states.borrow_mut().clear();
@@ -1825,7 +1744,6 @@ impl SemanticContext {
         self.next_synthetic_binding.set(0);
     }
 }
-
 fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, SemanticError> {
     let mut functions = HashSet::new();
     let mut types = HashSet::new();
@@ -1844,7 +1762,6 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
     let mut declarations = HashMap::from([(program.unit.name.clone(), "source unit")]);
     let mut global_error_codes = HashMap::new();
     let mut struct_names = Vec::new();
-
     let mut register_declaration = |name: &str,
                                     kind: &'static str,
                                     is_function: bool,
@@ -1869,7 +1786,6 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
         }
         Ok(())
     };
-
     for item in &program.items {
         match item {
             Item::Function(function) => {
@@ -1987,10 +1903,8 @@ fn validate_declaration_uniqueness(program: &Program) -> Result<Vec<String>, Sem
             }
         }
     }
-
     Ok(struct_names)
 }
-
 fn collect_struct_dependencies(
     ty: &Type,
     known_structs: &HashSet<String>,
@@ -2040,7 +1954,6 @@ fn collect_struct_dependencies(
         }
     }
 }
-
 fn value_struct_cycle(context: &SemanticContext, struct_names: &[String]) -> Option<Vec<String>> {
     let definitions = context.structs.borrow().clone();
     let known_structs = struct_names.iter().cloned().collect::<HashSet<_>>();
@@ -2055,7 +1968,6 @@ fn value_struct_cycle(context: &SemanticContext, struct_names: &[String]) -> Opt
         }
         graph.insert(name.clone(), dependencies);
     }
-
     // Use an explicit DFS stack so malformed recursive value types cannot
     // overflow the compiler stack before they are rejected.
     let mut visit_state = struct_names
@@ -2083,7 +1995,6 @@ fn value_struct_cycle(context: &SemanticContext, struct_names: &[String]) -> Opt
                     None
                 }
             };
-
             if let Some(dependency) = next_dependency {
                 match visit_state.get(&dependency).copied().unwrap_or_default() {
                     0 => {
@@ -2104,24 +2015,20 @@ fn value_struct_cycle(context: &SemanticContext, struct_names: &[String]) -> Opt
                 }
                 continue;
             }
-
             let (finished, _) = stack.pop().expect("stack is not empty");
             let path_entry = path.pop().expect("active path mirrors DFS stack");
             debug_assert_eq!(finished, path_entry);
             visit_state.insert(finished, 2);
         }
     }
-
     None
 }
-
 fn value_struct_cycle_error(cycle: &[String]) -> SemanticError {
     SemanticError {
         code: "K2006",
         message: format!("cyclic value struct definition: {}", cycle.join(" -> ")),
     }
 }
-
 fn validate_acyclic_value_structs(
     context: &SemanticContext,
     struct_names: &[String],
@@ -2129,30 +2036,25 @@ fn validate_acyclic_value_structs(
     value_struct_cycle(context, struct_names)
         .map_or(Ok(()), |cycle| Err(value_struct_cycle_error(&cycle)))
 }
-
 #[derive(Clone, Copy, Debug, Default)]
 struct ExpandedTypeResources {
     nodes: usize,
     depth: usize,
 }
-
 #[derive(Debug)]
 struct StructResolutionBudgetError {
     owner: Option<String>,
     error: SemanticError,
 }
-
 struct StructResolutionPlan {
     order: Vec<String>,
     resources: HashMap<String, ExpandedTypeResources>,
 }
-
 fn capped_expanded_nodes(nodes: usize, additional: usize) -> usize {
     nodes
         .saturating_add(additional)
         .min(MAX_EXPANDED_TYPE_NODES.saturating_add(1))
 }
-
 /// Measure one type using already-memoized resources for every named dependency.
 ///
 /// This walk is deliberately iterative. Named structs contribute their
@@ -2241,7 +2143,6 @@ fn measure_expanded_type(
     }
     resources
 }
-
 /// Prove that materializing the acyclic named-type graph fits fixed V1 limits.
 ///
 /// The dependency graph is processed leaf-first. Each named shape is measured
@@ -2265,7 +2166,6 @@ fn validate_struct_resolution_budget(
         dependencies.sort();
         graph.insert(name.clone(), dependencies);
     }
-
     let mut unresolved_dependencies = graph
         .iter()
         .map(|(name, dependencies)| (name.clone(), dependencies.len()))
@@ -2310,7 +2210,6 @@ fn validate_struct_resolution_budget(
             },
         });
     }
-
     let mut measured = HashMap::<String, ExpandedTypeResources>::new();
     for name in &order {
         let mut resources = ExpandedTypeResources { nodes: 1, depth: 1 };
@@ -2323,7 +2222,6 @@ fn validate_struct_resolution_budget(
         }
         measured.insert(name.clone(), resources);
     }
-
     let mut roots = local_struct_names.to_vec();
     roots.sort();
     for name in &roots {
@@ -2351,7 +2249,6 @@ fn validate_struct_resolution_budget(
             });
         }
     }
-
     let total = roots.iter().fold(0_usize, |total, name| {
         capped_expanded_nodes(
             total,
@@ -2374,7 +2271,6 @@ fn validate_struct_resolution_budget(
         resources: measured,
     })
 }
-
 fn canonicalize_named_type(ty: &Type, resolved: &HashMap<String, Type>) -> Type {
     match ty {
         Type::NamedStruct(name) => resolved.get(name).cloned().unwrap_or_else(|| ty.clone()),
@@ -2404,7 +2300,6 @@ fn canonicalize_named_type(ty: &Type, resolved: &HashMap<String, Type>) -> Type 
         _ => ty.clone(),
     }
 }
-
 fn install_canonical_struct_types(context: &SemanticContext, plan: StructResolutionPlan) {
     let StructResolutionPlan { order, resources } = plan;
     let definitions = context.structs.borrow().clone();
@@ -2437,7 +2332,6 @@ fn install_canonical_struct_types(context: &SemanticContext, plan: StructResolut
     context.resolved_named_types.replace(resolved);
     context.resolved_named_type_resources.replace(resources);
 }
-
 fn type_expr_mentions_name(ty: &TypeExpr, expected: &str) -> bool {
     let mut pending = vec![ty];
     while let Some(ty) = pending.pop() {
@@ -2454,7 +2348,6 @@ fn type_expr_mentions_name(ty: &TypeExpr, expected: &str) -> bool {
     }
     false
 }
-
 fn recursive_function_call_cycle(context: &SemanticContext) -> Option<Vec<String>> {
     let summaries = context.function_summaries.borrow().clone();
     let mut function_names = summaries.keys().cloned().collect::<Vec<_>>();
@@ -2464,7 +2357,6 @@ fn recursive_function_call_cycle(context: &SemanticContext) -> Option<Vec<String
         .cloned()
         .map(|name| (name, 0_u8))
         .collect::<HashMap<_, _>>();
-
     for root in &function_names {
         if visit_state.get(root).copied().unwrap_or_default() != 0 {
             continue;
@@ -2486,7 +2378,6 @@ fn recursive_function_call_cycle(context: &SemanticContext) -> Option<Vec<String
                     None
                 }
             };
-
             if let Some(callee) = next {
                 match visit_state.get(&callee).copied().unwrap_or_default() {
                     0 => {
@@ -2507,7 +2398,6 @@ fn recursive_function_call_cycle(context: &SemanticContext) -> Option<Vec<String
                 }
                 continue;
             }
-
             let (finished, _) = stack.pop().expect("non-empty DFS stack");
             path.pop().expect("DFS path mirrors stack");
             visit_state.insert(finished, 2);
@@ -2515,7 +2405,6 @@ fn recursive_function_call_cycle(context: &SemanticContext) -> Option<Vec<String
     }
     None
 }
-
 fn recursive_function_call_error(cycle: &[String]) -> SemanticError {
     SemanticError {
         code: "K2006",
@@ -2525,17 +2414,14 @@ fn recursive_function_call_error(cycle: &[String]) -> SemanticError {
         ),
     }
 }
-
 fn validate_acyclic_function_calls(context: &SemanticContext) -> Result<(), SemanticError> {
     recursive_function_call_cycle(context)
         .map_or(Ok(()), |cycle| Err(recursive_function_call_error(&cycle)))
 }
-
 /// Analyze a parsed program in a fresh per-compilation semantic context.
 pub fn analyze(program: &Program) -> Result<TypedProgram, SemanticError> {
     SemanticContext::new().analyze(program)
 }
-
 fn reject_test_surface_without_test_mode(
     context: &SemanticContext,
     program: &Program,
@@ -2543,7 +2429,6 @@ fn reject_test_surface_without_test_mode(
     if context.test_builtins_enabled {
         return Ok(());
     }
-
     let mut failures = Vec::new();
     let mut omitted = 0_usize;
     if program.test_target.is_some() {
@@ -2615,7 +2500,6 @@ fn reject_test_surface_without_test_mode(
         Err(SemanticFailures { failures })
     }
 }
-
 /// Revalidate whole-program invariants after independently typed modules have
 /// been linked into one HIR program.
 ///
@@ -2637,7 +2521,6 @@ pub fn validate_linked_program(
             validate_list_schemas(&parameter.ty)?;
         }
     }
-
     let context = SemanticContext::with_zk_enabled(zk_enabled);
     context.states.replace(
         program
@@ -2646,7 +2529,6 @@ pub fn validate_linked_program(
             .map(|state| (state.name.clone(), state.ty.clone()))
             .collect(),
     );
-
     let mut returns = HashMap::new();
     for item in &program.items {
         let TypedItem::Function(function) = item;
@@ -2664,7 +2546,6 @@ pub fn validate_linked_program(
         }
     }
     context.function_returns.replace(returns);
-
     for item in &program.items {
         let TypedItem::Function(function) = item;
         context.current_state_param_names.replace(
@@ -2689,13 +2570,11 @@ pub fn validate_linked_program(
             .insert(function.name.clone(), summary);
     }
     context.current_state_param_names.borrow_mut().clear();
-
     validate_acyclic_function_calls(&context)?;
     validate_scalar_state_initialization(&context, &program.items, &program.states)?;
     crate::secret::validate_program(program, zk_enabled)?;
     enforce_permission_requirements(&context, &program.items)
 }
-
 /// Derive the production HIR from a test-capable target without returning to AST.
 ///
 /// Only declarations originating in the deployable target are supplied here;
@@ -2741,7 +2620,6 @@ pub(crate) fn project_test_target_to_production(
     validate_linked_program(&target, zk_enabled)?;
     Ok(target)
 }
-
 fn validate_production_projection_block(
     block: &TypedBlock,
     owner: &str,
@@ -2757,7 +2635,6 @@ fn validate_production_projection_block(
     }
     Ok(())
 }
-
 fn validate_production_projection_statement(
     statement: &TypedStatement,
     owner: &str,
@@ -2862,7 +2739,6 @@ fn validate_production_projection_statement(
         TypedStatement::Break | TypedStatement::Continue => Ok(()),
     }
 }
-
 fn validate_production_projection_expr(
     expression: &TypedExpr,
     owner: &str,
@@ -3017,7 +2893,6 @@ fn validate_production_projection_expr(
         | ExprKind::Ident(_) => Ok(()),
     }
 }
-
 fn analyze_with_context(
     context: &SemanticContext,
     program: &Program,
@@ -3322,7 +3197,6 @@ fn analyze_with_context(
     context
         .function_named_only_reasons
         .replace(named_only_reasons);
-
     let mut items = Vec::new();
     let states = resolved_state
         .iter()
@@ -3460,7 +3334,6 @@ fn analyze_with_context(
     enforce_permission_requirements(context, &typed_program.items)?;
     Ok(typed_program)
 }
-
 fn core_query_view_name(ty: &Type) -> Option<&str> {
     let Type::Struct { name, .. } = ty else {
         return None;
@@ -3475,7 +3348,6 @@ fn core_query_view_name(ty: &Type) -> Option<&str> {
     };
     (core_query_view_type(builtin).as_ref() == Some(ty)).then_some(name.as_str())
 }
-
 pub(crate) fn type_name(ty: &Type) -> String {
     match ty {
         Type::Int => "int".into(),
@@ -3518,7 +3390,6 @@ pub(crate) fn type_name(ty: &Type) -> String {
         Type::NamedStruct(s) => s.clone(),
     }
 }
-
 /// Render `ty` as a valid source annotation.
 ///
 /// ABI descriptors derive their canonical names from their exact recursive
@@ -3527,7 +3398,6 @@ pub(crate) fn type_name(ty: &Type) -> String {
 pub fn render_type_name(ty: &Type) -> String {
     render_source_type_name(ty)
 }
-
 fn render_source_type_name(ty: &Type) -> String {
     match ty {
         Type::Secret(inner) => format!("Secret<{}>", render_source_type_name(inner)),
@@ -3560,7 +3430,6 @@ fn render_source_type_name(ty: &Type) -> String {
         scalar => type_name(scalar),
     }
 }
-
 fn trigger_data_family_name(family: TriggerDataFamily) -> &'static str {
     match family {
         TriggerDataFamily::Peer => "peer",
@@ -3576,14 +3445,12 @@ fn trigger_data_family_name(family: TriggerDataFamily) -> &'static str {
         TriggerDataFamily::Executor => "executor",
     }
 }
-
 fn named_data_event_kind(event: &TriggerDataEventKind) -> Option<&str> {
     match event {
         TriggerDataEventKind::Any => None,
         TriggerDataEventKind::Named(kind) => Some(kind.as_str()),
     }
 }
-
 fn duplicate_data_matcher_error(
     trigger_name: &str,
     family: TriggerDataFamily,
@@ -3597,7 +3464,6 @@ fn duplicate_data_matcher_error(
         ),
     }
 }
-
 fn invalid_data_matcher_literal<E>(
     trigger_name: &str,
     family: TriggerDataFamily,
@@ -3616,7 +3482,6 @@ where
         ),
     }
 }
-
 fn unsupported_data_matcher_error(
     trigger_name: &str,
     family: TriggerDataFamily,
@@ -3630,7 +3495,6 @@ fn unsupported_data_matcher_error(
         ),
     }
 }
-
 fn unsupported_data_event_kind_error(
     trigger_name: &str,
     family: TriggerDataFamily,
@@ -3644,7 +3508,6 @@ fn unsupported_data_event_kind_error(
         ),
     }
 }
-
 fn parse_peer_matcher(
     trigger_name: &str,
     family: TriggerDataFamily,
@@ -3653,7 +3516,6 @@ fn parse_peer_matcher(
     raw.parse()
         .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "peer", raw, err))
 }
-
 fn parse_domain_matcher(
     trigger_name: &str,
     family: TriggerDataFamily,
@@ -3662,7 +3524,6 @@ fn parse_domain_matcher(
     DomainId::parse_fully_qualified(raw)
         .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "domain", raw, err))
 }
-
 fn parse_account_matcher(
     trigger_name: &str,
     family: TriggerDataFamily,
@@ -3672,7 +3533,6 @@ fn parse_account_matcher(
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "account", raw, err))
 }
-
 fn parse_asset_matcher(
     trigger_name: &str,
     family: TriggerDataFamily,
@@ -3681,7 +3541,6 @@ fn parse_asset_matcher(
     raw.parse()
         .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "asset", raw, err))
 }
-
 fn parse_asset_definition_matcher(
     trigger_name: &str,
     family: TriggerDataFamily,
@@ -3691,7 +3550,6 @@ fn parse_asset_definition_matcher(
         invalid_data_matcher_literal(trigger_name, family, "asset_definition", raw, err)
     })
 }
-
 fn parse_nft_matcher(
     trigger_name: &str,
     family: TriggerDataFamily,
@@ -3700,7 +3558,6 @@ fn parse_nft_matcher(
     raw.parse()
         .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "nft", raw, err))
 }
-
 fn parse_rwa_matcher(
     trigger_name: &str,
     family: TriggerDataFamily,
@@ -3709,7 +3566,6 @@ fn parse_rwa_matcher(
     raw.parse()
         .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "rwa", raw, err))
 }
-
 fn parse_trigger_matcher(
     trigger_name: &str,
     family: TriggerDataFamily,
@@ -3718,7 +3574,6 @@ fn parse_trigger_matcher(
     raw.parse()
         .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "trigger", raw, err))
 }
-
 fn parse_role_matcher(
     trigger_name: &str,
     family: TriggerDataFamily,
@@ -3727,7 +3582,6 @@ fn parse_role_matcher(
     raw.parse()
         .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "role", raw, err))
 }
-
 fn lower_structured_data_filter(
     trigger_name: &str,
     filter: &TriggerStructuredDataFilter,
@@ -4275,7 +4129,6 @@ fn lower_structured_data_filter(
         }
     }
 }
-
 fn analyze_trigger(
     trigger: &TriggerDecl,
     fn_modifiers: &HashMap<String, FunctionModifiers>,
@@ -4286,7 +4139,6 @@ fn analyze_trigger(
             message: format!("invalid trigger name `{}`: {}", trigger.name, err),
         })?;
     let id = TriggerId::new(name);
-
     if trigger.call.namespace.is_none() {
         let entry = &trigger.call.entrypoint;
         let modifiers = fn_modifiers.get(entry).ok_or_else(|| SemanticError {
@@ -4315,7 +4167,6 @@ fn analyze_trigger(
             });
         }
     }
-
     let filter = match &trigger.filter {
         TriggerFilter::Time(time) => {
             let execution = match time {
@@ -4373,7 +4224,6 @@ fn analyze_trigger(
             EventFilterBox::Pipeline(filter)
         }
     };
-
     let repeats = match trigger
         .repeats
         .clone()
@@ -4382,7 +4232,6 @@ fn analyze_trigger(
         TriggerRepeats::Indefinitely => Repeats::Indefinitely,
         TriggerRepeats::Exactly(count) => Repeats::Exactly(count),
     };
-
     let authority = match &trigger.authority {
         Some(raw) => Some(
             AccountId::parse_encoded(raw)
@@ -4394,9 +4243,7 @@ fn analyze_trigger(
         ),
         None => None,
     };
-
     let metadata = trigger_metadata_from_entries(&trigger.metadata)?;
-
     Ok(TypedTrigger {
         id,
         call: trigger.call.clone(),
@@ -4406,7 +4253,6 @@ fn analyze_trigger(
         metadata,
     })
 }
-
 fn trigger_metadata_from_entries(
     entries: &[TriggerMetadataEntry],
 ) -> Result<Metadata, SemanticError> {
@@ -4427,10 +4273,8 @@ fn trigger_metadata_from_entries(
     }
     Ok(metadata)
 }
-
 const JSON_LITERAL_REQUIRED_MESSAGE: &str =
     "Json::parse requires a direct string literal so native JSON is validated at compile time";
-
 fn parse_json_literal(raw: &str) -> Result<json::Value, SemanticError> {
     json::parse_value(raw).map_err(|error| match error {
         json::Error::DuplicateField { field } => SemanticError {
@@ -4445,7 +4289,6 @@ fn parse_json_literal(raw: &str) -> Result<json::Value, SemanticError> {
         },
     })
 }
-
 fn json_from_expr(expr: &Expr) -> Result<Json, SemanticError> {
     let value = match expr {
         Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
@@ -4545,14 +4388,12 @@ fn json_from_expr(expr: &Expr) -> Result<Json, SemanticError> {
         message: format!("invalid trigger metadata value: {err}"),
     })
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NumericKind {
     Int,
     Decimal,
     Quantity,
 }
-
 fn numeric_kind(ty: &Type) -> Option<NumericKind> {
     match resolve_struct_type(ty) {
         Type::Int => Some(NumericKind::Int),
@@ -4561,7 +4402,6 @@ fn numeric_kind(ty: &Type) -> Option<NumericKind> {
         _ => None,
     }
 }
-
 fn numeric_kind_to_type(kind: NumericKind) -> Type {
     match kind {
         NumericKind::Int => Type::Int,
@@ -4569,7 +4409,6 @@ fn numeric_kind_to_type(kind: NumericKind) -> Type {
         NumericKind::Quantity => Type::Quantity,
     }
 }
-
 fn typed_int_literal(value: &BigInt) -> Result<TypedExpr, SemanticError> {
     if value.to_twos_bytes().len() > MAX_MANTISSA_BYTES {
         return Err(SemanticError {
@@ -4582,7 +4421,6 @@ fn typed_int_literal(value: &BigInt) -> Result<TypedExpr, SemanticError> {
         ty: Type::Int,
     })
 }
-
 fn parse_decimal_literal(spelling: &str) -> Result<Numeric, SemanticError> {
     let (coefficient, exponent) = spelling
         .split_once(['e', 'E'])
@@ -4684,7 +4522,6 @@ fn parse_decimal_literal(spelling: &str) -> Result<Numeric, SemanticError> {
             message: format!("invalid decimal literal: {error}"),
         })
 }
-
 fn descriptors_have_confusable_repeats(parameters: &[&str]) -> bool {
     for (index, parameter) in parameters.iter().enumerate() {
         let parameter = parameter.trim_end_matches(['?', '.']);
@@ -4700,7 +4537,6 @@ fn descriptors_have_confusable_repeats(parameters: &[&str]) -> bool {
     }
     false
 }
-
 fn user_parameters_have_confusable_repeats(parameters: &[TypedParam]) -> bool {
     parameters.iter().enumerate().any(|(index, parameter)| {
         parameters
@@ -4709,7 +4545,6 @@ fn user_parameters_have_confusable_repeats(parameters: &[TypedParam]) -> bool {
             .any(|other| resolve_struct_type(&parameter.ty) == resolve_struct_type(&other.ty))
     })
 }
-
 fn builtin_named_only_reason(builtin: Builtin, implicit_receiver: bool) -> Option<&'static str> {
     let spec = builtin.spec();
     if spec.call_policy == BuiltinCallPolicy::Pagination {
@@ -4732,7 +4567,6 @@ fn builtin_named_only_reason(builtin: Builtin, implicit_receiver: bool) -> Optio
     descriptors_have_confusable_repeats(user_parameters)
         .then_some("repeated parameter types require names to prevent argument transposition")
 }
-
 #[derive(Debug)]
 struct CallArgumentPlan {
     /// Arguments in declaration/ABI order.
@@ -4742,7 +4576,6 @@ struct CallArgumentPlan {
     /// Whether the source call used named arguments.
     is_named: bool,
 }
-
 fn reorder_call_arguments(
     call_name: &str,
     args: &[Expr],
@@ -4782,7 +4615,6 @@ fn reorder_call_arguments(
             message: format!("call `{call_name}` has inconsistent named-argument metadata"),
         });
     }
-
     for name in argument_names {
         if !parameter_names.iter().any(|parameter| parameter == name) {
             return Err(SemanticError {
@@ -4851,7 +4683,6 @@ fn reorder_call_arguments(
         is_named: true,
     })
 }
-
 fn builtin_instantiation_has_confusable_repeats(
     builtin: Builtin,
     arguments: &[TypedExpr],
@@ -4873,7 +4704,6 @@ fn builtin_instantiation_has_confusable_repeats(
     };
     resolve_struct_type(&key) == resolve_struct_type(&value)
 }
-
 fn retain_named_call_evaluation_order(typed: TypedExpr, plan: &CallArgumentPlan) -> TypedExpr {
     if !plan.is_named {
         return typed;
@@ -4893,22 +4723,18 @@ fn retain_named_call_evaluation_order(typed: TypedExpr, plan: &CallArgumentPlan)
     };
     TypedExpr { expr, ty }
 }
-
 pub(crate) fn is_numeric_type(ty: &Type) -> bool {
     numeric_kind(ty).is_some()
 }
-
 pub(crate) fn is_wide_numeric_type(ty: &Type) -> bool {
     matches!(
         resolve_struct_type(ty),
         Type::Int | Type::Decimal | Type::Quantity
     )
 }
-
 fn is_int_like(ty: &Type) -> bool {
     matches!(resolve_struct_type(ty), Type::Int)
 }
-
 fn numeric_result_type(lhs: &Type, rhs: &Type) -> Option<Type> {
     let lhs_resolved = resolve_struct_type(lhs);
     let rhs_resolved = resolve_struct_type(rhs);
@@ -4917,7 +4743,6 @@ fn numeric_result_type(lhs: &Type, rhs: &Type) -> Option<Type> {
     }
     None
 }
-
 fn arithmetic_result_type(op: BinaryOp, lhs: &Type, rhs: &Type) -> Option<Type> {
     let lhs = resolve_struct_type(lhs);
     let rhs = resolve_struct_type(rhs);
@@ -4932,7 +4757,6 @@ fn arithmetic_result_type(op: BinaryOp, lhs: &Type, rhs: &Type) -> Option<Type> 
         _ => None,
     }
 }
-
 fn literal_int(expr: &TypedExpr) -> Option<BigInt> {
     match expr.kind() {
         ExprKind::IntLiteral(value) => Some(value.clone()),
@@ -4944,7 +4768,6 @@ fn literal_int(expr: &TypedExpr) -> Option<BigInt> {
         _ => None,
     }
 }
-
 fn reject_implicit_int_decimal_mix(lhs: &Type, rhs: &Type) -> Result<(), SemanticError> {
     let lhs = resolve_struct_type(lhs);
     let rhs = resolve_struct_type(rhs);
@@ -4960,7 +4783,6 @@ fn reject_implicit_int_decimal_mix(lhs: &Type, rhs: &Type) -> Result<(), Semanti
             .into(),
     })
 }
-
 fn explicit_numeric_conversion(
     name: &str,
     args: Vec<TypedExpr>,
@@ -5028,7 +4850,6 @@ fn explicit_numeric_conversion(
         })
     })())
 }
-
 fn numeric_literal_is_negative(expr: &TypedExpr) -> bool {
     match expr.kind() {
         ExprKind::IntLiteral(value) => value.is_negative(),
@@ -5040,7 +4861,6 @@ fn numeric_literal_is_negative(expr: &TypedExpr) -> bool {
         _ => false,
     }
 }
-
 fn numeric_literal_is_zero(expr: &TypedExpr) -> bool {
     match expr.kind() {
         ExprKind::IntLiteral(value) => value.is_zero(),
@@ -5048,7 +4868,6 @@ fn numeric_literal_is_zero(expr: &TypedExpr) -> bool {
         _ => false,
     }
 }
-
 fn is_supported_durable_value_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
         ty if is_numeric_type(&ty) => true,
@@ -5066,7 +4885,6 @@ fn is_supported_durable_value_type(ty: &Type) -> bool {
         _ => false,
     }
 }
-
 fn coerce_exact_numeric_literal_to(
     expr: &mut TypedExpr,
     expected: &Type,
@@ -5078,7 +4896,6 @@ fn coerce_exact_numeric_literal_to(
     }
     Ok(())
 }
-
 /// Apply the expected numeric domain only to exact literal operands.
 ///
 /// Runtime values retain their nominal type: this is literal inference, not
@@ -5094,7 +4911,6 @@ fn coerce_contextual_numeric_literals(
     let comparison = matches!(op, Eq | Ne | Lt | Le | Gt | Ge);
     let left_type = resolve_struct_type(&left.ty);
     let right_type = resolve_struct_type(&right.ty);
-
     if left_type == Type::Quantity {
         match op {
             Add | Sub | Mod if exact_numeric_literal_expression(right) => {
@@ -5120,14 +4936,12 @@ fn coerce_contextual_numeric_literals(
         }
         return Ok(());
     }
-
     if right_type == Type::Quantity {
         if matches!(op, Add | Sub | Mod) || comparison {
             coerce_exact_numeric_literal_to(left, &Type::Quantity)?;
         }
         return Ok(());
     }
-
     // A sibling decimal operand provides a compile-time type context for an
     // exact literal. This retags and folds only literal syntax; an existing
     // runtime `int` is never wrapped in a hidden `NumericCast`.
@@ -5136,7 +4950,6 @@ fn coerce_contextual_numeric_literals(
     } else if right_type == Type::Decimal && exact_numeric_literal_expression(left) {
         coerce_exact_numeric_literal_to(left, &Type::Decimal)?;
     }
-
     match expected.map(resolve_struct_type) {
         Some(Type::Decimal) if matches!(op, Add | Sub | Mul | Div | Mod) => {
             coerce_exact_numeric_literal_to(left, &Type::Decimal)?;
@@ -5155,10 +4968,8 @@ fn coerce_contextual_numeric_literals(
         },
         _ => {}
     }
-
     Ok(())
 }
-
 fn list_element_contains_resource_handle(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
         Type::Secret(_) | Type::StateMap(_, _) | Type::AssetHandle => true,
@@ -5176,7 +4987,6 @@ fn list_element_contains_resource_handle(ty: &Type) -> bool {
         _ => false,
     }
 }
-
 /// Return the recursively flattened V1 function-ABI word count, capped at one
 /// more than `limit`.
 ///
@@ -5206,7 +5016,6 @@ pub(crate) fn runtime_value_word_count_bounded(ty: &Type, limit: usize) -> Optio
             // the only shapes that can flatten to zero words in V1.
             _ => return Some(1),
         };
-
         let mut total = 0_usize;
         for child in children {
             let remaining = limit.saturating_sub(total);
@@ -5218,10 +5027,8 @@ pub(crate) fn runtime_value_word_count_bounded(ty: &Type, limit: usize) -> Optio
         }
         Some(total)
     }
-
     count(ty, limit)
 }
-
 fn zero_sized_list_element(ty: &Type) -> Option<Type> {
     match resolve_struct_type(ty) {
         Type::List(element, _) => {
@@ -5245,7 +5052,6 @@ fn zero_sized_list_element(ty: &Type) -> Option<Type> {
         _ => None,
     }
 }
-
 fn validate_list_schemas(ty: &Type) -> Result<(), SemanticError> {
     let Some(element) = zero_sized_list_element(ty) else {
         return Ok(());
@@ -5258,7 +5064,6 @@ fn validate_list_schemas(ty: &Type) -> Result<(), SemanticError> {
         ),
     })
 }
-
 fn validate_declared_struct_list_schemas(context: &SemanticContext) -> Result<(), SemanticError> {
     let structs = context.structs.borrow();
     let mut names = structs.keys().collect::<Vec<_>>();
@@ -5273,7 +5078,6 @@ fn validate_declared_struct_list_schemas(context: &SemanticContext) -> Result<()
     }
     Ok(())
 }
-
 fn list_element_is_comparable(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
         Type::Struct { fields, .. } => fields
@@ -5309,7 +5113,6 @@ fn list_element_is_comparable(ty: &Type) -> bool {
         | Type::Json => true,
     }
 }
-
 fn is_supported_public_argument_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
         Type::Int
@@ -5346,13 +5149,11 @@ fn is_supported_public_argument_type(ty: &Type) -> bool {
         | Type::NamedStruct(_) => false,
     }
 }
-
 pub(crate) fn is_supported_durable_key_type(ty: &Type) -> bool {
     let resolved = resolve_struct_type(ty);
     let canonical_name = type_name(&resolved);
     V1_STATE_MAP_KEY_TYPE_NAMES.contains(&canonical_name.as_str())
 }
-
 fn is_in_memory_map_word_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
         ty if is_numeric_type(&ty) => true,
@@ -5361,7 +5162,6 @@ fn is_in_memory_map_word_type(ty: &Type) -> bool {
         _ => false,
     }
 }
-
 fn ensure_in_memory_map_word_types(
     context: &SemanticContext,
     map_expr: &TypedExpr,
@@ -5391,11 +5191,9 @@ fn ensure_in_memory_map_word_types(
     }
     Ok(())
 }
-
 fn validate_state_type(ty: &Type) -> Result<(), SemanticError> {
     validate_state_type_inner(ty, true)
 }
-
 fn validate_state_type_inner(ty: &Type, allow_map: bool) -> Result<(), SemanticError> {
     if crate::secret::type_contains_secret(ty) {
         return Err(SemanticError {
@@ -5461,11 +5259,9 @@ fn validate_state_type_inner(ty: &Type, allow_map: bool) -> Result<(), SemanticE
         }
     }
 }
-
 pub(crate) fn is_blob_like(ty: &Type) -> bool {
     matches!(resolve_struct_type(ty), Type::Bytes)
 }
-
 fn pointer_constructor_type(constructor: PointerConstructor) -> Type {
     match constructor {
         PointerConstructor::AccountId => Type::AccountId,
@@ -5484,7 +5280,6 @@ fn pointer_constructor_type(constructor: PointerConstructor) -> Type {
         PointerConstructor::SoracloudResponse => Type::SoracloudResponse,
     }
 }
-
 fn is_eq_comparable_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
         ty if is_numeric_type(&ty) => true,
@@ -5493,7 +5288,6 @@ fn is_eq_comparable_type(ty: &Type) -> bool {
         _ => false,
     }
 }
-
 pub fn is_pointer_type(ty: &Type) -> bool {
     matches!(
         resolve_struct_type(ty),
@@ -5511,10 +5305,8 @@ pub fn is_pointer_type(ty: &Type) -> bool {
             | Type::SoracloudResponse
     )
 }
-
 const TRANSFER_BATCH_SIGNATURE: &str =
     "(AccountId, AccountId, AssetDefinitionId, quantity) tuple entries";
-
 fn is_transfer_batch_entry_tuple(ty: &Type) -> bool {
     match ty {
         Type::Tuple(fields) if fields.len() == 4 => {
@@ -5526,7 +5318,6 @@ fn is_transfer_batch_entry_tuple(ty: &Type) -> bool {
         _ => false,
     }
 }
-
 fn ensure_transfer_batch_args(args: &mut [TypedExpr]) -> Result<(), SemanticError> {
     if args.is_empty() {
         return Err(SemanticError {
@@ -5555,7 +5346,6 @@ fn ensure_transfer_batch_args(args: &mut [TypedExpr]) -> Result<(), SemanticErro
         message: format!("transfer_batch expects {}", TRANSFER_BATCH_SIGNATURE),
     })
 }
-
 /// Recursively bind nested struct fields into `name#i#j` variables for convenient lowering.
 fn bind_struct_fields_rec(
     out: &mut Vec<TypedStatement>,
@@ -5592,7 +5382,6 @@ fn bind_struct_fields_rec(
         }
     }
 }
-
 /// Recursively bind tuple elements into `name#i` variables so older lowering
 /// helpers can access flattened names. Nested structs continue to use the
 /// existing struct binding helper, and nested tuples recurse naturally.
@@ -5631,7 +5420,6 @@ fn bind_tuple_fields_rec(
         }
     }
 }
-
 fn analyze_function(
     context: &SemanticContext,
     func: &Function,
@@ -5798,7 +5586,6 @@ fn analyze_function(
         name_source: None,
     })
 }
-
 fn reject_public_trigger_event(context: &SemanticContext, name: &str) -> Result<(), SemanticError> {
     let forbidden = context
         .current_function_modifiers
@@ -5821,7 +5608,6 @@ fn reject_public_trigger_event(context: &SemanticContext, name: &str) -> Result<
     }
     Ok(())
 }
-
 fn current_public_trigger_callback_allows_payload_helper(context: &SemanticContext) -> bool {
     let current = context.current_function_name.borrow().clone();
     let Some(current) = current else {
@@ -5832,7 +5618,6 @@ fn current_public_trigger_callback_allows_payload_helper(context: &SemanticConte
         .borrow()
         .contains(&current)
 }
-
 fn current_function_is_test(context: &SemanticContext) -> bool {
     context
         .current_function_modifiers
@@ -5840,11 +5625,9 @@ fn current_function_is_test(context: &SemanticContext) -> bool {
         .as_ref()
         .is_some_and(|modifiers| modifiers.is_test)
 }
-
 fn function_is_runtime_entrypoint(modifiers: &FunctionModifiers) -> bool {
     modifiers.kind != FunctionKind::Private
 }
-
 fn invoke_entrypoint_literal(expr: &Expr) -> Option<String> {
     match expr {
         Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
@@ -5865,14 +5648,12 @@ fn invoke_entrypoint_literal(expr: &Expr) -> Option<String> {
         _ => None,
     }
 }
-
 fn typed_string_literal(value: String) -> TypedExpr {
     TypedExpr {
         expr: ExprKind::String(value),
         ty: Type::String,
     }
 }
-
 fn validate_require_error_variant(
     context: &SemanticContext,
     args: &[Expr],
@@ -5897,7 +5678,6 @@ fn validate_require_error_variant(
     }
     Ok(())
 }
-
 fn analyze_invoke_entrypoint_call(
     context: &SemanticContext,
     args: &[Expr],
@@ -5916,7 +5696,6 @@ fn analyze_invoke_entrypoint_call(
             message: "test::invoke_kotoage expects (string|Name literal, Json)".into(),
         });
     }
-
     let target_name = invoke_entrypoint_literal(&args[0]).ok_or_else(|| SemanticError {
         code: "E_TEST_ENTRYPOINT_LITERAL",
         message:
@@ -5930,9 +5709,7 @@ fn analyze_invoke_entrypoint_call(
             message: "test::invoke_kotoage expects a Json payload as its second argument".into(),
         });
     }
-
     let ret_ty = runtime_entrypoint_return_type(context, &target_name)?;
-
     Ok(TypedExpr {
         expr: ExprKind::Call {
             name: format!("__invoke_entrypoint__{target_name}"),
@@ -5941,7 +5718,6 @@ fn analyze_invoke_entrypoint_call(
         ty: ret_ty,
     })
 }
-
 fn runtime_entrypoint_return_type(
     context: &SemanticContext,
     target_name: &str,
@@ -5967,7 +5743,6 @@ fn runtime_entrypoint_return_type(
             .cloned()
             .unwrap_or(Type::Unit));
     }
-
     if let Some(signature) = context
         .external_functions
         .borrow()
@@ -5984,13 +5759,11 @@ fn runtime_entrypoint_return_type(
         }
         return Ok(signature.return_type);
     }
-
     Err(SemanticError {
         code: "K2002",
         message: format!("unknown runtime public or lifecycle target `{target_name}`"),
     })
 }
-
 fn analyze_invoke_entrypoint_as_call(
     context: &SemanticContext,
     args: &[Expr],
@@ -6026,7 +5799,6 @@ fn analyze_invoke_entrypoint_as_call(
         });
     }
     let ret_ty = runtime_entrypoint_return_type(context, &target_name)?;
-
     Ok(TypedExpr {
         expr: ExprKind::Call {
             name: "invoke_entrypoint_as".to_string(),
@@ -6039,7 +5811,6 @@ fn analyze_invoke_entrypoint_as_call(
         ty: ret_ty,
     })
 }
-
 fn analyze_expect_reject_as_call(
     context: &SemanticContext,
     args: &[Expr],
@@ -6078,7 +5849,6 @@ fn analyze_expect_reject_as_call(
         });
     }
     let _ = runtime_entrypoint_return_type(context, &target_name)?;
-
     Ok(TypedExpr {
         expr: ExprKind::Call {
             name: "expect_reject_as".to_string(),
@@ -6091,7 +5861,6 @@ fn analyze_expect_reject_as_call(
         ty: Type::Unit,
     })
 }
-
 fn analyze_actor_account_call(
     context: &SemanticContext,
     args: &[Expr],
@@ -6122,7 +5891,6 @@ fn analyze_actor_account_call(
         ty: Type::AccountId,
     })
 }
-
 fn analyze_actor_public_key_call(
     context: &SemanticContext,
     args: &[Expr],
@@ -6154,7 +5922,6 @@ fn analyze_actor_public_key_call(
         ty: Type::Bytes,
     })
 }
-
 fn analyze_actor_sign_call(
     context: &SemanticContext,
     args: &[Expr],
@@ -6192,7 +5959,6 @@ fn analyze_actor_sign_call(
         ty: Type::Bytes,
     })
 }
-
 fn analyze_block(
     context: &SemanticContext,
     block: &Block,
@@ -6240,7 +6006,6 @@ fn analyze_block(
         .replace(previous_mutable_bindings);
     result
 }
-
 fn validate_v1_bounded_for_shape(
     init: &Option<Box<Statement>>,
     cond: &Option<Expr>,
@@ -6335,7 +6100,6 @@ fn validate_v1_bounded_for_shape(
     }
     Ok(())
 }
-
 fn analyze_statement(
     context: &SemanticContext,
     stmt: &Statement,
@@ -6357,7 +6121,6 @@ fn analyze_statement(
     }
     result
 }
-
 fn analyze_statement_inner(
     context: &SemanticContext,
     stmt: &Statement,
@@ -7237,7 +7000,6 @@ fn analyze_statement_inner(
         }
     }
 }
-
 fn query_helper_accepts_arg(builtin: Builtin, ty: &Type) -> bool {
     match builtin {
         Builtin::QueryExecuteNorito
@@ -7255,7 +7017,6 @@ fn query_helper_accepts_arg(builtin: Builtin, ty: &Type) -> bool {
         _ => false,
     }
 }
-
 fn core_query_view_type(builtin: Builtin) -> Option<Type> {
     let (name, fields) = match builtin {
         Builtin::QueryGetAccount | Builtin::QueryPageAccounts => (
@@ -7305,7 +7066,6 @@ fn core_query_view_type(builtin: Builtin) -> Option<Type> {
         ),
     })
 }
-
 fn query_page_type(view: Type) -> Result<Type, SemanticError> {
     let Type::Struct {
         name: view_name, ..
@@ -7338,7 +7098,6 @@ fn query_page_type(view: Type) -> Result<Type, SemanticError> {
         ]),
     })
 }
-
 fn query_page_view_type(ty: &Type) -> Option<&Type> {
     let Type::Struct { name, fields } = ty else {
         return None;
@@ -7357,7 +7116,6 @@ fn query_page_view_type(ty: &Type) -> Option<&Type> {
         && next_offset.as_ref() == &Type::Int)
         .then_some(view.as_ref())
 }
-
 fn core_query_page_type(builtin: Builtin) -> Type {
     query_page_type(
         core_query_view_type(builtin)
@@ -7365,7 +7123,6 @@ fn core_query_page_type(builtin: Builtin) -> Type {
     )
     .expect("projected plural core-query builtins use supported view types")
 }
-
 fn canonicalize_builtin_result<T>(
     builtin: Builtin,
     result: Result<T, SemanticError>,
@@ -7378,12 +7135,10 @@ fn canonicalize_builtin_result<T>(
         error
     })
 }
-
 fn replace_identifier_token(message: &str, needle: &str, replacement: &str) -> String {
     fn is_identifier_byte(byte: u8) -> bool {
         byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b':')
     }
-
     let mut rewritten = String::with_capacity(message.len() + replacement.len());
     let mut copied_until = 0;
     for (start, _) in message.match_indices(needle) {
@@ -7406,7 +7161,6 @@ fn replace_identifier_token(message: &str, needle: &str, replacement: &str) -> S
     rewritten.push_str(&message[copied_until..]);
     rewritten
 }
-
 fn coerce_builtin_exact_numeric_literals(
     builtin: Builtin,
     arguments: &mut [TypedExpr],
@@ -7424,7 +7178,6 @@ fn coerce_builtin_exact_numeric_literals(
     }
     Ok(())
 }
-
 fn analyze_surface_builtin_call(
     context: &SemanticContext,
     builtin: Builtin,
@@ -7640,7 +7393,6 @@ fn analyze_surface_builtin_call(
             let resolved_value_ty = resolve_struct_type(&map_value_ty);
             ensure_assignable_and_coerce(&resolved_key_ty, &mut call_args[1])?;
             ensure_in_memory_map_word_types(context, &call_args[0])?;
-
             if original_len == 2 {
                 match resolve_struct_type(&resolved_value_ty) {
                     Type::Int => {
@@ -7716,7 +7468,6 @@ fn analyze_surface_builtin_call(
             let resolved_value_ty = resolve_struct_type(&map_value_ty);
             ensure_assignable_and_coerce(&resolved_key_ty, &mut call_args[1])?;
             ensure_in_memory_map_word_types(context, &call_args[0])?;
-
             if original_len == 2 {
                 match resolve_struct_type(&resolved_value_ty) {
                     Type::Int => {
@@ -10230,7 +9981,6 @@ fn analyze_surface_builtin_call(
         }
     }
 }
-
 fn enclosing_return_type(context: &SemanticContext) -> Option<Type> {
     context
         .current_function_name
@@ -10238,14 +9988,12 @@ fn enclosing_return_type(context: &SemanticContext) -> Option<Type> {
         .as_ref()
         .and_then(|name| context.function_returns.borrow().get(name).cloned())
 }
-
 fn typed_block_value_type(block: &TypedBlock) -> Type {
     block
         .tail
         .as_ref()
         .map_or(Type::Unit, |expression| expression.ty.clone())
 }
-
 /// Return whether evaluating `block` can never reach its enclosing expression
 /// continuation.
 ///
@@ -10257,7 +10005,6 @@ pub(crate) fn typed_block_diverges(block: &TypedBlock) -> bool {
     block.statements.iter().any(typed_statement_diverges)
         || block.tail.as_deref().is_some_and(typed_expression_diverges)
 }
-
 fn typed_statement_diverges(statement: &TypedStatement) -> bool {
     match statement {
         TypedStatement::Return(_) | TypedStatement::Break | TypedStatement::Continue => true,
@@ -10286,7 +10033,6 @@ fn typed_statement_diverges(statement: &TypedStatement) -> bool {
         | TypedStatement::MapSet { .. } => false,
     }
 }
-
 fn typed_expression_diverges(expression: &TypedExpr) -> bool {
     match expression.kind() {
         ExprKind::If {
@@ -10305,7 +10051,6 @@ fn typed_expression_diverges(expression: &TypedExpr) -> bool {
         _ => false,
     }
 }
-
 fn analyze_expression_block(
     context: &SemanticContext,
     block: &Block,
@@ -10324,7 +10069,6 @@ fn analyze_expression_block(
         0,
     )
 }
-
 fn require_exact_branch_type(expected: &Type, actual: &Type) -> Result<(), SemanticError> {
     if resolve_struct_type(expected) == resolve_struct_type(actual) {
         Ok(())
@@ -10339,7 +10083,6 @@ fn require_exact_branch_type(expected: &Type, actual: &Type) -> Result<(), Seman
         })
     }
 }
-
 fn normalize_branch_error(error: SemanticError, expected: &Type) -> SemanticError {
     if matches!(
         error.code,
@@ -10357,7 +10100,6 @@ fn normalize_branch_error(error: SemanticError, expected: &Type) -> SemanticErro
         error
     }
 }
-
 fn analyze_expression_branches(
     context: &SemanticContext,
     then_branch: &Block,
@@ -10374,7 +10116,6 @@ fn analyze_expression_branches(
         expected,
     )
 }
-
 fn analyze_expression_branches_with_envs(
     context: &SemanticContext,
     then_branch: &Block,
@@ -10396,7 +10137,6 @@ fn analyze_expression_branches_with_envs(
         }
         return Ok((then_typed, else_typed, expected.clone()));
     }
-
     match analyze_expression_block(context, then_branch, &mut then_vars.clone(), None) {
         Ok(then_typed) => {
             if typed_block_diverges(&then_typed) {
@@ -10435,7 +10175,6 @@ fn analyze_expression_branches_with_envs(
         Err(error) => Err(error),
     }
 }
-
 fn analyze_sum_pattern(
     pattern: &SumPattern,
     value_type: &Type,
@@ -10492,7 +10231,6 @@ fn analyze_sum_pattern(
         binding,
     ))
 }
-
 fn analyze_match_expression(
     context: &SemanticContext,
     value: TypedExpr,
@@ -10537,7 +10275,6 @@ fn analyze_match_expression(
                 .into(),
         });
     }
-
     let inferred = if let Some(expected) = expected {
         expected.clone()
     } else {
@@ -10569,7 +10306,6 @@ fn analyze_match_expression(
             })
         })?
     };
-
     let mut typed_arms = Vec::with_capacity(checked.len());
     for (arm, pattern, binding) in checked {
         let mut arm_vars = vars.clone();
@@ -10591,7 +10327,6 @@ fn analyze_match_expression(
         ty: inferred,
     })
 }
-
 fn analyze_expr(
     context: &SemanticContext,
     expr: &Expr,
@@ -10599,7 +10334,6 @@ fn analyze_expr(
 ) -> Result<TypedExpr, SemanticError> {
     analyze_expr_expected(context, expr, vars, None)
 }
-
 fn analyze_list_literal(
     context: &SemanticContext,
     elements: &[Expr],
@@ -10644,7 +10378,6 @@ fn analyze_list_literal(
             ),
         });
     }
-
     let mut typed = Vec::with_capacity(elements.len());
     let mut element_type = expected_element;
     for element in elements {
@@ -10673,7 +10406,6 @@ fn analyze_list_literal(
         ty: list_type,
     })
 }
-
 fn analyze_list_comprehension(
     context: &SemanticContext,
     expression: &Expr,
@@ -10694,7 +10426,6 @@ fn analyze_list_comprehension(
         });
     };
     ensure_new_local_binding(context, item, vars)?;
-
     let (expected_element, result_capacity) = match expected.map(resolve_struct_type) {
         Some(Type::List(element, capacity)) => {
             if source_capacity > capacity {
@@ -10721,7 +10452,6 @@ fn analyze_list_comprehension(
         }
         None => (None, source_capacity),
     };
-
     let mut comprehension_vars = vars.clone();
     comprehension_vars.insert(item.to_owned(), (*source_element).clone());
     let mut expression = analyze_expr_expected(
@@ -10767,7 +10497,6 @@ fn analyze_list_comprehension(
         ty: list_type,
     })
 }
-
 fn is_native_json_value_type(ty: &Type) -> bool {
     match resolve_struct_type(ty) {
         Type::Int
@@ -10799,7 +10528,6 @@ fn is_native_json_value_type(ty: &Type) -> bool {
         | Type::NamedStruct(_) => false,
     }
 }
-
 fn analyze_native_json_value(
     context: &SemanticContext,
     expression: &Expr,
@@ -10817,7 +10545,6 @@ fn analyze_native_json_value(
     }
     Ok(typed)
 }
-
 fn analyze_list_method_call(
     context: &SemanticContext,
     source_name: &str,
@@ -10840,7 +10567,6 @@ fn analyze_list_method_call(
         "enumerate" => (LIST_ENUMERATE_INTRINSIC, &[][..]),
         _ => return None,
     };
-
     let receiver = match analyze_expr(context, &args[0], vars) {
         Ok(receiver) => receiver,
         Err(error) => return Some(Err(error)),
@@ -10909,7 +10635,6 @@ fn analyze_list_method_call(
             ),
         }));
     }
-
     let mut typed_slots = (0..plan.ordered.len()).map(|_| None).collect::<Vec<_>>();
     typed_slots[0] = Some(receiver);
     for index in plan
@@ -10975,7 +10700,6 @@ fn analyze_list_method_call(
         Ok(typed) => typed,
         Err(error) => return Some(Err(error)),
     };
-
     let result_type = match method.0 {
         LIST_LEN_INTRINSIC => Type::Int,
         LIST_GET_INTRINSIC | LIST_POP_INTRINSIC => Type::Option(element.clone()),
@@ -11039,7 +10763,6 @@ fn analyze_list_method_call(
         &plan,
     )))
 }
-
 fn numeric_rounding_mode(expression: &Expr) -> Option<(RoundingMode, i64)> {
     use ivm_abi::numeric::RoundingModeV1 as AbiMode;
 
@@ -11071,7 +10794,6 @@ fn numeric_rounding_mode(expression: &Expr) -> Option<(RoundingMode, i64)> {
     };
     i64::try_from(tag).ok().map(|tag| (mode, tag))
 }
-
 fn analyze_decimal_to_int_round_call(
     context: &SemanticContext,
     source_name: &str,
@@ -11152,7 +10874,6 @@ fn analyze_decimal_to_int_round_call(
         &plan,
     )))
 }
-
 fn analyze_numeric_round_method_call(
     context: &SemanticContext,
     source_name: &str,
@@ -11199,7 +10920,6 @@ fn analyze_numeric_round_method_call(
             }));
         }
     };
-
     let parameter_names = ["divisor", "scale", "mode"]
         .into_iter()
         .map(str::to_owned)
@@ -11225,7 +10945,6 @@ fn analyze_numeric_round_method_call(
             ),
         }));
     }
-
     let mut typed_slots = (0..4).map(|_| None).collect::<Vec<_>>();
     typed_slots[0] = Some(receiver);
     let mut rounding_mode = None;
@@ -11311,7 +11030,6 @@ fn analyze_numeric_round_method_call(
             message: format!("{display_name} divisor must not be zero"),
         }));
     }
-
     let constant_scale = match scale.kind() {
         ExprKind::IntLiteral(scale) => scale
             .try_to_u64()
@@ -11402,7 +11120,6 @@ fn analyze_numeric_round_method_call(
             ty: result_type,
         }));
     }
-
     Some(Ok(retain_named_call_evaluation_order(
         TypedExpr {
             expr: ExprKind::Call {
@@ -11414,7 +11131,6 @@ fn analyze_numeric_round_method_call(
         &plan,
     )))
 }
-
 fn analyze_expr_expected(
     context: &SemanticContext,
     expr: &Expr,
@@ -11440,7 +11156,6 @@ fn analyze_expr_expected(
     }
     result
 }
-
 fn analyze_expr_expected_inner(
     context: &SemanticContext,
     expr: &Expr,
@@ -12428,7 +12143,6 @@ fn analyze_expr_expected_inner(
                     ),
                 });
             }
-
             let mut argument_plan = CallArgumentPlan {
                 ordered: args.clone(),
                 evaluation_order: (0..args.len()).collect(),
@@ -12623,7 +12337,6 @@ fn analyze_expr_expected_inner(
                 )
                 .map(|typed| retain_named_call_evaluation_order(typed, &argument_plan));
             }
-
             // analyze builtin calls
             let mut typed_slots = (0..args.len()).map(|_| None).collect::<Vec<_>>();
             let expected_parameters = context.function_params.borrow().get(&name).cloned();
@@ -12786,7 +12499,6 @@ fn analyze_expr_expected_inner(
         }
     }
 }
-
 fn analyze_sum_type_call(
     context: &SemanticContext,
     name: &str,
@@ -12807,7 +12519,6 @@ fn analyze_sum_type_call(
             message: message.to_owned(),
         })
     };
-
     Some(match name {
         STATE_MAP_GET_INTRINSIC => {
             if args.len() != 2 {
@@ -12875,11 +12586,9 @@ fn analyze_sum_type_call(
         _ => return None,
     })
 }
-
 fn is_supported_sum_payload(ty: &Type) -> bool {
     is_supported_durable_value_type(ty)
 }
-
 fn parse_declared_type(
     context: &SemanticContext,
     ty: &Option<TypeExpr>,
@@ -12890,7 +12599,6 @@ fn parse_declared_type(
     validate_list_schemas(&ty)?;
     Ok(Some(ty))
 }
-
 fn analyze_const_expr(
     context: &SemanticContext,
     expr: &Expr,
@@ -12903,7 +12611,6 @@ fn analyze_const_expr(
     }
     result
 }
-
 fn analyze_const_expr_inner(
     context: &SemanticContext,
     expr: &Expr,
@@ -13028,7 +12735,6 @@ fn analyze_const_expr_inner(
         }),
     }
 }
-
 fn fold_constant_numeric(expression: &TypedExpr) -> Result<TypedExpr, SemanticError> {
     match crate::checked_arithmetic::evaluate(expression) {
         Ok(Some(value)) => Ok(value.into_typed_expr()),
@@ -13042,7 +12748,6 @@ fn fold_constant_numeric(expression: &TypedExpr) -> Result<TypedExpr, SemanticEr
         }),
     }
 }
-
 fn parse_declared_param_type(
     context: &SemanticContext,
     param: &Param,
@@ -13103,7 +12808,6 @@ fn parse_declared_param_type(
         is_state: param.is_state,
     })
 }
-
 fn convert_type_expr(context: &SemanticContext, ty: &TypeExpr) -> Result<Type, SemanticError> {
     let result = convert_type_expr_inner(context, ty);
     if result.is_err() {
@@ -13111,7 +12815,6 @@ fn convert_type_expr(context: &SemanticContext, ty: &TypeExpr) -> Result<Type, S
     }
     result
 }
-
 fn convert_type_expr_inner(
     context: &SemanticContext,
     ty: &TypeExpr,
@@ -13306,7 +13009,6 @@ fn convert_type_expr_inner(
         }
     })
 }
-
 fn apply_map_new_type_hint(expr: &mut TypedExpr, hint: &Type) {
     let hint = resolve_struct_type(hint);
     if !matches!(hint, Type::StateMap(_, _)) {
@@ -13318,7 +13020,6 @@ fn apply_map_new_type_hint(expr: &mut TypedExpr, hint: &Type) {
         expr.ty = hint;
     }
 }
-
 fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError> {
     let expected = resolve_struct_type(expected);
     let actual = resolve_struct_type(actual);
@@ -13374,7 +13075,6 @@ fn ensure_assignable(expected: &Type, actual: &Type) -> Result<(), SemanticError
         }),
     }
 }
-
 fn ensure_assignable_and_coerce(
     expected: &Type,
     expr: &mut TypedExpr,
@@ -13442,7 +13142,6 @@ fn ensure_assignable_and_coerce(
     }
     Ok(())
 }
-
 fn fold_numeric_literal_cast(converted: TypedExpr) -> Result<TypedExpr, SemanticError> {
     match crate::checked_arithmetic::evaluate(&converted) {
         Ok(Some(value)) => Ok(value.into_typed_expr()),
@@ -13456,7 +13155,6 @@ fn fold_numeric_literal_cast(converted: TypedExpr) -> Result<TypedExpr, Semantic
         }),
     }
 }
-
 fn int_literal_expression(expr: &TypedExpr) -> bool {
     match expr.kind() {
         ExprKind::IntLiteral(_) => true,
@@ -13467,7 +13165,6 @@ fn int_literal_expression(expr: &TypedExpr) -> bool {
         _ => false,
     }
 }
-
 fn exact_numeric_literal_expression(expr: &TypedExpr) -> bool {
     match expr.kind() {
         ExprKind::IntLiteral(_) | ExprKind::DecimalLiteral { .. } => true,
@@ -13478,7 +13175,6 @@ fn exact_numeric_literal_expression(expr: &TypedExpr) -> bool {
         _ => false,
     }
 }
-
 fn assign_op_to_binary(op: AssignOp) -> Option<BinaryOp> {
     match op {
         AssignOp::Set => None,
@@ -13489,7 +13185,6 @@ fn assign_op_to_binary(op: AssignOp) -> Option<BinaryOp> {
         AssignOp::Mod => Some(BinaryOp::Mod),
     }
 }
-
 pub(crate) fn resolve_struct_type(ty: &Type) -> Type {
     match ty {
         Type::NamedStruct(_) => ty.clone(),
@@ -13511,7 +13206,6 @@ pub(crate) fn resolve_struct_type(ty: &Type) -> Type {
         _ => ty.clone(),
     }
 }
-
 fn resolve_struct_type_with_context(
     context: &SemanticContext,
     ty: &Type,
@@ -13527,7 +13221,6 @@ fn resolve_struct_type_with_context(
     validate_use_site_type_resolution_budget(context, ty)?;
     Ok(materialize_struct_type_with_context(context, ty))
 }
-
 fn validate_use_site_type_resolution_budget(
     context: &SemanticContext,
     ty: &Type,
@@ -13551,7 +13244,6 @@ fn validate_use_site_type_resolution_budget(
     }
     Ok(())
 }
-
 fn materialize_struct_type_with_context(context: &SemanticContext, ty: &Type) -> Type {
     match ty {
         Type::NamedStruct(name) => context
@@ -13588,18 +13280,15 @@ fn materialize_struct_type_with_context(context: &SemanticContext, ty: &Type) ->
         _ => ty.clone(),
     }
 }
-
 fn normalize_namespaced(name: &str) -> String {
     if let Some(builtin) = Builtin::from_source_name(name) {
         return builtin.name().to_owned();
     }
     String::from(name)
 }
-
 fn block_has_return_value(block: &super::ast::Block) -> bool {
     block.statements.iter().any(stmt_has_return_value)
 }
-
 fn stmt_has_return_value(stmt: &super::ast::Statement) -> bool {
     use super::ast::Statement as S;
     match stmt.kind() {
@@ -13621,14 +13310,11 @@ fn stmt_has_return_value(stmt: &super::ast::Statement) -> bool {
         _ => false,
     }
 }
-
 // NOTE: `TypedProgram` is defined earlier in this file with seiyaku metadata.
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum TypedItem {
     Function(TypedFunction),
 }
-
 #[derive(Debug, PartialEq, Clone)]
 pub struct TypedTrigger {
     pub id: TriggerId,
@@ -13638,7 +13324,6 @@ pub struct TypedTrigger {
     pub authority: Option<AccountId>,
     pub metadata: Metadata,
 }
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedFunction {
     pub name: String,
@@ -13653,14 +13338,12 @@ pub struct TypedFunction {
     /// Exact declared function/lifecycle name range, when source-backed.
     pub name_source: Option<crate::source::SourceRange>,
 }
-
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedBlock {
     pub statements: Vec<TypedStatement>,
     /// Final expression without a semicolon.
     pub tail: Option<Box<TypedExpr>>,
 }
-
 /// Source operation that supplied a compiler-proven StateMap iteration bound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StateMapIterationBoundKind {
@@ -13669,7 +13352,6 @@ pub enum StateMapIterationBoundKind {
     /// Prefix `.take(count)` with a literal count.
     Take,
 }
-
 impl StateMapIterationBoundKind {
     /// Canonical manifest spelling retained from the source operation.
     #[must_use]
@@ -13680,7 +13362,6 @@ impl StateMapIterationBoundKind {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum TypedStatement {
     Let {
@@ -13734,35 +13415,30 @@ pub enum TypedStatement {
         value: Box<TypedExpr>,
     },
 }
-
 impl TypedExpr {
     /// View the typed expression kind.
     #[must_use]
     pub const fn kind(&self) -> &ExprKind {
         &self.expr
     }
-
     /// Mutably view the typed expression kind.
     #[must_use]
     pub const fn kind_mut(&mut self) -> &mut ExprKind {
         &mut self.expr
     }
 }
-
 impl TypedStatement {
     /// View the typed statement.
     #[must_use]
     pub const fn kind(&self) -> &Self {
         self
     }
-
     /// Mutably view the typed statement.
     #[must_use]
     pub const fn kind_mut(&mut self) -> &mut Self {
         self
     }
 }
-
 /// Return call operands with runtime evaluation semantics.
 ///
 /// Active-only sums use dedicated expression nodes, so ordinary calls always
@@ -13770,7 +13446,6 @@ impl TypedStatement {
 fn evaluated_call_args<'a>(_name: &str, args: &'a [TypedExpr]) -> &'a [TypedExpr] {
     args
 }
-
 fn expr_mutates_map(expr: &TypedExpr, map_name: &str) -> bool {
     match expr.kind() {
         ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
@@ -13863,7 +13538,6 @@ fn expr_mutates_map(expr: &TypedExpr, map_name: &str) -> bool {
         | ExprKind::Ident(_) => false,
     }
 }
-
 fn block_mutates_map(block: &TypedBlock, map_name: &str) -> bool {
     fn stmt_mutates(stmt: &TypedStatement, map_name: &str) -> bool {
         match stmt.kind() {
@@ -13908,7 +13582,6 @@ fn block_mutates_map(block: &TypedBlock, map_name: &str) -> bool {
             .as_ref()
             .is_some_and(|tail| expr_mutates_map(tail, map_name))
 }
-
 fn block_contains_host_side_effects(block: &TypedBlock) -> bool {
     block
         .statements
@@ -13919,7 +13592,6 @@ fn block_contains_host_side_effects(block: &TypedBlock) -> bool {
             .as_ref()
             .is_some_and(|tail| expr_contains_host_side_effects(tail))
 }
-
 fn block_contains_instruction_emission(block: &TypedBlock) -> bool {
     block
         .statements
@@ -13930,7 +13602,6 @@ fn block_contains_instruction_emission(block: &TypedBlock) -> bool {
             .as_ref()
             .is_some_and(|tail| expr_contains_instruction_emission(tail))
 }
-
 fn block_mutates_durable_state(context: &SemanticContext, block: &TypedBlock) -> bool {
     block
         .statements
@@ -13941,36 +13612,29 @@ fn block_mutates_durable_state(context: &SemanticContext, block: &TypedBlock) ->
             .as_ref()
             .is_some_and(|tail| expr_mutates_durable_state(context, tail))
 }
-
 fn is_state_identifier(context: &SemanticContext, name: &str) -> bool {
     context.states.borrow().contains_key(name)
 }
-
 fn is_state_param_name(context: &SemanticContext, name: &str) -> bool {
     context.current_state_param_names.borrow().contains(name)
 }
-
 fn is_state_binding(context: &SemanticContext, name: &str) -> bool {
     is_state_identifier(context, name) || is_state_param_name(context, name)
 }
-
 fn canonical_state_hint(name: &str) -> String {
     let base = name.split('#').next().unwrap_or(name);
     format!("state:{base}")
 }
-
 fn mark_state_read(state_names: &HashSet<String>, name: &str, reads: &mut IndexSet<String>) {
     if state_names.contains(name.split('#').next().unwrap_or(name)) {
         reads.insert(canonical_state_hint(name));
     }
 }
-
 fn mark_state_write(state_names: &HashSet<String>, name: &str, writes: &mut IndexSet<String>) {
     if state_names.contains(name.split('#').next().unwrap_or(name)) {
         writes.insert(canonical_state_hint(name));
     }
 }
-
 fn collect_state_accesses_block(
     state_names: &HashSet<String>,
     block: &TypedBlock,
@@ -13984,7 +13648,6 @@ fn collect_state_accesses_block(
         collect_state_accesses_expr(state_names, tail, reads, writes);
     }
 }
-
 fn collect_state_accesses_statement(
     state_names: &HashSet<String>,
     stmt: &TypedStatement,
@@ -14060,7 +13723,6 @@ fn collect_state_accesses_statement(
         }
     }
 }
-
 fn collect_state_accesses_expr(
     state_names: &HashSet<String>,
     expr: &TypedExpr,
@@ -14177,7 +13839,6 @@ fn collect_state_accesses_expr(
         | ExprKind::Bytes(_) => {}
     }
 }
-
 pub fn function_state_accesses(
     func: &TypedFunction,
     states: &[TypedStateDecl],
@@ -14191,13 +13852,11 @@ pub fn function_state_accesses(
     collect_state_accesses_block(&state_names, &func.body, &mut reads, &mut writes);
     (reads, writes)
 }
-
 fn collect_called_functions(context: &SemanticContext, block: &TypedBlock) -> IndexSet<String> {
     let mut calls = IndexSet::new();
     collect_called_functions_into(context, block, &mut calls);
     calls
 }
-
 fn collect_called_functions_into(
     context: &SemanticContext,
     block: &TypedBlock,
@@ -14210,7 +13869,6 @@ fn collect_called_functions_into(
         collect_calls_in_expr(context, tail, calls);
     }
 }
-
 fn collect_calls_in_statement(
     context: &SemanticContext,
     stmt: &TypedStatement,
@@ -14277,7 +13935,6 @@ fn collect_calls_in_statement(
         TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => {}
     }
 }
-
 fn collect_calls_in_expr(
     context: &SemanticContext,
     expr: &TypedExpr,
@@ -14383,14 +14040,12 @@ fn collect_calls_in_expr(
         | ExprKind::Ident(_) => {}
     }
 }
-
 fn ensure_state_map_iter_supported(
     _context: &SemanticContext,
     _map_expr: &TypedExpr,
 ) -> Result<(), SemanticError> {
     Ok(())
 }
-
 fn ensure_not_state_shadow(context: &SemanticContext, name: &str) -> Result<(), SemanticError> {
     if is_state_binding(context, name) {
         return Err(SemanticError {
@@ -14400,7 +14055,6 @@ fn ensure_not_state_shadow(context: &SemanticContext, name: &str) -> Result<(), 
     }
     Ok(())
 }
-
 fn ensure_new_local_binding(
     context: &SemanticContext,
     name: &str,
@@ -14427,7 +14081,6 @@ fn ensure_new_local_binding(
     }
     Ok(())
 }
-
 fn ensure_mutable_assignment_target(
     context: &SemanticContext,
     name: &str,
@@ -14443,12 +14096,10 @@ fn ensure_mutable_assignment_target(
         ),
     })
 }
-
 fn is_state_map_expr(context: &SemanticContext, expr: &TypedExpr) -> bool {
     matches!(resolve_struct_type(&expr.ty), Type::StateMap(_, _))
         && typed_map_expr_is_state(context, expr)
 }
-
 /// Return the syntactic root name of a typed state-handle expression.
 ///
 /// Callers must validate that the returned root belongs to the current typed
@@ -14464,17 +14115,14 @@ pub fn typed_state_handle_name(expr: &TypedExpr) -> Option<String> {
         _ => None,
     }
 }
-
 fn is_state_handle_expr(context: &SemanticContext, expr: &TypedExpr) -> bool {
     typed_state_handle_name(expr)
         .as_deref()
         .is_some_and(|name| is_state_binding(context, name.split('#').next().unwrap_or(name)))
 }
-
 fn typed_map_expr_is_state(context: &SemanticContext, expr: &TypedExpr) -> bool {
     is_state_handle_expr(context, expr)
 }
-
 fn map_expr_is_state(context: &SemanticContext, expr: &Expr) -> bool {
     match expr {
         Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
@@ -14485,11 +14133,9 @@ fn map_expr_is_state(context: &SemanticContext, expr: &Expr) -> bool {
         _ => false,
     }
 }
-
 fn is_user_defined_function(context: &SemanticContext, name: &str) -> bool {
     context.function_returns.borrow().contains_key(name)
 }
-
 fn compute_transitive_effects(
     summaries: &HashMap<String, FunctionSummary>,
 ) -> HashMap<String, FunctionEffects> {
@@ -14513,7 +14159,6 @@ fn compute_transitive_effects(
     }
     effects
 }
-
 fn describe_view_violation(effect: FunctionEffects) -> &'static str {
     if effect.mutates_durable_state {
         "durable state mutation"
@@ -14523,7 +14168,6 @@ fn describe_view_violation(effect: FunctionEffects) -> &'static str {
         "host side effects"
     }
 }
-
 fn find_first_view_violation(
     root: &str,
     summaries: &HashMap<String, FunctionSummary>,
@@ -14555,7 +14199,6 @@ fn find_first_view_violation(
     }
     None
 }
-
 fn validate_scalar_state_initialization(
     context: &SemanticContext,
     items: &[TypedItem],
@@ -14567,7 +14210,6 @@ fn validate_scalar_state_initialization(
     // Recheck the call graph here so this security property fails closed even
     // if a future caller invokes it without the ordinary semantic pipeline.
     validate_acyclic_function_calls(context)?;
-
     let required = states
         .iter()
         .filter(|state| !matches!(&state.ty, Type::StateMap(_, _)))
@@ -14576,14 +14218,12 @@ fn validate_scalar_state_initialization(
     if required.is_empty() {
         return Ok(());
     }
-
     let functions = items
         .iter()
         .map(|item| match item {
             TypedItem::Function(function) => function,
         })
         .collect::<Vec<_>>();
-
     let hajimari = functions
         .iter()
         .find(|function| function.modifiers.kind == FunctionKind::Hajimari)
@@ -14591,7 +14231,6 @@ fn validate_scalar_state_initialization(
             code: "E_STATE_HAJIMARI_REQUIRED",
             message: "seiyaku scalar state requires a `hajimari()`/`始まり()` declaration".into(),
         })?;
-
     let required_set = required.iter().cloned().collect::<HashSet<_>>();
     let summaries = compute_definite_state_write_summaries(&functions, &required_set)?;
     let initialized = summaries.get(&hajimari.name).cloned().unwrap_or_default();
@@ -14612,9 +14251,7 @@ fn validate_scalar_state_initialization(
         })
     }
 }
-
 type DefiniteStateSet = HashSet<String>;
-
 /// Must-analysis state for one block.
 ///
 /// Every populated exit set is the intersection of initialized states across
@@ -14627,11 +14264,9 @@ struct DefiniteInitFlow {
     breaks: Option<DefiniteStateSet>,
     continues: Option<DefiniteStateSet>,
 }
-
 fn intersect_states(left: &mut DefiniteStateSet, right: &DefiniteStateSet) {
     left.retain(|state| right.contains(state));
 }
-
 fn merge_exit(accumulated: &mut Option<DefiniteStateSet>, candidate: Option<DefiniteStateSet>) {
     let Some(candidate) = candidate else {
         return;
@@ -14642,7 +14277,6 @@ fn merge_exit(accumulated: &mut Option<DefiniteStateSet>, candidate: Option<Defi
         *accumulated = Some(candidate);
     }
 }
-
 fn merge_alternative_continuations(
     left: Option<DefiniteStateSet>,
     right: Option<DefiniteStateSet>,
@@ -14656,7 +14290,6 @@ fn merge_alternative_continuations(
         }
     }
 }
-
 fn evaluate_definite_init_expr(
     expr: &TypedExpr,
     mut initialized: DefiniteStateSet,
@@ -14820,7 +14453,6 @@ fn evaluate_definite_init_expr(
         | ExprKind::Ident(_) => initialized,
     }
 }
-
 fn analyze_definite_init_block(
     block: &TypedBlock,
     incoming: DefiniteStateSet,
@@ -14831,7 +14463,6 @@ fn analyze_definite_init_block(
         continuing: Some(incoming),
         ..DefiniteInitFlow::default()
     };
-
     for statement in &block.statements {
         let Some(incoming) = flow.continuing.take() else {
             // Statements following an unconditional control transfer are
@@ -14845,16 +14476,13 @@ fn analyze_definite_init_block(
         merge_exit(&mut flow.breaks, statement_flow.breaks);
         merge_exit(&mut flow.continues, statement_flow.continues);
     }
-
     if let Some(tail) = &block.tail
         && let Some(continuing) = flow.continuing.take()
     {
         flow.continuing = Some(evaluate_definite_init_expr(tail, continuing, summaries));
     }
-
     flow
 }
-
 fn analyze_definite_init_statement(
     statement: &TypedStatement,
     incoming: DefiniteStateSet,
@@ -15008,7 +14636,6 @@ fn analyze_definite_init_statement(
         }
     }
 }
-
 fn analyze_may_execute_loop(
     body: &TypedBlock,
     before_body: DefiniteStateSet,
@@ -15027,7 +14654,6 @@ fn analyze_may_execute_loop(
         let step_flow = analyze_definite_init_statement(step, reaches_step, required, summaries);
         merge_exit(&mut body_flow.returns, step_flow.returns);
     }
-
     DefiniteInitFlow {
         continuing: Some(before_body),
         returns: body_flow.returns,
@@ -15038,7 +14664,6 @@ fn analyze_may_execute_loop(
         continues: None,
     }
 }
-
 fn definite_writes_on_normal_exit(
     function: &TypedFunction,
     required: &DefiniteStateSet,
@@ -15054,7 +14679,6 @@ fn definite_writes_on_normal_exit(
     }
     flow.returns.unwrap_or_default()
 }
-
 fn compute_definite_state_write_summaries(
     functions: &[&TypedFunction],
     required: &DefiniteStateSet,
@@ -15063,7 +14687,6 @@ fn compute_definite_state_write_summaries(
         .iter()
         .map(|function| (function.name.clone(), DefiniteStateSet::new()))
         .collect::<HashMap<_, _>>();
-
     // The already-validated acyclic call graph has height at most N. Start at
     // the conservative empty summary and iterate to the least fixed point, so
     // calls through arbitrarily ordered helpers are source-order independent.
@@ -15082,14 +14705,12 @@ fn compute_definite_state_write_summaries(
         }
         summaries = next;
     }
-
     Err(SemanticError {
         code: "E_STATE_HAJIMARI_INCOMPLETE",
         message: "compiler could not prove complete scalar-state assignment by `hajimari`/`始まり` through the helper call graph"
             .into(),
     })
 }
-
 fn enforce_permission_requirements(
     context: &SemanticContext,
     items: &[TypedItem],
@@ -15116,7 +14737,6 @@ fn enforce_permission_requirements(
                 message,
             });
         }
-
         if func.modifiers.kind == FunctionKind::Kotoage && func.modifiers.permission.is_none() {
             return Err(SemanticError {
                 code: "K2004",
@@ -15129,7 +14749,6 @@ fn enforce_permission_requirements(
     }
     Ok(())
 }
-
 fn statement_contains_host_side_effects(stmt: &TypedStatement) -> bool {
     match stmt.kind() {
         TypedStatement::Expr(expr)
@@ -15193,7 +14812,6 @@ fn statement_contains_host_side_effects(stmt: &TypedStatement) -> bool {
         TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => false,
     }
 }
-
 fn statement_contains_instruction_emission(stmt: &TypedStatement) -> bool {
     match stmt.kind() {
         TypedStatement::Expr(expr)
@@ -15257,7 +14875,6 @@ fn statement_contains_instruction_emission(stmt: &TypedStatement) -> bool {
         TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => false,
     }
 }
-
 fn statement_mutates_durable_state(context: &SemanticContext, stmt: &TypedStatement) -> bool {
     match stmt.kind() {
         TypedStatement::Let { name, value } => {
@@ -15321,7 +14938,6 @@ fn statement_mutates_durable_state(context: &SemanticContext, stmt: &TypedStatem
         TypedStatement::Return(None) | TypedStatement::Break | TypedStatement::Continue => false,
     }
 }
-
 fn expr_contains_host_side_effects(expr: &TypedExpr) -> bool {
     match expr.kind() {
         ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
@@ -15409,7 +15025,6 @@ fn expr_contains_host_side_effects(expr: &TypedExpr) -> bool {
         | ExprKind::Ident(_) => false,
     }
 }
-
 fn expr_contains_instruction_emission(expr: &TypedExpr) -> bool {
     match expr.kind() {
         ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
@@ -15498,7 +15113,6 @@ fn expr_contains_instruction_emission(expr: &TypedExpr) -> bool {
         | ExprKind::Ident(_) => false,
     }
 }
-
 fn expr_mutates_durable_state(context: &SemanticContext, expr: &TypedExpr) -> bool {
     match expr.kind() {
         ExprKind::Call { name, args } | ExprKind::NamedCall { name, args, .. } => {
@@ -15594,7 +15208,6 @@ fn expr_mutates_durable_state(context: &SemanticContext, expr: &TypedExpr) -> bo
         | ExprKind::Ident(_) => false,
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -15617,7 +15230,6 @@ mod tests {
         source.push_str("}\n}\n");
         source
     }
-
     #[test]
     fn large_shared_struct_references_and_expression_checks_reuse_one_canonical_dag() {
         let source = shared_struct_dag_source(14, 128);
@@ -15626,7 +15238,6 @@ mod tests {
         let typed = context
             .analyze(&program)
             .expect("canonical struct references must not multiply expanded work");
-
         let canonical = context.resolved_named_types.borrow();
         let Type::Struct {
             fields: canonical_fields,
@@ -15646,7 +15257,6 @@ mod tests {
             panic!("StateMap value must resolve to S000");
         };
         assert!(Arc::ptr_eq(canonical_fields, state_fields));
-
         let function = typed
             .items
             .iter()
@@ -15671,7 +15281,6 @@ mod tests {
         }
         assert_eq!(checked, 128);
     }
-
     #[test]
     fn runtime_word_count_stops_at_the_fixed_register_window_for_shared_dags() {
         let source = shared_struct_dag_source(14, 0);
@@ -15682,14 +15291,12 @@ mod tests {
             .expect("shared word-count fixture must type-check");
         let canonical = context.resolved_named_types.borrow();
         let root = canonical.get("S000").expect("canonical shared root");
-
         assert_eq!(
             runtime_value_word_count_bounded(root, crate::regalloc::MAX_ARGUMENT_VALUES),
             Some(crate::regalloc::MAX_ARGUMENT_VALUES + 1),
             "word accounting must stop immediately after crossing the ABI window"
         );
     }
-
     #[test]
     fn modest_shared_struct_references_preserve_ordinary_semantics() {
         let source = shared_struct_dag_source(8, 16);
@@ -15698,7 +15305,6 @@ mod tests {
         assert_eq!(typed.states.len(), 1);
         assert!(matches!(typed.states[0].ty, Type::StateMap(_, _)));
     }
-
     #[test]
     fn compiler_owned_test_return_selector_is_reserved_for_functions() {
         assert!(is_reserved_source_declaration(
@@ -15710,7 +15316,6 @@ mod tests {
             false
         ));
     }
-
     #[test]
     fn exact_amount_is_globally_retired_while_other_numeric_names_are_contextual() {
         const EXPECTED: &[&str] = &[
@@ -15761,7 +15366,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn retired_numeric_spellings_are_rejected_as_source_unit_identities() {
         let program = parse("module i64 { fn run() {} }")
@@ -15774,7 +15378,6 @@ mod tests {
             "source unit `i64` uses a compiler-reserved name"
         );
     }
-
     #[test]
     fn production_projection_accepts_registered_intrinsics_and_rejects_fabricated_calls() {
         let retained = HashSet::new();
@@ -15826,7 +15429,6 @@ mod tests {
             )
             .unwrap_or_else(|error| panic!("registered intrinsic {name} was rejected: {error:?}"));
         }
-
         let fabricated = TypedExpr {
             expr: ExprKind::Call {
                 name: "__fabricated_projection_escape".to_owned(),
@@ -15850,7 +15452,6 @@ mod tests {
         assert_eq!(error.code, "K2002");
         assert!(error.message.contains("__fabricated_projection_escape"));
     }
-
     #[test]
     fn removed_test_function_cannot_hide_behind_an_intrinsic_name() {
         let retained = HashSet::new();
@@ -15872,7 +15473,6 @@ mod tests {
         .expect_err("removed test calls must take precedence over intrinsic classification");
         assert_eq!(error.code, "E_TEST_ONLY_PRODUCTION");
     }
-
     #[test]
     fn pending_diagnostic_fills_first_spanless_failure_without_masking_structured_failure() {
         let source = crate::source::SourceId(9);
@@ -15901,14 +15501,11 @@ mod tests {
                 failure("E_THIRD", None),
             ],
         };
-
         attach_pending_diagnostic(&mut failures, Some(pending.clone()));
-
         assert_eq!(failures.failures[0].diagnostic, Some(structured));
         assert_eq!(failures.failures[1].diagnostic, Some(pending));
         assert!(failures.failures[2].diagnostic.is_none());
     }
-
     fn sample_account_literal() -> String {
         iroha_data_model::account::AccountId::new(
             "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D"
@@ -15917,16 +15514,13 @@ mod tests {
         )
         .to_string()
     }
-
     fn analyze_test(program: &Program) -> Result<TypedProgram, SemanticError> {
         SemanticContext::with_capabilities(false, true).analyze(program)
     }
-
     fn analyze_error(source: &str) -> SemanticError {
         let program = parse(source).expect("source should parse");
         analyze(&program).expect_err("semantic analysis should reject source")
     }
-
     fn returned_expr(source: &str) -> TypedExpr {
         let program = parse(source).expect("source should parse");
         let typed = analyze(&program).expect("source should analyze");
@@ -15945,23 +15539,19 @@ mod tests {
             })
             .expect("function return expression")
     }
-
     fn function_tail(source: &str) -> TypedExpr {
         let program = parse(source).expect("source should parse");
         let typed = analyze(&program).expect("source should analyze");
         let TypedItem::Function(function) = typed.items.into_iter().next().expect("function item");
         *function.body.tail.expect("function tail expression")
     }
-
     #[test]
     fn list_literals_infer_exact_or_contextual_capacity() {
         let exact = function_tail("fn exact() -> List<int, 2> { [1, 2] }");
         assert_eq!(exact.ty, Type::List(Box::new(Type::Int), 2));
         assert!(matches!(exact.expr, ExprKind::List(ref items) if items.len() == 2));
-
         let contextual = function_tail("fn wider() -> List<int, 8> { [1, 2] }");
         assert_eq!(contextual.ty, Type::List(Box::new(Type::Int), 8));
-
         let inferred_program =
             parse("fn inferred() { let values = [1, 2, 3]; }").expect("parse inferred List");
         let inferred = analyze(&inferred_program).expect("analyze inferred List");
@@ -15971,20 +15561,16 @@ mod tests {
         };
         assert_eq!(value.ty, Type::List(Box::new(Type::Int), 3));
     }
-
     #[test]
     fn empty_and_oversized_list_literals_fail_closed() {
         let empty = function_tail("fn empty() -> List<int, 4> { [] }");
         assert_eq!(empty.ty, Type::List(Box::new(Type::Int), 4));
-
         let error = analyze_error("fn missing_context() { let values = []; }");
         assert_eq!(error.code, "E_LIST_EMPTY_CONTEXT");
-
         let values = std::iter::repeat_n("1", 65).collect::<Vec<_>>().join(", ");
         let error = analyze_error(&format!("fn oversized() {{ let values = [{values}]; }}"));
         assert_eq!(error.code, "E_LIST_CAPACITY");
     }
-
     #[test]
     fn zero_sized_list_elements_are_rejected_at_every_semantic_boundary() {
         for source in [
@@ -16001,12 +15587,10 @@ mod tests {
             assert!(error.message.contains("at least one word"));
         }
     }
-
     #[test]
     fn contextual_empty_lists_and_one_word_sum_handles_remain_valid() {
         let ordinary = function_tail("fn empty() -> List<int, 4> { [] }");
         assert_eq!(ordinary.ty, Type::List(Box::new(Type::Int), 4));
-
         let sum_handle = function_tail(
             "struct Empty {} fn values() -> List<Option<Empty>, 1> { [Option::none] }",
         );
@@ -16020,20 +15604,17 @@ mod tests {
                 1,
             )
         );
-
         let forward = function_tail(
             "struct Holder { List<Value, 1> values } struct Value { int item } fn values() -> List<Value, 1> { [Value { item: 1 }] }",
         );
         assert!(matches!(forward.ty, Type::List(_, 1)));
     }
-
     #[test]
     fn native_json_rejects_decoded_duplicate_keys_and_oversized_nodes() {
         let error = analyze_error(include_str!(
             "semantic/test_sources/native_json_rejects_decoded_duplicate_keys_and_oversized_nodes_1.ko"
         ));
         assert_eq!(error.code, "E_JSON_DUPLICATE_KEY");
-
         let object_entries = (0..65)
             .map(|index| format!("key{index}: {index}"))
             .collect::<Vec<_>>()
@@ -16042,7 +15623,6 @@ mod tests {
             "fn oversized_object() -> Json {{ json {{ {object_entries} }} }}"
         ));
         assert_eq!(error.code, "E_JSON_CAPACITY");
-
         let array_elements = (0..65)
             .map(|index| index.to_string())
             .collect::<Vec<_>>()
@@ -16052,7 +15632,6 @@ mod tests {
         ));
         assert_eq!(error.code, "E_JSON_CAPACITY");
     }
-
     #[test]
     fn json_parse_literals_fail_during_semantic_analysis() {
         let duplicate = analyze_error(include_str!(
@@ -16060,7 +15639,6 @@ mod tests {
         ));
         assert_eq!(duplicate.code, "E_JSON_DUPLICATE_KEY");
         assert!(duplicate.message.contains("owner"), "{}", duplicate.message);
-
         let malformed = analyze_error(include_str!(
             "semantic/test_sources/json_parse_literals_fail_during_semantic_analysis_2.ko"
         ));
@@ -16071,7 +15649,6 @@ mod tests {
             malformed.message
         );
     }
-
     #[test]
     fn json_parse_requires_a_direct_literal_but_native_json_remains_typed() {
         for source in [
@@ -16089,21 +15666,18 @@ mod tests {
             assert_eq!(dynamic.code, "E_JSON_LITERAL_REQUIRED", "{source}");
             assert_eq!(dynamic.message, JSON_LITERAL_REQUIRED_MESSAGE, "{source}");
         }
-
         let native = parse(
             include_str!("semantic/test_sources/json_parse_requires_a_direct_literal_but_native_json_remains_typed_4.ko"),
         )
         .expect("lowercase typed native JSON source should parse");
         analyze(&native).expect("lowercase typed native JSON must remain available");
     }
-
     #[test]
     fn native_json_requires_explicit_result_and_struct_conversion() {
         let result =
             analyze_error("fn invalid(Result<int, int> value) -> Json { json { value: value } }");
         assert_eq!(result.code, "E_JSON_VALUE_TYPE");
         assert!(result.message.contains("Result"), "{}", result.message);
-
         let structure = analyze_error(
             "struct Payload { int value } fn invalid(Payload value) -> Json { json { value: value } }",
         );
@@ -16114,7 +15688,6 @@ mod tests {
             structure.message
         );
     }
-
     #[test]
     fn native_json_rejects_recursive_schema_limits_during_semantic_checking() {
         let children = std::iter::repeat_n("json [1, 2, 3, 4]", 64)
@@ -16126,7 +15699,6 @@ mod tests {
         ));
         assert_eq!(error.code, "E_JSON_SCHEMA_LIMIT", "{}", error.message);
         assert!(error.message.contains("V1"));
-
         let long_keys = (0..64)
             .map(|index| format!("\"key{index}{}\": {index}", "x".repeat(1_100)))
             .collect::<Vec<_>>()
@@ -16137,7 +15709,6 @@ mod tests {
         assert_eq!(error.code, "E_JSON_SCHEMA_LIMIT", "{}", error.message);
         assert!(error.message.contains("byte limit"), "{}", error.message);
     }
-
     #[test]
     fn list_comprehensions_preserve_the_proven_source_maximum() {
         let expression = function_tail(
@@ -16148,25 +15719,21 @@ mod tests {
             expression.expr,
             ExprKind::ListComprehension { .. }
         ));
-
         let error = analyze_error(
             "fn too_small() -> List<int, 4> { let List<int, 8> source = [1, 2]; [value for value in source if false] }",
         );
         assert_eq!(error.code, "E_LIST_COMPREHENSION_CAPACITY");
         assert!(error.message.contains("filters do not reduce"));
     }
-
     #[test]
     fn lists_allow_nested_structures_but_reject_resource_handles() {
         let nested = function_tail(
             "struct Pair { int left, bool right } fn nested() -> List<List<Pair, 2>, 2> { [[Pair { left: 1, right: true }]] }",
         );
         assert!(matches!(nested.ty, Type::List(_, 2)));
-
         let error =
             analyze_error("fn resources(List<Option<StateMap<int, int>>, 2> value) { return; }");
         assert_eq!(error.code, "E_LIST_RESOURCE_ELEMENT");
-
         let secret_source =
             "fn resources(List<Option<Secret<int>>, 2> value) { let ignored = value; }";
         let secret_program = parse(secret_source).expect("secret List source should parse");
@@ -16175,7 +15742,6 @@ mod tests {
             .expect_err("nested Secret handles must not become List elements");
         assert_eq!(error.code, "E_LIST_RESOURCE_ELEMENT");
     }
-
     #[test]
     fn every_list_method_has_a_typed_safe_surface() {
         let program = parse(
@@ -16198,19 +15764,15 @@ mod tests {
             function.body.tail.as_ref().expect("enumerate tail").ty,
             Type::List(Box::new(Type::Tuple(vec![Type::Int, Type::Int])), 4)
         );
-
         let error =
             analyze_error("fn immutable() { let List<int, 2> values = [1]; values.try_push(2); }");
         assert_eq!(error.code, "E_LIST_MUTABLE_RECEIVER");
-
         let error = analyze_error("fn temporary() { let pushed = [1].try_push(2); }");
         assert_eq!(error.code, "E_LIST_MUTABLE_RECEIVER");
-
         let error = analyze_error(
             "fn ambiguous() { var List<int, 2> values = [1]; values.try_set(0, 1); }",
         );
         assert_eq!(error.code, "E_NAMED_ARGUMENTS_REQUIRED");
-
         analyze(
             &parse(
                 "fn distinct() { var List<string, 2> values = [\"a\"]; values.try_set(0, \"b\"); }",
@@ -16219,7 +15781,6 @@ mod tests {
         )
         .expect("distinct index/value types may remain positional");
     }
-
     #[test]
     fn sourced_mutable_list_receiver_retains_its_binding_identity() {
         let source = crate::source::SourceFile::new(
@@ -16232,7 +15793,6 @@ mod tests {
                 .expect("parse sourced mutable List receiver");
         analyze(&spanned.program).expect("source provenance must not hide the mutable binding");
     }
-
     #[test]
     fn list_mutability_does_not_leak_between_sibling_lexical_bindings() {
         for (index, body) in [
@@ -16243,12 +15803,10 @@ mod tests {
         .enumerate()
         {
             let text = format!("seiyaku Lists {{ view fn main(bool flag) {{ {body} }} }}");
-
             let raw = parse(&text).expect("parse raw sibling List bindings");
             let raw_error =
                 analyze(&raw).expect_err("raw-AST fallback must preserve lexical mutability");
             assert_eq!(raw_error.code, "E_LIST_MUTABLE_RECEIVER", "{body}");
-
             let source = crate::source::SourceFile::new(
                 crate::source::SourceId(42 + index as u32),
                 format!("list-sibling-{index}.ko"),
@@ -16271,14 +15829,12 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn list_take_accepts_zero_and_rejects_limits_above_source_capacity() {
         let zero = function_tail(
             "fn zero() -> List<int, 1> { let List<int, 4> values = [1, 2]; values.take(0) }",
         );
         assert_eq!(zero.ty, Type::List(Box::new(Type::Int), 1));
-
         for (source, code) in [
             (
                 "fn above_source() { let List<int, 1> values = [1]; let head = values.take(2); }",
@@ -16297,7 +15853,6 @@ mod tests {
             assert_eq!(error.code, code, "{}", error.message);
         }
     }
-
     #[test]
     fn list_contains_accepts_recursive_durable_aggregates() {
         let expression = function_tail(include_str!(
@@ -16308,7 +15863,6 @@ mod tests {
             matches!(expression.expr, ExprKind::Call { ref name, .. } if name == LIST_CONTAINS_INTRINSIC)
         );
     }
-
     #[test]
     fn unchecked_list_reads_and_writes_have_actionable_diagnostics() {
         let error = analyze_error("fn read() { let values = [1]; let value = values[0]; }");
@@ -16317,12 +15871,10 @@ mod tests {
             error.message.contains("values.get(index)")
                 || error.message.contains("list.get(index)")
         );
-
         let error = analyze_error("fn write() { var values = [1]; values[0] = 2; }");
         assert_eq!(error.code, "E_LIST_UNSAFE_INDEX");
         assert!(error.message.contains("try_set"));
     }
-
     #[test]
     fn decimal_literals_are_exact_canonical_and_preserve_source_spelling() {
         for (spelling, canonical) in [
@@ -16345,7 +15897,6 @@ mod tests {
             assert_eq!(value.to_string(), canonical);
         }
     }
-
     #[test]
     fn decimal_literal_normalizes_before_enforcing_scale_twenty_eight() {
         let removable = format!("0.{}10", "0".repeat(27));
@@ -16355,7 +15906,6 @@ mod tests {
         };
         assert_eq!(value.mantissa().to_string(), "1");
         assert_eq!(value.scale(), 28);
-
         let zero = format!("0.{}", "0".repeat(80));
         let expression = returned_expr(&format!("fn value() -> decimal {{ return {zero}; }}"));
         let ExprKind::DecimalLiteral { value, .. } = expression.expr else {
@@ -16363,14 +15913,12 @@ mod tests {
         };
         assert!(value.is_zero());
         assert_eq!(value.scale(), 0);
-
         let nonremovable = format!("0.{}1", "0".repeat(28));
         let error = analyze_error(&format!(
             "fn value() -> decimal {{ return {nonremovable}; }}"
         ));
         assert_eq!(error.code, "E_DECIMAL_SCALE_OVERFLOW");
     }
-
     #[test]
     fn int_literal_accepts_both_signed_512_bit_endpoints_and_rejects_neighbors() {
         fn decimal_plus_one(value: &str) -> String {
@@ -16392,21 +15940,18 @@ mod tests {
             }
             String::from_utf8(digits).expect("decimal digits")
         }
-
         let mut maximum_bytes = vec![0xff; 64];
         maximum_bytes[63] = 0x7f;
         let maximum = BigInt::from_twos_bytes(&maximum_bytes).expect("signed 512-bit maximum");
         let mut minimum_bytes = vec![0; 64];
         minimum_bytes[63] = 0x80;
         let minimum = BigInt::from_twos_bytes(&minimum_bytes).expect("signed 512-bit minimum");
-
         let maximum_expression =
             returned_expr(&format!("fn value() -> int {{ return {maximum}; }}"));
         assert!(matches!(maximum_expression.expr, ExprKind::IntLiteral(value) if value == maximum));
         let minimum_expression =
             returned_expr(&format!("fn value() -> int {{ return {minimum}; }}"));
         assert!(matches!(minimum_expression.expr, ExprKind::IntLiteral(value) if value == minimum));
-
         let above = decimal_plus_one(&maximum.to_string());
         let below_magnitude = decimal_plus_one(minimum.to_string().trim_start_matches('-'));
         for source in [
@@ -16417,14 +15962,12 @@ mod tests {
             assert!(error.contains("E_INT_LITERAL_OVERFLOW"), "{error}");
         }
     }
-
     #[test]
     fn decimal_literal_accepts_signed_minimum_after_combining_unary_minus() {
         let mut minimum_bytes = vec![0; MAX_MANTISSA_BYTES];
         minimum_bytes[MAX_MANTISSA_BYTES - 1] = 0x80;
         let minimum = BigInt::from_twos_bytes(&minimum_bytes).expect("signed 512-bit minimum");
         let magnitude = minimum.to_string().trim_start_matches('-').to_owned();
-
         let expression = returned_expr(&format!(
             "fn value() -> decimal {{ return -{magnitude}.0; }}"
         ));
@@ -16433,13 +15976,11 @@ mod tests {
             ExprKind::DecimalLiteral { ref value, .. }
                 if value.mantissa() == &minimum && value.scale() == 0
         ));
-
         let error = analyze_error(&format!(
             "fn value() -> decimal {{ return {magnitude}.0; }}"
         ));
         assert_eq!(error.code, "E_DECIMAL_MANTISSA_OVERFLOW");
     }
-
     #[test]
     fn decimal_literal_ignores_leading_zeroes_before_width_checks() {
         let expression = returned_expr(&format!(
@@ -16451,7 +15992,6 @@ mod tests {
             ExprKind::DecimalLiteral { ref value, .. } if value.to_string() == "10"
         ));
     }
-
     #[test]
     fn exact_constant_numeric_arithmetic_uses_runtime_primitives() {
         for (source, expected) in [
@@ -16467,7 +16007,6 @@ mod tests {
             };
             assert_eq!(value.to_string(), expected);
         }
-
         for (source, expected_code) in [
             (
                 "fn value() -> quantity { return 1 - 2; }",
@@ -16490,7 +16029,6 @@ mod tests {
             assert_eq!(error.code, expected_code, "{}", error.message);
         }
     }
-
     #[test]
     fn exact_literals_inherit_decimal_and_quantity_expression_context() {
         let program = parse(
@@ -16504,25 +16042,19 @@ mod tests {
         )
         .expect("parse contextual numeric literals");
         analyze(&program).expect("exact literals must inherit their numeric expression context");
-
         let repeating = analyze_error("const decimal THIRD = 1 / 3;");
         assert_eq!(repeating.code, "E_REPEATING_DECIMAL");
-
         let underflow = analyze_error("const quantity INVALID = 1 - 2;");
         assert_eq!(underflow.code, "E_QUANTITY_UNDERFLOW");
-
         let negative = analyze_error("const quantity INVALID = -1;");
         assert_eq!(negative.code, "E_NEGATIVE_QUANTITY");
-
         let scaled =
             returned_expr("fn scaled(quantity balance) -> quantity { return balance / 2; }");
         assert_eq!(scaled.ty, Type::Quantity);
         let ratio = returned_expr("fn ratio(quantity balance) -> decimal { return balance / 2; }");
         assert_eq!(ratio.ty, Type::Decimal);
     }
-
     include!("semantic/tests/numeric_rounding_modes.rs");
-
     #[test]
     fn unknown_rounding_spellings_are_rejected() {
         for mode in ["nearest", "bankers", "nearest_toward"] {
@@ -16541,7 +16073,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn rounded_numeric_methods_reject_noncanonical_signatures() {
         let positional = analyze_error(
@@ -16549,21 +16080,18 @@ mod tests {
                 input.div_round(2.0, 2, Rounding::nearest_even) }",
         );
         assert_eq!(positional.code, "E_NAMED_ARGUMENTS_REQUIRED");
-
         let int_receiver = analyze_error(
             "fn value(int input) -> decimal { \
                 input.div_round( \
                     divisor: 2.0, scale: 2, mode: Rounding::nearest_even) }",
         );
         assert_eq!(int_receiver.code, "E_NUMERIC_ROUND_RECEIVER");
-
         let decimal_ratio = analyze_error(
             "fn value(decimal input, quantity divisor) -> decimal { \
                 input.ratio_round( \
                     divisor: divisor, scale: 2, mode: Rounding::nearest_even) }",
         );
         assert_eq!(decimal_ratio.code, "E_NUMERIC_ROUND_RECEIVER");
-
         for scale in ["-1", "29"] {
             let error = analyze_error(&format!(
                 "fn value(decimal input) -> decimal {{ \
@@ -16573,7 +16101,6 @@ mod tests {
             assert_eq!(error.code, "E_INVALID_SCALE", "scale={scale}");
         }
     }
-
     #[test]
     fn named_numeric_conversions_preserve_failure_and_rounding_policy() {
         let recoverable = returned_expr(
@@ -16585,7 +16112,6 @@ mod tests {
             Type::Result(Box::new(Type::Quantity), Box::new(Type::Int))
         );
         assert!(matches!(recoverable.expr, ExprKind::NumericTryCast { .. }));
-
         let truncated =
             returned_expr("fn value() -> int { return decimal::to_int_trunc(value: -1.9); }");
         assert!(
@@ -16599,7 +16125,6 @@ mod tests {
             matches!(rounded.expr, ExprKind::IntLiteral(ref value) if value.try_to_i64() == Some(2))
         );
     }
-
     #[test]
     fn named_struct_fields_retain_source_evaluation_order() {
         let expr = returned_expr(
@@ -16623,7 +16148,6 @@ mod tests {
             matches!(fields[2].1.expr, ExprKind::IntLiteral(ref value) if value == &BigInt::from(7_i64))
         );
     }
-
     #[test]
     fn struct_literals_reject_unknown_missing_and_positional_fields() {
         for (source, code) in [
@@ -16644,7 +16168,6 @@ mod tests {
             assert_eq!(error.code, code, "{}", error.message);
         }
     }
-
     #[test]
     fn named_user_call_arguments_are_reordered_to_parameter_order() {
         let program = parse(
@@ -16675,7 +16198,6 @@ mod tests {
         assert!(matches!(args[1].expr, ExprKind::String(ref value) if value == "two"));
         assert_eq!(evaluation_order, &[1, 0]);
     }
-
     #[test]
     fn named_user_calls_reject_unknown_missing_and_ambiguous_positional_arguments() {
         for (source, code) in [
@@ -16695,13 +16217,11 @@ mod tests {
             let error = analyze_error(source);
             assert_eq!(error.code, code, "{}", error.message);
         }
-
         let named =
             parse("fn target(int left, int right) {} fn main() { target(right: 2, left: 1); }")
                 .expect("parse repeated-type named call");
         analyze(&named).expect("named repeated-type call should type-check");
     }
-
     #[test]
     fn named_argument_plans_reject_optional_holes_without_compacting_abi_slots() {
         let parameters = vec![
@@ -16728,7 +16248,6 @@ mod tests {
         assert_eq!(error.code, "E_NAMED_ARGUMENT_HOLE");
         assert!(error.message.contains("first_optional"));
         assert!(error.message.contains("second_optional"));
-
         let trailing_names = vec!["required".to_owned()];
         let trailing = reorder_call_arguments(
             "internal_optional_fixture",
@@ -16742,7 +16261,6 @@ mod tests {
         .expect("omitting only a trailing optional suffix remains canonical");
         assert_eq!(trailing.ordered.len(), 1);
         assert_eq!(trailing.evaluation_order, [0]);
-
         let interior_optional_parameters = vec![
             "required".to_owned(),
             "optional_payload".to_owned(),
@@ -16767,25 +16285,21 @@ mod tests {
         assert_eq!(interior.ordered.len(), 2);
         assert_eq!(interior.evaluation_order, [0, 1]);
     }
-
     #[test]
     fn privileged_and_effectful_calls_with_three_parameters_require_names() {
         let privileged = analyze_error(
             "kotoage fn publish(int first, string second, bool third) authorize(\"Publish\") {} fn main() { publish(1, \"two\", true); }",
         );
         assert_eq!(privileged.code, "E_NAMED_ARGUMENTS_REQUIRED");
-
         let effectful = analyze_error(
             "fn main(AccountId account, Name key, Json value) { ledger::account::set_detail(account, key, value); }",
         );
         assert_eq!(effectful.code, "E_NAMED_ARGUMENTS_REQUIRED");
-
         let transitive = analyze_error(
             "fn sink(AccountId account, Name key, Json value) { ledger::account::set_detail(account: account, key: key, value: value); } fn wrapper(AccountId account, Name key, Json value) { sink(account: account, key: key, value: value); } fn main(AccountId account, Name key, Json value) { wrapper(account, key, value); }",
         );
         assert_eq!(transitive.code, "E_NAMED_ARGUMENTS_REQUIRED");
     }
-
     #[test]
     fn named_method_arguments_do_not_mix_with_the_receiver() {
         let program = parse(
@@ -16794,20 +16308,17 @@ mod tests {
         .expect("parse named method call");
         analyze(&program).expect("implicit receiver must not count as a positional argument");
     }
-
     #[test]
     fn pagination_calls_require_offset_and_limit_names() {
         let positional =
             analyze_error("fn page(bytes path) -> bytes { return state::keys(path, 0, 10); }");
         assert_eq!(positional.code, "E_NAMED_ARGUMENTS_REQUIRED");
-
         let named = parse(
             "fn page(bytes path) -> bytes { return state::keys(limit: 10, path: path, offset: 0); }",
         )
         .expect("parse named pagination call");
         analyze(&named).expect("named pagination call should type-check");
     }
-
     #[test]
     fn durable_state_calls_reject_legacy_name_path_carriers() {
         for source in [
@@ -16824,14 +16335,12 @@ mod tests {
                 error.message
             );
         }
-
         let canonical = parse(
             "fn read(Name base) -> bytes { let bytes path = base.path(1); return state::get(path); }",
         )
         .expect("parse StatePath-producing helper");
         analyze(&canonical).expect("base.path must produce a state-call-compatible bytes value");
     }
-
     #[test]
     fn state_path_method_rejects_wrong_receiver_and_segment_types() {
         for source in [
@@ -16843,7 +16352,6 @@ mod tests {
             assert_eq!(error.message, "path expects (Name, int|bytes)", "{source}");
         }
     }
-
     #[test]
     fn duplicate_top_level_declarations_are_rejected() {
         let cases = [
@@ -16864,13 +16372,11 @@ mod tests {
                 "duplicate const `repeated`",
             ),
         ];
-
         for (source, expected) in cases {
             let err = analyze_error(source);
             assert_eq!(err.message, expected);
         }
     }
-
     #[test]
     fn cross_kind_declaration_collisions_are_rejected() {
         let err = analyze_error("struct Shared { int value; } fn Shared() {}");
@@ -16880,7 +16386,6 @@ mod tests {
             "declaration name `Shared` is already used by a type"
         );
     }
-
     #[test]
     fn compiler_owned_declaration_names_are_rejected() {
         for (source, expected) in [
@@ -16902,7 +16407,6 @@ mod tests {
             assert_eq!(error.message, expected);
         }
     }
-
     #[test]
     fn duplicate_function_parameters_are_rejected() {
         let err = analyze_error("fn repeated(int value, bool value) {}");
@@ -16911,13 +16415,11 @@ mod tests {
             "duplicate parameter `value` in function `repeated`"
         );
     }
-
     #[test]
     fn duplicate_struct_fields_are_rejected() {
         let err = analyze_error("struct Repeated { int value; bool value; }");
         assert_eq!(err.message, "duplicate field `value` in type `Repeated`");
     }
-
     #[test]
     fn error_codes_are_contract_global_and_require_is_typed() {
         let duplicate = analyze_error(
@@ -16928,7 +16430,6 @@ mod tests {
             duplicate.message,
             "error code 1001 is assigned to both `Payment::Unauthorized` and `Settlement::Expired`"
         );
-
         let accepted = parse(
             "error enum Payment { Unauthorized = 1001 } \
              fn pay(bool allowed) { require(allowed, Payment::Unauthorized); }",
@@ -16939,7 +16440,6 @@ mod tests {
         assert_eq!(typed.error_codes[0].namespace, "Payment");
         assert_eq!(typed.error_codes[0].name, "Unauthorized");
         assert_eq!(typed.error_codes[0].code, 1001);
-
         for invalid in [
             "require(true);",
             "require(true, 1001);",
@@ -16957,7 +16457,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn semantic_analysis_rejects_ast_parameters_without_types() {
         let mut program = parse("fn f(int value) {}").expect("parse typed parameter");
@@ -16968,7 +16467,6 @@ mod tests {
         let err = analyze(&program).expect_err("typeless parameter AST must be rejected");
         assert_eq!(err.message, "parameter `value` requires an explicit type");
     }
-
     #[test]
     fn semantic_analysis_rejects_ast_consts_without_types() {
         let mut program = parse("const int VALUE = 1;").expect("parse typed const");
@@ -16979,16 +16477,13 @@ mod tests {
         let err = analyze(&program).expect_err("typeless const AST must be rejected");
         assert_eq!(err.message, "const `VALUE` requires an explicit type");
     }
-
     #[test]
     fn unknown_path_and_generic_types_are_rejected() {
         let path_err = analyze_error("fn use_missing(Missing value) {}");
         assert_eq!(path_err.message, "unknown type `Missing`");
-
         let generic_err = analyze_error("fn generic(Missing<int> value) {}");
         assert_eq!(generic_err.message, "unknown generic type `Missing`");
     }
-
     #[test]
     fn opaque_host_capability_types_are_not_source_types() {
         for name in [
@@ -17002,7 +16497,6 @@ mod tests {
             assert_eq!(error.message, format!("unknown type `{name}`"));
         }
     }
-
     #[test]
     fn option_and_result_type_expressions_are_recognized() {
         let context = SemanticContext::new();
@@ -17014,7 +16508,6 @@ mod tests {
             convert_type_expr(&context, &option).expect("Option type"),
             Type::Option(Box::new(Type::Int))
         );
-
         let result = TypeExpr::Generic {
             base: "Result".into(),
             args: vec![TypeExpr::Path("int".into()), TypeExpr::Path("bool".into())],
@@ -17023,20 +16516,17 @@ mod tests {
             convert_type_expr(&context, &result).expect("Result type"),
             Type::Result(Box::new(Type::Int), Box::new(Type::Bool))
         );
-
         let helpers = parse(
             "fn option_helper(Option<int> value) {} \
              fn result_helper(Result<int, bool> value) {}",
         )
         .expect("private helper types parse");
         analyze(&helpers).expect("private helpers accept Option/Result parameters");
-
         let public = parse(
             "seiyaku Demo { kotoage fn call(Option<int> value, Result<int, bool> outcome) authorize(\"Call\") {} }",
         )
         .expect("public sum parameters parse");
         analyze(&public).expect("one-shot V1 argument records support Option and Result");
-
         let unsupported = analyze_error(
             "seiyaku Demo { kotoage fn call(StateMap<int, int> value) authorize(\"Call\") {} }",
         );
@@ -17048,7 +16538,6 @@ mod tests {
             unsupported.message
         );
     }
-
     #[test]
     fn forward_declared_struct_types_are_accepted() {
         let program = parse(
@@ -17059,7 +16548,6 @@ mod tests {
         .expect("source should parse");
         analyze(&program).expect("forward-declared struct references should resolve");
     }
-
     #[test]
     fn reusable_context_clears_all_declaration_registries() {
         let context = SemanticContext::new();
@@ -17069,32 +16557,27 @@ mod tests {
         )
         .expect("declared source");
         context.analyze(&declared).expect("first analysis");
-
         let undeclared = parse("fn read(SessionOnly value) -> int { return value.value; }")
             .expect("undeclared source parses");
         let error = context
             .analyze(&undeclared)
             .expect_err("the previous source's type must not leak");
         assert_eq!(error.message, "unknown type `SessionOnly`");
-
         context
             .analyze(&declared)
             .expect("context remains reusable after a failed analysis");
     }
-
     #[test]
     fn internal_named_struct_references_are_nominal() {
         let alpha = Type::NamedStruct("Alpha".to_string());
         let another_alpha = Type::NamedStruct("Alpha".to_string());
         let beta = Type::NamedStruct("Beta".to_string());
-
         ensure_assignable(&alpha, &another_alpha)
             .expect("same named struct reference should be assignable");
         let err = ensure_assignable(&alpha, &beta)
             .expect_err("unrelated named struct references must not be assignable");
         assert!(err.message.contains("expected Alpha, got Beta"));
     }
-
     #[test]
     fn cyclic_value_structs_are_rejected_before_resolution() {
         let direct = analyze_error("struct Node { Node next; } state Node root;");
@@ -17102,7 +16585,6 @@ mod tests {
             direct.message,
             "cyclic value struct definition: Node -> Node"
         );
-
         let indirect = analyze_error(
             "struct Left { Right right; } \
              struct Right { Left left; } \
@@ -17113,7 +16595,6 @@ mod tests {
             "cyclic value struct definition: Left -> Right -> Left"
         );
     }
-
     #[test]
     fn get_private_input_requires_build_configured_zk_mode() {
         let err = analyze_error("fn read() -> int { return crypto::private_input(0); }");
@@ -17121,18 +16602,12 @@ mod tests {
             err.message,
             "builtin `crypto::private_input` requires ZK mode in compiler build configuration"
         );
-
-        let source = r#"
-            seiyaku ZkContract {
-                fn read() -> Secret<int> { return crypto::private_input(0); }
-            }
-            "#;
+        let source = include_str!("semantic/fixtures/v1/s001.ko");
         let program = parse(source).expect("ZK-enabled source should parse");
         SemanticContext::with_zk_enabled(true)
             .analyze(&program)
             .expect("build-configured ZK mode should permit private input access");
     }
-
     #[test]
     fn return_type_match() {
         let ok1 = analyze(&parse("fn f() -> bool { return true; } ").unwrap());
@@ -17142,7 +16617,6 @@ mod tests {
         let ok3 = analyze(&parse("fn h() { return; } ").unwrap());
         assert!(ok3.is_ok());
     }
-
     #[test]
     fn return_type_mismatch() {
         let err = analyze(&parse("fn f() -> bool { return 1; } ").unwrap());
@@ -17150,7 +16624,6 @@ mod tests {
         let err2 = analyze(&parse("fn h() { return 1; } ").unwrap());
         assert!(err2.is_err());
     }
-
     #[test]
     fn non_unit_must_return_all_paths() {
         let err = analyze(&parse("fn f() -> int { if true { return 1; } } ").unwrap());
@@ -17159,7 +16632,6 @@ mod tests {
             analyze(&parse("fn g() -> int { if true { return 1; } else { return 2; } } ").unwrap());
         assert!(ok.is_ok());
     }
-
     #[test]
     fn return_value_requires_declared_type() {
         let err = analyze(&parse("fn f() { return 1; } ").unwrap());
@@ -17167,7 +16639,6 @@ mod tests {
         let ok = analyze(&parse("fn g() { return; } ").unwrap());
         assert!(ok.is_ok());
     }
-
     #[test]
     fn param_type_enforcement_primitives() {
         // Boolean-to-integer coercion is intentionally absent from V1.
@@ -17180,7 +16651,6 @@ mod tests {
         let ok = analyze(&parse("fn h(int x, int y) -> int { return x + y; } ").unwrap());
         assert!(ok.is_ok());
     }
-
     #[test]
     fn typed_id_parameters_reject_arithmetic() {
         // Typed ledger identifiers are not numeric.
@@ -17191,7 +16661,6 @@ mod tests {
             analyze(&parse("fn g(AccountId a, AccountId b) -> bool { return a == b; } ").unwrap());
         assert!(ok.is_ok());
     }
-
     #[test]
     fn tuple_bindings_flatten_members() {
         let program = parse("fn f() { let pair = (1, 2); } ").unwrap();
@@ -17212,7 +16681,6 @@ mod tests {
             .collect();
         assert_eq!(suffixes, vec!["pair", "pair#0", "pair#1"]);
     }
-
     #[test]
     fn struct_destructuring_uses_declaration_order_for_out_of_order_literals() {
         let program = parse(
@@ -17225,7 +16693,6 @@ mod tests {
         .expect("parse named struct literals");
         let typed = analyze(&program).expect("analyze named struct literals");
         let TypedItem::Function(function) = &typed.items[0];
-
         let binding = |suffix: &str| {
             function
                 .body
@@ -17241,7 +16708,6 @@ mod tests {
                 })
                 .unwrap_or_else(|| panic!("missing binding `{suffix}`"))
         };
-
         let is_projection = |value: &TypedExpr, base: Option<&str>, index: &str| {
             matches!(
                 &value.expr,
@@ -17261,7 +16727,6 @@ mod tests {
         assert!(is_projection(binding("left"), None, "0"));
         assert!(is_projection(binding("right"), None, "1"));
     }
-
     #[test]
     fn state_map_iteration_accepts_pointer_keys() {
         let program = parse(
@@ -17275,7 +16740,6 @@ mod tests {
         .expect("parse state map");
         analyze(&program).expect("canonical StateMap iteration supports typed pointer keys");
     }
-
     #[test]
     fn static_state_map_iteration_limit_is_inclusive_and_fail_closed() {
         for iteration in ["M.take(64)", "M.range(10, 74)"] {
@@ -17288,7 +16752,6 @@ mod tests {
                 panic!("boundary iteration `{iteration}` must be accepted: {error:?}")
             });
         }
-
         for (iteration, expected_form) in [
             ("M.take(65)", "StateMap.take(N)"),
             ("M.range(10, 75)", "StateMap.range(start, end)"),
@@ -17306,7 +16769,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn dynamic_map_take_rejects_non_literal_bounds() {
         let program = parse(
@@ -17325,7 +16787,6 @@ mod tests {
                 .contains("requires a non-negative int literal")
         );
     }
-
     #[test]
     fn dynamic_map_range_rejects_non_literal_bounds() {
         let program = parse(
@@ -17340,7 +16801,6 @@ mod tests {
         let error = analyze(&program).expect_err("dynamic range must fail closed in V1");
         assert!(error.message.contains("requires non-negative int literals"));
     }
-
     #[test]
     fn state_map_alias_is_rejected() {
         let program = parse(
@@ -17353,7 +16813,6 @@ mod tests {
         let err = analyze(&program).expect_err("aliasing a state map should error");
         assert_eq!(err.code, "E_STATE_MAP_ALIAS");
     }
-
     #[test]
     fn state_map_reassignment_is_rejected() {
         let program = parse(
@@ -17366,7 +16825,6 @@ mod tests {
         let err = analyze(&program).expect_err("reassigning a state map should error");
         assert_eq!(err.code, "E_STATE_MAP_ALIAS");
     }
-
     #[test]
     fn state_map_cannot_be_passed_to_user_fn() {
         let program = parse(
@@ -17378,7 +16836,6 @@ mod tests {
         let err = analyze(&program).expect_err("passing state map to user fn should error");
         assert_eq!(err.code, "E_STATE_MAP_ALIAS");
     }
-
     #[test]
     fn scalar_state_requires_hajimari() {
         let err = analyze_error("state int counter; fn read() -> int { return counter; }");
@@ -17388,7 +16845,6 @@ mod tests {
             "seiyaku scalar state requires a `hajimari()`/`始まり()` declaration"
         );
     }
-
     #[test]
     fn scalar_state_hajimari_reports_every_missing_write() {
         let err = analyze_error("state int first; state int second; hajimari() { first = 0; }");
@@ -17398,7 +16854,6 @@ mod tests {
             "hajimari() must initialize every scalar state on every normal return or fallthrough path; missing: second"
         );
     }
-
     #[test]
     fn scalar_state_initialization_intersects_conditional_paths() {
         let accepted = parse(
@@ -17407,14 +16862,12 @@ mod tests {
         )
         .expect("parse complete conditional hajimari");
         analyze(&accepted).expect("both conditional paths initialize scalar state");
-
         let err = analyze_error(
             "state int value; \
              hajimari() { if true { value = 1; } }",
         );
         assert_eq!(err.code, "E_STATE_HAJIMARI_INCOMPLETE");
     }
-
     #[test]
     fn scalar_state_initialization_checks_early_returns() {
         let err = analyze_error(
@@ -17422,7 +16875,6 @@ mod tests {
              hajimari() { if true { return; } value = 1; }",
         );
         assert_eq!(err.code, "E_STATE_HAJIMARI_INCOMPLETE");
-
         let accepted = parse(
             "state int value; \
              hajimari() { if true { value = 1; return; } value = 2; }",
@@ -17430,7 +16882,6 @@ mod tests {
         .expect("parse initialized early return");
         analyze(&accepted).expect("every normal exit initializes scalar state");
     }
-
     #[test]
     fn scalar_state_initialization_does_not_trust_optional_execution() {
         let loop_error = analyze_error(
@@ -17438,7 +16889,6 @@ mod tests {
              hajimari() { for index in range(1) { value = index; } }",
         );
         assert_eq!(loop_error.code, "E_STATE_HAJIMARI_INCOMPLETE");
-
         let short_circuit_error = analyze_error(
             "state int value; \
              fn seed() -> bool { value = 1; return true; } \
@@ -17446,7 +16896,6 @@ mod tests {
         );
         assert_eq!(short_circuit_error.code, "E_STATE_HAJIMARI_INCOMPLETE");
     }
-
     #[test]
     fn scalar_state_hajimari_accepts_transitive_complete_initialization() {
         let program = parse(
@@ -17459,21 +16908,18 @@ mod tests {
         .expect("parse transitive scalar hajimari");
         analyze(&program).expect("transitive hajimari writes should initialize every scalar state");
     }
-
     #[test]
     fn map_assignment_requires_map_target() {
         let program = parse("fn f() { let x = 1; x[0] = 2; }").expect("parse map assignment");
         let err = analyze(&program).expect_err("non-map assignment should error");
         assert!(err.message.contains("map assignment expects StateMap<K,V>"));
     }
-
     #[test]
     fn assignment_rejects_bool_to_int() {
         let program =
             parse("fn f() { var int x = true; x = false; }").expect("parse bool assignment");
         analyze(&program).expect_err("bool assignment must not coerce to int");
     }
-
     #[test]
     fn immutable_local_reassignment_is_rejected() {
         let err = analyze_error("fn f() { let value = 1; value = 2; }");
@@ -17483,14 +16929,12 @@ mod tests {
             "cannot assign to immutable binding `value`; declare a mutable local with `var`"
         );
     }
-
     #[test]
     fn mutable_local_reassignment_is_accepted() {
         let program = parse("fn f() -> int { var value = 1; value += 2; return value; }")
             .expect("parse mutable binding");
         analyze(&program).expect("var bindings should permit reassignment");
     }
-
     #[test]
     fn function_parameters_are_immutable() {
         let err = analyze_error("fn f(int value) { value = 2; }");
@@ -17500,7 +16944,6 @@ mod tests {
             "cannot assign to immutable binding `value`; declare a mutable local with `var`"
         );
     }
-
     #[test]
     fn local_declarations_cannot_duplicate_or_shadow_bindings() {
         for source in [
@@ -17511,7 +16954,6 @@ mod tests {
             analyze_error(source);
         }
     }
-
     #[test]
     fn parameters_and_locals_cannot_shadow_any_source_declaration() {
         for source in [
@@ -17527,7 +16969,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn source_unit_identity_cannot_be_redeclared_inside_the_unit() {
         let program = parse("seiyaku App { fn App() {} }").expect("parse identity collision");
@@ -17537,21 +16978,18 @@ mod tests {
             "{error:?}"
         );
     }
-
     #[test]
     fn break_requires_loop_context() {
         let program = parse("fn f() { break; }").expect("parse break");
         let err = analyze(&program).expect_err("break outside loop should error");
         assert_eq!(err.code, "E_BREAK_OUTSIDE_LOOP");
     }
-
     #[test]
     fn continue_requires_loop_context() {
         let program = parse("fn f() { continue; }").expect("parse continue");
         let err = analyze(&program).expect_err("continue outside loop should error");
         assert_eq!(err.code, "E_CONTINUE_OUTSIDE_LOOP");
     }
-
     #[test]
     fn state_shadowing_is_rejected_in_let() {
         let program =
@@ -17559,7 +16997,6 @@ mod tests {
         let err = analyze(&program).expect_err("state shadowing should error");
         assert_eq!(err.code, "E_STATE_SHADOWED");
     }
-
     #[test]
     fn state_shadowing_is_rejected_in_params() {
         let program =
@@ -17567,7 +17004,6 @@ mod tests {
         let err = analyze(&program).expect_err("state shadowing should error");
         assert_eq!(err.code, "E_STATE_SHADOWED");
     }
-
     #[test]
     fn state_shadowing_is_rejected_in_map_loop_vars() {
         let program = parse(
@@ -17578,7 +17014,6 @@ mod tests {
         let err = analyze(&program).expect_err("state shadowing should error");
         assert_eq!(err.code, "E_STATE_SHADOWED");
     }
-
     #[test]
     fn c_style_for_is_rejected_before_semantic_analysis() {
         for source in [
@@ -17589,7 +17024,6 @@ mod tests {
             assert!(err.contains("only `for item in range(end)`"));
         }
     }
-
     #[test]
     fn manually_constructed_while_ast_cannot_bypass_v1_frontend_rules() {
         let mut program = parse("fn f() {}").expect("parse base program");
@@ -17606,7 +17040,6 @@ mod tests {
         let error = analyze(&program).expect_err("while AST must fail closed");
         assert_eq!(error.code, "E_UNBOUNDED_LOOP");
     }
-
     #[test]
     fn manually_constructed_dynamic_for_ast_cannot_bypass_v1_frontend_rules() {
         let mut program = parse("fn f() {}").expect("parse base program");
@@ -17642,7 +17075,6 @@ mod tests {
         let error = analyze(&program).expect_err("dynamic for AST must fail closed");
         assert_eq!(error.code, "E_UNBOUNDED_LOOP");
     }
-
     #[test]
     fn equality_rejects_tuple_types() {
         let program = parse("fn f() { let a = (1, 2); let b = (1, 2); let _x = a == b; }")
@@ -17650,14 +17082,12 @@ mod tests {
         let err = analyze(&program).expect_err("tuple equality should error");
         assert!(err.message.contains("equality is not supported"));
     }
-
     #[test]
     fn pointer_constructor_accepts_string_binding() {
         let program = parse("fn f() { let s = \"wonderland\"; let _n = Name::parse(s); }")
             .expect("parse pointer constructor");
         analyze(&program).expect("string binding should be allowed");
     }
-
     #[test]
     fn flat_pointer_constructor_spellings_are_rejected() {
         for (flat, canonical) in [
@@ -17682,7 +17112,6 @@ mod tests {
             assert!(error.message.contains(canonical), "{error:?}");
         }
     }
-
     #[test]
     fn flat_builtin_spellings_are_rejected_in_favour_of_namespaces() {
         for (flat_call, canonical) in [
@@ -17711,7 +17140,6 @@ mod tests {
             assert!(error.message.contains(canonical), "{error:?}");
         }
     }
-
     #[test]
     fn japanese_branded_capability_segments_normalize_to_the_canonical_registry() {
         let program = parse(
@@ -17720,7 +17148,6 @@ mod tests {
         .expect("parse Japanese branded capability path");
         analyze(&program).expect("Japanese capability segments must resolve canonically");
     }
-
     #[test]
     fn canonical_builtin_diagnostics_replace_only_identifier_tokens() {
         assert_eq!(
@@ -17740,7 +17167,6 @@ mod tests {
             "__invoke_entrypoint__run targets test::invoke_kotoage"
         );
     }
-
     #[test]
     fn for_body_bindings_do_not_escape_loop() {
         let program = parse(
@@ -17755,14 +17181,12 @@ mod tests {
         let err = analyze(&program).expect_err("body bindings should not escape");
         assert!(err.message.contains("undefined variable"));
     }
-
     #[test]
     fn tuple_pattern_requires_tuple_type() {
         let program = parse("fn f() { let (a, b) = 1; }").expect("parse tuple pattern");
         let err = analyze(&program).expect_err("non-tuple destructuring should error");
         assert!(err.message.contains("tuple destructuring expects a tuple"));
     }
-
     #[test]
     fn tuple_pattern_requires_arity_match() {
         let program = parse("fn f() { let (a, b, c) = (1, 2); }").expect("parse tuple pattern");
@@ -17772,7 +17196,6 @@ mod tests {
                 .contains("tuple destructuring expects 2 bindings")
         );
     }
-
     #[test]
     fn struct_pattern_requires_arity_match() {
         let program = parse(
@@ -17786,7 +17209,6 @@ mod tests {
                 .contains("struct destructuring expects 2 bindings")
         );
     }
-
     #[test]
     fn assert_rejects_extra_args() {
         let program = parse("fn f() { test::assert(true, false); }").expect("parse assert");
@@ -17798,7 +17220,6 @@ mod tests {
                 .contains("assert expects (bool) or (bool, string|int)")
         );
     }
-
     #[test]
     fn in_memory_map_constructor_is_rejected() {
         let program = parse("fn f() { let StateMap<Name, int> m = StateMap::new(); let _x = m; }")
@@ -17815,7 +17236,6 @@ mod tests {
             err.message
         );
     }
-
     #[test]
     fn bytes_equality_is_allowed() {
         let program =
@@ -17823,7 +17243,6 @@ mod tests {
                 .expect("parse bytes equality");
         analyze(&program).expect("bytes equality should be allowed");
     }
-
     #[test]
     fn bytes_literal_types_as_bytes() {
         let program = parse(r#"fn f() { let bytes b = b"ab"; }"#).expect("parse bytes literal");
@@ -17838,7 +17257,6 @@ mod tests {
             other => panic!("expected let statement, got {other:?}"),
         }
     }
-
     #[test]
     fn state_map_key_type_is_validated() {
         let program = parse("state StateMap<Json, int> M; fn f() {}").expect("parse state map");
@@ -17850,7 +17268,6 @@ mod tests {
             err.message
         );
     }
-
     #[test]
     fn durable_state_map_key_domain_matches_generated_policy() {
         let supported = [
@@ -17877,7 +17294,6 @@ mod tests {
             expected_names
         );
         assert!(supported.iter().all(is_supported_durable_key_type));
-
         for unsupported in [
             Type::Json,
             Type::AxtDescriptor,
@@ -17893,20 +17309,17 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn field_assignment_is_rejected() {
         let program = parse("fn f() { let t = (1, 2); t.0 = 3; }").expect("parse field assignment");
         let err = analyze(&program).expect_err("field assignment should error");
         assert!(err.message.contains("assignment target must be"));
     }
-
     #[test]
     fn info_accepts_int() {
         let program = parse("fn f() { debug::info(42); }").expect("parse info");
         analyze(&program).expect("info should accept int");
     }
-
     #[test]
     fn view_entrypoints_reject_observable_debug_logging() {
         let program = parse("seiyaku Demo { view fn inspect() { debug::info(42); } }")
@@ -17917,7 +17330,6 @@ mod tests {
             "{error:?}"
         );
     }
-
     #[test]
     fn vector_length_control_is_not_a_source_builtin() {
         let program = parse("fn f() { runtime::set_vector_length(8); }").expect("parse setvl");
@@ -17929,7 +17341,6 @@ mod tests {
             "{error:?}"
         );
     }
-
     #[test]
     fn trigger_event_accepts_no_args() {
         let program = parse(
@@ -17938,7 +17349,6 @@ mod tests {
         .expect("parse trigger_event");
         analyze(&program).expect("trigger_event should type-check");
     }
-
     #[test]
     fn public_entrypoints_reject_trigger_event() {
         let program = parse(
@@ -17953,7 +17363,6 @@ mod tests {
             err.message
         );
     }
-
     #[test]
     fn trigger_callbacks_accept_trigger_event_payload_helpers() {
         let program = parse(include_str!(
@@ -17962,17 +17371,14 @@ mod tests {
         .expect("parse trigger callback trigger_event");
         analyze(&program).expect("trigger callback trigger_event should type-check");
     }
-
     #[test]
     fn namespaced_trigger_callback_does_not_require_local_entrypoint() {
         let program = parse(
             include_str!("semantic/test_sources/namespaced_trigger_callback_does_not_require_local_entrypoint_1.ko"),
         )
         .expect("parse namespaced trigger callback");
-
         analyze(&program).expect("namespaced trigger callback target is resolved at activation");
     }
-
     #[test]
     fn namespaced_trigger_callback_does_not_mark_local_function_as_trigger_callback() {
         let program = parse(
@@ -17981,7 +17387,6 @@ mod tests {
         .expect("parse namespaced trigger callback");
         let err = analyze(&program)
             .expect_err("remote trigger callback must not permit local trigger_event access");
-
         assert!(
             err.message
                 .contains("cannot use `context::trigger_event` here"),
@@ -17989,7 +17394,6 @@ mod tests {
             err.message
         );
     }
-
     #[test]
     fn invoke_entrypoint_accepts_test_functions() {
         let program = parse(include_str!(
@@ -17998,7 +17402,6 @@ mod tests {
         .expect("parse invoke_entrypoint");
         analyze_test(&program).expect("invoke_entrypoint in tests should type-check");
     }
-
     #[test]
     fn invoke_entrypoint_rejects_non_test_functions() {
         let program = parse(include_str!(
@@ -18008,7 +17411,6 @@ mod tests {
         let err = analyze_test(&program).expect_err("non-test invoke_entrypoint should fail");
         assert!(err.message.contains("only available inside #[test]"));
     }
-
     #[test]
     fn invoke_entrypoint_accepts_name_literal_target() {
         let program = parse(include_str!(
@@ -18017,7 +17419,6 @@ mod tests {
         .expect("parse name literal invoke_entrypoint");
         analyze_test(&program).expect("name literal invoke_entrypoint should type-check");
     }
-
     #[test]
     fn invoke_entrypoint_rejects_non_literal_target() {
         let program = parse(include_str!(
@@ -18030,7 +17431,6 @@ mod tests {
                 .contains("requires a literal public or lifecycle target")
         );
     }
-
     #[test]
     fn invoke_entrypoint_rejects_non_json_payload() {
         let program = parse(include_str!(
@@ -18040,7 +17440,6 @@ mod tests {
         let err = analyze_test(&program).expect_err("non-json payload should fail");
         assert!(err.message.contains("expects a Json payload"));
     }
-
     #[test]
     fn invoke_entrypoint_rejects_internal_target() {
         let program = parse(include_str!(
@@ -18053,7 +17452,6 @@ mod tests {
                 .contains("may only target kotoage/view/hajimari/kaizen")
         );
     }
-
     #[test]
     fn invoke_entrypoint_as_and_actor_helpers_type_check_in_tests() {
         let program = parse(include_str!(
@@ -18062,7 +17460,6 @@ mod tests {
         .expect("parse invoke_entrypoint_as");
         analyze_test(&program).expect("test helpers should type-check");
     }
-
     #[test]
     fn invoke_entrypoint_as_accepts_tuple_returning_targets() {
         let program = parse(include_str!(
@@ -18071,7 +17468,6 @@ mod tests {
         .expect("parse tuple invoke_entrypoint_as");
         analyze_test(&program).expect("tuple-returning target should type-check");
     }
-
     #[test]
     fn standalone_test_helpers_preserve_external_entrypoint_kind() {
         let target = parse(include_str!(
@@ -18081,7 +17477,6 @@ mod tests {
         let signatures = SemanticContext::with_capabilities(false, true)
             .resolve_function_signatures(&target)
             .expect("resolve target signatures");
-
         let accepted = parse(include_str!(
             "semantic/test_sources/standalone_test_helpers_preserve_external_entrypoint_kind_2.ko"
         ))
@@ -18089,14 +17484,12 @@ mod tests {
         SemanticContext::with_capabilities(false, true)
             .analyze_with_external_functions(&accepted, &signatures)
             .expect("external lifecycle entrypoint should retain its kind");
-
         let rejected = parse(include_str!("semantic/test_sources/invokes_lifecycle_1.ko"))
             .expect("parse private-helper test module");
         let error = SemanticContext::with_capabilities(false, true)
             .analyze_with_external_functions(&rejected, &signatures)
             .expect_err("private target helper must not become an entrypoint");
         assert_eq!(error.code(), "E_TEST_ENTRYPOINT_KIND");
-
         let direct_call = parse(include_str!(
             "semantic/test_sources/invokes_private_helper_1.ko"
         ))
@@ -18106,7 +17499,6 @@ mod tests {
             .expect_err("external entrypoints must retain the contract-call boundary");
         assert_eq!(error.code(), "K2004");
     }
-
     #[test]
     fn actor_helpers_reject_non_test_functions() {
         let program = parse(include_str!(
@@ -18116,7 +17508,6 @@ mod tests {
         let err = analyze_test(&program).expect_err("actor helper outside test should fail");
         assert!(err.message.contains("only available inside #[test]"));
     }
-
     #[test]
     fn view_entrypoints_accept_explicit_json_getter_on_typed_json_parameter() {
         let program = parse(
@@ -18125,7 +17516,6 @@ mod tests {
         .expect("parse view get_int");
         analyze(&program).expect("typed Json parameters may use explicit JSON getters");
     }
-
     #[test]
     fn view_entrypoints_reject_ensure() {
         let program = parse(
@@ -18140,7 +17530,6 @@ mod tests {
             err.message
         );
     }
-
     #[test]
     fn view_entrypoints_accept_get_or() {
         let program = parse(
@@ -18149,7 +17538,6 @@ mod tests {
         .expect("parse get_or");
         analyze(&program).expect("view get_or should type-check");
     }
-
     #[test]
     fn state_map_get_returns_option_without_intercepting_user_get_function() {
         let program = parse(
@@ -18175,7 +17563,6 @@ mod tests {
         );
         assert_eq!(returns.get("echo"), Some(&Some(Type::Int)));
     }
-
     #[test]
     fn state_map_reads_require_explicit_option_handling() {
         for (source, expected) in [
@@ -18207,14 +17594,12 @@ mod tests {
                 );
             }
         }
-
         let write = parse(
             "seiyaku Demo { state StateMap<int, int> balances; kotoage fn set(int key, int value) authorize(\"Write\") { balances[key] = value; } }",
         )
         .expect("parse indexed StateMap write");
         analyze(&write).expect("simple indexed StateMap assignment must remain valid");
     }
-
     #[test]
     fn state_map_remove_returns_option_for_scalar_values() {
         let program = parse(
@@ -18234,7 +17619,6 @@ mod tests {
         assert!(reads.contains("state:balances"));
         assert!(writes.contains("state:balances"));
     }
-
     #[test]
     fn view_entrypoints_reject_state_map_remove() {
         let program = parse(
@@ -18249,7 +17633,6 @@ mod tests {
             err.message
         );
     }
-
     #[test]
     fn view_entrypoints_reject_direct_durable_state_assignment() {
         let program = parse(
@@ -18264,7 +17647,6 @@ mod tests {
             err.message
         );
     }
-
     #[test]
     fn view_entrypoints_reject_state_map_mutation() {
         let program = parse(
@@ -18279,7 +17661,6 @@ mod tests {
             err.message
         );
     }
-
     #[test]
     fn view_entrypoints_reject_transitive_durable_state_mutation() {
         let program = parse(
@@ -18295,7 +17676,6 @@ mod tests {
             err.message
         );
     }
-
     #[test]
     fn compiler_internal_builtins_are_rejected_from_source() {
         for name in [
@@ -18355,7 +17735,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn generic_execute_instruction_is_not_a_builtin() {
         let program = parse("fn f(bytes payload) { execute_instruction(payload); }")
@@ -18366,7 +17745,6 @@ mod tests {
             "unknown function or builtin `execute_instruction`"
         );
     }
-
     #[test]
     fn raw_namespaced_host_bridges_are_not_builtins() {
         for source_name in [
@@ -18391,7 +17769,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn noncanonical_crypto_aliases_are_rejected() {
         for alias in ["sm::hash", "sm::verify", "sm::seal_gcm", "sm::open_ccm"] {
@@ -18409,7 +17786,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn truncated_scalar_crypto_and_ephemeral_nullifier_calls_are_rejected_from_source() {
         for (name, args) in [
@@ -18428,7 +17804,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn branded_feature_diagnostics_never_leak_compiler_internal_english_names() {
         for (source, branded, internal) in [
@@ -18479,7 +17854,6 @@ mod tests {
                 "diagnostic leaked internal spelling `{internal}`: {error:?}"
             );
         }
-
         for (source, branded, internal) in [
             (
                 "seiyaku T { #[test] fn f() { test::invoke_kotoage(1); } }",
@@ -18498,7 +17872,6 @@ mod tests {
             assert!(!error.message.contains(internal), "{error:?}");
         }
     }
-
     #[test]
     fn language_feature_diagnostics_use_only_branded_terms() {
         fn assert_branded(message: &str) {
@@ -18513,7 +17886,6 @@ mod tests {
                 );
             }
         }
-
         for source in [
             "module M { kotoage fn run() authorize(\"Run\") {} }",
             "module M { view fn read() {} }",
@@ -18523,7 +17895,6 @@ mod tests {
                 .expect_err("invalid declaration must produce a parser diagnostic");
             assert_branded(&message);
         }
-
         for source in [
             "seiyaku S { trigger wake -> missing { on time pre_commit; } }",
             "seiyaku S { view fn read() {} trigger wake -> read { on time pre_commit; } }",
@@ -18538,7 +17909,6 @@ mod tests {
             assert_branded(&error.message);
         }
     }
-
     #[test]
     fn public_valcom_operands_are_rejected_in_favour_of_typed_secrets() {
         let program = parse("fn f() -> int { return crypto::valcom(left: 7, right: 11); }")
@@ -18552,7 +17922,6 @@ mod tests {
             "crypto::valcom expects two typed Secret<int|decimal|quantity> arguments"
         );
     }
-
     #[test]
     fn valcom_registry_rejects_non_zk_analysis_with_the_source_name() {
         let result = analyze_surface_builtin_call(
@@ -18569,7 +17938,6 @@ mod tests {
             "builtin `crypto::valcom` requires ZK mode in compiler build configuration"
         );
     }
-
     #[test]
     fn public_entrypoints_reject_zk_verify_without_permission() {
         let mut program = parse(
@@ -18595,7 +17963,6 @@ mod tests {
             err.message
         );
     }
-
     #[test]
     fn runtime_entrypoints_cannot_be_direct_call_targets() {
         for (target_declaration, target_name) in [
@@ -18614,7 +17981,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn privileged_effect_table_covers_release_mutators() {
         for name in [
@@ -18634,7 +18000,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn canonical_context_and_ledger_namespaces_type_check() {
         let program = parse(include_str!(
@@ -18643,7 +18008,6 @@ mod tests {
         .expect("parse canonical namespaced calls");
         analyze(&program).expect("canonical context and ledger namespaces should type-check");
     }
-
     #[test]
     fn escrow_open_offer_signature_matches_the_host_abi() {
         let program = parse(include_str!(
@@ -18651,7 +18015,6 @@ mod tests {
         ))
         .expect("parse canonical escrow calls");
         analyze(&program).expect("three required arguments plus optional evidence must type-check");
-
         let invalid = parse(include_str!(
             "semantic/test_sources/escrow_open_offer_signature_matches_the_host_abi_2.ko"
         ))
@@ -18664,7 +18027,6 @@ mod tests {
             error.message
         );
     }
-
     #[test]
     fn public_entrypoints_reject_state_mutation_without_permission() {
         let mut program = parse(
@@ -18689,7 +18051,6 @@ mod tests {
             err.message
         );
     }
-
     #[test]
     fn recursive_functions_are_rejected() {
         for source in [
@@ -18706,7 +18067,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn view_entrypoints_reject_transitive_zk_verify() {
         let program = parse(
@@ -18724,7 +18084,6 @@ mod tests {
             err.message
         );
     }
-
     #[test]
     fn resolve_account_alias_accepts_canonical_string() {
         let program = parse(
@@ -18733,7 +18092,6 @@ mod tests {
         .expect("parse resolve_account_alias");
         analyze(&program).expect("resolve_account_alias should type-check");
     }
-
     #[test]
     fn resolve_account_alias_accepts_alias_bytes() {
         let program = parse(
@@ -18742,7 +18100,6 @@ mod tests {
         .expect("parse resolve_account_alias blob");
         analyze(&program).expect("resolve_account_alias blob should type-check");
     }
-
     #[test]
     fn durable_state_maps_accept_forward_declared_struct_values() {
         let program = parse(include_str!(
@@ -18751,7 +18108,6 @@ mod tests {
         .expect("parse durable struct map");
         analyze(&program).expect("durable struct-valued state map should type-check");
     }
-
     #[test]
     fn equality_between_event_account_and_resolved_alias_type_checks() {
         let program = parse(
@@ -18766,7 +18122,6 @@ mod tests {
         .expect("parse account equality");
         analyze(&program).expect("account-id equality should type-check");
     }
-
     #[test]
     fn get_asset_definition_id_accepts_trigger_payloads() {
         let program = parse(
@@ -18775,7 +18130,6 @@ mod tests {
         .expect("parse get_asset_definition_id");
         analyze(&program).expect("get_asset_definition_id should type-check");
     }
-
     #[test]
     fn get_quantity_returns_an_optional_trigger_quantity() {
         let program = parse(
@@ -18784,7 +18138,6 @@ mod tests {
         .expect("parse get_quantity");
         analyze(&program).expect("get_quantity should type-check as Option<quantity>");
     }
-
     #[test]
     fn durable_string_state_is_supported() {
         let program = parse(include_str!(
@@ -18793,7 +18146,6 @@ mod tests {
         .expect("parse string state");
         analyze(&program).expect("string state should be supported");
     }
-
     #[test]
     fn durable_struct_string_field_is_supported() {
         let program = parse(include_str!(
@@ -18802,7 +18154,6 @@ mod tests {
         .expect("parse state struct");
         analyze(&program).expect("string state field should be supported");
     }
-
     #[test]
     fn nested_state_map_is_rejected() {
         let ty = Type::Struct {
@@ -18819,7 +18170,6 @@ mod tests {
             err.message
         );
     }
-
     #[test]
     fn durable_option_and_result_accept_aggregate_payloads() {
         let program = parse(include_str!(
@@ -18828,7 +18178,6 @@ mod tests {
         .expect("parse aggregate sum state");
         analyze(&program).expect("aggregate Option/Result state should type-check");
     }
-
     #[test]
     fn local_sum_annotations_resolve_aggregate_payloads_contextually() {
         let program = parse(
@@ -18837,7 +18186,6 @@ mod tests {
         .expect("parse aggregate local sums");
         analyze(&program).expect("aggregate local sum annotations should resolve nominal payloads");
     }
-
     #[test]
     fn explicit_numeric_conversions_preserve_nominal_types() {
         let program = parse(
@@ -18850,7 +18198,6 @@ mod tests {
         let TypedItem::Function(f) = &typed.items[0];
         assert_eq!(f.ret_ty, Some(Type::Decimal));
     }
-
     #[test]
     fn quantity_remains_nominal_in_mixed_numeric_operations() {
         let program = parse(
@@ -18862,7 +18209,6 @@ mod tests {
         let err = analyze(&program).expect_err("mixed numeric types should error");
         assert!(err.message.contains("not defined for quantity and int"));
     }
-
     #[test]
     fn exact_literals_infer_decimal_without_runtime_conversion() {
         let constant = returned_expr("fn value() -> decimal { return 2 + 0.5; }");
@@ -18871,7 +18217,6 @@ mod tests {
             constant.kind(),
             ExprKind::DecimalLiteral { value, .. } if value.to_string() == "2.5"
         ));
-
         let arithmetic =
             returned_expr("fn value(decimal fraction) -> decimal { return 2 + fraction; }");
         assert!(matches!(
@@ -18885,7 +18230,6 @@ mod tests {
                 .expect("parse sibling-inferred decimal literal"),
         )
         .expect("a decimal sibling must infer an exact literal without a return context");
-
         let comparison =
             returned_expr("fn less(decimal fraction) -> bool { return 2 < fraction; }");
         assert!(matches!(
@@ -18895,7 +18239,6 @@ mod tests {
                     && matches!(right.kind(), ExprKind::Ident(_))
         ));
     }
-
     #[test]
     fn mixed_runtime_int_decimal_operations_require_explicit_conversion() {
         for source in [
@@ -18911,7 +18254,6 @@ mod tests {
                 "`int` and `decimal` operands cannot be mixed implicitly; convert the `int` with `decimal::from_int(value)` before arithmetic or comparison"
             );
         }
-
         analyze(
             &parse(
                 "fn value(int whole, decimal fraction) -> decimal { \
@@ -18922,7 +18264,6 @@ mod tests {
         )
         .expect("an explicit int-to-decimal conversion must remain valid");
     }
-
     #[test]
     fn decimal_compound_assignment_requires_explicit_runtime_conversion() {
         let implicit = analyze_error(
@@ -18934,7 +18275,6 @@ mod tests {
         );
         assert_eq!(implicit.code, "E_IMPLICIT_NUMERIC_CONVERSION");
         assert!(implicit.message.contains("decimal::from_int(value)"));
-
         let source = parse(
             "fn accumulate(int delta) -> decimal { \
                 var decimal value = 1.5; \
@@ -18969,27 +18309,23 @@ mod tests {
                 if matches!(right.kind(), ExprKind::DecimalLiteral { .. })
         ));
     }
-
     #[test]
     fn quantity_rejects_remainder_and_negation_surfaces() {
         let remainder = parse("seiyaku C { fn f(quantity a, quantity b) { let _x = a % b; } }")
             .expect("parse quantity remainder");
         let error = analyze(&remainder).expect_err("quantity remainder must fail");
         assert_eq!(error.code, "E_QUANTITY_REMAINDER");
-
         let negation = parse("seiyaku C { fn f(quantity a) { let _x = -a; } }")
             .expect("parse numeric negation");
         let error = analyze(&negation).expect_err("quantity negation must fail");
         assert_eq!(error.code, "E_QUANTITY_NEGATION");
     }
-
     #[test]
     fn unsuffixed_whole_literal_is_contextual_in_a_quantity_position() {
         let program = parse("seiyaku C { fn f() -> quantity { return 1; } }")
             .expect("parse unsuffixed literal");
         analyze(&program).expect("whole literal must coerce exactly in a quantity context");
     }
-
     #[test]
     fn values_wider_than_u128_are_accepted_as_int() {
         let program = parse(
@@ -19002,7 +18338,6 @@ mod tests {
         let TypedItem::Function(function) = &typed.items[0];
         assert_eq!(function.ret_ty, Some(Type::Int));
     }
-
     #[test]
     fn adaptive_int_values_use_width_independent_operators() {
         let program =
@@ -19010,7 +18345,6 @@ mod tests {
                 .expect("parse width-independent int expression");
         analyze(&program).expect("ordinary int operators must accept the complete V1 domain");
     }
-
     #[test]
     fn ledger_quantity_parameters_contextually_accept_whole_literals() {
         let program = parse(
@@ -19021,7 +18355,6 @@ mod tests {
         .expect("parse ledger amount call");
         analyze(&program).expect("whole literal must coerce exactly at a quantity boundary");
     }
-
     #[test]
     fn canonical_trigger_operations_type_check() {
         let program = parse(
@@ -19033,7 +18366,6 @@ mod tests {
         .expect("parse canonical trigger operations");
         analyze(&program).expect("analyze canonical trigger operations");
     }
-
     #[test]
     fn trigger_decl_builds_typed_metadata() {
         use iroha_data_model::account::AccountId;
@@ -19069,20 +18401,17 @@ mod tests {
         );
         assert!(!trigger.metadata.is_empty());
     }
-
     #[test]
     fn trigger_metadata_json_parse_uses_json_literal_diagnostics() {
         let duplicate = analyze_error(include_str!(
             "semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_1.ko"
         ));
         assert_eq!(duplicate.code, "E_JSON_DUPLICATE_KEY");
-
         let malformed = analyze_error(include_str!(
             "semantic/test_sources/trigger_metadata_json_parse_uses_json_literal_diagnostics_2.ko"
         ));
         assert_eq!(malformed.code, "E_JSON_LITERAL_INVALID");
     }
-
     #[test]
     fn trigger_metadata_json_parse_obeys_the_canonical_call_contract() {
         let trigger_source = |value: &str| {
@@ -19098,7 +18427,6 @@ mod tests {
                 "#,
             )
         };
-
         for value in [r#"Json::parse("{}")"#, r#"Json::parse(value: "{}")"#] {
             let source = trigger_source(value);
             let program = parse(&source).expect("canonical Json::parse metadata should parse");
@@ -19106,7 +18434,6 @@ mod tests {
                 panic!("canonical trigger metadata `{value}` failed: {error:?}")
             });
         }
-
         for (value, code, message) in [
             (
                 r#"Json::parse(raw: "{}")"#,
@@ -19135,7 +18462,6 @@ mod tests {
             assert_eq!(error.message, message, "{value}: {error:?}");
         }
     }
-
     #[test]
     fn trigger_decl_supports_data_filter() {
         let program = parse(include_str!(
@@ -19149,7 +18475,6 @@ mod tests {
             EventFilterBox::Data(DataEventFilter::Any)
         ));
     }
-
     #[test]
     fn trigger_decl_supports_structured_asset_data_filter() {
         let asset_definition = AssetDefinitionId::derive_from_components(
@@ -19181,7 +18506,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn trigger_decl_supports_transfer_specific_asset_filter() {
         use iroha_data_model::account::ParsedAccountId;
@@ -19228,7 +18552,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn trigger_decl_supports_structured_data_filters_for_core_families() {
         use iroha_data_model::{
@@ -19253,7 +18576,6 @@ mod tests {
             rwa::RwaId,
             trigger::TriggerId,
         };
-
         let account_literal = sample_account_literal();
         let account = AccountId::parse_encoded(account_literal.as_str())
             .map(ParsedAccountId::into_account_id)
@@ -19276,7 +18598,6 @@ mod tests {
         .expect("rwa");
         let trigger_id: TriggerId = "wake".parse().expect("trigger");
         let role_id: RoleId = "auditor".parse().expect("role");
-
         let cases = vec![
             (
                 format!(
@@ -19466,7 +18787,6 @@ mod tests {
                 )),
             ),
         ];
-
         for (src, expected_filter) in cases {
             let program = parse(&src).expect("parse trigger decl");
             let typed = analyze(&program).expect("analyze trigger decl");
@@ -19474,7 +18794,6 @@ mod tests {
             assert_eq!(trigger.filter, expected_filter);
         }
     }
-
     #[test]
     fn trigger_decl_supports_pipeline_filter() {
         use iroha_data_model::events::pipeline::{BlockEventFilter, BlockStatus};
@@ -19492,7 +18811,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn trigger_decl_supports_pipeline_transaction_approved_filter() {
         use iroha_data_model::events::pipeline::{TransactionEventFilter, TransactionStatus};
@@ -19510,7 +18828,6 @@ mod tests {
             ))
         );
     }
-
     #[test]
     fn trigger_decl_rejects_invalid_data_matcher_literal() {
         let program = parse(include_str!(
@@ -19523,7 +18840,6 @@ mod tests {
                 .contains("invalid `asset_definition` matcher literal")
         );
     }
-
     #[test]
     fn trigger_decl_rejects_duplicate_data_matchers() {
         let asset_definition_literal = AssetDefinitionId::derive_from_components(
@@ -19548,7 +18864,6 @@ mod tests {
         let err = analyze(&program).expect_err("duplicate matcher should error");
         assert!(err.message.contains("duplicate `asset_definition` matcher"));
     }
-
     #[test]
     fn trigger_decl_rejects_invalid_authority() {
         let program = parse(include_str!(
@@ -19558,7 +18873,6 @@ mod tests {
         let err = analyze(&program).expect_err("invalid authority should error");
         assert!(err.message.contains("invalid trigger authority"));
     }
-
     #[test]
     fn trigger_decl_accepts_canonical_domainless_authority() {
         let authority = sample_account_literal();
@@ -19574,7 +18888,6 @@ mod tests {
             "#,
         ))
         .expect("parse trigger declaration");
-
         let typed = analyze(&program).expect("canonical domainless authority must type-check");
         assert_eq!(
             typed.triggers[0]
@@ -19585,7 +18898,6 @@ mod tests {
             authority,
         );
     }
-
     #[test]
     fn trigger_decl_requires_kotoage_entrypoint() {
         let program = parse(include_str!(
@@ -19595,7 +18907,6 @@ mod tests {
         let err = analyze(&program).expect_err("non-kotoage target should error");
         assert!(err.message.contains("`kotoage`/`言挙げ` function"));
     }
-
     #[test]
     fn trigger_decl_cannot_target_lifecycle_entrypoints_through_constructed_ast() {
         for lifecycle in ["hajimari", "kaizen"] {
@@ -19612,7 +18923,6 @@ mod tests {
                 })
                 .expect("trigger declaration");
             trigger.call.entrypoint = lifecycle.to_owned();
-
             let error = analyze(&program)
                 .expect_err("lifecycle entrypoints must never be trigger callbacks");
             assert!(
@@ -19623,7 +18933,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn semantic_analysis_defends_against_lifecycle_permission_hints() {
         let mut program = parse("seiyaku Demo { hajimari() {} }").expect("parse hajimari");
@@ -19631,7 +18940,6 @@ mod tests {
             panic!("expected hajimari")
         };
         hajimari.modifiers.permission = Some("SourceOwnedPermission".to_owned());
-
         let error = analyze(&program).expect_err("lifecycle permission must be rejected");
         assert!(
             error
@@ -19639,7 +18947,6 @@ mod tests {
                 .contains("lifecycle authorization is runtime-defined")
         );
     }
-
     #[test]
     fn typed_core_queries_expose_declared_projection_and_page_types() {
         let program = parse(
@@ -19654,7 +18961,6 @@ mod tests {
                 TypedItem::Function(function) => function,
             })
             .collect::<Vec<_>>();
-
         let account = functions
             .iter()
             .find(|function| function.name == "account")
@@ -19664,7 +18970,6 @@ mod tests {
             Some(Type::Option(ref view))
                 if matches!(view.as_ref(), Type::Struct { name, .. } if name == "AccountView")
         ));
-
         let accounts = functions
             .iter()
             .find(|function| function.name == "accounts")
@@ -19686,7 +18991,6 @@ mod tests {
                     && offset.as_ref() == &Type::Int
         ));
     }
-
     #[test]
     fn typed_core_query_pages_require_names_and_bounded_constants() {
         let positional = analyze(
@@ -19695,7 +18999,6 @@ mod tests {
         )
         .expect_err("pagination calls are named-only");
         assert_eq!(positional.code, "E_NAMED_ARGUMENTS_REQUIRED");
-
         for (source, code) in [
             (
                 "fn f() { let _page = ledger::query::accounts(offset: -1, limit: 64); }",
@@ -19734,7 +19037,6 @@ mod tests {
                 .expect_err("invalid literal page bounds must fail during compilation");
             assert_eq!(error.code, code, "{source}: {}", error.message);
         }
-
         analyze(
             &parse(
                 "fn f() { let _page = ledger::query::accounts(offset: 9223372036854775806, limit: 1); }",
@@ -19743,7 +19045,6 @@ mod tests {
         )
         .expect("an offset-plus-limit window ending at i64::MAX is valid");
     }
-
     #[test]
     fn typed_core_singular_queries_reject_raw_bytes() {
         let program = parse("fn account(bytes raw) { let _view = ledger::query::account(raw); }")
@@ -19751,7 +19052,6 @@ mod tests {
         let error = analyze(&program).expect_err("core queries require their declared typed ID");
         assert_eq!(error.code, "E_QUERY_KEY_TYPE");
     }
-
     #[test]
     fn tail_sums_matches_if_let_and_propagation_type_check_together() {
         let program = parse(
@@ -19760,7 +19060,6 @@ mod tests {
         .expect("parse active-only sum program");
         analyze(&program).expect("active-only sums and expression control flow must type-check");
     }
-
     #[test]
     fn divergent_expression_arms_inhabit_the_sibling_value_type() {
         let program = parse(include_str!(
@@ -19769,7 +19068,6 @@ mod tests {
         .expect("parse divergent expression arms");
         analyze(&program).expect("a returning arm must not synthesize a unit placeholder value");
     }
-
     #[test]
     fn discarded_branch_tail_does_not_count_as_function_return_coverage() {
         let program = parse(
@@ -19780,7 +19078,6 @@ mod tests {
             .expect_err("a discarded branch value cannot satisfy a declared return type");
         assert_eq!(error.code, "E_MISSING_RETURN");
     }
-
     #[test]
     fn wholly_divergent_expression_without_a_type_context_fails_closed() {
         let program = parse(
@@ -19791,6 +19088,5 @@ mod tests {
             analyze(&program).expect_err("bottom-like expressions require a concrete context");
         assert_eq!(error.code, "E_DIVERGING_EXPRESSION_CONTEXT");
     }
-
     include!("semantic_sum_tests.rs");
 }

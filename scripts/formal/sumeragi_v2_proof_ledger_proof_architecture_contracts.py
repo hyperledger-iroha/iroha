@@ -1,5 +1,186 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+ASYNC_STRONG_TYPE_INVARIANT_EXACT_BODY = (
+    "/\\ StrongInductiveInvariant /\\ AsyncSchedulerTypeInvariant "
+    "/\\ AsyncProducerTypeInvariant "
+    "/\\ AsyncServeProducerEpisodeTypeInvariant "
+    "/\\ AsyncServeProducerEpisodeOwnershipInvariant "
+    "/\\ AsyncServiceActivationPairInvariant "
+    "/\\ AsyncControlServiceStateTypeInvariant "
+    "/\\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant "
+    "/\\ AsyncCandidateLifecycleSchedulerCoverageInvariant "
+    "/\\ AsyncCertifiedResponseClaimIngressOwnershipInvariant "
+    "/\\ AsyncLeaderWireIngressCarrierOwnershipInvariant "
+    "/\\ AsyncOrdinaryIngressCarrierOwnershipInvariant "
+    "/\\ ReceivedTimeoutVotePoolInvariant "
+    "/\\ AsyncRecoveryTypeInvariant /\\ AsyncRestartAuthorityInvariant "
+    "/\\ AsyncRecoveryExecutionInvariant "
+    "/\\ AsyncHistoricalLockRestartAuthorityTypeInvariant "
+    "/\\ HistoricalLockRestartAuthoritySourceRetentionInvariant "
+    "/\\ AsyncGstRecoveryPhaseInvariant "
+    "/\\ AsyncSerializedBusyKernelInvariant"
+)
+
+
+def _async_extended_strong_type_induction_errors(
+    path: Path, source: str
+) -> list[str]:
+    """Keep every producer/timeout conjunct in init, stutter, and Next induction."""
+
+    errors: list[str] = []
+
+    def normalized_theorem(symbol: str) -> tuple[str, int] | None:
+        theorem = _top_level_theorem_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if theorem is None:
+            return None
+        body, line = theorem
+        return " ".join(body.split()), line
+
+    init = normalized_theorem("AsyncInitEstablishesStrongTypeInvariant")
+    if init is not None:
+        body, line = init
+        bridges = (
+            "<2>3f. AsyncProducerTypeInvariant BY <1>1, "
+            "AsyncInitEstablishesProducerTypeInvariant",
+            "<2>3p. /\\ AsyncServeProducerEpisodeTypeInvariant "
+            "/\\ AsyncServeProducerEpisodeOwnershipInvariant BY <1>1, "
+            "AsyncInitEstablishesServeProducerEpisodeInvariants",
+            "<2>3t. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant "
+            "BY <1>1, AsyncInitEstablishesTimeoutRecoveryCurrentBoundary",
+        )
+        if any(body.count(bridge) != 1 for bridge in bridges):
+            errors.append(
+                f"{path}:{line}: AsyncInitEstablishesStrongTypeInvariant must "
+                "establish every producer-journal, one-shot Serve producer, "
+                "and timeout-recovery boundary conjunct"
+            )
+
+    stutter = normalized_theorem(
+        "AsyncAllVarsStutterPreservesStrongTypeInvariant"
+    )
+    if stutter is not None:
+        body, line = stutter
+        projection = (
+            "/\\ AsyncProducerTypeInvariant "
+            "/\\ AsyncServeProducerEpisodeTypeInvariant "
+            "/\\ AsyncServeProducerEpisodeOwnershipInvariant "
+            "/\\ AsyncServiceActivationPairInvariant "
+            "/\\ AsyncControlServiceStateTypeInvariant "
+            "/\\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant"
+        )
+        steps = (
+            "<2>4e. AsyncProducerTypeInvariant' BY <1>1, <2>1, "
+            "AsyncProducerVarsFramePreservesTypeInvariant DEF AsyncAllVars",
+            "<2>8p. /\\ AsyncServeProducerEpisodeTypeInvariant' "
+            "/\\ AsyncServeProducerEpisodeOwnershipInvariant' "
+            "BY <1>1, <2>1, Isa DEF AsyncAllVars, AsyncSchedulerVars, "
+            "AsyncServeProducerEpisodeTypeInvariant, "
+            "AsyncServeProducerEpisodeOwnershipInvariant, "
+            "AsyncServeIngressLifecycleOwnerIdentities, "
+            "AsyncServeIngressAdmissionIdentities, "
+            "AsyncServeOffQueueReservations, AsyncServeJobQueued, "
+            "AsyncIoServeIdentities",
+            "<2>8t. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant' "
+            "BY <1>1, <2>1, Isa DEF AsyncAllVars, AsyncSchedulerVars, vars, "
+            "AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant, "
+            "AsyncTimeoutRecoveryEpisodes, AsyncTimeoutRecoveryEpisodesIn, "
+            "NodeHasDecision, AsyncNodeHasDecisionIn",
+        )
+        qed = (
+            "<2> QED BY <2>3, <2>4, <2>4aa, <2>4a, <2>4b, <2>4bb, "
+            "<2>4c, <2>4d, <2>4e, <2>5, <2>6, <2>7, <2>8, <2>8p, "
+            "<2>8t DEF AsyncStrongTypeInvariant"
+        )
+        if body.count(projection) != 1:
+            errors.append(
+                f"{path}:{line}: "
+                "AsyncAllVarsStutterPreservesStrongTypeInvariant must project "
+                "every producer and timeout-boundary conjunct"
+            )
+        if any(body.count(step) != 1 for step in steps):
+            errors.append(
+                f"{path}:{line}: "
+                "AsyncAllVarsStutterPreservesStrongTypeInvariant must prime "
+                "every producer and timeout-boundary conjunct"
+            )
+        if body.count(qed) != 1:
+            errors.append(
+                f"{path}:{line}: "
+                "AsyncAllVarsStutterPreservesStrongTypeInvariant must retain "
+                "every new conjunct as an exact QED dependency"
+            )
+
+    next_step = normalized_theorem("AsyncNextPreservesStrongTypeInvariant")
+    if next_step is not None:
+        body, line = next_step
+        projection = (
+            "<2>2m. /\\ AsyncProducerTypeInvariant "
+            "/\\ AsyncServeProducerEpisodeTypeInvariant "
+            "/\\ AsyncServeProducerEpisodeOwnershipInvariant "
+            "/\\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant "
+            "BY <1>1 DEF AsyncStrongTypeInvariant"
+        )
+        producer_type = (
+            "<2>4f. AsyncProducerTypeInvariant' BY <1>1, <2>2, "
+            "AsyncProducerProjectionPreservesTypeInvariant DEF AsyncNext"
+        )
+        serve_type = (
+            "<2>4d. /\\ AsyncServeProducerEpisodeTypeInvariant' "
+            "/\\ AsyncServeProducerEpisodeOwnershipInvariant' BY <1>1, "
+            "AsyncNextPreservesServeProducerEpisodeInvariants"
+        )
+        boundary = (
+            "<2>4e. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant' "
+            "BY <1>1, <2>2h, "
+            "AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant"
+        )
+        qed = (
+            "<2> QED BY <2>2l, <2>2m, <2>3, <2>4, <2>4a, <2>4b, "
+            "<2>4c, <2>4d, <2>4e, <2>4f, <2>5, <2>6, <2>7, <2>8, "
+            "<2>9, <2>10, <2>11, <2>12, <2>13 "
+            "DEF AsyncStrongTypeInvariant"
+        )
+        if body.count(projection) != 1:
+            errors.append(
+                f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                "project every producer and timeout-recovery boundary conjunct "
+                "before priming it"
+            )
+        if body.count(producer_type) != 1:
+            errors.append(
+                f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                "prime AsyncProducerTypeInvariant through the exact producer "
+                "projection transition"
+            )
+        if body.count(serve_type) != 1:
+            errors.append(
+                f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                "prime AsyncServeProducerEpisodeTypeInvariant through the "
+                "exact one-shot transition"
+            )
+        if body.count(serve_type) != 1:
+            errors.append(
+                f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                "prime AsyncServeProducerEpisodeOwnershipInvariant through "
+                "the reviewed admission, retirement, and reset cases"
+            )
+        if body.count(boundary) != 1:
+            errors.append(
+                f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                "prime AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant "
+                "through retained, created, and vote-updated episodes"
+            )
+        if body.count(qed) != 1:
+            errors.append(
+                f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant must "
+                "retain every producer and timeout-boundary prime as an "
+                "exact QED dependency"
+            )
+    return errors
+
+
 def _proof_obligation_architecture_errors(
     obligations: list[Any], module_sources: dict[str, str]
 ) -> list[str]:

@@ -16,10 +16,9 @@ use iroha_core::privacy_engines::bootle_lantern::issuer::{
     taira_bootle_lantern_broker_contract_digest_v1,
     taira_bootle_lantern_issuer_profile_contract_digest_v1,
 };
-use iroha_crypto::{Hash, HashOf, sha256};
+use iroha_crypto::sha256;
 use iroha_data_model::{
     NetworkId,
-    block::BlockHeader,
     isi::{
         InstructionBox,
         privacy::{
@@ -1372,9 +1371,13 @@ mod tests {
             compiled_privacy_profile_v1, zk_x509_release_candidate_profile_material_v1,
         },
     };
-    use iroha_data_model::privacy::{
-        BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
-        PrivacyIssuerIdV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{
+        block::BlockHeader,
+        privacy::{
+            BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BootleLanternAllowedAttributeValuesV1,
+            PrivacyIssuerIdV1, PrivacyParameterIdV1, PrivacyPolicyIdV1,
+        },
     };
 
     use super::*;

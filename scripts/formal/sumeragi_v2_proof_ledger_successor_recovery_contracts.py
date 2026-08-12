@@ -767,7 +767,6 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
         "crates/iroha_core/src/sumeragi/v2.rs",
         errors,
         "production successor-refinement source",
-        expanded_components=("tests/v2_adapter_activation_context.rs",),
     )
     if adapter_source:
         adapter_test_context = (
@@ -825,7 +824,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             core_context,
             (
                 ".map(|certificate| self.register_parent_qc(certificate))",
-                "reducer::HeightContext::new( context_id, chain_id, context.height, parent_commit,",
+                "reducer::HeightContext::new( context_id, network_id, context.height, parent_commit,",
             ),
         )
         require_order(
@@ -1072,8 +1071,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "kura.v2_finality_artifact(height)?",
                 "let context = &artifact.height_context",
                 "let proofs_of_possession = &artifact.validator_set_pops",
-                "authenticate_certified_body_request(",
-                "verify_historical_quorum_certificate(",
+                "authenticate_certified_body_request_with_validator_pops(",
+                "let request = authenticated.request()",
                 "request.subject != artifact.subject",
                 "let Some(responder_position)",
                 ".position(|entry| entry.validator == responder_peer)",
@@ -2339,6 +2338,8 @@ def _async_historical_recovery_source_fidelity_errors(
         "HistoricalCommitDecisionResponseEvidence": (
             "/\\ candidate.evidence \\in asyncSentItems "
             '/\\ candidate.evidence.kind = "CommitCertificateResponse" '
+            "/\\ candidate.evidence.source = "
+            "candidate.evidence.envelope.request.envelope.recipient "
             "/\\ candidate.evidence.envelope.recipient = candidate.node "
             "/\\ candidate.evidence.envelope.qc = qc "
             "/\\ CommitCertificateRequestAuthorized( "
@@ -2977,9 +2978,19 @@ def _persistent_recovery_cut_source_fidelity_errors(
     if errors:
         return errors
 
-    sources = {
-        name: path.read_text(encoding="utf-8") for name, path in paths.items()
-    }
+    sources: dict[str, str] = {}
+    for name, path in paths.items():
+        if name in {"adapter", "runtime", "effects", "worker"}:
+            _, sources[name] = _read_reviewed_rust_source(
+                repo_root,
+                path.relative_to(repo_root).as_posix(),
+                errors,
+                f"persistent recovery-cut {name} source",
+            )
+        else:
+            sources[name] = path.read_text(encoding="utf-8")
+    if errors:
+        return errors
 
     def require_context_item(
         source_name: str,
@@ -3002,7 +3013,9 @@ def _persistent_recovery_cut_source_fidelity_errors(
         return matches[0]
 
     adapter_context = (("impl", "SumeragiV2Adapter"),)
-    runtime_context = (("impl", "SerializedV2Runtime"),)
+    runtime_context = (
+        ("impl", "SerializedV2Runtime", "<", "SumeragiV2Adapter", ">"),
+    )
     executor_context = (
         (
             "impl",
@@ -3233,8 +3246,19 @@ if let Err(reason) = self
             paths["adapter"], frontier, sequence, description, errors
         )
 
-    adapter_open = _require_rust_item(
-        paths["adapter"], sources["adapter"], "open_with_aggregator", errors
+    adapter_open = require_context_item(
+        "adapter",
+        "open_with_aggregator_and_publication_with_capacity",
+        adapter_context,
+        "capacity-bound restart constructor",
+    )
+    _require_rust_item_context(
+        paths["adapter"],
+        adapter_open,
+        adapter_context,
+        "capacity-bound restart constructor",
+        errors,
+        expected_attributes=("#[allow(clippy::too_many_arguments)]",),
     )
     _require_rust_token_sequence(
         paths["adapter"],
@@ -3323,6 +3347,8 @@ let ingress = self
 let deferred = self
     .driver
     .rebind_deferred_body_available(previous, rebound, manifest);
+ingress.saturating_add(deferred)
+} else {
 """,
             "a sole persistent source must be retagged rather than retired",
         ),
@@ -3380,7 +3406,7 @@ if !ownership.exactly_binds_adapter_effect(effect) {
 match self.driver.retire_restored_body_fetch_parent(
     *round,
     *subject,
-    manifest.as_ref(),
+    manifest.as_ref()
 ) {
 """,
         "restored Fetch retirement must delegate durable parent lookup to the adapter",

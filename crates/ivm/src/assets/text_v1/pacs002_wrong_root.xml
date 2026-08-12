@@ -1,0 +1,6 @@
+
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
+  <FIToFICstmrCdtTrf>
+    <GrpHdr><MsgId>WRONG-ROOT</MsgId></GrpHdr>
+  </FIToFICstmrCdtTrf>
+</Document>

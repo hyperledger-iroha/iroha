@@ -2304,11 +2304,7 @@
             vec![(1, 0, 2), (1, 2, 2), (2, 0, 2)]
         );
         let response = merged_paginated_list_response(
-            collected
-                .payloads
-                .into_iter()
-                .map(|(_, payload)| payload)
-                .collect(),
+            collected.payloads,
             1,
             2,
             "exact",
@@ -2747,9 +2743,10 @@
         for kind in ["Queued", "Approved", "Committed"] {
             let response = pipeline_status_hint_response(kind, "cache");
 
-            let hinted = pipeline_status_hinted_global_response(response)
-                .await
-                .expect("hint classifier should not fail");
+            let hinted =
+                pipeline_status_hinted_global_response(response, ROUTED_READ_TEST_BODY_BYTES)
+                    .await
+                    .expect("hint classifier should not fail");
 
             assert!(
                 hinted.is_none(),
@@ -2763,9 +2760,10 @@
         for kind in ["Rejected", "Expired"] {
             let response = pipeline_status_hint_response(kind, "cache");
 
-            let hinted = pipeline_status_hinted_global_response(response)
-                .await
-                .expect("hint classifier should not fail");
+            let hinted =
+                pipeline_status_hinted_global_response(response, ROUTED_READ_TEST_BODY_BYTES)
+                    .await
+                    .expect("hint classifier should not fail");
 
             assert!(
                 hinted.is_none(),
@@ -2779,10 +2777,11 @@
         for (kind, resolved_from) in [("Applied", "cache"), ("Rejected", "state")] {
             let response = pipeline_status_hint_response(kind, resolved_from);
 
-            let hinted = pipeline_status_hinted_global_response(response)
-                .await
-                .expect("hint classifier should not fail")
-                .expect("authoritative hinted status may short-circuit");
+            let hinted =
+                pipeline_status_hinted_global_response(response, ROUTED_READ_TEST_BODY_BYTES)
+                    .await
+                    .expect("hint classifier should not fail")
+                    .expect("authoritative hinted status may short-circuit");
             let body = axum::body::to_bytes(hinted.into_body(), usize::MAX)
                 .await
                 .expect("hinted body should be readable");
@@ -2801,7 +2800,7 @@
             .body(Body::from(br#"{"status":{"kind":"Queued"}"#.as_slice()))
             .expect("malformed JSON response");
 
-        let hinted = pipeline_status_hinted_global_response(response)
+        let hinted = pipeline_status_hinted_global_response(response, ROUTED_READ_TEST_BODY_BYTES)
             .await
             .expect("malformed hinted success should fall through to fanout");
 

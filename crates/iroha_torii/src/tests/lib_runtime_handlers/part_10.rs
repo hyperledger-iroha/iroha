@@ -36,6 +36,7 @@ async fn signed_query_proxy_tries_next_candidate_only_before_dispatch() {
         ],
         route,
         request,
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
         Duration::from_millis(20),
         move |candidate, _request| {
             let attempts = attempts_ref.clone();

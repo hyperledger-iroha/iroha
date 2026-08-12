@@ -1,0 +1,5 @@
+
+seiyaku CompactBackend {
+  fn literal() -> Name { return Name::parse("counter"); }
+  kotoage fn main() -> Name  authorize("Entry") { return literal(); }
+}

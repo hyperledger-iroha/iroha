@@ -1005,16 +1005,15 @@ impl StaticZoneConfig {
                     )
                 })
                 .and_then(|bytes| {
-                    bytes.checked_add(
-                        freeze
-                            .notes
+                    bytes.checked_add(freeze.notes.as_ref().map_or(0, |notes| {
+                        notes
                             .capacity()
                             .saturating_mul(std::mem::size_of::<String>())
-                            .saturating_mul(2),
-                    )
+                            .saturating_mul(2)
+                    }))
                 })
                 .ok_or_else(|| eyre::eyre!("static freeze retained-byte accounting overflow"))?;
-            for note in &freeze.notes {
+            for note in freeze.notes.as_deref().unwrap_or_default() {
                 retained = retained
                     .checked_add(note.capacity().saturating_mul(2))
                     .ok_or_else(|| eyre::eyre!("static note retained-byte accounting overflow"))?;
@@ -1218,6 +1217,47 @@ mod tests {
         assert_eq!(freeze.notes, vec!["guardian review".to_string()]);
         assert!(config.event_log_path().is_some());
         assert_eq!(config.sync_interval(), Duration::from_secs(45));
+    }
+
+    #[test]
+    fn static_zone_retained_bytes_accounts_for_optional_freeze_notes() {
+        let config = StaticZoneConfig {
+            domain: "example.sora".to_owned(),
+            records: Vec::new(),
+            freeze: Some(FreezeMetadataConfig {
+                state: "soft".to_owned(),
+                ticket: None,
+                expires_at: None,
+                notes: Some(vec!["guardian review".to_owned()]),
+            }),
+        };
+        let freeze = config.freeze.as_ref().expect("freeze metadata");
+        let notes = freeze.notes.as_ref().expect("freeze notes");
+        let note_bytes = notes
+            .capacity()
+            .saturating_mul(std::mem::size_of::<String>())
+            .saturating_mul(2)
+            .saturating_add(
+                notes
+                    .iter()
+                    .map(|note| note.capacity().saturating_mul(2))
+                    .sum(),
+            );
+        let expected = std::mem::size_of::<StaticZone>()
+            .saturating_mul(2)
+            .saturating_add(config.domain.capacity().saturating_mul(2))
+            .saturating_add(
+                config
+                    .records
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<Record>())
+                    .saturating_mul(2),
+            )
+            .saturating_add(std::mem::size_of::<FreezeMetadata>().saturating_mul(2))
+            .saturating_add(freeze.state.capacity().saturating_mul(2))
+            .saturating_add(note_bytes);
+
+        assert_eq!(config.retained_bytes().expect("retained bytes"), expected);
     }
 
     #[test]

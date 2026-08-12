@@ -38,9 +38,8 @@ where
             "iterable query component is shorter than its archived layout".to_owned(),
         ));
     }
-    let value = norito::codec::decode_adaptive::<T>(bytes).map_err(|_| {
-        Error::Conversion("failed to decode iterable query component".to_owned())
-    })?;
+    let value = norito::codec::decode_adaptive::<T>(bytes)
+        .map_err(|_| Error::Conversion("failed to decode iterable query component".to_owned()))?;
     let mut writer = ExactBareWriter {
         expected: bytes,
         written: 0,
@@ -125,9 +124,8 @@ impl FastIterComponentDecoder {
             self.remaining_allocated_bytes,
             norito::core::MAX_OWNED_VALUE_DECODE_DEPTH,
         );
-        let (decoded, usage) = norito::core::with_decode_limits_measured(limits, || {
-            decode_exact_in_scope::<T>(bytes)
-        });
+        let (decoded, usage) =
+            norito::core::with_decode_limits_measured(limits, || decode_exact_in_scope::<T>(bytes));
         let Ok(decoded) = decoded else {
             return Ok(None);
         };

@@ -35,7 +35,7 @@ NORITO_SKIP_BINDINGS_SYNC=1 cargo clippy --workspace --benches --tests --example
 # update the default genesis (no custom executor required); assumes the transaction authority is `iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID`
 cargo run --bin kagami -- genesis generate --ivm-dir . --genesis-public-key ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4 default > ./defaults/genesis.json
 # update schema
-cargo run --bin kagami -- schema --genesis-out ./specs/references/genesis_schema.json > ./specs/references/schema.json
+bash scripts/tests/consistency.sh --update schema
 # Validate live Iroha help and update Kagami's checked-in compact snapshot.
 cargo run --bin iroha -- tools markdown-help > /dev/null
 cargo run --bin kagami -- advanced markdown-help > ./crates/iroha_kagami/CommandLineHelp.md
@@ -44,4 +44,4 @@ cargo run --bin kagami -- docker -p 4 -s Iroha -H -c ./defaults -i hyperledger/i
 cargo run --bin kagami -- docker -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:local -b . -o ./defaults/docker-compose.local.yml -F
 cargo run --bin kagami -- docker -p 4 -s Iroha -H -c ./defaults -i hyperledger/iroha:dev -o ./defaults/docker-compose.yml -F
 # stage updates
-git add ./defaults/genesis.json ./specs/references/schema.json ./specs/references/genesis_schema.json ./crates/iroha_kagami/CommandLineHelp.md ./defaults/docker-compose.single.yml ./defaults/docker-compose.local.yml ./defaults/docker-compose.yml
+git add ./defaults/genesis.json ./specs/references/schema.json ./crates/iroha_kagami/CommandLineHelp.md ./defaults/docker-compose.single.yml ./defaults/docker-compose.local.yml ./defaults/docker-compose.yml

@@ -63,14 +63,12 @@ use crate::{
     smartcontracts::{code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
-
 #[cfg(feature = "telemetry")]
 type StateTelemetry = crate::telemetry::StateTelemetry;
 #[cfg(not(feature = "telemetry"))]
 type StateTelemetry = ();
 type NexusDataSpaceId = iroha_data_model::nexus::DataSpaceId;
 type NexusLaneId = iroha_data_model::nexus::LaneId;
-
 /// Decode one canonical Norito-framed [`TransactionEntrypoint`] and return its identity.
 ///
 /// The identity is derived from the decoded signed intent rather than the transport frame. This
@@ -82,7 +80,6 @@ pub(crate) fn entrypoint_hash_from_framed_bytes(
     let entrypoint: TransactionEntrypoint = norito::decode_canonical(framed)?;
     Ok(entrypoint.hash())
 }
-
 /// Stateful admission facts that must be committed only if transaction execution succeeds.
 #[derive(Debug, Clone)]
 pub(crate) struct StatefulAdmission {
@@ -95,16 +92,13 @@ pub(crate) struct StatefulAdmission {
     /// Exact signed validation-fee value to credit only after complete execution succeeds.
     pub(crate) validation_fee_credit: Option<crate::validation_fee::ValidationFeeCredit>,
 }
-
 #[derive(Debug, Clone, norito::codec::Decode, norito::codec::Encode)]
 struct PendingSealedTransactionCommitment {
     payload: SealedTransactionCommitmentPayload,
     commit_height: u64,
     commit_index: u64,
 }
-
 const SEALED_TRANSACTION_STATE_PREFIX: &str = "sealed_tx_commitment_";
-
 fn sealed_commitment_state_key(commitment: &iroha_crypto::Hash) -> StatePath {
     StatePath::from_str(&format!(
         "{SEALED_TRANSACTION_STATE_PREFIX}{}",
@@ -112,19 +106,16 @@ fn sealed_commitment_state_key(commitment: &iroha_crypto::Hash) -> StatePath {
     ))
     .expect("sealed transaction commitment key is a valid state path")
 }
-
 fn sealed_state_decode_error(error: impl fmt::Display) -> TransactionRejectionReason {
     TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
         "sealed transaction commitment state decode failed: {error}"
     )))
 }
-
 fn sealed_state_encode_error(error: impl fmt::Display) -> TransactionRejectionReason {
     TransactionRejectionReason::Validation(ValidationFail::InternalError(format!(
         "sealed transaction commitment state encode failed: {error}"
     )))
 }
-
 pub(crate) fn validate_sealed_commitment_stateless(
     commitment: &SignedSealedTransactionCommitment,
     expected_network_id: &NetworkId,
@@ -150,7 +141,6 @@ pub(crate) fn validate_sealed_commitment_stateless(
         })
     })
 }
-
 pub(crate) fn sealed_reveal_execution_key(
     state_block: &StateBlock<'_>,
     reveal: &SealedTransactionReveal,
@@ -164,7 +154,6 @@ pub(crate) fn sealed_reveal_execution_key(
     };
     (record.commit_height, reveal.commitment, record.commit_index)
 }
-
 pub(crate) fn prune_expired_sealed_commitments(state_block: &mut StateBlock<'_>) -> usize {
     let height = state_block._curr_block.height().get();
     let expired_keys: Vec<_> = state_block
@@ -195,7 +184,6 @@ pub(crate) fn prune_expired_sealed_commitments(state_block: &mut StateBlock<'_>)
     }
     expired_keys.len()
 }
-
 static FRAUD_ASSESSMENT_BAND_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
     iroha_data_model::name::Name::from_str("fraud_assessment_band")
         .expect("static band metadata name")
@@ -252,7 +240,6 @@ const CONTRACT_SUBJECT_DIRECT_SIGN_REJECTION: &str =
     "deployed contract subjects cannot originate signed transactions directly";
 /// Prefix used in transaction-limit rejection reasons when the signature cap is exceeded.
 pub const SIGNATURE_LIMIT_REASON_PREFIX: &str = "Too many signatures in payload";
-
 #[derive(Clone, Debug)]
 enum SignatureCheck {
     Verify,
@@ -275,7 +262,6 @@ pub struct AcceptedTransaction<'tx> {
         OnceLock<Option<HashOf<iroha_data_model::transaction::signed::TransactionPayload>>>,
     single_ed25519_key: OnceLock<Option<iroha_crypto::Ed25519ParsedPublicKey>>,
 }
-
 impl Clone for AcceptedTransaction<'_> {
     fn clone(&self) -> Self {
         Self {
@@ -290,15 +276,12 @@ impl Clone for AcceptedTransaction<'_> {
         }
     }
 }
-
 impl PartialEq for AcceptedTransaction<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.entrypoint() == other.entrypoint()
     }
 }
-
 impl Eq for AcceptedTransaction<'_> {}
-
 fn clone_once_lock<T: Clone>(source: &OnceLock<T>) -> OnceLock<T> {
     let cloned = OnceLock::new();
     if let Some(value) = source.get() {
@@ -306,26 +289,21 @@ fn clone_once_lock<T: Clone>(source: &OnceLock<T>) -> OnceLock<T> {
     }
     cloned
 }
-
 /// Accepted transaction that has been verified to be absent from the blockchain.
 ///
 /// This wrapper is constructed by checking an [`AcceptedTransaction`] against a state view and
 /// guarantees that the transaction hash was not present in the ledger at the time of creation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CheckedTransaction<'tx>(AcceptedTransaction<'tx>);
-
 /// Error returned when trying to mark an already committed transaction as pending.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransactionAlreadyCommitted;
-
 impl fmt::Display for TransactionAlreadyCommitted {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("transaction already committed")
     }
 }
-
 impl std::error::Error for TransactionAlreadyCommitted {}
-
 /// Reusable stateless transaction metadata derived once for block validation.
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedTransactionMetadata {
@@ -346,7 +324,6 @@ pub(crate) struct PreparedTransactionMetadata {
     /// Parsed transaction metadata nesting depths, in canonical metadata iteration order.
     metadata_depths: Result<Vec<(String, usize)>, TransactionLimitError>,
 }
-
 /// Signed transaction decoded from a versioned Torii payload with reusable admission metadata.
 ///
 /// This is public only so Torii can pass the decoded transaction across crate boundaries without
@@ -358,7 +335,6 @@ pub struct DecodedVersionedSignedTransaction {
     tx: SignedTransaction,
     prepared: PreparedTransactionMetadata,
 }
-
 impl<'tx> CheckedTransaction<'tx> {
     /// Attempt to construct a [`CheckedTransaction`] by verifying the transaction hash against the provided state.
     ///
@@ -375,7 +351,6 @@ impl<'tx> CheckedTransaction<'tx> {
         }
         Ok(Self(tx))
     }
-
     /// Construct a checked transaction after the caller performed committed-hash validation.
     ///
     /// This is intended for hot requeue paths that already validated
@@ -384,46 +359,38 @@ impl<'tx> CheckedTransaction<'tx> {
     pub(crate) fn new_unchecked(tx: AcceptedTransaction<'tx>) -> Self {
         Self(tx)
     }
-
     /// Borrow the underlying [`AcceptedTransaction`].
     #[must_use]
     pub fn as_accepted(&self) -> &AcceptedTransaction<'tx> {
         &self.0
     }
-
     /// Consume the wrapper and return the inner [`AcceptedTransaction`].
     #[must_use]
     pub fn into_accepted(self) -> AcceptedTransaction<'tx> {
         self.0
     }
-
     /// Check whether the transaction is now recorded in the blockchain.
     #[must_use]
     pub fn is_in_blockchain(&self, state: &impl StateReadOnlyWithTransactions) -> bool {
         state.has_transaction(self.hash())
     }
 }
-
 impl<'tx> core::ops::Deref for CheckedTransaction<'tx> {
     type Target = AcceptedTransaction<'tx>;
-
     fn deref(&self) -> &Self::Target {
         self.as_accepted()
     }
 }
-
 impl<'tx> AsRef<AcceptedTransaction<'tx>> for CheckedTransaction<'tx> {
     fn as_ref(&self) -> &AcceptedTransaction<'tx> {
         self.as_accepted()
     }
 }
-
 impl<'tx> From<CheckedTransaction<'tx>> for AcceptedTransaction<'tx> {
     fn from(value: CheckedTransaction<'tx>) -> Self {
         value.into_accepted()
     }
 }
-
 fn json_value_depth(value: &norito::json::Value) -> usize {
     match value {
         norito::json::Value::Array(items) => {
@@ -435,7 +402,6 @@ fn json_value_depth(value: &norito::json::Value) -> usize {
         _ => 1,
     }
 }
-
 fn ensure_metadata_depth(
     metadata: &Metadata,
     max_depth: usize,
@@ -449,7 +415,6 @@ fn ensure_metadata_depth(
     }
     Ok(())
 }
-
 fn prepare_metadata_depths(
     metadata: &Metadata,
 ) -> Result<Vec<(String, usize)>, TransactionLimitError> {
@@ -464,7 +429,6 @@ fn prepare_metadata_depths(
     }
     Ok(depths)
 }
-
 fn ensure_metadata_depth_with_prepared(
     metadata: &Metadata,
     max_depth: usize,
@@ -486,7 +450,6 @@ fn ensure_metadata_depth_with_prepared(
         ensure_metadata_depth(metadata, max_depth)
     }
 }
-
 /// Verification failed of some signature due to following reason
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignatureVerificationFail {
@@ -497,7 +460,6 @@ pub struct SignatureVerificationFail {
     /// Error which happened during verification
     pub detail: String,
 }
-
 impl core::fmt::Display for SignatureVerificationFail {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
@@ -508,9 +470,7 @@ impl core::fmt::Display for SignatureVerificationFail {
         )
     }
 }
-
 impl std::error::Error for SignatureVerificationFail {}
-
 /// Stable codes describing why signature verification was rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SignatureRejectionCode {
@@ -529,7 +489,6 @@ pub enum SignatureRejectionCode {
     /// Multisig bundle does not reach the configured threshold.
     InsufficientWeight,
 }
-
 impl SignatureRejectionCode {
     /// Stable machine-readable code string.
     pub const fn as_str(self) -> &'static str {
@@ -543,7 +502,6 @@ impl SignatureRejectionCode {
             Self::InsufficientWeight => "PRTRY:TX_SIGNATURE_INSUFFICIENT",
         }
     }
-
     /// Human-readable summary for logs and envelopes.
     pub const fn summary(self) -> &'static str {
         match self {
@@ -557,7 +515,6 @@ impl SignatureRejectionCode {
         }
     }
 }
-
 impl SignatureVerificationFail {
     /// Construct a new failure with the given code and detail string.
     pub fn new(
@@ -571,13 +528,11 @@ impl SignatureVerificationFail {
             detail: detail.into(),
         }
     }
-
     /// Accessor for the rejection code.
     pub const fn code(&self) -> SignatureRejectionCode {
         self.code
     }
 }
-
 /// Error type for transaction from [`SignedTransaction`] to [`AcceptedTransaction`]
 #[derive(Debug, displaydoc::Display, PartialEq, Eq, FromVariant, thiserror::Error)]
 pub enum AcceptTransactionFail {
@@ -604,7 +559,6 @@ pub enum AcceptTransactionFail {
     /// Transaction creation time is in the future
     TransactionInTheFuture,
 }
-
 fn duration_since_epoch_with_fallback(result: Result<Duration, SystemTimeError>) -> Duration {
     match result {
         Ok(duration) => duration,
@@ -618,11 +572,9 @@ fn duration_since_epoch_with_fallback(result: Result<Duration, SystemTimeError>)
         }
     }
 }
-
 fn current_unix_time() -> Duration {
     duration_since_epoch_with_fallback(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH))
 }
-
 impl DecodedVersionedSignedTransaction {
     /// Decode a versioned signed transaction and prepare admission metadata once.
     ///
@@ -639,7 +591,6 @@ impl DecodedVersionedSignedTransaction {
             AcceptedTransaction::prepare_signed_metadata_from_versioned_payload(&tx, input);
         Ok(Self { tx, prepared })
     }
-
     /// Decode an owned versioned signed transaction and prepare admission metadata once.
     ///
     /// This normalizes adaptive versioned transport payloads to canonical signed
@@ -652,37 +603,31 @@ impl DecodedVersionedSignedTransaction {
     pub fn decode_versioned_owned(input: Vec<u8>) -> iroha_version::error::Result<Self> {
         Self::decode_versioned(input.as_slice())
     }
-
     /// Borrow the decoded signed transaction.
     #[must_use]
     pub fn signed(&self) -> &SignedTransaction {
         &self.tx
     }
-
     /// Borrow the decoded authority.
     #[must_use]
     pub fn authority(&self) -> &AccountId {
         self.tx.authority()
     }
-
     /// Return the prepared canonical transaction hash.
     #[must_use]
     pub fn hash(&self) -> HashOf<SignedTransaction> {
         self.prepared.signed_hash
     }
-
     /// Return the prepared canonical entrypoint hash.
     #[must_use]
     pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
         self.prepared.entrypoint_hash
     }
-
     /// Return the prepared exact framed signed-transaction length.
     #[must_use]
     pub fn encoded_len(&self) -> usize {
         self.prepared.encoded_len
     }
-
     /// Return the message/signature/public-key tuple used for deterministic Ed25519 batch precheck.
     #[must_use]
     pub fn single_ed25519_precheck_parts(
@@ -695,7 +640,6 @@ impl DecodedVersionedSignedTransaction {
             public_key,
         ))
     }
-
     /// Validate and accept the decoded signed transaction using prepared metadata.
     ///
     /// # Errors
@@ -724,7 +668,6 @@ impl DecodedVersionedSignedTransaction {
             self.prepared,
         ))
     }
-
     /// Validate and accept the decoded signed transaction after deterministic Ed25519 precheck.
     ///
     /// # Errors
@@ -754,7 +697,6 @@ impl DecodedVersionedSignedTransaction {
         ))
     }
 }
-
 fn reject_retired_heartbeat_metadata(tx: &SignedTransaction) -> Result<(), TransactionLimitError> {
     if tx.metadata().get(&*HEARTBEAT_METADATA_NAME).is_some() {
         return Err(TransactionLimitError {
@@ -765,7 +707,6 @@ fn reject_retired_heartbeat_metadata(tx: &SignedTransaction) -> Result<(), Trans
     }
     Ok(())
 }
-
 fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
     let any = instruction.as_any();
     if let Some(iroha_data_model::isi::register::RegisterBox::Trigger(register)) =
@@ -801,7 +742,6 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         || any.is::<iroha_data_model::isi::governance::FinalizeReferendum>()
         || any.is::<iroha_data_model::isi::ministry::SubmitAgendaProposal>()
 }
-
 fn is_time_sensitive_executable(executable: &Executable) -> bool {
     match executable {
         Executable::Instructions(instructions) => {
@@ -818,7 +758,6 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
         Executable::Ivm(_) => true,
     }
 }
-
 fn instruction_self_registers_authority(
     instruction: &InstructionBox,
     authority: &AccountId,
@@ -838,14 +777,11 @@ fn instruction_self_registers_authority(
                     _ => None,
                 })
         });
-
     let Some(registration) = maybe_registration else {
         return false;
     };
-
     registration.clone().build(authority).id == *authority
 }
-
 /// Return whether the executable's first instruction registers its exact authority.
 ///
 /// Self-registering transactions are the only single-signature transactions that may enter
@@ -858,7 +794,6 @@ pub fn executable_self_registers_authority(executable: &Executable, authority: &
             let Some((first, _rest)) = instructions.split_first() else {
                 return false;
             };
-
             instruction_self_registers_authority(first, authority)
         }
         Executable::ContractCall(_)
@@ -867,7 +802,6 @@ pub fn executable_self_registers_authority(executable: &Executable, authority: &
         | Executable::Ivm(_) => false,
     }
 }
-
 /// Return whether admission may accept an authority that is absent from world state.
 ///
 /// This includes exact first-instruction account self-registration and the existing multisig
@@ -882,7 +816,6 @@ pub fn allows_unregistered_authority(executable: &Executable, authority: &Accoun
                 if instructions_allow_multisig_envelope_authority(instructions)
         )
 }
-
 pub(crate) fn instructions_allow_multisig_envelope_authority(
     instructions: &[InstructionBox],
 ) -> bool {
@@ -895,13 +828,11 @@ pub(crate) fn instructions_allow_multisig_envelope_authority(
         )
     })
 }
-
 #[derive(Clone, Copy)]
 enum ConfidentialPolicyAdmissionAction {
     TopUp,
     Redeem,
 }
-
 impl ConfidentialPolicyAdmissionAction {
     const fn label(self) -> &'static str {
         match self {
@@ -910,7 +841,6 @@ impl ConfidentialPolicyAdmissionAction {
         }
     }
 }
-
 fn confidential_policy_admission_rejection(
     action: ConfidentialPolicyAdmissionAction,
 ) -> TransactionRejectionReason {
@@ -919,7 +849,6 @@ fn confidential_policy_admission_rejection(
         action.label()
     )))
 }
-
 fn effective_confidential_policy_mode_for_admission(
     world: &impl WorldReadOnly,
     asset_def_id: &AssetDefinitionId,
@@ -932,7 +861,6 @@ fn effective_confidential_policy_mode_for_admission(
     let Some(transition) = policy.pending_transition() else {
         return Ok(policy.mode());
     };
-
     if transition.new_mode() == ConfidentialPolicyMode::ShieldedOnly
         && block_height >= transition.effective_height()
     {
@@ -946,10 +874,8 @@ fn effective_confidential_policy_mode_for_admission(
             return Ok(policy.mode());
         }
     }
-
     Ok(policy.effective_mode(block_height))
 }
-
 fn validate_confidential_policy_for_action(
     world: &impl WorldReadOnly,
     asset_def_id: &AssetDefinitionId,
@@ -964,7 +890,6 @@ fn validate_confidential_policy_for_action(
         Err(confidential_policy_admission_rejection(action))
     }
 }
-
 fn confidential_policy_allows_action(
     policy_mode: ConfidentialPolicyMode,
     action: ConfidentialPolicyAdmissionAction,
@@ -977,7 +902,6 @@ fn confidential_policy_allows_action(
         )
     )
 }
-
 pub(crate) fn validate_confidential_policy_admission_for_world(
     executable: &Executable,
     world: &impl WorldReadOnly,
@@ -1005,10 +929,8 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
             )?;
         }
     }
-
     Ok(())
 }
-
 #[cfg(test)]
 mod confidential_policy_admission_tests {
     use iroha_data_model::asset::definition::ConfidentialPolicyMode;
@@ -1036,7 +958,6 @@ mod confidential_policy_admission_tests {
         }
     }
 }
-
 fn format_nts_health_reason(status: &crate::time::NetworkTimeStatus) -> String {
     format!(
         "fallback={} samples_used={} peers_seen={} offset_ms={} confidence_ms={} min_samples_ok={} offset_ok={} confidence_ok={}",
@@ -1050,7 +971,6 @@ fn format_nts_health_reason(status: &crate::time::NetworkTimeStatus) -> String {
         status.health.confidence_ok
     )
 }
-
 fn enforce_time_sensitive_with_nts(
     tx: &SignedTransaction,
     status: crate::time::NetworkTimeStatus,
@@ -1082,7 +1002,6 @@ fn enforce_time_sensitive_with_nts(
         }
     }
 }
-
 fn enforce_nts_health_for_time_sensitive(
     tx: &SignedTransaction,
 ) -> Result<(), AcceptTransactionFail> {
@@ -1093,7 +1012,6 @@ fn enforce_nts_health_for_time_sensitive(
     let mode = crate::time::enforcement_mode();
     enforce_time_sensitive_with_nts(tx, status, mode)
 }
-
 fn validate_proof_attachment_shapes(tx: &SignedTransaction) -> Result<(), AcceptTransactionFail> {
     let Some(attachments) = tx.attachments() else {
         return Ok(());
@@ -1116,7 +1034,6 @@ fn validate_proof_attachment_shapes(tx: &SignedTransaction) -> Result<(), Accept
     }
     Ok(())
 }
-
 impl<'tx> AcceptedTransaction<'tx> {
     fn from_entrypoint(entrypoint: Cow<'tx, TransactionEntrypoint>) -> Self {
         Self {
@@ -1130,7 +1047,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             single_ed25519_key: OnceLock::new(),
         }
     }
-
     fn from_external_with_cached_bytes(
         tx: SignedTransaction,
         signed_bytes: Option<Arc<Vec<u8>>>,
@@ -1155,7 +1071,6 @@ impl<'tx> AcceptedTransaction<'tx> {
         let _ = accepted.signed_hash.set(signed_hash);
         accepted
     }
-
     fn from_entrypoint_with_cached_entrypoint_bytes(
         tx: TransactionEntrypoint,
         entrypoint_bytes: Arc<Vec<u8>>,
@@ -1169,29 +1084,24 @@ impl<'tx> AcceptedTransaction<'tx> {
             .set(Self::compat_signed_hash(entrypoint_hash));
         accepted
     }
-
     fn from_external_with_hot_cache(tx: SignedTransaction) -> Self {
         Self::from_external_with_cached_bytes(tx, None)
     }
-
     fn compat_signed_hash(
         entrypoint_hash: HashOf<TransactionEntrypoint>,
     ) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(iroha_crypto::Hash::from(entrypoint_hash))
     }
-
     fn canonical_signed_payload_with_flags(tx: &SignedTransaction) -> (Vec<u8>, u8) {
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         norito::codec::encode_with_header_flags(tx)
     }
-
     #[cfg(test)]
     fn external_entrypoint_hash_from_signed(
         tx: &SignedTransaction,
     ) -> HashOf<TransactionEntrypoint> {
         tx.hash_as_entrypoint()
     }
-
     #[cfg(test)]
     fn external_entrypoint_hash_from_signed_frame(
         signed_frame: &[u8],
@@ -1199,7 +1109,6 @@ impl<'tx> AcceptedTransaction<'tx> {
         let transaction: SignedTransaction = norito::decode_canonical(signed_frame)?;
         Ok(transaction.hash_as_entrypoint())
     }
-
     fn framed_padding_for<T>() -> usize {
         let align = norito::core::archived_payload_align::<T>();
         if align <= 1 {
@@ -1208,27 +1117,22 @@ impl<'tx> AcceptedTransaction<'tx> {
         let remainder = norito::core::Header::SIZE % align;
         if remainder == 0 { 0 } else { align - remainder }
     }
-
     fn bare_encoded_len<T: norito::NoritoSerialize>(value: &T) -> usize {
         norito::codec::Encode::encode(value).len()
     }
-
     fn framed_encoded_len<T: norito::NoritoSerialize>(value: &T) -> usize {
         norito::core::Header::SIZE
             .saturating_add(Self::framed_padding_for::<T>())
             .saturating_add(Self::bare_encoded_len(value))
     }
-
     fn framed_encoded_payload_len<T>(payload_len: usize) -> usize {
         norito::core::Header::SIZE
             .saturating_add(Self::framed_padding_for::<T>())
             .saturating_add(payload_len)
     }
-
     fn signed_encoded_len(tx: &SignedTransaction) -> usize {
         Self::framed_encoded_len(tx)
     }
-
     fn entrypoint_encoded_len(tx: &TransactionEntrypoint) -> usize {
         match tx {
             TransactionEntrypoint::External(signed) => Self::signed_encoded_len(signed),
@@ -1239,11 +1143,9 @@ impl<'tx> AcceptedTransaction<'tx> {
             TransactionEntrypoint::Time(entrypoint) => Self::framed_encoded_len(entrypoint),
         }
     }
-
     fn signed_encoded_len_for_limit(tx: &SignedTransaction) -> u64 {
         u64::try_from(Self::signed_encoded_len(tx)).unwrap_or(u64::MAX)
     }
-
     fn signed_encoded_len_for_limit_with_prepared(
         tx: &SignedTransaction,
         prepared: Option<&PreparedTransactionMetadata>,
@@ -1259,7 +1161,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             },
         )
     }
-
     fn parsed_single_ed25519_key(
         tx: &SignedTransaction,
     ) -> Option<iroha_crypto::Ed25519ParsedPublicKey> {
@@ -1276,7 +1177,6 @@ impl<'tx> AcceptedTransaction<'tx> {
         }
         iroha_crypto::ed25519_parse_public_key(public_key).ok()
     }
-
     /// Build reusable stateless metadata for a signed transaction.
     #[must_use]
     pub(crate) fn prepare_signed_metadata(tx: &SignedTransaction) -> PreparedTransactionMetadata {
@@ -1292,7 +1192,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             None,
         )
     }
-
     fn prepare_signed_metadata_from_versioned_payload(
         tx: &SignedTransaction,
         versioned_payload: &[u8],
@@ -1327,7 +1226,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             entrypoint_bytes,
         )
     }
-
     fn prepare_signed_metadata_with_entrypoint_hash_encoded_len_and_caches(
         tx: &SignedTransaction,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -1347,12 +1245,10 @@ impl<'tx> AcceptedTransaction<'tx> {
             metadata_depths: prepare_metadata_depths(tx.metadata()),
         }
     }
-
     fn signed_encoded_len_from_external_entrypoint_frame(
         framed: &[u8],
     ) -> Result<usize, norito::core::Error> {
         const EXTERNAL_ENTRYPOINT_TAG: u32 = 0;
-
         let view = norito::core::from_bytes_view(framed)?;
         if view.schema() != <TransactionEntrypoint as norito::core::NoritoSerialize>::schema_hash()
         {
@@ -1387,7 +1283,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             signed_payload_len,
         ))
     }
-
     /// Build stateless metadata for a signed transaction decoded from a canonical gossip frame.
     #[must_use]
     pub(crate) fn prepare_gossip_signed_metadata(
@@ -1406,7 +1301,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             Some(entrypoint_bytes),
         )
     }
-
     fn from_external_with_prepared_metadata(
         tx: SignedTransaction,
         prepared: PreparedTransactionMetadata,
@@ -1425,7 +1319,6 @@ impl<'tx> AcceptedTransaction<'tx> {
         let _ = accepted.entrypoint_hash.set(prepared.entrypoint_hash);
         accepted
     }
-
     fn validate_common(
         tx: &SignedTransaction,
         expected_network_id: &NetworkId,
@@ -1439,10 +1332,8 @@ impl<'tx> AcceptedTransaction<'tx> {
                 actual: *tx.domain(),
             }));
         }
-
         Self::validate_common_envelope(tx, max_clock_drift, now)
     }
-
     fn validate_common_envelope(
         tx: &SignedTransaction,
         max_clock_drift: Duration,
@@ -1451,17 +1342,14 @@ impl<'tx> AcceptedTransaction<'tx> {
         if tx.creation_time().saturating_sub(now) > max_clock_drift {
             return Err(AcceptTransactionFail::TransactionInTheFuture);
         }
-
         tx.payload().validate_fee_payment_intent().map_err(|err| {
             AcceptTransactionFail::SignatureVerification(Self::signature_fail_from_error(
                 tx,
                 TransactionSignatureError::InvalidFeePaymentIntent(err.to_string()),
             ))
         })?;
-
         Ok(())
     }
-
     fn has_single_ed25519_signature(tx: &SignedTransaction) -> bool {
         matches!(
             tx.authority().controller(),
@@ -1472,7 +1360,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                     && tx.signature().payload().payload().len() == ED25519_SIGNATURE_LENGTH
         )
     }
-
     fn verify_signature_for_check(
         tx: &SignedTransaction,
         signature_check: SignatureCheck,
@@ -1487,7 +1374,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             }
             SignatureCheck::Verify | SignatureCheck::PrecheckedSingleEd25519 => {}
         }
-
         if let Some(prepared) = prepared
             && let Some(public_key) = prepared.single_ed25519_key
             && Self::has_single_ed25519_signature(tx)
@@ -1497,7 +1383,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             let messages = [message];
             let signatures = [signature];
             let public_keys = [public_key];
-
             return iroha_crypto::ed25519_verify_batch_preparsed_deterministic(
                 &messages,
                 &signatures,
@@ -1511,12 +1396,10 @@ impl<'tx> AcceptedTransaction<'tx> {
                 ))
             });
         }
-
         tx.verify_signature().map_err(|err| {
             AcceptTransactionFail::SignatureVerification(Self::signature_fail_from_error(tx, err))
         })
     }
-
     fn ensure_signing_allowed(
         tx: &SignedTransaction,
         crypto: &iroha_config::parameters::actual::Crypto,
@@ -1581,7 +1464,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             }
         }
     }
-
     fn signature_public_key_algorithm(
         signature: &TransactionSignature,
         public_key: &iroha_crypto::PublicKey,
@@ -1595,7 +1477,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             ))
         })
     }
-
     fn signature_rejection_code(err: &TransactionSignatureError) -> SignatureRejectionCode {
         match err {
             TransactionSignatureError::UnsupportedMultisigAuthority => {
@@ -1628,7 +1509,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             }
         }
     }
-
     fn signature_fail_from_error(
         tx: &SignedTransaction,
         err: TransactionSignatureError,
@@ -1639,14 +1519,12 @@ impl<'tx> AcceptedTransaction<'tx> {
             err.to_string(),
         )
     }
-
     pub(crate) fn signature_verification_result(
         tx: &SignedTransaction,
     ) -> Result<(), SignatureVerificationFail> {
         tx.verify_signature()
             .map_err(|err| Self::signature_fail_from_error(tx, err))
     }
-
     fn ensure_signature_limit(
         signature_count: usize,
         limits: &TransactionParameters,
@@ -1668,10 +1546,8 @@ impl<'tx> AcceptedTransaction<'tx> {
                 },
             ));
         }
-
         Ok(())
     }
-
     /// Verify that the transaction is not yet committed and wrap it in a [`CheckedTransaction`].
     ///
     /// # Errors
@@ -1685,7 +1561,6 @@ impl<'tx> AcceptedTransaction<'tx> {
     {
         CheckedTransaction::new(self, state)
     }
-
     /// Validate a genesis transaction, including its individual authorization proof.
     ///
     /// # Errors
@@ -1700,7 +1575,6 @@ impl<'tx> AcceptedTransaction<'tx> {
         let now = current_unix_time();
         Self::validate_genesis_with_now(tx, max_clock_drift, genesis_account, crypto, now)
     }
-
     /// Like [`Self::validate_genesis`], but with a caller-provided "now" timestamp.
     ///
     /// # Errors
@@ -1720,17 +1594,13 @@ impl<'tx> AcceptedTransaction<'tx> {
             }));
         }
         Self::validate_common_envelope(tx, max_clock_drift, now)?;
-
         if genesis_account != tx.authority() {
             return Err(AcceptTransactionFail::UnexpectedGenesisAccountSignature);
         }
-
         Self::ensure_signing_allowed(tx, crypto)?;
         Self::verify_signature_for_check(tx, SignatureCheck::Verify, None)?;
-
         Ok(())
     }
-
     /// Like [`Self::accept`], but without wrapping.
     ///
     /// # Errors
@@ -1756,7 +1626,6 @@ impl<'tx> AcceptedTransaction<'tx> {
         enforce_nts_health_for_time_sensitive(tx)?;
         Ok(())
     }
-
     #[allow(clippy::too_many_lines)]
     pub(crate) fn validate_with_now(
         tx: &SignedTransaction,
@@ -1777,7 +1646,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             None,
         )
     }
-
     /// Validate a transaction with metadata prepared once by the caller.
     ///
     /// # Errors
@@ -1804,7 +1672,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             Some(prepared),
         )
     }
-
     /// Validate a transaction with metadata prepared once by the caller and a precomputed signature result.
     ///
     /// # Errors
@@ -1834,7 +1701,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             Some(prepared),
         )
     }
-
     /// Validate a transaction after a successful single-Ed25519 precheck with prepared metadata.
     ///
     /// # Errors
@@ -1861,7 +1727,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             Some(prepared),
         )
     }
-
     #[allow(clippy::too_many_lines)]
     fn validate_with_now_and_signature_check(
         tx: &SignedTransaction,
@@ -1875,7 +1740,6 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> Result<(), AcceptTransactionFail> {
         reject_retired_heartbeat_metadata(tx).map_err(AcceptTransactionFail::TransactionLimit)?;
         Self::validate_common(tx, expected_network_id, max_clock_drift, now)?;
-
         let ttl = tx.time_to_live().ok_or_else(|| {
             AcceptTransactionFail::TransactionLimit(TransactionLimitError {
                 reason: "Transaction `time_to_live_ms` is required and must be signature-bound"
@@ -1906,14 +1770,10 @@ impl<'tx> AcceptedTransaction<'tx> {
                 now_ms: now.as_millis(),
             });
         }
-
         Self::ensure_signing_allowed(tx, crypto)?;
-
         Self::verify_signature_for_check(tx, signature_check, prepared)?;
-
         let signature_count = tx.signature_count();
         Self::ensure_signature_limit(signature_count, &limits)?;
-
         let tx_encoded_len = Self::signed_encoded_len_for_limit_with_prepared(tx, prepared);
         let max_tx_bytes = limits.max_tx_bytes().get();
         if tx_encoded_len > max_tx_bytes {
@@ -1925,9 +1785,7 @@ impl<'tx> AcceptedTransaction<'tx> {
                 },
             ));
         }
-
         validate_proof_attachment_shapes(tx)?;
-
         let decompressed_len = tx.attachments().map_or(0usize, |attachments| {
             attachments
                 .as_slice()
@@ -1957,7 +1815,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                 },
             ));
         }
-
         let expires_at_height_meta = tx.expires_at_height().map_err(|err| {
             AcceptTransactionFail::TransactionLimit(TransactionLimitError {
                 reason: format!(
@@ -1973,7 +1830,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                 },
             ));
         }
-
         let tx_sequence_meta = tx.tx_sequence().map_err(|err| {
             AcceptTransactionFail::TransactionLimit(TransactionLimitError {
                 reason: format!(
@@ -1989,11 +1845,9 @@ impl<'tx> AcceptedTransaction<'tx> {
                 },
             ));
         }
-
         let max_metadata_depth = usize::from(limits.max_metadata_depth().get());
         ensure_metadata_depth_with_prepared(tx.metadata(), max_metadata_depth, prepared)
             .map_err(AcceptTransactionFail::TransactionLimit)?;
-
         // Attachment payloads currently carry flat structures; no additional nesting cap required.
         match &tx.instructions() {
             Executable::Instructions(instructions) => {
@@ -2004,7 +1858,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                         },
                     ));
                 }
-
                 let instruction_limit = limits.max_instructions().get();
                 let instruction_count = u64::try_from(instructions.len()).unwrap_or(u64::MAX);
                 if instruction_count > instruction_limit {
@@ -2037,7 +1890,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                         },
                     ));
                 }
-
                 let item_limit = limits.max_instructions().get();
                 let item_count = u64::try_from(items.len()).unwrap_or(u64::MAX);
                 if item_count > item_limit {
@@ -2051,7 +1903,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                         },
                     ));
                 }
-
                 if items
                     .iter()
                     .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_)))
@@ -2075,7 +1926,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                         reason: err.to_string(),
                     })
                 })?;
-
                 let instruction_limit = limits.max_instructions().get();
                 let instruction_count = u64::try_from(proved.overlay.len()).unwrap_or(u64::MAX);
                 if instruction_count > instruction_limit {
@@ -2089,7 +1939,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                         },
                     ));
                 }
-
                 let ivm_bytecode_size_limit = limits.ivm_bytecode_size().get();
                 let bytecode_size = u64::try_from(proved.bytecode.size_bytes()).unwrap_or(u64::MAX);
                 if bytecode_size > ivm_bytecode_size_limit {
@@ -2104,7 +1953,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                         },
                     ));
                 }
-
                 // Decode the program header to obtain the code section and enforce the global
                 // instruction count limit published via `TransactionParameters`.
                 let parsed =
@@ -2120,7 +1968,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                             reason: format!("Failed to decode IVM instructions: {err}"),
                         })
                     })?;
-
                 let decoded_bytes = decoded
                     .iter()
                     .try_fold(0u64, |acc, op| acc.checked_add(u64::from(op.len)))
@@ -2136,7 +1983,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                         },
                     ));
                 }
-
                 let decoded_len = u64::try_from(decoded.len()).unwrap_or(u64::MAX);
                 if decoded_len > instruction_limit {
                     return Err(AcceptTransactionFail::TransactionLimit(
@@ -2159,7 +2005,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                         reason: err.to_string(),
                     })
                 })?;
-
                 let ivm_bytecode_size_limit = limits.ivm_bytecode_size().get();
                 let bytecode_size = u64::try_from(smart_contract.size_bytes()).unwrap_or(u64::MAX);
                 if bytecode_size > ivm_bytecode_size_limit {
@@ -2174,7 +2019,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                         },
                     ));
                 }
-
                 // Decode the program header to obtain the code section and enforce the global
                 // instruction count limit published via `TransactionParameters`.
                 let parsed =
@@ -2190,7 +2034,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                             reason: format!("Failed to decode IVM instructions: {err}"),
                         })
                     })?;
-
                 let decoded_bytes = decoded
                     .iter()
                     .try_fold(0u64, |acc, op| acc.checked_add(u64::from(op.len)))
@@ -2206,7 +2049,6 @@ impl<'tx> AcceptedTransaction<'tx> {
                         },
                     ));
                 }
-
                 let instruction_limit = limits.max_instructions().get();
                 let decoded_len = u64::try_from(decoded.len()).unwrap_or(u64::MAX);
                 if decoded_len > instruction_limit {
@@ -2222,10 +2064,8 @@ impl<'tx> AcceptedTransaction<'tx> {
                 }
             }
         }
-
         Ok(())
     }
-
     /// Create [`Self`] assuming the signed transaction is acceptable.
     pub fn new_unchecked(tx: impl Into<Cow<'tx, SignedTransaction>>) -> Self {
         let entrypoint = match tx.into() {
@@ -2234,7 +2074,6 @@ impl<'tx> AcceptedTransaction<'tx> {
         };
         Self::from_entrypoint(entrypoint)
     }
-
     /// Create [`Self`] assuming the entrypoint is acceptable.
     pub fn new_unchecked_entrypoint(tx: impl Into<Cow<'tx, TransactionEntrypoint>>) -> Self {
         match tx.into() {
@@ -2244,19 +2083,16 @@ impl<'tx> AcceptedTransaction<'tx> {
             entrypoint => Self::from_entrypoint(entrypoint),
         }
     }
-
     /// Borrow the underlying entrypoint.
     #[must_use]
     pub fn entrypoint(&self) -> &TransactionEntrypoint {
         self.entrypoint.as_ref()
     }
-
     /// Consume the accepted transaction and return its wrapped entrypoint.
     #[must_use]
     pub fn into_entrypoint(self) -> TransactionEntrypoint {
         self.entrypoint.into_owned()
     }
-
     /// Borrow the wrapped signed transaction when present.
     #[must_use]
     pub fn external(&self) -> Option<&SignedTransaction> {
@@ -2268,7 +2104,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             TransactionEntrypoint::SealedCommitment(_) | TransactionEntrypoint::Time(_) => None,
         }
     }
-
     /// Return the canonical hash of the wrapped transaction.
     #[must_use]
     pub fn hash(&self) -> HashOf<SignedTransaction> {
@@ -2276,7 +2111,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             .signed_hash
             .get_or_init(|| Self::compat_signed_hash(self.hash_as_entrypoint()))
     }
-
     /// Return the canonical entrypoint hash of the wrapped transaction.
     #[must_use]
     pub fn hash_as_entrypoint(&self) -> HashOf<TransactionEntrypoint> {
@@ -2284,7 +2118,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             .entrypoint_hash
             .get_or_init(|| self.entrypoint().hash())
     }
-
     /// Return the exact encoded size used by queue and transaction-size budgeting.
     #[must_use]
     pub fn encoded_len(&self) -> usize {
@@ -2292,7 +2125,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             .encoded_len
             .get_or_init(|| Self::entrypoint_encoded_len(self.entrypoint()))
     }
-
     /// Return cached canonical signed-transaction bytes for queue gossip when this is external.
     #[must_use]
     #[cfg(test)]
@@ -2306,7 +2138,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             .as_ref()
             .map(Arc::clone)
     }
-
     /// Return cached canonical transaction-entrypoint bytes for queue gossip.
     #[must_use]
     pub(crate) fn entrypoint_bytes(&self) -> Arc<Vec<u8>> {
@@ -2317,7 +2148,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             )
         }))
     }
-
     /// Return cached payload hash when this is an external transaction.
     #[must_use]
     #[cfg(test)]
@@ -2328,7 +2158,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             .payload_hash
             .get_or_init(|| self.external().map(|signed| HashOf::new(signed.payload())))
     }
-
     /// Return cached parsed Ed25519 key for single-key Ed25519 authorities.
     #[must_use]
     #[cfg(test)]
@@ -2337,7 +2166,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             .single_ed25519_key
             .get_or_init(|| self.external().and_then(Self::parsed_single_ed25519_key))
     }
-
     /// Return prepared metadata for an external transaction.
     #[must_use]
     #[cfg(test)]
@@ -2361,7 +2189,6 @@ impl<'tx> AcceptedTransaction<'tx> {
             metadata_depths: prepare_metadata_depths(self.metadata()?),
         })
     }
-
     pub(crate) fn stateless_cache_metadata(&self) -> Option<PreparedTransactionMetadata> {
         let signed = self.external()?;
         let payload_hash = *self
@@ -2382,25 +2209,21 @@ impl<'tx> AcceptedTransaction<'tx> {
             metadata_depths: prepare_metadata_depths(self.metadata()?),
         })
     }
-
     /// Borrow the transaction authority account identifier when present.
     #[must_use]
     pub fn authority_opt(&self) -> Option<&AccountId> {
         self.entrypoint().authority_opt()
     }
-
     /// Borrow the transaction authority account identifier.
     #[must_use]
     pub fn authority(&self) -> &AccountId {
         self.entrypoint().authority()
     }
-
     /// Entry-point metadata when present.
     #[must_use]
     pub fn metadata(&self) -> Option<&Metadata> {
         self.entrypoint().metadata()
     }
-
     /// Creation timestamp for queue expiry and projections.
     #[must_use]
     pub fn creation_time(&self) -> Duration {
@@ -2413,14 +2236,12 @@ impl<'tx> AcceptedTransaction<'tx> {
             TransactionEntrypoint::Time(_) => Duration::ZERO,
         }
     }
-
     /// Entry-point TTL when one exists.
     #[must_use]
     pub fn time_to_live(&self) -> Option<Duration> {
         self.external().and_then(SignedTransaction::time_to_live)
     }
 }
-
 impl AcceptedTransaction<'static> {
     fn validate_entrypoint_with_now(
         tx: &TransactionEntrypoint,
@@ -2467,7 +2288,6 @@ impl AcceptedTransaction<'static> {
         }
         Ok(())
     }
-
     /// Accept genesis transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
     ///
     /// # Errors
@@ -2482,7 +2302,6 @@ impl AcceptedTransaction<'static> {
         Self::validate_genesis(&tx, max_clock_drift, genesis_account, crypto)
             .map(|()| Self::from_external_with_hot_cache(tx))
     }
-
     /// Accept transaction. Transition from [`SignedTransaction`] to [`AcceptedTransaction`].
     ///
     /// # Errors
@@ -2498,7 +2317,6 @@ impl AcceptedTransaction<'static> {
         Self::validate(&tx, expected_network_id, max_clock_drift, limits, crypto)
             .map(|()| Self::from_external_with_hot_cache(tx))
     }
-
     /// Accept transaction using caller-provided canonical signed-transaction bytes.
     ///
     /// # Errors
@@ -2516,7 +2334,6 @@ impl AcceptedTransaction<'static> {
         Self::validate(&tx, expected_network_id, max_clock_drift, limits, crypto)
             .map(|()| Self::from_external_with_cached_bytes(tx, Some(signed_bytes)))
     }
-
     /// Accept transaction using a caller-provided [`TimeSource`] for admission-time checks.
     ///
     /// # Errors
@@ -2542,7 +2359,6 @@ impl AcceptedTransaction<'static> {
         enforce_nts_health_for_time_sensitive(&tx)?;
         Ok(Self::from_external_with_hot_cache(tx))
     }
-
     /// Accept any directly submitted transaction entrypoint.
     ///
     /// # Errors
@@ -2569,7 +2385,6 @@ impl AcceptedTransaction<'static> {
             other => Self::from_entrypoint(Cow::Owned(other)),
         })
     }
-
     /// Accept an entrypoint at one explicit validation instant.
     ///
     /// Durable recovery uses the persisted enqueue instant to prove that an acknowledged
@@ -2600,7 +2415,6 @@ impl AcceptedTransaction<'static> {
             other => Self::from_entrypoint(Cow::Owned(other)),
         })
     }
-
     /// Accept an already-decoded gossip entrypoint and seed its canonical entrypoint frame bytes.
     ///
     /// # Errors
@@ -2627,7 +2441,6 @@ impl AcceptedTransaction<'static> {
             false,
         )
     }
-
     /// Accept an already-decoded gossip entrypoint using caller-prepared metadata.
     ///
     /// This path lets gossip admission reuse deterministic single-Ed25519 batch
@@ -2696,7 +2509,6 @@ impl AcceptedTransaction<'static> {
                 )?;
             }
         }
-
         let accepted = Self::from_entrypoint_with_cached_entrypoint_bytes(
             tx,
             entrypoint_bytes,
@@ -2718,7 +2530,6 @@ impl AcceptedTransaction<'static> {
         Ok(accepted)
     }
 }
-
 impl<'tx> From<AcceptedTransaction<'tx>> for SignedTransaction {
     fn from(source: AcceptedTransaction<'tx>) -> Self {
         match source.entrypoint.into_owned() {
@@ -2733,20 +2544,17 @@ impl<'tx> From<AcceptedTransaction<'tx>> for SignedTransaction {
         }
     }
 }
-
 impl<'tx> From<AcceptedTransaction<'tx>> for (AccountId, Executable) {
     fn from(source: AcceptedTransaction<'tx>) -> Self {
         SignedTransaction::from(source).into()
     }
 }
-
 impl AsRef<SignedTransaction> for AcceptedTransaction<'_> {
     fn as_ref(&self) -> &SignedTransaction {
         self.external()
             .expect("system entrypoints do not expose SignedTransaction access")
     }
 }
-
 impl StateBlock<'_> {
     /// Validate stateful admission rules that must hold before transaction execution.
     ///
@@ -2767,11 +2575,9 @@ impl StateBlock<'_> {
                 ValidationFail::NotPermitted(CONTRACT_SUBJECT_DIRECT_SIGN_REJECTION.into()),
             ));
         }
-
         let authority_exists = state_transaction.world.accounts.get(&authority).is_some();
         let allow_unregistered_authority =
             !authority_exists && allows_unregistered_authority(tx.instructions(), &authority);
-
         // Multisig propose/approve envelopes may use an unmaterialized authority because
         // authorization is derived from multisig membership rather than account storage. All
         // other transactions must originate from an existing account.
@@ -2780,7 +2586,6 @@ impl StateBlock<'_> {
                 FindError::Account(authority.clone()),
             ));
         }
-
         if let Executable::Instructions(instructions) = tx.instructions()
             && instructions.is_empty()
         {
@@ -2790,7 +2595,6 @@ impl StateBlock<'_> {
                 ),
             ));
         }
-
         let (require_height_ttl, require_sequence) = {
             let params = state_transaction.world.parameters();
             (
@@ -2798,19 +2602,16 @@ impl StateBlock<'_> {
                 params.transaction.require_sequence,
             )
         };
-
         let expires_at_height = tx.expires_at_height().map_err(|err| {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
                 "Transaction metadata `expires_at_height` must be an unsigned integer: {err}"
             )))
         })?;
-
         let tx_sequence_value = tx.tx_sequence().map_err(|err| {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
                 "Transaction metadata `tx_sequence` must be an unsigned integer: {err}"
             )))
         })?;
-
         if require_height_ttl {
             let expiry = expires_at_height.ok_or_else(|| {
                 TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
@@ -2826,7 +2627,6 @@ impl StateBlock<'_> {
                 ));
             }
         }
-
         let mut sequence_to_commit = None;
         if let Some(seq) = tx_sequence_value {
             let previous = state_transaction
@@ -2856,12 +2656,10 @@ impl StateBlock<'_> {
                 ),
             ));
         }
-
         #[cfg(feature = "telemetry")]
         let telemetry_handle: Option<&StateTelemetry> = Some(state_transaction.telemetry);
         #[cfg(not(feature = "telemetry"))]
         let telemetry_handle: Option<&StateTelemetry> = None;
-
         if let Ok(account) = state_transaction.world.account(&authority) {
             let has_multisig_state = state_transaction
                 .world
@@ -2898,7 +2696,6 @@ impl StateBlock<'_> {
                 ));
             }
         }
-
         let routing_decision = match routing_decision {
             Some(decision) => decision,
             None => {
@@ -2928,7 +2725,6 @@ impl StateBlock<'_> {
             dataspace_id: routing_decision.dataspace_id,
             dataspace_catalog: &state_transaction.nexus.dataspace_catalog,
         };
-
         enforce_lane_policies(tx, state_transaction, &lane_assignment)?;
         validate_confidential_policy_admission_for_world(
             tx.instructions(),
@@ -2937,14 +2733,12 @@ impl StateBlock<'_> {
         )?;
         let validation_fee_credit =
             crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)?;
-
         enforce_fraud_policy(
             &state_transaction.fraud_monitoring,
             tx.metadata(),
             telemetry_handle,
             &lane_assignment,
         )?;
-
         Ok(StatefulAdmission {
             authority,
             allow_unregistered_authority,
@@ -2952,7 +2746,6 @@ impl StateBlock<'_> {
             validation_fee_credit,
         })
     }
-
     /// Validate and apply the transaction to the state if validation succeeds; leave the state unchanged on failure.
     ///
     /// Returns the hash and the result of the transaction -- the trigger sequence on success, or the rejection reason on failure.
@@ -2963,7 +2756,6 @@ impl StateBlock<'_> {
     ) -> (HashOf<TransactionEntrypoint>, TransactionResultInner) {
         self.validate_transaction_at_entrypoint_index_and_routing(tx, ivm_cache, None, None)
     }
-
     /// Validate and apply a transaction with both its original block entrypoint index and routing context.
     ///
     /// Returns the hash and the result of the transaction.
@@ -2981,7 +2773,6 @@ impl StateBlock<'_> {
             Some(routing),
         )
     }
-
     /// Validate recovered standalone lane-block execution input in descriptor order.
     ///
     /// Successful transactions stage their state effects in this [`StateBlock`]
@@ -3041,7 +2832,6 @@ impl StateBlock<'_> {
         }
         Ok(results)
     }
-
     fn validate_lane_block_execution_input_unique_entrypoints(
         artifact: &crate::kura::LaneBlockExecutionInputArtifact,
     ) -> core::result::Result<(), &'static str> {
@@ -3078,7 +2868,6 @@ impl StateBlock<'_> {
         }
         Ok(())
     }
-
     fn validate_transaction_at_entrypoint_index_and_routing(
         &mut self,
         tx: AcceptedTransaction<'_>,
@@ -3148,10 +2937,8 @@ impl StateBlock<'_> {
                 self.zk_proof_bytes_in_block = new_proof_bytes_total;
             }
         }
-
         (hash, result)
     }
-
     /// Validate the transaction, staging its state changes.
     ///
     /// Returns the trigger sequence on success, or the rejection reason on failure.
@@ -3175,12 +2962,10 @@ impl StateBlock<'_> {
                 ),
             ));
         }
-
         let admission =
             Self::validate_stateful_admission(tx.as_ref(), state_transaction, routing_decision)?;
         let authority = admission.authority;
         let allow_unregistered_authority = admission.allow_unregistered_authority;
-
         match tx.as_ref().instructions() {
             Executable::ContractCall(call) => {
                 if crate::executor::transaction_gas_limit(tx.as_ref()).is_none() {
@@ -3231,7 +3016,6 @@ impl StateBlock<'_> {
             }
             _ => {}
         }
-
         debug!(tx=%tx.hash(), "Validating transaction");
         Self::validate_transaction_with_runtime_executor(tx.clone(), state_transaction, ivm_cache)?;
         let trigger_sequence = if allow_unregistered_authority {
@@ -3246,22 +3030,18 @@ impl StateBlock<'_> {
             debug!("Data triggers executed successfully");
             trigger_sequence
         };
-
         crate::validation_fee::commit_validation_fee_credit(
             state_transaction,
             admission.validation_fee_credit.as_ref(),
         )?;
-
         if let Some(seq) = admission.sequence_to_commit {
             state_transaction
                 .world
                 .tx_sequences
                 .insert(authority.clone(), seq);
         }
-
         Ok(trigger_sequence)
     }
-
     fn validate_sealed_transaction_commitment(
         commitment: &SignedSealedTransactionCommitment,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -3285,7 +3065,6 @@ impl StateBlock<'_> {
                 other.to_string(),
             )),
         })?;
-
         let payload = commitment.payload();
         let height = state_transaction._curr_block.height().get();
         if payload.reveal_after_height <= height {
@@ -3319,7 +3098,6 @@ impl StateBlock<'_> {
             .insert(key, bytes);
         Ok(DataTriggerSequence::default())
     }
-
     fn validate_sealed_transaction_reveal(
         reveal: &SealedTransactionReveal,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -3381,12 +3159,10 @@ impl StateBlock<'_> {
                 ),
             ));
         }
-
         state_transaction.world.smart_contract_state.remove(key);
         let accepted = AcceptedTransaction::new_unchecked(Cow::Borrowed(signed));
         Self::validate_transaction_internal(accepted, state_transaction, ivm_cache, None)
     }
-
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
     fn validate_ivm(
         authority: AccountId,
@@ -3448,11 +3224,9 @@ impl StateBlock<'_> {
         // Use the domain-separated full-artifact hash and canonical ABI hash.
         let code_hash = summary.code_hash();
         let abi_hash = summary.abi_hash();
-
         crate::pipeline::overlay::validate_header_policy(&meta).map_err(|error| {
             TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
         })?;
-
         // Runtime upgrade admission: if there is an activated runtime upgrade record for this ABI
         // version, require that the computed ABI hash matches the active manifest.
         //
@@ -3481,7 +3255,6 @@ impl StateBlock<'_> {
                 }
             }
         }
-
         // Fuel (`max_cycles`) must be explicitly provided and bounded by both
         // governance and the local deterministic execution ceiling.
         let upper_bound = state_transaction.pipeline.ivm_max_cycles_upper_bound;
@@ -3494,7 +3267,6 @@ impl StateBlock<'_> {
         .map_err(|error| {
             TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
         })?;
-
         let code = &bytes[offset..];
         let decoded = if code.is_empty() {
             None
@@ -3509,7 +3281,6 @@ impl StateBlock<'_> {
                 })?,
             )
         };
-
         let inst_cap = state_transaction.pipeline.ivm_max_decoded_instructions;
         let bytes_cap = state_transaction.pipeline.ivm_max_decoded_bytes;
         if let Some(decoded) = decoded.as_ref() {
@@ -3528,7 +3299,6 @@ impl StateBlock<'_> {
                     ));
                 }
             }
-
             if bytes_cap != 0 {
                 let decoded_bytes = decoded
                     .iter()
@@ -3548,7 +3318,6 @@ impl StateBlock<'_> {
                 }
             }
         }
-
         // Admission guard: reject bytecode that invokes syscalls outside the ABI surface.
         if let Some(decoded) = decoded.as_ref() {
             debug_assert_eq!(meta.abi_version, 1, "only ABI v1 is supported");
@@ -3578,7 +3347,6 @@ impl StateBlock<'_> {
                 }
             }
         }
-
         // Validate every supplied or stored manifest as a complete V1
         // consensus binding. A present manifest may not omit either hash.
         let validate_manifest =
@@ -3588,7 +3356,6 @@ impl StateBlock<'_> {
                         TransactionRejectionReason::Validation(ValidationFail::IvmAdmission(error))
                     })
             };
-
         if is_contract {
             if let Some(manifest) = manifest_metadata.as_ref() {
                 validate_manifest(manifest)?;
@@ -3610,7 +3377,6 @@ impl StateBlock<'_> {
                 ),
             ));
         }
-
         // Protected namespaces admission (governance gating)
         if let Some(contract_address) = deploy_target {
             // Read protected namespaces from on-chain custom parameter `gov_protected_namespaces`
@@ -3660,12 +3426,9 @@ impl StateBlock<'_> {
                     .record_protected_namespace_enforcement("allowed");
             }
         }
-
         let _ = authority; // reserved for future context-dependent checks
-
         Ok(())
     }
-
     /// Validate transaction with runtime executors.
     ///
     /// Note: transaction instructions will be executed on the given `state_transaction`.
@@ -3676,7 +3439,6 @@ impl StateBlock<'_> {
     ) -> Result<(), TransactionRejectionReason> {
         let tx: SignedTransaction = tx.into();
         let authority = tx.authority().clone();
-
         state_transaction
             .world
             .executor
@@ -3694,7 +3456,6 @@ impl StateBlock<'_> {
             })
     }
 }
-
 #[cfg(feature = "telemetry")]
 static FRAUD_ASSESSMENT_TENANT_KEY: LazyLock<TelemetryName> = LazyLock::new(|| {
     TelemetryName::from_str("fraud_assessment_tenant").expect("static tenant metadata key")
@@ -3712,14 +3473,12 @@ static FRAUD_ASSESSMENT_DISPOSITION_KEY: LazyLock<TelemetryName> = LazyLock::new
     TelemetryName::from_str("fraud_assessment_disposition")
         .expect("static disposition metadata key")
 });
-
 #[cfg(feature = "telemetry")]
 #[derive(Clone, Copy)]
 enum FraudDisposition {
     Fraud,
     Clean,
 }
-
 /// Dataspace routing details needed when enforcing the fraud policy.
 pub(crate) struct LaneAssignment<'cfg> {
     /// Lane identifier selected by routing policy.
@@ -3729,13 +3488,11 @@ pub(crate) struct LaneAssignment<'cfg> {
     /// Catalog used to resolve dataspace metadata.
     pub(crate) dataspace_catalog: &'cfg DataSpaceCatalog,
 }
-
 impl LaneAssignment<'_> {
     fn dataspace_label(&self) -> String {
         dataspace_label_from_catalog(self.dataspace_catalog, self.dataspace_id)
     }
 }
-
 fn dataspace_label_from_catalog(catalog: &DataSpaceCatalog, id: NexusDataSpaceId) -> String {
     catalog
         .entries()
@@ -3743,15 +3500,12 @@ fn dataspace_label_from_catalog(catalog: &DataSpaceCatalog, id: NexusDataSpaceId
         .find(|entry| entry.id == id)
         .map_or_else(|| id.as_u64().to_string(), |entry| entry.alias.clone())
 }
-
 fn reject_not_permitted(reason: impl Into<String>) -> TransactionRejectionReason {
     TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason.into()))
 }
-
 fn reject_lane_policy(alias: &str, reason: impl Into<String>) -> TransactionRejectionReason {
     reject_not_permitted(format!("lane {alias}: {}", reason.into()))
 }
-
 fn collect_lane_privacy_proofs(
     tx: &SignedTransaction,
 ) -> Vec<iroha_data_model::nexus::LanePrivacyProof> {
@@ -3761,7 +3515,6 @@ fn collect_lane_privacy_proofs(
         .filter_map(|attachment| attachment.lane_privacy.clone())
         .collect()
 }
-
 fn enforce_manifest_quorum(
     alias: &str,
     rules: &GovernanceRules,
@@ -3781,7 +3534,6 @@ fn enforce_manifest_quorum(
     if rules.validators.is_empty() {
         return Ok(());
     }
-
     let approvals = collect_manifest_approvals(alias, tx)?;
     let validators = canonical_manifest_validators(alias, rules)?;
     let approved = approvals
@@ -3799,7 +3551,6 @@ fn enforce_manifest_quorum(
     }
     Ok(())
 }
-
 fn collect_manifest_approvals(
     alias: &str,
     tx: &SignedTransaction,
@@ -3813,7 +3564,6 @@ fn collect_manifest_approvals(
         )
     })?;
     approvals.insert(authority_i105);
-
     let metadata = tx.metadata();
     let Some(raw) = metadata.get(&*GOV_APPROVERS_METADATA_KEY) else {
         return Ok(approvals);
@@ -3847,7 +3597,6 @@ fn collect_manifest_approvals(
     }
     Ok(approvals)
 }
-
 fn canonical_manifest_validators(
     alias: &str,
     rules: &GovernanceRules,
@@ -3869,7 +3618,6 @@ fn canonical_manifest_validators(
     }
     Ok(validators)
 }
-
 fn tx_contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
     let contains_runtime_upgrade = |instruction: &InstructionBox| {
         instruction
@@ -3894,13 +3642,11 @@ fn tx_contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
         Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => false,
     }
 }
-
 fn tx_touches_manifest_protected_namespace_surface(tx: &SignedTransaction) -> bool {
     let metadata = tx.metadata();
     let has_governance_contract_address =
         metadata.get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY).is_some();
     let has_contract_address_hint = metadata.get(&*CONTRACT_ADDRESS_METADATA_KEY).is_some();
-
     let mut contract_targets_seen = false;
     let mut register_code_seen = false;
     let inspect_instruction = |instruction: &InstructionBox| {
@@ -3953,19 +3699,15 @@ fn tx_touches_manifest_protected_namespace_surface(tx: &SignedTransaction) -> bo
         }
         Executable::Ivm(_) | Executable::IvmProved(_) => {}
     }
-
     let ivm_with_contract_metadata = matches!(tx.instructions(), Executable::Ivm(_))
         && (has_governance_contract_address || has_contract_address_hint);
-
     register_code_seen || contract_targets_seen || ivm_with_contract_metadata
 }
-
 fn tx_requires_manifest_validator_gating(rules: &GovernanceRules, tx: &SignedTransaction) -> bool {
     tx_contains_runtime_upgrade_instruction(tx)
         || (!rules.protected_namespaces.is_empty()
             && tx_touches_manifest_protected_namespace_surface(tx))
 }
-
 #[allow(clippy::too_many_lines)]
 fn enforce_manifest_protected_namespaces(
     alias: &str,
@@ -3976,7 +3718,6 @@ fn enforce_manifest_protected_namespaces(
     if rules.protected_namespaces.is_empty() {
         return Ok(());
     }
-
     let metadata = tx.metadata();
     let metadata_governance_contract_address = metadata
         .get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY)
@@ -4004,7 +3745,6 @@ fn enforce_manifest_protected_namespaces(
             })
         })
         .transpose()?;
-
     let metadata_contract_address_hint = metadata
         .get(&*CONTRACT_ADDRESS_METADATA_KEY)
         .map(|value| {
@@ -4028,7 +3768,6 @@ fn enforce_manifest_protected_namespaces(
             })
         })
         .transpose()?;
-
     let mut contract_targets = BTreeSet::new();
     let mut register_code_seen = false;
     let mut commit_deployment_count = 0_usize;
@@ -4115,7 +3854,6 @@ fn enforce_manifest_protected_namespaces(
         }
         Executable::Ivm(_) | Executable::IvmProved(_) => {}
     }
-
     if commit_deployment_count > 1
         || (commit_deployment_count == 1 && (activate_seen || deactivate_seen))
         || (activate_seen && deactivate_seen)
@@ -4125,15 +3863,12 @@ fn enforce_manifest_protected_namespaces(
             "protected contract rotations must use exactly one `CommitContractDeployment` instruction and no legacy activate/deactivate pair",
         ));
     }
-
     if let Some(contract_address) = metadata_governance_contract_address.clone() {
         contract_targets.insert(contract_address);
     }
-
     let ivm_with_contract_metadata = matches!(tx.instructions(), Executable::Ivm(_))
         && (metadata_governance_contract_address.is_some()
             || metadata_contract_address_hint.is_some());
-
     let contract_instr_seen =
         register_code_seen || !contract_targets.is_empty() || ivm_with_contract_metadata;
     let explicit_contract_instruction_seen =
@@ -4145,7 +3880,6 @@ fn enforce_manifest_protected_namespaces(
             .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_))),
         Executable::Instructions(_) | Executable::Ivm(_) | Executable::IvmProved(_) => false,
     };
-
     if contract_instr_seen
         && metadata_governance_contract_address.is_none()
         && (!has_directly_addressed_call || explicit_contract_instruction_seen)
@@ -4155,7 +3889,6 @@ fn enforce_manifest_protected_namespaces(
             "transactions with contract operations must set `gov_contract_address` metadata when lane governance protects namespaces",
         ));
     }
-
     if let (Some(hint), Some(meta)) = (
         metadata_contract_address_hint.as_ref(),
         metadata_governance_contract_address.as_ref(),
@@ -4167,7 +3900,6 @@ fn enforce_manifest_protected_namespaces(
             ));
         }
     }
-
     if let Some(meta_contract_address) = metadata_governance_contract_address.as_ref()
         && !contract_targets.is_empty()
         && contract_targets
@@ -4179,12 +3911,9 @@ fn enforce_manifest_protected_namespaces(
             "`gov_contract_address` metadata does not match contract addresses referenced by contract instructions",
         ));
     }
-
     let _ = world;
-
     Ok(())
 }
-
 fn enforce_runtime_upgrade_hook(
     alias: &str,
     rules: &GovernanceRules,
@@ -4194,18 +3923,15 @@ fn enforce_runtime_upgrade_hook(
     if !contains_runtime_upgrade {
         return Ok(false);
     }
-
     let Some(hook) = rules.hooks.runtime_upgrade.as_ref() else {
         return Ok(true);
     };
-
     if !hook.allow {
         return Err(reject_lane_policy(
             alias,
             "runtime upgrade hook prohibits runtime upgrade instructions".to_string(),
         ));
     }
-
     if hook.require_metadata || hook.allowed_ids.is_some() {
         let Some(key) = hook.metadata_key.as_ref() else {
             return Err(reject_lane_policy(
@@ -4251,20 +3977,16 @@ fn enforce_runtime_upgrade_hook(
             ));
         }
     }
-
     Ok(contains_runtime_upgrade)
 }
-
 fn contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
     tx_contains_runtime_upgrade_instruction(tx)
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RuntimeUpgradeModuleKind {
     Parliament,
     LocalAdmins,
 }
-
 fn resolve_runtime_upgrade_module_kind(
     module_name: Option<&str>,
     catalog: &iroha_config::parameters::actual::GovernanceCatalog,
@@ -4282,7 +4004,6 @@ fn resolve_runtime_upgrade_module_kind(
         Some(RuntimeUpgradeModuleKind::LocalAdmins)
     }
 }
-
 fn enforce_runtime_upgrade_dataspace_policy(
     alias: &str,
     dataspace_id: NexusDataSpaceId,
@@ -4306,7 +4027,6 @@ fn enforce_runtime_upgrade_dataspace_policy(
     }
     Ok(())
 }
-
 fn extract_lane_identity_metadata(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -4334,7 +4054,6 @@ fn extract_lane_identity_metadata(
         },
     )
 }
-
 fn extract_lane_authority_domains(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -4348,7 +4067,6 @@ fn extract_lane_authority_domains(
         )
     })
 }
-
 fn publishes_only_space_directory_manifests(tx: &SignedTransaction) -> bool {
     let is_publish = |instruction: &InstructionBox| {
         instruction
@@ -4367,7 +4085,6 @@ fn publishes_only_space_directory_manifests(tx: &SignedTransaction) -> bool {
         _ => false,
     }
 }
-
 fn enforce_lane_policies(
     tx: &SignedTransaction,
     state_transaction: &StateTransaction<'_, '_>,
@@ -4376,11 +4093,9 @@ fn enforce_lane_policies(
     let lane_id = lane_assignment.lane_id;
     let dataspace_id = lane_assignment.dataspace_id;
     let manifest_registry: &LaneManifestRegistryHandle = &state_transaction.lane_manifests;
-
     if let Err(err) = manifest_registry.ensure_lane_ready(lane_id) {
         return Err(reject_not_permitted(err.message()));
     }
-
     let manifest_status = manifest_registry.status(lane_id).cloned();
     let lane_alias = manifest_status.as_ref().map_or_else(
         || format!("lane-{}", lane_id.as_u32()),
@@ -4395,7 +4110,6 @@ fn enforce_lane_policies(
         | Executable::IvmProved(_)
         | Executable::Ivm(_) => false,
     };
-
     let mut runtime_upgrade_present = false;
     if let Some(status) = manifest_status.as_ref() {
         if let Some(rules) = status.rules() {
@@ -4425,7 +4139,6 @@ fn enforce_lane_policies(
                         ));
                     }
                 }
-
                 let quorum_required = !allows_multisig_envelope_authority
                     && rules.quorum.unwrap_or(0).saturating_sub(1) > 0
                     && !rules.validators.is_empty();
@@ -4433,7 +4146,6 @@ fn enforce_lane_policies(
                     enforce_manifest_quorum(&lane_alias, rules, tx)?;
                 }
             }
-
             if governance_manifest {
                 enforce_manifest_protected_namespaces(
                     &lane_alias,
@@ -4441,12 +4153,10 @@ fn enforce_lane_policies(
                     tx,
                     &state_transaction.world,
                 )?;
-
                 runtime_upgrade_present = enforce_runtime_upgrade_hook(&lane_alias, rules, tx)?;
             }
         }
     }
-
     if !runtime_upgrade_present {
         runtime_upgrade_present = contains_runtime_upgrade_instruction(tx);
     }
@@ -4461,7 +4171,6 @@ fn enforce_lane_policies(
             &state_transaction.nexus.governance,
         )?;
     }
-
     let privacy_proofs = collect_lane_privacy_proofs(tx);
     let verified_privacy_commitments = if privacy_proofs.is_empty() {
         BTreeSet::new()
@@ -4475,13 +4184,11 @@ fn enforce_lane_policies(
             reject_lane_policy(&lane_alias, format!("lane privacy proof rejected: {err}"))
         })?
     };
-
     let lane_privacy_registry = if state_transaction.lane_privacy_registry.is_empty() {
         None
     } else {
         Some(state_transaction.lane_privacy_registry.clone())
     };
-
     let publishes_space_directory_manifest = publishes_only_space_directory_manifests(tx);
     let lane_identity = if publishes_space_directory_manifest {
         (None, Vec::new())
@@ -4493,7 +4200,6 @@ fn enforce_lane_policies(
             &lane_alias,
         )?
     };
-
     if !publishes_space_directory_manifest
         && let Some(engine) = state_transaction.lane_compliance.as_ref()
     {
@@ -4539,10 +4245,8 @@ fn enforce_lane_policies(
             }
         }
     }
-
     Ok(())
 }
-
 #[cfg(feature = "telemetry")]
 fn tenant_label_from(raw: &str) -> &str {
     let trimmed = raw.trim();
@@ -4552,7 +4256,6 @@ fn tenant_label_from(raw: &str) -> &str {
         trimmed
     }
 }
-
 #[cfg(feature = "telemetry")]
 struct FraudTelemetryContext<'a> {
     telemetry: &'a StateTelemetry,
@@ -4564,7 +4267,6 @@ struct FraudTelemetryContext<'a> {
     latency_ms: Option<u64>,
     disposition: Option<FraudDisposition>,
 }
-
 #[cfg(feature = "telemetry")]
 impl<'a> FraudTelemetryContext<'a> {
     fn prepare(
@@ -4578,7 +4280,6 @@ impl<'a> FraudTelemetryContext<'a> {
         }
         Some(Self::new(telemetry, routing, metadata))
     }
-
     #[allow(clippy::too_many_lines)]
     fn new(
         telemetry: &'a StateTelemetry,
@@ -4624,9 +4325,7 @@ impl<'a> FraudTelemetryContext<'a> {
                     )
                 },
             );
-
         let tenant_label = tenant_label_from(&tenant);
-
         let latency_ms: Option<u64> = metadata
             .get(FRAUD_ASSESSMENT_LATENCY_KEY.as_ref())
             .and_then(|value| {
@@ -4644,7 +4343,6 @@ impl<'a> FraudTelemetryContext<'a> {
                     Some,
                 )
             });
-
         let score_bps: Option<u16> =
             metadata
                 .get(FRAUD_ASSESSMENT_SCORE_KEY.as_ref())
@@ -4677,7 +4375,6 @@ impl<'a> FraudTelemetryContext<'a> {
                         },
                     )
                 });
-
         let disposition = metadata
             .get(FRAUD_ASSESSMENT_DISPOSITION_KEY.as_ref())
             .and_then(|value| {
@@ -4706,7 +4403,6 @@ impl<'a> FraudTelemetryContext<'a> {
                     },
                 )
             });
-
         Self {
             telemetry,
             lane_id,
@@ -4718,15 +4414,12 @@ impl<'a> FraudTelemetryContext<'a> {
             disposition,
         }
     }
-
     fn tenant_label(&self) -> &str {
         tenant_label_from(&self.tenant)
     }
-
     fn dataspace_label(&self) -> &str {
         self.dataspace_label.as_str()
     }
-
     fn record_missing(&self, cause: &'static str) {
         self.telemetry.record_fraud_missing_assessment(
             self.lane_id,
@@ -4736,7 +4429,6 @@ impl<'a> FraudTelemetryContext<'a> {
             cause,
         );
     }
-
     fn record_invalid(&self, field: &'static str) {
         self.telemetry.record_fraud_invalid_metadata(
             self.lane_id,
@@ -4746,7 +4438,6 @@ impl<'a> FraudTelemetryContext<'a> {
             field,
         );
     }
-
     fn record_assessment(&self, band: iroha_config::parameters::actual::FraudRiskBand) {
         self.telemetry.record_fraud_assessment(
             self.lane_id,
@@ -4767,7 +4458,6 @@ impl<'a> FraudTelemetryContext<'a> {
             );
         }
     }
-
     fn record_attestation(&self, engine_id: &str, status: &'static str) {
         self.telemetry.record_fraud_attestation(
             self.lane_id,
@@ -4778,7 +4468,6 @@ impl<'a> FraudTelemetryContext<'a> {
             status,
         );
     }
-
     fn outcome_mismatch_direction(
         &self,
         band: iroha_config::parameters::actual::FraudRiskBand,
@@ -4796,7 +4485,6 @@ impl<'a> FraudTelemetryContext<'a> {
         }
     }
 }
-
 #[cfg(feature = "telemetry")]
 impl FraudDisposition {
     fn from_metadata(raw: &str) -> Result<Option<Self>, ()> {
@@ -4816,7 +4504,6 @@ impl FraudDisposition {
         }
     }
 }
-
 #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
 #[allow(clippy::too_many_lines)]
 /// Enforce the configured fraud monitoring policy against the transaction metadata.
@@ -4829,14 +4516,11 @@ pub(crate) fn enforce_fraud_policy(
     if !config.enabled {
         return Ok(());
     }
-
     let lane_id = routing.lane_id;
     let dataspace_id = routing.dataspace_id;
     let dataspace_label = routing.dataspace_label();
-
     #[cfg(feature = "telemetry")]
     let fraud_ctx = FraudTelemetryContext::prepare(telemetry, routing, metadata);
-
     let Some(required) = config.required_minimum_band else {
         if config.enabled {
             warn!(
@@ -4845,7 +4529,6 @@ pub(crate) fn enforce_fraud_policy(
         }
         return Ok(());
     };
-
     let Some(value) = metadata.get(FRAUD_ASSESSMENT_BAND_NAME.as_ref()) else {
         #[cfg(feature = "telemetry")]
         if let Some(ctx) = fraud_ctx.as_ref() {
@@ -4873,7 +4556,6 @@ pub(crate) fn enforce_fraud_policy(
         );
         return Ok(());
     };
-
     let band_str = if let Ok(s) = value.try_into_any_norito::<String>() {
         s
     } else {
@@ -4885,7 +4567,6 @@ pub(crate) fn enforce_fraud_policy(
             ValidationFail::NotPermitted("fraud assessment band must be a string".into()),
         ));
     };
-
     let band = if let Ok(band) = band_str.parse::<iroha_config::parameters::actual::FraudRiskBand>()
     {
         band
@@ -4898,7 +4579,6 @@ pub(crate) fn enforce_fraud_policy(
             ValidationFail::NotPermitted(format!("fraud assessment band '{band_str}' is invalid")),
         ));
     };
-
     let tenant_value = if let Some(value) = metadata.get(FRAUD_ASSESSMENT_TENANT_NAME.as_ref()) {
         value
     } else {
@@ -4937,7 +4617,6 @@ pub(crate) fn enforce_fraud_policy(
         ));
     }
     let tenant = tenant_raw;
-
     if let Some(latency_value) = metadata.get(FRAUD_ASSESSMENT_LATENCY_NAME.as_ref())
         && latency_value
             .try_into_any_norito::<u64>()
@@ -4954,7 +4633,6 @@ pub(crate) fn enforce_fraud_policy(
             ),
         ));
     }
-
     let score_value = if let Some(value) = metadata.get(FRAUD_ASSESSMENT_SCORE_NAME.as_ref()) {
         value
     } else {
@@ -5004,7 +4682,6 @@ pub(crate) fn enforce_fraud_policy(
             )),
         ));
     }
-
     let expected_band = expected_band_from_score(score_bps);
     if expected_band != band {
         #[cfg(feature = "telemetry")]
@@ -5026,12 +4703,10 @@ pub(crate) fn enforce_fraud_policy(
             )),
         ));
     }
-
     #[cfg(feature = "telemetry")]
     if let Some(ctx) = fraud_ctx.as_ref() {
         ctx.record_assessment(band);
     }
-
     if band < required {
         return Err(TransactionRejectionReason::Validation(
             ValidationFail::NotPermitted(format!(
@@ -5039,7 +4714,6 @@ pub(crate) fn enforce_fraud_policy(
             )),
         ));
     }
-
     if !config.attesters.is_empty() {
         let tenant_label = {
             let trimmed = tenant.trim();
@@ -5312,10 +4986,8 @@ pub(crate) fn enforce_fraud_policy(
             ctx.record_attestation(attester_label, "verified");
         }
     }
-
     Ok(())
 }
-
 fn expected_band_from_score(score_bps: u16) -> iroha_config::parameters::actual::FraudRiskBand {
     use iroha_config::parameters::actual::FraudRiskBand;
 
@@ -5335,7 +5007,6 @@ fn expected_band_from_score(score_bps: u16) -> iroha_config::parameters::actual:
         }
     }
 }
-
 #[cfg(test)]
 /// Tests for transaction acceptance and validation.
 pub mod tests {
@@ -5424,33 +5095,27 @@ pub mod tests {
         smartcontracts::{Execute, ivm::cache::IvmCache},
         state::{State, StateBlock, StateReadOnly, World},
     };
-
     fn checked_signature_of<T: norito::codec::Encode>(
         private_key: &PrivateKey,
         payload: &T,
     ) -> SignatureOf<T> {
         SignatureOf::try_new(private_key, payload).expect("test fixture signing should succeed")
     }
-
     fn checked_fixture_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(seed, algorithm).expect("test fixture key derivation should succeed")
     }
-
     fn checked_random_tx_keypair() -> KeyPair {
         KeyPair::try_random().expect("transaction fixture key generation should succeed")
     }
-
     fn checked_random_tx_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("transaction fixture key generation should succeed")
     }
-
     fn test_network_id() -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x15; Hash::LENGTH]),
         ))
     }
-
     #[test]
     fn tx_fixture_key_generation_preserves_algorithms() {
         assert_eq!(
@@ -5466,7 +5131,6 @@ pub mod tests {
             );
         }
     }
-
     fn single_lane_assignment(catalog: &DataSpaceCatalog) -> super::LaneAssignment<'_> {
         super::LaneAssignment {
             lane_id: TestLaneId::SINGLE,
@@ -5474,14 +5138,12 @@ pub mod tests {
             dataspace_catalog: catalog,
         }
     }
-
     fn new_account_in_domain(
         account_id: &AccountId,
         _domain_id: &DomainId,
     ) -> iroha_data_model::account::NewAccount {
         Account::new(account_id.clone())
     }
-
     fn world_with_authority(domain: &str) -> (World, AccountId, KeyPair) {
         let (authority_id, key_pair) = gen_account_in(domain);
         let domain_id = DomainId::try_new(domain, "universal").expect("domain id");
@@ -5489,7 +5151,6 @@ pub mod tests {
         let account = new_account_in_domain(&authority_id, &domain_id).build(&authority_id);
         (World::with([domain], [account], []), authority_id, key_pair)
     }
-
     fn world_with_uaid_account(
         uaid: UniversalAccountId,
         dataspace: TestDataSpaceId,
@@ -5503,7 +5164,6 @@ pub mod tests {
             .with_uaid(Some(uaid))
             .build(&authority);
         let mut world = World::with([domain], [account], []);
-
         if with_manifest {
             let manifest = AssetPermissionManifest {
                 version: ManifestVersion::default(),
@@ -5519,7 +5179,6 @@ pub mod tests {
             if !manifest_active {
                 record.lifecycle.mark_expired(2);
             }
-
             let mut set = SpaceDirectoryManifestSet::default();
             set.upsert(record);
             world.space_directory_manifests.insert(uaid, set);
@@ -5529,17 +5188,14 @@ pub mod tests {
                 world.uaid_dataspaces.insert(uaid, bindings);
             }
         }
-
         (world, authority)
     }
-
     #[test]
     fn lane_identity_rejects_uaid_without_dataspace_binding() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"tx::uaid-no-manifest"));
         let dataspace = TestDataSpaceId::new(7);
         let (world, authority) = world_with_uaid_account(uaid, dataspace, false, true);
         let world_view = world.view();
-
         let err =
             super::extract_lane_identity_metadata(&world_view, &authority, dataspace, "lane-x")
                 .expect_err("UAID routing must require a dataspace binding");
@@ -5553,7 +5209,6 @@ pub mod tests {
             other => panic!("expected NotPermitted rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn lane_policy_allows_space_directory_manifest_publish_before_uaid_binding_exists() {
         let chain: ChainId = "space-directory-publish".parse().unwrap();
@@ -5593,7 +5248,6 @@ pub mod tests {
         };
         let engine = LaneComplianceEngine::from_policies(vec![policy], false).expect("engine");
         state.install_lane_compliance_engine(Some(Arc::new(engine)));
-
         let manifest = AssetPermissionManifest {
             version: ManifestVersion::default(),
             uaid,
@@ -5618,18 +5272,15 @@ pub mod tests {
             dataspace_id: TestDataSpaceId::UNIVERSAL,
             dataspace_catalog: &stx.nexus.dataspace_catalog,
         };
-
         super::enforce_lane_policies(&tx, &stx, &assignment)
             .expect("manifest publication creates the UAID dataspace binding");
     }
-
     #[test]
     fn lane_identity_rejects_inactive_target_manifest() {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"tx::uaid-inactive-manifest"));
         let dataspace = TestDataSpaceId::new(9);
         let (world, authority) = world_with_uaid_account(uaid, dataspace, true, false);
         let world_view = world.view();
-
         let err =
             super::extract_lane_identity_metadata(&world_view, &authority, dataspace, "lane-x")
                 .expect_err("inactive target manifest must be rejected");
@@ -5643,7 +5294,6 @@ pub mod tests {
             other => panic!("expected NotPermitted rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn dataspace_label_helper_uses_alias_and_fallback() {
         use iroha_data_model::nexus::DataSpaceMetadata;
@@ -5658,21 +5308,17 @@ pub mod tests {
             },
         ])
         .expect("valid catalog");
-
         let label = super::dataspace_label_from_catalog(&catalog, TestDataSpaceId::new(7));
         assert_eq!(label, "alpha");
-
         let fallback = super::dataspace_label_from_catalog(&catalog, TestDataSpaceId::new(9));
         assert_eq!(fallback, "9");
     }
-
     #[test]
     fn duration_since_epoch_with_ok_result_passes_through() {
         let expected = Duration::from_secs(42);
         let actual = super::duration_since_epoch_with_fallback(Ok(expected));
         assert_eq!(actual, expected);
     }
-
     #[test]
     fn duration_since_epoch_with_err_falls_back_to_zero() {
         let skew_error = SystemTime::UNIX_EPOCH
@@ -5681,7 +5327,6 @@ pub mod tests {
         let actual = super::duration_since_epoch_with_fallback(Err(skew_error));
         assert_eq!(actual, Duration::ZERO);
     }
-
     #[test]
     fn validate_genesis_with_now_uses_supplied_timestamp() {
         let far_future = Duration::from_secs(10_000_000_000);
@@ -5696,7 +5341,6 @@ pub mod tests {
             "genesis timestamp check".to_string(),
         )])
         .sign(&GENESIS_ACCOUNT.key);
-
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         AcceptedTransaction::validate_genesis_with_now(
             &tx,
@@ -5707,7 +5351,6 @@ pub mod tests {
         )
         .expect("genesis validation should use provided timestamp");
     }
-
     #[test]
     fn validate_genesis_with_now_rejects_invalid_transaction_signature() {
         let now = Duration::from_secs(10_000);
@@ -5727,7 +5370,6 @@ pub mod tests {
             unrelated.private_key(),
             tx.payload(),
         )));
-
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         assert!(matches!(
             AcceptedTransaction::validate_genesis_with_now(
@@ -5740,7 +5382,6 @@ pub mod tests {
             Err(AcceptTransactionFail::SignatureVerification(_))
         ));
     }
-
     #[test]
     fn runtime_and_genesis_transaction_domains_are_disjoint() {
         let now = Duration::from_secs(10_000);
@@ -5766,7 +5407,6 @@ pub mod tests {
         .with_instructions([Log::new(Level::DEBUG, "genesis domain".to_string())])
         .sign(&GENESIS_ACCOUNT.key);
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-
         assert!(matches!(
             AcceptedTransaction::validate_genesis_with_now(
                 &runtime,
@@ -5795,7 +5435,6 @@ pub mod tests {
             })) if expected == network_id
         ));
     }
-
     #[test]
     fn signature_limit_allows_count_at_cap() {
         let default_limits = TransactionParameters::default();
@@ -5807,11 +5446,9 @@ pub mod tests {
             default_limits.max_decompressed_bytes(),
             default_limits.max_metadata_depth(),
         );
-
         super::AcceptedTransaction::ensure_signature_limit(3, &limits)
             .expect("signature count at cap should be accepted");
     }
-
     #[test]
     fn signature_limit_rejects_counts_above_cap() {
         let default_limits = TransactionParameters::default();
@@ -5823,10 +5460,8 @@ pub mod tests {
             default_limits.max_decompressed_bytes(),
             default_limits.max_metadata_depth(),
         );
-
         let err = super::AcceptedTransaction::ensure_signature_limit(4, &limits)
             .expect_err("signature count above cap must be rejected");
-
         match err {
             super::AcceptTransactionFail::TransactionLimit(fail) => {
                 assert!(
@@ -5849,7 +5484,6 @@ pub mod tests {
 
         include!("tx/signature_rejection_tests.rs");
     }
-
     #[test]
     fn multisig_authority_rejected_with_stable_code() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -5860,12 +5494,10 @@ pub mod tests {
         );
         builder = builder.with_instructions([Log::new(Level::INFO, "multisig".into())]);
         let tx = builder.sign(keypair.private_key());
-
         let member = MultisigMember::new(keypair.public_key().clone(), 1).expect("member is valid");
         let policy = MultisigPolicy::new(1, vec![member]).expect("policy is valid");
         let multisig_authority = AccountId::new_multisig(policy);
         let tx = tx.with_authority(multisig_authority);
-
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         match AcceptedTransaction::accept(
@@ -5889,19 +5521,16 @@ pub mod tests {
             other => panic!("expected SignatureVerification failure, got {other:?}"),
         }
     }
-
     #[test]
     fn multisig_authority_accepts_mixed_curves_with_quorum() {
         let member_ed = checked_random_tx_keypair_with_algorithm(Algorithm::Ed25519);
         let member_secp = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
-
         let members = vec![
             MultisigMember::new(member_ed.public_key().clone(), 1).expect("member ed"),
             MultisigMember::new(member_secp.public_key().clone(), 1).expect("member secp"),
         ];
         let policy = MultisigPolicy::new(2, members).expect("policy");
         let authority = AccountId::new_multisig(policy.clone());
-
         let mut builder = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
@@ -5909,7 +5538,6 @@ pub mod tests {
         );
         builder = builder.with_instructions([Log::new(Level::INFO, "multisig ok".into())]);
         let tx = builder.sign_multisig([member_ed.private_key(), member_secp.private_key()]);
-
         let limits = TransactionParameters::default();
         let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         if !crypto_cfg.allowed_signing.contains(&Algorithm::Secp256k1) {
@@ -5917,11 +5545,9 @@ pub mod tests {
         }
         crypto_cfg.allowed_signing.sort();
         crypto_cfg.allowed_signing.dedup();
-
         AcceptedTransaction::accept(tx, &test_network_id(), Duration::ZERO, limits, &crypto_cfg)
             .expect("multisig with quorum should be accepted");
     }
-
     #[test]
     fn multisig_authority_rejects_unknown_signer() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -5932,12 +5558,10 @@ pub mod tests {
         );
         builder = builder.with_instructions([Log::new(Level::INFO, "multisig".into())]);
         let tx = builder.sign(keypair.private_key());
-
         let member = MultisigMember::new(keypair.public_key().clone(), 2).expect("member is valid");
         let policy = MultisigPolicy::new(2, vec![member]).expect("policy is valid");
         let multisig_authority = AccountId::new_multisig(policy);
         let mut tx = tx.with_authority(multisig_authority);
-
         // Attach a signature from an unknown signer.
         let payload = tx.payload().clone();
         let rogue = checked_random_tx_keypair();
@@ -5950,7 +5574,6 @@ pub mod tests {
                 ),
             ]),
         );
-
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         match AcceptedTransaction::accept(
@@ -5966,19 +5589,16 @@ pub mod tests {
             other => panic!("expected UnknownSigner rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn multisig_authority_rejects_insufficient_weight_bundle() {
         let signer = checked_random_tx_keypair();
         let other = checked_random_tx_keypair();
-
         let members = vec![
             MultisigMember::new(signer.public_key().clone(), 1).expect("member"),
             MultisigMember::new(other.public_key().clone(), 1).expect("member"),
         ];
         let policy = MultisigPolicy::new(2, members).expect("policy");
         let authority = AccountId::new_multisig(policy);
-
         let mut builder = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
@@ -5987,7 +5607,6 @@ pub mod tests {
         builder = builder
             .with_instructions([Log::new(Level::INFO, "insufficient multisig weight".into())]);
         let tx = builder.sign_multisig([signer.private_key()]);
-
         let limits = TransactionParameters::default();
         let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         if !crypto_cfg.allowed_signing.contains(&Algorithm::Ed25519) {
@@ -5995,7 +5614,6 @@ pub mod tests {
         }
         crypto_cfg.allowed_signing.sort();
         crypto_cfg.allowed_signing.dedup();
-
         match AcceptedTransaction::accept(
             tx,
             &test_network_id(),
@@ -6009,7 +5627,6 @@ pub mod tests {
             other => panic!("expected InsufficientWeight rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn multisig_account_direct_signing_rejected_in_validation() {
         use iroha_data_model::domain::DomainId;
@@ -6020,23 +5637,19 @@ pub mod tests {
         let signer2 = checked_random_tx_keypair();
         let signer1_id = AccountId::new(signer1.public_key().clone());
         let signer2_id = AccountId::new(signer2.public_key().clone());
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).expect("nonzero quorum"),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS)
                 .expect("nonzero multisig ttl"),
         };
-
         let multisig_key = checked_random_tx_keypair();
         let multisig_id = AccountId::new(multisig_key.public_key().clone());
-
         let mut multisig_metadata = Metadata::default();
         multisig_metadata.insert(
             crate::smartcontracts::isi::multisig::spec_key(),
             Json::new(spec),
         );
-
         let domain = Domain::new(domain_id.clone()).build(&signer1_id);
         let accounts = [
             new_account_in_domain(&signer1_id, &domain_id).build(&signer1_id),
@@ -6049,7 +5662,6 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             multisig_id.clone(),
@@ -6060,7 +5672,6 @@ pub mod tests {
             "direct multisig signer bypass".into(),
         )])
         .sign(multisig_key.private_key());
-
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let accepted = AcceptedTransaction::accept(
@@ -6071,12 +5682,10 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect("admission must accept the signature shape");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason))) => {
                 assert!(
@@ -6087,14 +5696,12 @@ pub mod tests {
             other => panic!("expected multisig direct-sign reject, got {other:?}"),
         }
     }
-
     #[test]
     fn deactivated_contract_subject_remains_in_the_non_signing_index() {
         use iroha_data_model::{
             domain::DomainId, isi::smart_contract_code::DeactivateContractInstance,
             smart_contract::ContractAddress,
         };
-
         let chain: ChainId = "contract-subject-direct-sign".parse().unwrap();
         let domain_id: DomainId = DomainId::try_new("contracts", "universal").unwrap();
         let deployer_keypair = checked_random_tx_keypair();
@@ -6108,9 +5715,7 @@ pub mod tests {
             iroha_data_model::nexus::DataSpaceId::new(0),
         )
         .expect("derive contract address");
-
         let contract_subject = contract_address.subject_id();
-
         let domain = Domain::new(domain_id.clone()).build(&deployer);
         let deployer_account = new_account_in_domain(&deployer, &domain_id).build(&deployer);
         let mut world = World::with([domain], [deployer_account], []);
@@ -6127,7 +5732,6 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
@@ -6145,13 +5749,11 @@ pub mod tests {
         assert_eq!(retained_binding.subject, contract_subject);
         state_tx.apply();
         block.commit().expect("commit contract deactivation");
-
         assert!(
             code::is_historical_contract_subject(state.view().world(), &contract_subject),
             "deactivation must retain the canonical subject in the admission-denial index"
         );
     }
-
     #[test]
     fn multisig_signatory_role_does_not_block_direct_signing() {
         use iroha_data_model::domain::DomainId;
@@ -6159,11 +5761,9 @@ pub mod tests {
         let chain: ChainId = "multisig-role-only".parse().unwrap();
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let (authority_id, keypair) = gen_account_in("wonderland");
-
         let domain = Domain::new(domain_id.clone()).build(&authority_id);
         let account = new_account_in_domain(&authority_id, &domain_id).build(&authority_id);
         let mut world = World::with([domain], [account], []);
-
         let role_id: RoleId = format!(
             "MULTISIG_SIGNATORY/{}/{}",
             domain_id,
@@ -6181,11 +5781,9 @@ pub mod tests {
             crate::role::RoleIdWithOwner::new(authority_id.clone(), role_id),
             (),
         );
-
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority_id.clone(),
@@ -6196,7 +5794,6 @@ pub mod tests {
             "multisig direct sign role fallback".into(),
         )])
         .sign(keypair.private_key());
-
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let accepted = AcceptedTransaction::accept(
@@ -6207,18 +5804,15 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect("admission must accept the signature shape");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-
         assert!(
             result.is_ok(),
             "single-key signatories with multisig roles should keep ordinary direct-signing rights: {result:?}"
         );
     }
-
     #[test]
     fn multisig_signatory_role_can_submit_multisig_propose_envelope() {
         use iroha_data_model::domain::DomainId;
@@ -6227,14 +5821,12 @@ pub mod tests {
         let chain: ChainId = "multisig-propose-role-allowed".parse().unwrap();
         let home_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
         let target_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
-
         let signer1 = checked_random_tx_keypair();
         let signer2 = checked_random_tx_keypair();
         let signer1_id = AccountId::new(signer1.public_key().clone());
         let signer2_id = AccountId::new(signer2.public_key().clone());
         let retail_key = checked_random_tx_keypair();
         let retail_id = AccountId::new(retail_key.public_key().clone());
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).expect("nonzero quorum"),
@@ -6251,13 +5843,11 @@ pub mod tests {
             )
             .expect("multisig policy"),
         );
-
         let home = Domain::new(home_domain.clone()).build(&signer1_id);
         let target = Domain::new(target_domain.clone()).build(&signer1_id);
         let signer1_account = new_account_in_domain(&signer1_id, &home_domain).build(&signer1_id);
         let signer2_account = new_account_in_domain(&signer2_id, &home_domain).build(&signer2_id);
         let world = World::with([home, target], [signer1_account, signer2_account], []);
-
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
@@ -6277,7 +5867,6 @@ pub mod tests {
             .expect("register canonical multisig account");
         setup_tx.apply();
         setup_block.commit().expect("commit multisig setup");
-
         let registration = Register::account(new_account_in_domain(&retail_id, &target_domain));
         let tx = TransactionBuilder::new(
             test_network_id(),
@@ -6290,7 +5879,6 @@ pub mod tests {
             None,
         ))])
         .sign(signer1.private_key());
-
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let accepted = AcceptedTransaction::accept(
@@ -6301,18 +5889,15 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect("admission must accept the signature shape");
-
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-
         assert!(
             result.is_ok(),
             "multisig propose envelope should bypass direct-sign rejection for signatory roles: {result:?}"
         );
     }
-
     #[test]
     fn lane_validator_gating_allows_multisig_propose_envelope_from_live_signer() {
         use iroha_data_model::domain::DomainId;
@@ -6321,7 +5906,6 @@ pub mod tests {
         let chain: ChainId = "multisig-propose-lane-validator-bypass".parse().unwrap();
         let home_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
         let target_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
-
         let signer1 = checked_random_tx_keypair();
         let signer2 = checked_random_tx_keypair();
         let validator = checked_random_tx_keypair();
@@ -6330,7 +5914,6 @@ pub mod tests {
         let validator_id = AccountId::new(validator.public_key().clone());
         let retail_key = checked_random_tx_keypair();
         let retail_id = AccountId::new(retail_key.public_key().clone());
-
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).expect("nonzero quorum"),
@@ -6347,7 +5930,6 @@ pub mod tests {
             )
             .expect("multisig policy"),
         );
-
         let home = Domain::new(home_domain.clone()).build(&signer1_id);
         let target = Domain::new(target_domain.clone()).build(&signer1_id);
         let signer1_account = new_account_in_domain(&signer1_id, &home_domain).build(&signer1_id);
@@ -6359,7 +5941,6 @@ pub mod tests {
             [signer1_account, signer2_account, validator_account],
             [],
         );
-
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
@@ -6379,7 +5960,6 @@ pub mod tests {
             .expect("register canonical multisig account");
         setup_tx.apply();
         setup_block.commit().expect("commit multisig setup");
-
         let mut statuses = BTreeMap::new();
         statuses.insert(
             TestLaneId::SINGLE,
@@ -6400,7 +5980,6 @@ pub mod tests {
         );
         let registry = std::sync::Arc::new(LaneManifestRegistry::from_statuses(statuses));
         state.install_lane_manifests(&registry);
-
         let registration = Register::account(new_account_in_domain(&retail_id, &target_domain));
         let tx = TransactionBuilder::new(
             test_network_id(),
@@ -6413,7 +5992,6 @@ pub mod tests {
             None,
         ))])
         .sign(signer1.private_key());
-
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let accepted = AcceptedTransaction::accept(
@@ -6424,18 +6002,15 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect("admission must accept the signature shape");
-
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-
         assert!(
             result.is_ok(),
             "lane validator gating should not reject multisig propose envelopes from live signers: {result:?}"
         );
     }
-
     #[test]
     fn lane_validator_gating_ignores_non_governance_transactions() {
         let chain: ChainId = "lane-validator-gating-plain-transfer".parse().unwrap();
@@ -6454,7 +6029,6 @@ pub mod tests {
             [authority_account, validator_a_account, validator_b_account],
             [],
         );
-
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
@@ -6479,7 +6053,6 @@ pub mod tests {
         );
         let registry = std::sync::Arc::new(LaneManifestRegistry::from_statuses(statuses));
         state.install_lane_manifests(&registry);
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
@@ -6487,7 +6060,6 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "retail transfer".into())])
         .sign(authority_keypair.private_key());
-
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let accepted = AcceptedTransaction::accept(
@@ -6498,18 +6070,15 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect("admission should accept transaction shape");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-
         assert!(
             result.is_ok(),
             "lane validator gating should ignore plain transactions that do not touch governance surfaces: {result:?}"
         );
     }
-
     #[test]
     fn missing_authority_rejected_for_non_multisig_transaction() {
         let chain: ChainId = "missing-authority-regular".parse().unwrap();
@@ -6518,7 +6087,6 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
@@ -6526,7 +6094,6 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "regular".into())])
         .sign(keypair.private_key());
-
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let accepted = AcceptedTransaction::accept(
@@ -6537,12 +6104,10 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect("admission should accept transaction shape");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-
         match result {
             Err(TransactionRejectionReason::AccountDoesNotExist(FindError::Account(id))) => {
                 assert_eq!(id, authority, "unexpected missing-account id");
@@ -6550,7 +6115,6 @@ pub mod tests {
             other => panic!("expected AccountDoesNotExist rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn unregistered_authority_predicates_require_exact_first_self_registration() {
         let (authority, _) = gen_account_in("wonderland");
@@ -6564,7 +6128,6 @@ pub mod tests {
         );
         assert!(executable_self_registers_authority(&exact, &authority));
         assert!(allows_unregistered_authority(&exact, &authority));
-
         let registers_other = Executable::Instructions(
             vec![InstructionBox::from(Register::account(Account::new(other)))].into(),
         );
@@ -6573,7 +6136,6 @@ pub mod tests {
             &authority
         ));
         assert!(!allows_unregistered_authority(&registers_other, &authority));
-
         let registration_is_not_first = Executable::Instructions(
             vec![
                 InstructionBox::from(Log::new(Level::INFO, "before registration".into())),
@@ -6590,7 +6152,6 @@ pub mod tests {
             &authority
         ));
     }
-
     #[test]
     fn missing_authority_self_register_allows_transaction() {
         let chain: ChainId = "missing-authority-self-register".parse().unwrap();
@@ -6599,7 +6160,6 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
@@ -6610,7 +6170,6 @@ pub mod tests {
             InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
         ])
         .sign(keypair.private_key());
-
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let accepted = AcceptedTransaction::accept(
@@ -6621,19 +6180,16 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect("admission should accept transaction shape");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-
         assert!(result.is_ok(), "self-register flow should pass: {result:?}");
         assert!(
             block.world.accounts.get(&authority).is_some(),
             "authority account should be created by the first transaction"
         );
     }
-
     #[test]
     fn existing_authority_self_register_is_idempotent() {
         let chain: ChainId = "existing-authority-self-register".parse().unwrap();
@@ -6643,7 +6199,6 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
@@ -6654,7 +6209,6 @@ pub mod tests {
             InstructionBox::from(Log::new(Level::INFO, "self-register-again".into())),
         ])
         .sign(keypair.private_key());
-
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let accepted = AcceptedTransaction::accept(
@@ -6665,30 +6219,25 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect("admission should accept transaction shape");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-
         assert!(
             result.is_ok(),
             "duplicate self-register should remain a no-op: {result:?}"
         );
     }
-
     #[test]
     fn missing_authority_multisig_approve_reaches_instruction_validation() {
         let chain: ChainId = "missing-authority-multisig-approve".parse().unwrap();
         let (missing_authority, keypair) = gen_account_in("wonderland");
         let multisig_account = AccountId::new(checked_random_tx_keypair().public_key().clone());
         let instructions_hash = HashOf::new(&Vec::<InstructionBox>::new());
-
         let world = World::new();
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             missing_authority.clone(),
@@ -6699,7 +6248,6 @@ pub mod tests {
             instructions_hash,
         )])
         .sign(keypair.private_key());
-
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let accepted = AcceptedTransaction::accept(
@@ -6710,12 +6258,10 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect("admission should accept transaction shape");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-
         match result {
             Err(TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
                 iroha_data_model::isi::error::InstructionExecutionError::Find(FindError::Account(
@@ -6725,12 +6271,10 @@ pub mod tests {
             other => panic!("expected instruction-level account lookup failure, got {other:?}"),
         }
     }
-
     #[test]
     fn single_authority_rejects_disallowed_algorithm() {
         let keypair = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
         let authority = AccountId::new(keypair.public_key().clone());
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority,
@@ -6738,13 +6282,11 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "single disallowed algorithm".into())])
         .sign(keypair.private_key());
-
         let limits = TransactionParameters::default();
         let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         crypto_cfg
             .allowed_signing
             .retain(|algo| *algo == Algorithm::Ed25519);
-
         match AcceptedTransaction::accept(
             tx,
             &test_network_id(),
@@ -6758,15 +6300,12 @@ pub mod tests {
             other => panic!("expected AlgorithmNotPermitted rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn multisig_authority_rejects_disallowed_algorithm() {
         let member = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
-
         let members = vec![MultisigMember::new(member.public_key().clone(), 1).expect("member")];
         let policy = MultisigPolicy::new(1, members).expect("policy");
         let authority = AccountId::new_multisig(policy);
-
         let mut builder = TransactionBuilder::new(
             test_network_id(),
             authority,
@@ -6777,13 +6316,11 @@ pub mod tests {
             "multisig disallowed algorithm".into(),
         )]);
         let tx = builder.sign_multisig(vec![member.private_key()]);
-
         let limits = TransactionParameters::default();
         let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         crypto_cfg
             .allowed_signing
             .retain(|algo| *algo == Algorithm::Ed25519);
-
         match AcceptedTransaction::accept(
             tx,
             &test_network_id(),
@@ -6797,19 +6334,16 @@ pub mod tests {
             other => panic!("expected AlgorithmNotPermitted rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn multisig_authority_rejects_insufficient_weight() {
         let member_a = checked_random_tx_keypair();
         let member_b = checked_random_tx_keypair();
-
         let members = vec![
             MultisigMember::new(member_a.public_key().clone(), 1).expect("member a"),
             MultisigMember::new(member_b.public_key().clone(), 1).expect("member b"),
         ];
         let policy = MultisigPolicy::new(2, members).expect("policy");
         let authority = AccountId::new_multisig(policy);
-
         let mut builder = TransactionBuilder::new(
             test_network_id(),
             authority,
@@ -6818,7 +6352,6 @@ pub mod tests {
         builder = builder
             .with_instructions([Log::new(Level::INFO, "multisig insufficient weight".into())]);
         let tx = builder.sign_multisig(vec![member_a.private_key()]);
-
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         match AcceptedTransaction::accept(
@@ -6834,15 +6367,12 @@ pub mod tests {
             other => panic!("expected InsufficientWeight rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn multisig_signature_limit_counts_bundle_entries() {
         let signer = checked_random_tx_keypair();
-
         let members = vec![MultisigMember::new(signer.public_key().clone(), 1).expect("member")];
         let policy = MultisigPolicy::new(1, members).expect("policy");
         let authority = AccountId::new_multisig(policy);
-
         let mut tx = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
@@ -6850,7 +6380,6 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "multisig too many signatures".into())])
         .sign_multisig(vec![signer.private_key()]);
-
         let payload = tx.payload().clone();
         let member_signature = checked_signature_of(signer.private_key(), &payload);
         tx.set_multisig_signatures(MultisigSignatures::new(vec![
@@ -6858,7 +6387,6 @@ pub mod tests {
             MultisigSignature::new(signer.public_key().clone(), member_signature.clone()),
             MultisigSignature::new(signer.public_key().clone(), member_signature),
         ]));
-
         let defaults = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
             nonzero!(2_u64),
@@ -6869,7 +6397,6 @@ pub mod tests {
             defaults.max_metadata_depth(),
         );
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-
         match AcceptedTransaction::accept(
             tx,
             &test_network_id(),
@@ -6887,7 +6414,6 @@ pub mod tests {
             other => panic!("expected signature limit rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn accepted_transaction_into_checked_allows_pending() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -6900,11 +6426,9 @@ pub mod tests {
         .with_instructions([instruction])
         .sign(keypair.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
-
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
-
         let view = state.view();
         let checked = accepted
             .clone()
@@ -6912,7 +6436,6 @@ pub mod tests {
             .expect("transaction should not be committed");
         assert_eq!(checked.as_ref().hash(), accepted.as_ref().hash());
     }
-
     #[test]
     fn accepted_transaction_into_entrypoint_consumes_wrapped_entrypoint() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -6925,10 +6448,8 @@ pub mod tests {
         .sign(keypair.private_key());
         let expected = TransactionEntrypoint::External(signed.clone());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
-
         assert_eq!(accepted.into_entrypoint(), expected);
     }
-
     #[test]
     fn accepted_transaction_into_checked_detects_committed() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -6941,23 +6462,19 @@ pub mod tests {
         .with_instructions([instruction])
         .sign(keypair.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
-
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut state_block = state.block(header);
         state_block
             .transactions
             .insert_block_with_single_tx(accepted.as_ref().hash(), nonzero!(1_usize));
         state_block.commit().expect("block commit");
-
         let view = state.view();
         let result = accepted.into_checked(&view);
         assert!(matches!(result, Err((_, TransactionAlreadyCommitted))));
     }
-
     #[test]
     fn accepted_transaction_caches_hashes_and_encoded_length() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -6972,9 +6489,7 @@ pub mod tests {
         let expected_len = norito::to_bytes(&signed)
             .expect("signed transaction encodes")
             .len();
-
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
-
         assert_eq!(accepted.hash(), signed.hash());
         assert_eq!(accepted.hash_as_entrypoint(), signed.hash_as_entrypoint());
         assert_eq!(accepted.encoded_len(), expected_len);
@@ -7003,7 +6518,6 @@ pub mod tests {
             .expect("clone should preserve signed bytes");
         assert!(Arc::ptr_eq(&signed_bytes, &cloned_bytes));
     }
-
     #[test]
     fn single_ed25519_fast_path_requires_ed25519_key_and_signature_shape() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7014,10 +6528,8 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "ed25519-fast-path".into())])
         .sign(keypair.private_key());
-
         assert!(AcceptedTransaction::has_single_ed25519_signature(&signed));
         assert!(AcceptedTransaction::parsed_single_ed25519_key(&signed).is_some());
-
         let secp_keypair = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
         let secp_authority = AccountId::new(secp_keypair.public_key().clone());
         let secp_signed = TransactionBuilder::new(
@@ -7027,24 +6539,20 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "secp256k1-fast-path".into())])
         .sign(secp_keypair.private_key());
-
         assert!(!AcceptedTransaction::has_single_ed25519_signature(
             &secp_signed
         ));
         assert!(AcceptedTransaction::parsed_single_ed25519_key(&secp_signed).is_none());
-
         let mut short_signature_tx = signed.clone();
         let short_signature = iroha_crypto::Signature::from_bytes(&[0_u8; 1]);
         short_signature_tx.set_signature(TransactionSignature(
             iroha_crypto::SignatureOf::from_signature(short_signature),
         ));
-
         assert!(!AcceptedTransaction::has_single_ed25519_signature(
             &short_signature_tx
         ));
         assert!(AcceptedTransaction::parsed_single_ed25519_key(&short_signature_tx).is_none());
     }
-
     #[test]
     fn borrowed_external_entrypoint_hash_matches_canonical_hash() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7055,13 +6563,11 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "borrowed-hash".into())])
         .sign(keypair.private_key());
-
         assert_eq!(
             AcceptedTransaction::external_entrypoint_hash_from_signed(&signed),
             signed.hash_as_entrypoint()
         );
     }
-
     #[test]
     fn signed_frame_entrypoint_hash_matches_canonical_hash() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7074,13 +6580,11 @@ pub mod tests {
         .sign(keypair.private_key());
         let signed_bytes =
             norito::encode_canonical(&signed).expect("signed transaction encodes canonically");
-
         assert_eq!(
             AcceptedTransaction::external_entrypoint_hash_from_signed_frame(&signed_bytes)
                 .expect("signed frame hashes"),
             signed.hash_as_entrypoint()
         );
-
         let mut corrupted = signed_bytes.clone();
         let payload_start = norito::core::Header::SIZE
             + AcceptedTransaction::framed_padding_for::<SignedTransaction>();
@@ -7089,7 +6593,6 @@ pub mod tests {
             AcceptedTransaction::external_entrypoint_hash_from_signed_frame(&corrupted),
             Err(norito::core::Error::ChecksumMismatch)
         ));
-
         let alternate_flags =
             norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
         let alternate = {
@@ -7104,7 +6607,6 @@ pub mod tests {
             Err(norito::core::Error::NonCanonicalEncoding)
         ));
     }
-
     #[test]
     fn prepared_governance_transaction_hash_matches_canonical_entrypoint_hash() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7133,11 +6635,9 @@ pub mod tests {
         }])
         .sign(keypair.private_key());
         let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
-
         assert_eq!(prepared.entrypoint_hash, signed.hash_as_entrypoint());
         assert_eq!(prepared.signed_hash, signed.hash());
     }
-
     #[test]
     fn accept_with_canonical_signed_bytes_reuses_payload_cache() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7163,7 +6663,6 @@ pub mod tests {
         );
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-
         let accepted = AcceptedTransaction::accept_with_canonical_signed_bytes(
             signed,
             Arc::clone(&signed_bytes),
@@ -7173,7 +6672,6 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect("accepted transaction");
-
         let cached = accepted.signed_bytes().expect("canonical bytes cached");
         assert!(Arc::ptr_eq(&cached, &signed_bytes));
         assert_eq!(
@@ -7181,7 +6679,6 @@ pub mod tests {
             expected_entrypoint_bytes.as_slice()
         );
     }
-
     #[test]
     fn decoded_versioned_signed_transaction_prepares_exact_length_from_payload() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7200,10 +6697,8 @@ pub mod tests {
                 .expect("entrypoint transaction encodes canonically");
         let versioned =
             <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
-
         let decoded = DecodedVersionedSignedTransaction::decode_versioned(&versioned)
             .expect("versioned signed transaction decodes");
-
         assert_eq!(decoded.hash(), signed.hash());
         assert_eq!(decoded.hash_as_entrypoint(), signed.hash_as_entrypoint());
         assert_eq!(decoded.encoded_len(), expected_len);
@@ -7228,13 +6723,11 @@ pub mod tests {
         );
         assert_eq!(decoded.prepared.payload_hash, HashOf::new(signed.payload()));
         assert!(decoded.prepared.single_ed25519_key.is_some());
-
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let accepted = decoded
             .into_accepted(&test_network_id(), Duration::ZERO, limits, &crypto_cfg)
             .expect("decoded transaction accepts");
-
         assert_eq!(accepted.hash(), signed.hash());
         assert_eq!(accepted.hash_as_entrypoint(), signed.hash_as_entrypoint());
         assert_eq!(accepted.encoded_len(), expected_len);
@@ -7245,7 +6738,6 @@ pub mod tests {
         assert_eq!(accepted.payload_hash(), Some(HashOf::new(signed.payload())));
         assert!(accepted.single_ed25519_key().is_some());
     }
-
     #[test]
     fn decoded_versioned_signed_transaction_normalizes_adaptive_payload_metadata() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7272,16 +6764,13 @@ pub mod tests {
             .len();
         let versioned =
             <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
-
         assert_eq!(versioned.len().saturating_sub(1), actual_payload_len);
         assert_eq!(
             AcceptedTransaction::signed_encoded_len(&signed),
             canonical_len
         );
-
         let decoded = DecodedVersionedSignedTransaction::decode_versioned(&versioned)
             .expect("versioned signed transaction decodes");
-
         assert_eq!(decoded.signed(), &signed);
         assert_eq!(
             AcceptedTransaction::external_entrypoint_hash_from_signed(&signed),
@@ -7300,7 +6789,6 @@ pub mod tests {
             "canonical adaptive ingress payload should seed entrypoint bytes"
         );
     }
-
     #[test]
     fn decoded_versioned_signed_transaction_owned_supports_ed25519_prechecked_accept() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7316,17 +6804,14 @@ pub mod tests {
             .len();
         let versioned =
             <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
-
         let decoded = DecodedVersionedSignedTransaction::decode_versioned_owned(versioned)
             .expect("owned versioned signed transaction decodes");
         let (message, signature, _public_key) = decoded
             .single_ed25519_precheck_parts()
             .expect("single Ed25519 transaction exposes precheck parts");
-
         assert_eq!(message, HashOf::new(signed.payload()).as_ref().as_slice());
         assert_eq!(signature, signed.signature().payload().payload());
         assert_eq!(decoded.encoded_len(), expected_len);
-
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let accepted = decoded
@@ -7337,11 +6822,9 @@ pub mod tests {
                 &crypto_cfg,
             )
             .expect("prechecked decoded transaction accepts");
-
         assert_eq!(accepted.hash(), signed.hash());
         assert_eq!(accepted.encoded_len(), expected_len);
     }
-
     #[test]
     fn every_prechecked_signature_path_rejects_invalid_fee_intent() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7363,7 +6846,6 @@ pub mod tests {
         let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
         let crypto = iroha_config::parameters::actual::Crypto::default();
         let now = signed.creation_time();
-
         let assert_rejected = |result: Result<(), AcceptTransactionFail>, path: &str| {
             let error = result.expect_err(path);
             match error {
@@ -7377,7 +6859,6 @@ pub mod tests {
                 other => panic!("{path} returned an unrelated rejection: {other:?}"),
             }
         };
-
         assert_rejected(
             AcceptedTransaction::validate_with_now_with_signature_result_and_prepared_metadata(
                 &signed,
@@ -7416,7 +6897,6 @@ pub mod tests {
             "prepared deterministic verification",
         );
     }
-
     #[test]
     fn decoded_versioned_signed_transaction_rejects_malformed_payloads() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7429,17 +6909,13 @@ pub mod tests {
         .sign(keypair.private_key());
         let mut versioned =
             <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
-
         assert!(DecodedVersionedSignedTransaction::decode_versioned(&[]).is_err());
-
         let mut unsupported = versioned.clone();
         unsupported[0] = 0x7f;
         assert!(DecodedVersionedSignedTransaction::decode_versioned(&unsupported).is_err());
-
         versioned.push(0);
         assert!(DecodedVersionedSignedTransaction::decode_versioned(&versioned).is_err());
     }
-
     #[test]
     fn accepted_transaction_entrypoint_encoded_lengths_match_norito_frames() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7453,7 +6929,6 @@ pub mod tests {
         let signed_expected_len = norito::to_bytes(&signed)
             .expect("signed transaction encodes")
             .len();
-
         assert_eq!(
             AcceptedTransaction::framed_encoded_len(&signed),
             signed_expected_len
@@ -7469,7 +6944,6 @@ pub mod tests {
             .encoded_len(),
             signed_expected_len
         );
-
         let time_entrypoint = TimeTriggerEntrypoint {
             id: "accepted-entrypoint-len-trigger".parse().unwrap(),
             instructions: ExecutionStep(ConstVec::from(Vec::<InstructionBox>::new())),
@@ -7478,7 +6952,6 @@ pub mod tests {
         let time_expected_len = norito::to_bytes(&time_entrypoint)
             .expect("time entrypoint encodes")
             .len();
-
         assert_eq!(
             AcceptedTransaction::framed_encoded_len(&time_entrypoint),
             time_expected_len
@@ -7491,7 +6964,6 @@ pub mod tests {
             time_expected_len
         );
     }
-
     #[test]
     fn signed_encoded_len_matches_norito_for_optional_metadata_shapes() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7500,7 +6972,6 @@ pub mod tests {
             Name::from_str("signed-len-tag").expect("name"),
             Json::from("cached"),
         );
-
         let mut builder = TransactionBuilder::new(
             test_network_id(),
             authority,
@@ -7514,7 +6985,6 @@ pub mod tests {
         let expected_len = norito::to_bytes(&signed)
             .expect("signed transaction encodes")
             .len();
-
         assert!(
             norito::NoritoSerialize::encoded_len_exact(&signed).is_some(),
             "representative signed transaction should have an exact encoded length"
@@ -7523,11 +6993,9 @@ pub mod tests {
             AcceptedTransaction::signed_encoded_len(&signed),
             expected_len
         );
-
         let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
         assert_eq!(prepared.encoded_len, expected_len);
     }
-
     #[test]
     fn prepared_metadata_depth_matches_direct_depth_check() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7545,7 +7013,6 @@ pub mod tests {
         .with_metadata(metadata)
         .sign(keypair.private_key());
         let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
-
         ensure_metadata_depth_with_prepared(signed.metadata(), 4, Some(&prepared))
             .expect("prepared metadata depth should accept equal max depth");
         assert_eq!(
@@ -7555,7 +7022,6 @@ pub mod tests {
                 .expect_err("direct metadata depth should reject too deep metadata")
         );
     }
-
     #[test]
     fn gossip_signed_metadata_matches_canonical_preparation() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7569,14 +7035,12 @@ pub mod tests {
         let entrypoint = TransactionEntrypoint::External(signed.clone());
         let entrypoint_bytes =
             norito::encode_canonical(&entrypoint).expect("entrypoint transaction encodes");
-
         let expected = AcceptedTransaction::prepare_signed_metadata(&signed);
         let actual = AcceptedTransaction::prepare_gossip_signed_metadata(
             &signed,
             entrypoint.hash(),
             Arc::new(entrypoint_bytes.clone()),
         );
-
         assert_eq!(actual.signed_hash, expected.signed_hash);
         assert_eq!(actual.entrypoint_hash, expected.entrypoint_hash);
         assert_eq!(actual.payload_hash, expected.payload_hash);
@@ -7595,7 +7059,6 @@ pub mod tests {
             expected.single_ed25519_key.is_some()
         );
     }
-
     #[test]
     fn signed_encoded_len_for_limit_uses_cached_canonical_bytes() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7610,7 +7073,6 @@ pub mod tests {
         let mut prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
         prepared.encoded_len = usize::MAX;
         prepared.signed_bytes = Some(Arc::clone(&signed_bytes));
-
         assert_eq!(
             AcceptedTransaction::signed_encoded_len_for_limit_with_prepared(
                 &signed,
@@ -7619,7 +7081,6 @@ pub mod tests {
             u64::try_from(signed_bytes.len()).expect("length fits in u64")
         );
     }
-
     #[test]
     fn fraud_policy_allows_when_disabled() {
         let cfg = iroha_config::parameters::actual::FraudMonitoring::default();
@@ -7628,7 +7089,6 @@ pub mod tests {
         let assignment = single_lane_assignment(&catalog);
         assert!(super::enforce_fraud_policy(&cfg, &metadata, None, &assignment).is_ok());
     }
-
     #[test]
     fn fraud_policy_rejects_missing_assessment() {
         let cfg = iroha_config::parameters::actual::FraudMonitoring {
@@ -7647,7 +7107,6 @@ pub mod tests {
             ))
         ));
     }
-
     #[test]
     fn accept_with_time_source_uses_mock_clock() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7695,7 +7154,6 @@ pub mod tests {
             AcceptTransactionFail::TransactionExpired { .. }
         ));
     }
-
     #[test]
     fn stateless_admission_rejects_missing_signature_bound_ttl() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7718,7 +7176,6 @@ pub mod tests {
         let malformed_json = encoded.replacen(&ttl_field, "\"time_to_live_ms\":null", 1);
         let malformed: SignedTransaction =
             norito::json::from_str(&malformed_json).expect("decode malformed wire fixture");
-
         let error = AcceptedTransaction::validate_with_now(
             &malformed,
             &test_network_id(),
@@ -7736,7 +7193,6 @@ pub mod tests {
             other => panic!("expected TransactionLimit for missing TTL, got {other:?}"),
         }
     }
-
     #[test]
     fn stateless_admission_enforces_governed_maximum_ttl() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -7749,7 +7205,6 @@ pub mod tests {
         builder.set_ttl(Duration::from_millis(5_001));
         let signed = builder.sign(keypair.private_key());
         let limits = TransactionParameters::default().with_max_time_to_live_ms(nonzero!(5_000_u64));
-
         let error = AcceptedTransaction::validate_with_now(
             &signed,
             &test_network_id(),
@@ -7767,7 +7222,6 @@ pub mod tests {
             other => panic!("expected TransactionLimit for excessive TTL, got {other:?}"),
         }
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn time_sensitive_instruction_detects_governance_and_non_sensitive() {
@@ -7782,7 +7236,6 @@ pub mod tests {
         };
         let ballot_box = InstructionBox::from(ballot);
         assert!(super::is_time_sensitive_instruction(&ballot_box));
-
         let agreement_id: iroha_data_model::repo::RepoAgreementId =
             "repo-1".parse().expect("repo id");
         let cash_leg = iroha_data_model::repo::RepoCashLeg {
@@ -7822,7 +7275,6 @@ pub mod tests {
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             margin_call
         )));
-
         let exit = iroha_data_model::isi::staking::ExitPublicLaneValidator {
             lane_id: TestLaneId::SINGLE,
             validator: counterparty.clone(),
@@ -7852,7 +7304,6 @@ pub mod tests {
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             finalize
         )));
-
         let settlement_id: iroha_data_model::isi::settlement::SettlementId =
             "settlement-1".parse().expect("settlement id");
         let dvp = iroha_data_model::isi::settlement::DvpIsi::new(
@@ -7905,18 +7356,15 @@ pub mod tests {
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             pvp
         )));
-
         let trigger_id: iroha_data_model::trigger::TriggerId =
             "nts-trigger".parse().expect("trigger id");
         let execute_trigger = iroha_data_model::isi::ExecuteTrigger::new(trigger_id);
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             execute_trigger
         )));
-
         let log_box = InstructionBox::from(Log::new(Level::INFO, "ok".into()));
         assert!(!super::is_time_sensitive_instruction(&log_box));
     }
-
     #[test]
     fn time_sensitive_instruction_detects_trigger_registration() {
         let (authority, _keypair) = gen_account_in("wonderland");
@@ -7940,14 +7388,12 @@ pub mod tests {
         let boxed = InstructionBox::from(register);
         assert!(super::is_time_sensitive_instruction(&boxed));
     }
-
     #[test]
     fn time_sensitive_instruction_marks_custom_instruction() {
         let custom = iroha_data_model::isi::CustomInstruction::new(Json::new("payload"));
         let boxed = InstructionBox::from(custom);
         assert!(super::is_time_sensitive_instruction(&boxed));
     }
-
     #[test]
     fn time_sensitive_executable_detects_sensitive_and_safe() {
         let (authority, _keypair) = gen_account_in("wonderland");
@@ -7960,19 +7406,16 @@ pub mod tests {
         };
         let sensitive = Executable::from(vec![InstructionBox::from(ballot)]);
         assert!(super::is_time_sensitive_executable(&sensitive));
-
         let safe = Executable::from(vec![InstructionBox::from(Log::new(
             Level::INFO,
             "ok".into(),
         ))]);
         assert!(!super::is_time_sensitive_executable(&safe));
-
         let ivm = Executable::Ivm(
             iroha_data_model::transaction::executable::IvmBytecode::from_compiled(vec![0xCA]),
         );
         assert!(super::is_time_sensitive_executable(&ivm));
     }
-
     #[test]
     fn nts_enforcement_rejects_time_sensitive_when_unhealthy() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -8026,7 +7469,6 @@ pub mod tests {
             .is_ok()
         );
     }
-
     #[test]
     fn nts_enforcement_skips_non_sensitive_transactions() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -8039,7 +7481,6 @@ pub mod tests {
         .sign(keypair.private_key());
         assert!(super::enforce_nts_health_for_time_sensitive(&tx).is_ok());
     }
-
     #[test]
     fn fraud_policy_rejects_insufficient_band() {
         use iroha_primitives::json::Json;
@@ -8067,7 +7508,6 @@ pub mod tests {
             ))
         ));
     }
-
     #[test]
     fn fraud_policy_accepts_sufficient_band() {
         use iroha_primitives::json::Json;
@@ -8089,7 +7529,6 @@ pub mod tests {
         let assignment = single_lane_assignment(&catalog);
         assert!(super::enforce_fraud_policy(&cfg, &metadata, None, &assignment).is_ok());
     }
-
     #[test]
     fn fraud_policy_rejects_inconsistent_band() {
         use iroha_primitives::json::Json;
@@ -8129,7 +7568,6 @@ pub mod tests {
             other => panic!("expected Validation::NotPermitted, got {other:?}"),
         }
     }
-
     fn fraud_metadata_with_assessment(assessment: &FraudAssessment) -> Metadata {
         use iroha_primitives::json::Json;
 
@@ -8150,7 +7588,6 @@ pub mod tests {
             Name::from_str("fraud_assessment_latency_ms").expect("static name"),
             Json::new(95_u64),
         );
-
         let mut unsigned = assessment.clone();
         unsigned.signature = None;
         let unsigned_bytes = norito::codec::Encode::encode(&unsigned);
@@ -8163,10 +7600,8 @@ pub mod tests {
             Name::from_str("fraud_assessment_envelope").expect("static name"),
             Json::new(BASE64_STANDARD.encode(norito::codec::Encode::encode(assessment))),
         );
-
         metadata
     }
-
     #[test]
     fn fraud_policy_attester_signature_precheck_uses_checked_public_key_algorithm() {
         let attester =
@@ -8195,10 +7630,8 @@ pub mod tests {
         };
         let catalog = DataSpaceCatalog::default();
         let assignment = single_lane_assignment(&catalog);
-
         let err = super::enforce_fraud_policy(&cfg, &metadata, None, &assignment)
             .expect_err("short Ed25519 attestation signature must be rejected");
-
         match err {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
                 assert!(
@@ -8209,7 +7642,6 @@ pub mod tests {
             other => panic!("expected Validation::NotPermitted, got {other:?}"),
         }
     }
-
     #[test]
     fn fraud_policy_rejects_all_zero_attestation_signature_before_backend() {
         let attester =
@@ -8238,10 +7670,8 @@ pub mod tests {
         };
         let catalog = DataSpaceCatalog::default();
         let assignment = single_lane_assignment(&catalog);
-
         let err = super::enforce_fraud_policy(&cfg, &metadata, None, &assignment)
             .expect_err("all-zero Ed25519 attestation signature must be rejected");
-
         match err {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
                 assert!(
@@ -8252,7 +7682,6 @@ pub mod tests {
             other => panic!("expected Validation::NotPermitted, got {other:?}"),
         }
     }
-
     #[test]
     fn fraud_policy_rejects_malformed_ed25519_attestation_signature_r_before_backend() {
         const SMALL_ORDER_R: [u8; 32] = [
@@ -8265,7 +7694,6 @@ pub mod tests {
             0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
             0xff, 0xff, 0xff, 0x7f,
         ];
-
         let attester =
             checked_fixture_keypair(b"fraud-attester-ed25519".to_vec(), Algorithm::Ed25519);
         let unsigned = FraudAssessment::new(
@@ -8292,7 +7720,6 @@ pub mod tests {
         };
         let catalog = DataSpaceCatalog::default();
         let assignment = single_lane_assignment(&catalog);
-
         for (label, replacement_r) in [
             ("small-order", SMALL_ORDER_R),
             ("noncanonical", NONCANONICAL_R),
@@ -8302,10 +7729,8 @@ pub mod tests {
             let mut assessment = unsigned.clone();
             assessment.signature = Some(signature_bytes);
             let metadata = fraud_metadata_with_assessment(&assessment);
-
             let err = super::enforce_fraud_policy(&cfg, &metadata, None, &assignment)
                 .expect_err("malformed Ed25519 attestation signature R must be rejected");
-
             match err {
                 TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
                     assert!(
@@ -8317,7 +7742,6 @@ pub mod tests {
             }
         }
     }
-
     #[test]
     fn fraud_policy_rejects_malformed_mldsa_attestation_signature_lengths_before_backend() {
         let attester = checked_fixture_keypair(b"fraud-attester-mldsa".to_vec(), Algorithm::MlDsa);
@@ -8345,7 +7769,6 @@ pub mod tests {
         };
         let catalog = DataSpaceCatalog::default();
         let assignment = single_lane_assignment(&catalog);
-
         for label in ["short", "overlong"] {
             let mut signature_bytes = valid_signature.payload().to_vec();
             match label {
@@ -8360,10 +7783,8 @@ pub mod tests {
             let mut assessment = unsigned.clone();
             assessment.signature = Some(signature_bytes);
             let metadata = fraud_metadata_with_assessment(&assessment);
-
             let err = super::enforce_fraud_policy(&cfg, &metadata, None, &assignment)
                 .expect_err("malformed ML-DSA attestation signature length must be rejected");
-
             match err {
                 TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
                     assert!(
@@ -8379,7 +7800,6 @@ pub mod tests {
             }
         }
     }
-
     #[test]
     fn tx_rejected_when_pipeline_gas_charge_limit_is_required_but_missing() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
@@ -8391,12 +7811,10 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         // Configure pipeline gas allowlist
         let mut pipeline = state.pipeline.clone();
         pipeline.gas.accepted_assets = vec!["xor#domain".to_string()];
         state.set_pipeline(pipeline);
-
         // Bind an executable gas limit but omit the required PipelineGas charge limit.
         let program = minimal_ivm_program_with_max_cycles(1, 1_000);
         let tx = TransactionBuilder::new(
@@ -8406,7 +7824,6 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(kp.private_key());
-
         // Height one is the fee-exempt genesis bootstrap boundary. Exercise
         // ordinary admission so the signed PipelineGas limit is mandatory.
         let header =
@@ -8422,7 +7839,6 @@ pub mod tests {
             ))
         ));
     }
-
     #[test]
     fn signature_limit_rejects_above_bound() {
         let default_limits = TransactionParameters::default();
@@ -8438,7 +7854,6 @@ pub mod tests {
             .expect_err("limit should reject excessive signatures");
         assert!(matches!(err, AcceptTransactionFail::TransactionLimit(_)));
     }
-
     #[test]
     fn signature_limit_allows_at_bound() {
         let default_limits = TransactionParameters::default();
@@ -8452,10 +7867,8 @@ pub mod tests {
         );
         assert!(AcceptedTransaction::ensure_signature_limit(2, &limits).is_ok());
     }
-
     const IVM_METADATA_HEADER_LEN: usize = ivm::HEADER_SIZE;
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
-
     /// Build a minimal valid IVM program: header (1.0, vector=4, `max_cycles=0`, abi=1) + HALT.
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         let mut code = Vec::new();
@@ -8472,7 +7885,6 @@ pub mod tests {
         program.extend_from_slice(&code);
         program
     }
-
     /// Build a minimal self-describing contract containing only a view entrypoint and HALT.
     fn minimal_ivm_contract_program() -> Vec<u8> {
         let mut program = ivm::ProgramMetadata {
@@ -8509,7 +7921,6 @@ pub mod tests {
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
     }
-
     /// Build a minimal program and override `max_cycles` in the header.
     fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<u8> {
         let mut prog = minimal_ivm_program(abi_version);
@@ -8517,7 +7928,6 @@ pub mod tests {
         prog[8..16].copy_from_slice(&max_cycles.to_le_bytes());
         prog
     }
-
     #[track_caller]
     fn minimal_ivm_program_with_instruction_count(
         abi_version: u8,
@@ -8542,7 +7952,6 @@ pub mod tests {
         program.extend_from_slice(&code);
         program
     }
-
     /// Build a minimal program and insert a literal-section padding block so the artifact
     /// reaches `total_len` bytes.
     fn minimal_ivm_program_with_literal_padding(abi_version: u8, total_len: usize) -> Vec<u8> {
@@ -8557,7 +7966,6 @@ pub mod tests {
             4,
             "minimal program should contain a single opcode"
         );
-
         let pad_len = total_len
             .checked_sub(IVM_METADATA_HEADER_LEN + code.len())
             .expect("total_len smaller than header + code");
@@ -8578,7 +7986,6 @@ pub mod tests {
             .expect("literal data length exceeds literal section encoding");
         let post_pad_u32 =
             u32::try_from(post_pad).expect("pad length exceeds literal section encoding");
-
         let mut padded = program;
         padded.extend_from_slice(&LITERAL_SECTION_MAGIC);
         padded.extend_from_slice(&0u32.to_le_bytes()); // literal count
@@ -8593,7 +8000,6 @@ pub mod tests {
         );
         padded
     }
-
     /// Build a minimal program that issues a single syscall followed by HALT.
     fn minimal_ivm_program_with_syscall(abi_version: u8, syscall: u8) -> Vec<u8> {
         let mut code = Vec::new();
@@ -8602,7 +8008,6 @@ pub mod tests {
                 .to_le_bytes(),
         );
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-
         let mut program = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 0,
@@ -8615,13 +8020,11 @@ pub mod tests {
         program.extend_from_slice(&code);
         program
     }
-
     /// Build a minimal program that issues a single extended syscall followed by HALT.
     fn minimal_ivm_program_with_syscallx(abi_version: u8, syscall: u32) -> Vec<u8> {
         let mut code = Vec::new();
         code.extend_from_slice(&ivm::encoding::wide::encode_syscallx(syscall).to_le_bytes());
         code.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-
         let mut program = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 0,
@@ -8634,13 +8037,10 @@ pub mod tests {
         program.extend_from_slice(&code);
         program
     }
-
     const TEST_GAS_LIMIT: u64 = 1_000_000;
-
     fn fee_payment_with_gas_limit(limit: u64) -> FeePaymentIntent {
         FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
     }
-
     #[test]
     fn validate_ivm_header_accepts_supported_versions() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
@@ -8652,7 +8052,6 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -8664,13 +8063,11 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         assert!(result.is_ok(), "valid header should pass: {result:?}");
     }
-
     #[test]
     fn validate_ivm_header_rejects_unknown_abi() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
@@ -8681,7 +8078,6 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -8693,7 +8089,6 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -8704,7 +8099,6 @@ pub mod tests {
             other => panic!("Expected UnsupportedAbiVersion(3) error, got {other:?}"),
         }
     }
-
     #[test]
     fn validate_ivm_header_rejects_abi_zero() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
@@ -8715,7 +8109,6 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -8728,7 +8121,6 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -8739,7 +8131,6 @@ pub mod tests {
             other => panic!("Expected UnsupportedAbiVersion(0) error, got {other:?}"),
         }
     }
-
     #[test]
     fn validate_generic_ivm_rejects_reserved_manifest_metadata_before_decode() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
@@ -8753,7 +8144,6 @@ pub mod tests {
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let mut metadata = Metadata::default();
         metadata.insert(
             (*CONTRACT_MANIFEST_METADATA_NAME).clone(),
@@ -8769,7 +8159,6 @@ pub mod tests {
             minimal_ivm_program(1),
         )))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -8780,7 +8169,6 @@ pub mod tests {
             ))) if message.contains("reserved `contract_manifest`")
         ));
     }
-
     #[test]
     fn validate_ivm_rejects_stale_authenticated_cntr_abi_hash() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
@@ -8794,7 +8182,6 @@ pub mod tests {
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let (artifact, _) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest(
                 "seiyaku StaleAbi { view fn inspect() -> int { return 1; } }",
@@ -8815,7 +8202,6 @@ pub mod tests {
                 .get(parsed.header_len + original_section_len..)
                 .expect("post-CNTR artifact suffix is in bounds"),
         );
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority_id,
@@ -8836,7 +8222,6 @@ pub mod tests {
                 && info.actual == iroha_crypto::Hash::prehashed(actual)
         ));
     }
-
     #[test]
     fn validate_ivm_manifest_metadata_conflict_rejected_even_if_state_matches() {
         use iroha_data_model::{
@@ -8850,7 +8235,6 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         // Seed block 1 with a correct manifest for the program.
         let header1 =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -8878,7 +8262,6 @@ pub mod tests {
         );
         tx1.apply();
         let _ = block1.commit();
-
         // Block 2: metadata manifest advertises the wrong abi_hash; admission must reject even
         // though the stored manifest matches.
         let header2 =
@@ -8913,7 +8296,6 @@ pub mod tests {
         .with_metadata(md)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
@@ -8929,7 +8311,6 @@ pub mod tests {
             ),
         }
     }
-
     #[test]
     fn validate_ivm_manifest_abi_and_code_hash_match() {
         use iroha_data_model::smart_contract::manifest::ContractManifest;
@@ -8940,12 +8321,10 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
-
         // Build minimal program with abi_version=1 (current baseline)
         let prog = minimal_ivm_contract_program();
         // Compute the canonical full-artifact contract hash.
@@ -8983,7 +8362,6 @@ pub mod tests {
         );
         assert!(result.is_ok(), "valid manifest should pass: {result:?}");
     }
-
     #[test]
     fn validate_ivm_manifest_rejects_mismatched_hashes() {
         use iroha_data_model::{
@@ -8997,7 +8375,6 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -9034,7 +8411,6 @@ pub mod tests {
         .with_metadata(md)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -9047,7 +8423,6 @@ pub mod tests {
             ),
         }
     }
-
     #[test]
     fn validate_ivm_manifest_rejects_mismatched_code_hash() {
         use iroha_data_model::{
@@ -9061,7 +8436,6 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -9098,7 +8472,6 @@ pub mod tests {
         .with_metadata(md)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -9111,7 +8484,6 @@ pub mod tests {
             ),
         }
     }
-
     #[test]
     fn validate_ivm_manifest_state_conflict_rejected_even_if_metadata_matches() {
         use iroha_data_model::{
@@ -9125,7 +8497,6 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         // Seed block 1 with a manifest that has the right code_hash but wrong abi_hash.
         let header1 =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9155,7 +8526,6 @@ pub mod tests {
         );
         tx1.apply();
         let _ = block1.commit();
-
         // Block 2: attach a correct manifest in metadata; validation should still reject
         // because the stored manifest ABI hash mismatches the computed one.
         let header2 =
@@ -9188,7 +8558,6 @@ pub mod tests {
         .with_metadata(md)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
@@ -9204,7 +8573,6 @@ pub mod tests {
             ),
         }
     }
-
     #[test]
     fn validate_ivm_max_cycles_structured_error() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
@@ -9215,11 +8583,9 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         // Program with max_cycles above default config bound; expect structured error
         let prog = minimal_ivm_program_with_max_cycles(1, 9_999_999);
         let tx = TransactionBuilder::new(
@@ -9229,7 +8595,6 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -9240,7 +8605,6 @@ pub mod tests {
             other => panic!("Expected MaxCyclesExceedsUpperBound structured error, got {other:?}"),
         }
     }
-
     #[test]
     fn validate_ivm_missing_max_cycles_rejected() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
@@ -9251,11 +8615,9 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let prog = minimal_ivm_program_with_max_cycles(1, 0);
         let tx = TransactionBuilder::new(
             test_network_id(),
@@ -9264,7 +8626,6 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -9275,7 +8636,6 @@ pub mod tests {
             other => panic!("Expected MissingMaxCycles error, got {other:?}"),
         }
     }
-
     #[test]
     fn validate_ivm_max_cycles_exceeds_fuel_rejected() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
@@ -9286,18 +8646,15 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         // Raise pipeline upper bound above fuel limit so the fuel check triggers first.
         let mut pipeline = state.pipeline.clone();
         let fuel_limit = state.world.parameters.view().smart_contract().fuel().get();
         pipeline.ivm_max_cycles_upper_bound =
             std::num::NonZeroU64::new(fuel_limit + 10).expect("fuel limit plus ten is non-zero");
         state.set_pipeline(pipeline);
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let prog = minimal_ivm_program_with_max_cycles(1, fuel_limit + 1);
         let tx = TransactionBuilder::new(
             test_network_id(),
@@ -9306,7 +8663,6 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -9320,7 +8676,6 @@ pub mod tests {
             other => panic!("Expected MaxCyclesExceedsFuel error, got {other:?}"),
         }
     }
-
     #[test]
     fn validate_ivm_instruction_limit_enforced() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
@@ -9331,17 +8686,14 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let mut pipeline = state.pipeline.clone();
         pipeline.ivm_max_decoded_instructions = 2;
         pipeline.ivm_max_decoded_bytes =
             iroha_config::parameters::defaults::pipeline::IVM_MAX_DECODED_BYTES;
         state.set_pipeline(pipeline);
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let prog = minimal_ivm_program_with_instruction_count(1, 1_000, 4);
         let tx = TransactionBuilder::new(
             test_network_id(),
@@ -9350,7 +8702,6 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -9366,7 +8717,6 @@ pub mod tests {
             other => panic!("Expected DecodedInstructionCountExceeded error, got {other:?}"),
         }
     }
-
     #[test]
     fn validate_ivm_decoded_byte_limit_enforced() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
@@ -9377,16 +8727,13 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let mut state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let mut pipeline = state.pipeline.clone();
         pipeline.ivm_max_decoded_instructions = 0;
         pipeline.ivm_max_decoded_bytes = 8; // allow only two 4-byte instructions
         state.set_pipeline(pipeline);
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let prog = minimal_ivm_program_with_instruction_count(1, 1_000, 4);
         let tx = TransactionBuilder::new(
             test_network_id(),
@@ -9395,7 +8742,6 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -9409,7 +8755,6 @@ pub mod tests {
             other => panic!("Expected DecodedCodeSizeExceeded error, got {other:?}"),
         }
     }
-
     #[test]
     fn validate_ivm_manifest_lookup_in_state() {
         use iroha_data_model::smart_contract::manifest::ContractManifest;
@@ -9420,7 +8765,6 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         // Seed block 1: insert a manifest into WSV directly via state tx
         let header1 =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -9449,7 +8793,6 @@ pub mod tests {
             .insert(code_hash, manifest.clone());
         tx1.apply();
         let _ = block1.commit();
-
         // Block 2: submit the IVM program; validation should find the manifest in WSV and accept
         let header2 =
             iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -9466,7 +8809,6 @@ pub mod tests {
         );
         assert!(result.is_ok(), "lookup manifest should allow validation");
     }
-
     #[test]
     fn validate_ivm_unknown_syscall_rejected_at_admission() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
@@ -9477,17 +8819,14 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let syscall = (0u8..=u8::MAX)
             .find(|number| {
                 !ivm::syscalls::is_syscall_allowed(ivm::SyscallPolicy::AbiV1, u32::from(*number))
             })
             .expect("ABI v1 should leave at least one u8 syscall number unmapped");
-
         // Program issues an unmapped SCALL then HALT; admission should reject before the VM runs.
         let prog = minimal_ivm_program_with_syscall(1, syscall);
         let tx = TransactionBuilder::new(
@@ -9497,7 +8836,6 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -9512,7 +8850,6 @@ pub mod tests {
             other => panic!("Expected UnknownSyscall rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn validate_ivm_unknown_scallx_rejected_at_admission() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
@@ -9523,17 +8860,14 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let syscall = 0x02_0000;
         assert!(!ivm::syscalls::is_syscall_allowed(
             ivm::SyscallPolicy::AbiV1,
             syscall
         ));
-
         let prog = minimal_ivm_program_with_syscallx(1, syscall);
         let tx = TransactionBuilder::new(
             test_network_id(),
@@ -9542,7 +8876,6 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -9557,7 +8890,6 @@ pub mod tests {
             other => panic!("Expected UnknownSyscall rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn invalid_signature_is_rejected() {
         use std::time::Duration;
@@ -9609,7 +8941,6 @@ pub mod tests {
             other => panic!("Expected signature verification error, got {other:?}"),
         }
     }
-
     #[test]
     fn ivm_bytecode_oversize_is_rejected_at_admission() {
         use std::time::Duration;
@@ -9618,7 +8949,6 @@ pub mod tests {
 
         // Build a valid signed transaction with an oversized IVM bytecode blob
         let (authority_id, kp) = gen_account_in("wonderland");
-
         // Limit bytecode size to 1024 bytes for this test
         let default_limits = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
@@ -9629,7 +8959,6 @@ pub mod tests {
             default_limits.max_decompressed_bytes(),
             default_limits.max_metadata_depth(),
         );
-
         // Create a blob twice the allowed size (2 KiB) — content need not be a valid IVM header
         let oversize_blob = vec![0u8; 2048];
         let tx = TransactionBuilder::new(
@@ -9639,7 +8968,6 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(oversize_blob)))
         .sign(kp.private_key());
-
         // Admission must reject with a TransactionLimit error
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         match AcceptedTransaction::validate(
@@ -9655,14 +8983,12 @@ pub mod tests {
             }
         }
     }
-
     #[test]
     fn ivm_bytecode_at_limit_is_accepted_at_admission() {
         use std::time::Duration;
 
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         let (authority_id, kp) = gen_account_in("wonderland");
-
         // Use an exact bytecode-size limit that can be represented by the 17-byte
         // IVM metadata header plus a valid literal-prefix alignment.
         const BYTECODE_LIMIT: u64 = 1021;
@@ -9675,7 +9001,6 @@ pub mod tests {
             default_limits.max_decompressed_bytes(),
             default_limits.max_metadata_depth(),
         );
-
         // Create a blob exactly at the allowed bytecode size.
         let at_limit_blob = minimal_ivm_program_with_literal_padding(1, BYTECODE_LIMIT as usize);
         assert_eq!(at_limit_blob.len(), BYTECODE_LIMIT as usize);
@@ -9686,7 +9011,6 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(at_limit_blob)))
         .sign(kp.private_key());
-
         // Admission should accept this transaction
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         match AcceptedTransaction::validate(
@@ -9700,7 +9024,6 @@ pub mod tests {
             other => panic!("Expected Ok for at-limit IVM bytecode, got {other:?}"),
         }
     }
-
     #[test]
     fn ivm_missing_gas_bound_rejected_at_admission() {
         use std::time::Duration;
@@ -9715,7 +9038,6 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let limits = TransactionParameters::default();
         let err = AcceptedTransaction::validate(
@@ -9726,7 +9048,6 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect_err("missing gas limit in fee payment intent should be rejected");
-
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
@@ -9740,7 +9061,6 @@ pub mod tests {
             other => panic!("Expected TransactionLimit failure, got {other:?}"),
         }
     }
-
     #[test]
     fn legacy_gas_limit_metadata_is_rejected_before_admission() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
@@ -9757,7 +9077,6 @@ pub mod tests {
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .try_sign(kp.private_key())
         .expect_err("retired gas-limit metadata must fail before admission");
-
         assert!(
             error
                 .to_string()
@@ -9765,7 +9084,6 @@ pub mod tests {
             "unexpected error: {error}"
         );
     }
-
     #[test]
     fn ivm_proved_missing_gas_bound_rejected_at_admission() {
         use std::time::Duration;
@@ -9785,7 +9103,6 @@ pub mod tests {
             gas_policy_commitment: Hash::new(b"gas"),
         }))
         .sign(kp.private_key());
-
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let limits = TransactionParameters::default();
         let err = AcceptedTransaction::validate(
@@ -9796,7 +9113,6 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect_err("missing gas limit in fee payment intent should be rejected");
-
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
@@ -9810,7 +9126,6 @@ pub mod tests {
             other => panic!("Expected TransactionLimit failure, got {other:?}"),
         }
     }
-
     #[test]
     fn contract_call_missing_gas_bound_rejected_at_admission() {
         use std::time::Duration;
@@ -9833,7 +9148,6 @@ pub mod tests {
             arguments: None,
         }))
         .sign(kp.private_key());
-
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let limits = TransactionParameters::default();
         let err = AcceptedTransaction::validate(
@@ -9844,7 +9158,6 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect_err("missing gas limit in fee payment intent should be rejected");
-
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
@@ -9858,7 +9171,6 @@ pub mod tests {
             other => panic!("Expected TransactionLimit failure, got {other:?}"),
         }
     }
-
     #[test]
     fn mixed_batch_missing_gas_bound_rejected_at_admission() {
         let (authority_id, kp) = gen_account_in("wonderland");
@@ -9886,7 +9198,6 @@ pub mod tests {
             .into(),
         ))
         .sign(kp.private_key());
-
         let err = AcceptedTransaction::validate(
             &tx,
             &test_network_id(),
@@ -9895,14 +9206,12 @@ pub mod tests {
             &iroha_config::parameters::actual::Crypto::default(),
         )
         .expect_err("mixed batch without a signed gas limit must be rejected");
-
         assert!(matches!(
             err,
             AcceptTransactionFail::TransactionLimit(ref limit)
                 if limit.reason.contains("missing gas limit in fee payment intent")
         ));
     }
-
     #[test]
     fn empty_executable_batch_rejected_at_admission() {
         let (authority_id, kp) = gen_account_in("wonderland");
@@ -9913,7 +9222,6 @@ pub mod tests {
         )
         .with_executable(Executable::Batch(ConstVec::new_empty()))
         .sign(kp.private_key());
-
         let err = AcceptedTransaction::validate(
             &tx,
             &test_network_id(),
@@ -9922,25 +9230,21 @@ pub mod tests {
             &iroha_config::parameters::actual::Crypto::default(),
         )
         .expect_err("empty executable batch must be rejected");
-
         assert!(matches!(
             err,
             AcceptTransactionFail::TransactionLimit(ref limit)
                 if limit.reason.contains("must not be empty")
         ));
     }
-
     #[test]
     fn transaction_size_limit_enforced() {
         use std::time::Duration;
         let (authority_id, kp) = gen_account_in("wonderland");
-
         let mut metadata = Metadata::default();
         metadata.insert(
             "blob".parse().expect("metadata key"),
             Json::new("x".repeat(1024)),
         );
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority_id.clone(),
@@ -9949,7 +9253,6 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "sized".to_string())])
         .with_metadata(metadata)
         .sign(kp.private_key());
-
         let limits = TransactionParameters::with_max_signatures(
             NonZeroU64::new(1).unwrap(),
             NonZeroU64::new(10).unwrap(),
@@ -9959,7 +9262,6 @@ pub mod tests {
             NonZeroU16::new(8).unwrap(),
         );
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-
         let err = AcceptedTransaction::validate(
             &tx,
             &test_network_id(),
@@ -9968,7 +9270,6 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect_err("transaction exceeding max_tx_bytes must be rejected");
-
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
@@ -9979,18 +9280,15 @@ pub mod tests {
             other => panic!("expected TransactionLimit failure, got {other:?}"),
         }
     }
-
     #[test]
     fn attachments_decompressed_limit_enforced() {
         use std::time::Duration;
         let (authority_id, kp) = gen_account_in("wonderland");
-
         let proof = ProofBox::new("halo2/ipa".into(), vec![0u8; 192]);
         let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_limit");
         let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id);
         let attachments = ProofAttachmentList::try_from(vec![attachment])
             .expect("one attachment is a valid bounded proof list");
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority_id.clone(),
@@ -9999,7 +9297,6 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "proof".to_string())])
         .with_attachments(attachments)
         .sign(kp.private_key());
-
         let limits = TransactionParameters::with_max_signatures(
             NonZeroU64::new(1).unwrap(),
             NonZeroU64::new(10).unwrap(),
@@ -10009,7 +9306,6 @@ pub mod tests {
             NonZeroU16::new(8).unwrap(),
         );
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-
         let err = AcceptedTransaction::validate(
             &tx,
             &test_network_id(),
@@ -10018,7 +9314,6 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect_err("attachments exceeding max_decompressed_bytes must be rejected");
-
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
@@ -10029,28 +9324,24 @@ pub mod tests {
             other => panic!("expected TransactionLimit failure, got {other:?}"),
         }
     }
-
     #[test]
     fn malformed_proof_attachments_rejected_at_transaction_admission() {
         use std::time::Duration;
         let (authority_id, kp) = gen_account_in("wonderland");
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let limits = TransactionParameters::default();
-
         let mut zero_vk_commitment = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
             VerifyingKeyId::new("halo2/ipa", "vk_admission"),
         );
         zero_vk_commitment.vk_commitment = Some([0u8; 32]);
-
         let mut zero_envelope_hash = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
             VerifyingKeyId::new("halo2/ipa", "vk_admission"),
         );
         zero_envelope_hash.envelope_hash = Some([0u8; 32]);
-
         let mut forged_envelope_hash = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
@@ -10060,12 +9351,10 @@ pub mod tests {
             iroha_crypto::Hash::new(&forged_envelope_hash.proof.bytes).into();
         forged_hash[0] ^= 0x80;
         forged_envelope_hash.envelope_hash = Some(forged_hash);
-
         assert!(matches!(
             ProofAttachmentList::try_from(Vec::new()),
             Err(iroha_data_model::proof::ProofAttachmentListError::Empty)
         ));
-
         let cases = [
             (
                 "proof-backend-mismatch",
@@ -10116,7 +9405,6 @@ pub mod tests {
                 "envelope_hash",
             ),
         ];
-
         for (label, attachments, expected_reason) in cases {
             let tx = TransactionBuilder::new(
                 test_network_id(),
@@ -10126,7 +9414,6 @@ pub mod tests {
             .with_instructions([Log::new(Level::INFO, format!("proof-{label}"))])
             .with_attachments(attachments)
             .sign(kp.private_key());
-
             let err = AcceptedTransaction::validate(
                 &tx,
                 &test_network_id(),
@@ -10135,7 +9422,6 @@ pub mod tests {
                 &crypto_cfg,
             )
             .expect_err("malformed proof attachment must be rejected at admission");
-
             match err {
                 AcceptTransactionFail::TransactionLimit(limit) => {
                     assert!(
@@ -10148,7 +9434,6 @@ pub mod tests {
             }
         }
     }
-
     #[test]
     fn accept_transaction_requires_expires_at_height_when_configured() {
         use std::time::Duration;
@@ -10156,7 +9441,6 @@ pub mod tests {
         use iroha_data_model::isi::Log;
         use iroha_logger::Level;
         let (authority_id, kp) = gen_account_in("wonderland");
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority_id.clone(),
@@ -10164,7 +9448,6 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "ttl".into())])
         .sign(kp.private_key());
-
         let default_limits = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
             default_limits.max_signatures(),
@@ -10176,7 +9459,6 @@ pub mod tests {
         )
         .with_ingress_enforcement(true, false);
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-
         let err = AcceptedTransaction::accept(
             tx,
             &test_network_id(),
@@ -10185,7 +9467,6 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect_err("transactions must provide expires_at_height when required");
-
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
@@ -10196,7 +9477,6 @@ pub mod tests {
             other => panic!("expected TransactionLimit failure, got {other:?}"),
         }
     }
-
     #[test]
     fn accept_transaction_requires_tx_sequence_when_configured() {
         use std::time::Duration;
@@ -10204,7 +9484,6 @@ pub mod tests {
         use iroha_data_model::isi::Log;
         use iroha_logger::Level;
         let (authority_id, kp) = gen_account_in("wonderland");
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority_id.clone(),
@@ -10212,7 +9491,6 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "seq".into())])
         .sign(kp.private_key());
-
         let default_limits = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
             default_limits.max_signatures(),
@@ -10224,7 +9502,6 @@ pub mod tests {
         )
         .with_ingress_enforcement(false, true);
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-
         let err = AcceptedTransaction::accept(
             tx,
             &test_network_id(),
@@ -10233,7 +9510,6 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect_err("transactions must provide tx_sequence when required");
-
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
@@ -10244,14 +9520,12 @@ pub mod tests {
             other => panic!("expected TransactionLimit failure, got {other:?}"),
         }
     }
-
     #[test]
     fn signature_verification_result_reports_invalid_signature() {
         use std::time::Duration;
 
         let (authority_id, kp) = gen_account_in("wonderland");
         let (other_id, _other_kp) = gen_account_in("underland");
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority_id,
@@ -10260,11 +9534,9 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "sig".into())])
         .sign(kp.private_key());
         let tampered = tx.with_authority(other_id);
-
         let err =
             AcceptedTransaction::signature_verification_result(&tampered).expect_err("must fail");
         assert_eq!(err.code, SignatureRejectionCode::InvalidSignature);
-
         let now = tampered.creation_time();
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -10282,7 +9554,6 @@ pub mod tests {
                 if err.code == SignatureRejectionCode::InvalidSignature
         ));
     }
-
     #[test]
     fn retired_heartbeat_string_marker_is_rejected() {
         use std::time::Duration;
@@ -10291,7 +9562,6 @@ pub mod tests {
         let authority = AccountId::new(signer.public_key().clone());
         let mut metadata = Metadata::default();
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new("true"));
-
         let tx = TransactionBuilder::new_with_time_source(
             test_network_id(),
             authority,
@@ -10302,7 +9572,6 @@ pub mod tests {
         .sign(signer.private_key());
         let tx_params = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-
         let error = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
@@ -10319,7 +9588,6 @@ pub mod tests {
                     && limit.reason.contains("retired")
         ));
     }
-
     #[test]
     fn retired_heartbeat_false_marker_is_rejected() {
         use std::time::Duration;
@@ -10328,7 +9596,6 @@ pub mod tests {
         let authority = AccountId::new(signer.public_key().clone());
         let mut metadata = Metadata::default();
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new(false));
-
         let tx = TransactionBuilder::new_with_time_source(
             test_network_id(),
             authority,
@@ -10339,7 +9606,6 @@ pub mod tests {
         .sign(signer.private_key());
         let tx_params = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-
         let err = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
@@ -10349,7 +9615,6 @@ pub mod tests {
             &time_source,
         )
         .expect_err("false heartbeat marker should be rejected");
-
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
@@ -10360,7 +9625,6 @@ pub mod tests {
             other => panic!("expected TransactionLimit failure, got {other:?}"),
         }
     }
-
     #[test]
     fn retired_heartbeat_arbitrary_marker_is_rejected() {
         use std::time::Duration;
@@ -10369,7 +9633,6 @@ pub mod tests {
         let authority = AccountId::new(signer.public_key().clone());
         let mut metadata = Metadata::default();
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new("nope"));
-
         let tx = TransactionBuilder::new_with_time_source(
             test_network_id(),
             authority,
@@ -10380,7 +9643,6 @@ pub mod tests {
         .sign(signer.private_key());
         let tx_params = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-
         let err = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
@@ -10390,7 +9652,6 @@ pub mod tests {
             &time_source,
         )
         .expect_err("invalid heartbeat marker should be rejected");
-
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
@@ -10401,7 +9662,6 @@ pub mod tests {
             other => panic!("expected TransactionLimit failure, got {other:?}"),
         }
     }
-
     #[test]
     fn retired_heartbeat_marker_rejects_non_empty_transactions() {
         use std::time::Duration;
@@ -10411,7 +9671,6 @@ pub mod tests {
         let (authority_id, kp) = gen_account_in("wonderland");
         let mut metadata = Metadata::default();
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new(true));
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority_id.clone(),
@@ -10420,10 +9679,8 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "noop".into())])
         .with_metadata(metadata)
         .sign(kp.private_key());
-
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-
         let err = AcceptedTransaction::accept(
             tx,
             &test_network_id(),
@@ -10432,7 +9689,6 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect_err("retired heartbeat marker must reject a non-empty transaction");
-
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
@@ -10443,7 +9699,6 @@ pub mod tests {
             other => panic!("expected retired heartbeat rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn transaction_expired_at_height_is_rejected_by_state() {
         use std::time::Duration;
@@ -10461,17 +9716,14 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "ttl-check-chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let mut metadata = Metadata::default();
         metadata.insert(
             iroha_data_model::name::Name::from_str("expires_at_height").unwrap(),
             Json::from(0_u64),
         );
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority_id.clone(),
@@ -10480,7 +9732,6 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "ttl".into())])
         .with_metadata(metadata)
         .sign(kp.private_key());
-
         let default_limits = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
             default_limits.max_signatures(),
@@ -10500,7 +9751,6 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect("stateless TTL checks should pass when metadata present");
-
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         match result {
@@ -10515,7 +9765,6 @@ pub mod tests {
             }
         }
     }
-
     #[test]
     fn sequence_not_increasing_is_rejected_by_state() {
         use std::time::Duration;
@@ -10534,17 +9783,14 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "seq-check-chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let mut metadata = Metadata::default();
         metadata.insert(
             iroha_data_model::name::Name::from_str("tx_sequence").unwrap(),
             Json::from(5_u64),
         );
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority_id.clone(),
@@ -10553,7 +9799,6 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "seq".into())])
         .with_metadata(metadata)
         .sign(kp.private_key());
-
         let default_limits = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
             default_limits.max_signatures(),
@@ -10573,7 +9818,6 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect("stateless sequence checks should pass when metadata present");
-
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         match result {
@@ -10588,7 +9832,6 @@ pub mod tests {
             ),
         }
     }
-
     #[test]
     fn sequence_increasing_is_accepted_by_state() {
         use std::time::Duration;
@@ -10607,17 +9850,14 @@ pub mod tests {
         let query_handle = crate::query::store::LiveQueryStore::start_test();
         let chain: ChainId = "seq-accept-chain".parse().unwrap();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let mut metadata = Metadata::default();
         metadata.insert(
             iroha_data_model::name::Name::from_str("tx_sequence").unwrap(),
             Json::from(6_u64),
         );
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority_id.clone(),
@@ -10626,7 +9866,6 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "seq".into())])
         .with_metadata(metadata)
         .sign(kp.private_key());
-
         let default_limits = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
             default_limits.max_signatures(),
@@ -10646,11 +9885,9 @@ pub mod tests {
             &crypto_cfg,
         )
         .expect("stateless sequence checks should pass when metadata present");
-
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         result.expect("sequence should be accepted");
-
         let updated = block
             .world
             .tx_sequences
@@ -10659,7 +9896,6 @@ pub mod tests {
             .expect("sequence entry must exist");
         assert_eq!(updated, 6);
     }
-
     #[test]
     fn custom_parameter_cannot_disable_configured_ivm_cycle_ceiling() {
         use iroha_data_model::{
@@ -10682,11 +9918,9 @@ pub mod tests {
         pipeline.ivm_max_cycles_upper_bound =
             std::num::NonZeroU64::new(1_000).expect("test ceiling is non-zero");
         state.set_pipeline(pipeline);
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         // A consensus custom parameter with the retired name must not disable
         // or override the node's configured production admission policy.
         let id = CustomParameterId::new(Name::from_str("max_ivm_cycles_upper_bound").unwrap());
@@ -10696,7 +9930,6 @@ pub mod tests {
             .parameters
             .get_mut()
             .set_parameter(Parameter::Custom(custom));
-
         // Build program with max_cycles = 2000
         let prog = minimal_ivm_program_with_max_cycles(1, 2_000);
         let tx = TransactionBuilder::new(
@@ -10706,7 +9939,6 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -10720,7 +9952,6 @@ pub mod tests {
             other => panic!("configured cycle ceiling must reject the program, got {other:?}"),
         }
     }
-
     #[test]
     fn configured_ivm_cycle_ceiling_accepts_within_bound_despite_custom_parameter() {
         use iroha_data_model::{
@@ -10742,11 +9973,9 @@ pub mod tests {
         pipeline.ivm_max_cycles_upper_bound =
             std::num::NonZeroU64::new(4_000).expect("test ceiling is non-zero");
         state.set_pipeline(pipeline);
-
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         // The retired custom parameter cannot lower the configured ceiling.
         let id = CustomParameterId::new(Name::from_str("max_ivm_cycles_upper_bound").unwrap());
         let custom = CustomParameter::new(id, Json::new(1_u64));
@@ -10755,7 +9984,6 @@ pub mod tests {
             .parameters
             .get_mut()
             .set_parameter(Parameter::Custom(custom));
-
         // Build program with max_cycles = 2000, below the bound
         let prog = minimal_ivm_program_with_max_cycles(1, 2_000);
         let tx = TransactionBuilder::new(
@@ -10765,7 +9993,6 @@ pub mod tests {
         )
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
         .sign(kp.private_key());
-
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -10827,7 +10054,6 @@ pub mod tests {
             assert_events(&events, "data_trigger/fires_for_each_transaction");
             block.assert_balances([("alice", 10), ("bob", 10), ("carol", 10), ("dave", 60)]);
         }
-
         /// # Scenario
         ///
         /// 1. Transaction: Alice sends the asset to Bob in two separate packages, emitting two events.
@@ -10843,7 +10069,6 @@ pub mod tests {
             assert_events(&events, "data_trigger/fires_for_each_matching_instruction");
             block.assert_balances([("alice", 40), ("bob", 10), ("carol", 30)]);
         }
-
         /// # Scenario
         ///
         /// 1. Transaction: Alice sends a large donation to Bob.
@@ -10877,7 +10102,6 @@ pub mod tests {
                 ("eve", 60),
             ]);
         }
-
         /// # Scenario
         ///
         /// 1. Transaction: Alice sends 50 units to Bob.
@@ -10916,7 +10140,6 @@ pub mod tests {
                 ("eve", 17),
             ]);
         }
-
         /// All or none of the initial transaction and subsequent data triggers should take effect.
         #[tokio::test]
         async fn atomically_chains_from_transaction() {
@@ -10925,31 +10148,26 @@ pub mod tests {
                 res.request_transfer("alice", 50, "bob");
                 res
             };
-
             aborts_on_execution_error(sandbox(), "txn");
             aborts_on_exceeding_depth(sandbox(), "txn");
             commits_on_depleting_lives(sandbox(), "txn");
             commits_on_regular_success(sandbox(), "txn");
         }
-
         /// All or none of the initial time trigger and subsequent data triggers should take effect.
         #[tokio::test]
         async fn atomically_chains_from_time_trigger() {
             let sandbox = || Sandbox::default().with_time_trigger_transfer("alice", 50, "bob");
-
             aborts_on_execution_error(sandbox(), "time");
             aborts_on_exceeding_depth(sandbox(), "time");
             commits_on_depleting_lives(sandbox(), "time");
             commits_on_regular_success(sandbox(), "time");
         }
-
         /// Negative transfer amounts cannot cross the nominal quantity boundary.
         #[test]
         fn negative_transfer_amount_cannot_be_constructed() {
             let negative = Numeric::try_new(-1_i128, 0).expect("negative numeric amount");
             assert!(Quantity::try_from_numeric(negative).is_err());
         }
-
         /// Data trigger chains must roll back when a transfer uses a zero amount.
         #[tokio::test]
         async fn atomically_aborts_on_zero_amount_from_transaction() {
@@ -10958,18 +10176,14 @@ pub mod tests {
                 res.request_transfer("alice", 50, "bob");
                 res
             };
-
             aborts_on_zero_amount(sandbox(), "txn");
         }
-
         /// Zero transfer amounts should abort chains initiated by time triggers as well.
         #[tokio::test]
         async fn atomically_aborts_on_zero_amount_from_time_trigger() {
             let sandbox = || Sandbox::default().with_time_trigger_transfer("alice", 50, "bob");
-
             aborts_on_zero_amount(sandbox(), "time");
         }
-
         fn aborts_on_execution_error(sandbox: Sandbox, snapshot_suffix: &str) {
             let mut sandbox = sandbox
                 .with_data_trigger_transfer("bob", 10, "carol")
@@ -11006,7 +10220,6 @@ pub mod tests {
                 ("eve", 10),
             ]);
         }
-
         fn aborts_on_zero_amount(sandbox: Sandbox, snapshot_suffix: &str) {
             let mut sandbox = sandbox
                 .with_data_trigger_transfer("bob", 10, "carol")
@@ -11041,7 +10254,6 @@ pub mod tests {
                 ("eve", 10),
             ]);
         }
-
         fn aborts_on_exceeding_depth(sandbox: Sandbox, snapshot_suffix: &str) {
             let mut sandbox = sandbox
                 .with_max_execution_depth(2)
@@ -11071,7 +10283,6 @@ pub mod tests {
                 ("eve", 10),
             ]);
         }
-
         fn commits_on_depleting_lives(sandbox: Sandbox, snapshot_suffix: &str) {
             let mut sandbox = sandbox
                 .with_data_trigger_transfer("bob", 50, "carol")
@@ -11087,7 +10298,6 @@ pub mod tests {
             // The execution sequence should take effect.
             block.assert_balances([("alice", 10), ("bob", 10), ("carol", 60)]);
         }
-
         fn commits_on_regular_success(sandbox: Sandbox, snapshot_suffix: &str) {
             let mut sandbox = sandbox
                 .with_max_execution_depth(3)
@@ -11117,14 +10327,11 @@ pub mod tests {
             ]);
         }
     }
-
     include!("tx/empty_instruction_test.rs");
-
     #[test]
     fn lane_privacy_proofs_collected_from_attachments() {
         let (authority, keypair) = gen_account_in("wonderland");
         let backend = Ident::from_str("halo2/ipa").expect("ident");
-
         let proof1 = LanePrivacyProof {
             commitment_id: LaneCommitmentId::new(1),
             witness: LanePrivacyWitness::Merkle(LanePrivacyMerkleWitness {
@@ -11139,7 +10346,6 @@ pub mod tests {
                 proof: MerkleProof::from_audit_path_bytes(0, vec![[0x44; 32]]),
             }),
         };
-
         let mut attachment1 = ProofAttachment::new_ref(
             backend.clone(),
             ProofBox::new(backend.clone(), vec![0xAA]),
@@ -11152,7 +10358,6 @@ pub mod tests {
             VerifyingKeyId::new(backend, "vk_lane_2"),
         );
         attachment2.lane_privacy = Some(proof2.clone());
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority,
@@ -11164,7 +10369,6 @@ pub mod tests {
                 .expect("two attachments are a valid bounded proof list"),
         )
         .sign(keypair.private_key());
-
         let collected_proofs = super::collect_lane_privacy_proofs(&tx);
         let ids: BTreeSet<_> = collected_proofs
             .iter()
@@ -11174,21 +10378,18 @@ pub mod tests {
         assert!(ids.contains(&LaneCommitmentId::new(1)));
         assert!(ids.contains(&LaneCommitmentId::new(2)));
     }
-
     #[test]
     fn state_manifest_quorum_requires_approvers() {
         let primary_keypair = checked_fixture_keypair(vec![0x11; 32], Algorithm::Ed25519);
         let secondary_keypair = checked_fixture_keypair(vec![0x22; 32], Algorithm::Ed25519);
         let primary_id = AccountId::new(primary_keypair.public_key().clone());
         let secondary_id = AccountId::new(secondary_keypair.public_key().clone());
-
         let rules = GovernanceRules {
             validators: vec![primary_id.clone(), secondary_id.clone()],
             quorum: Some(2),
             ..GovernanceRules::default()
         };
         let lane_alias = "gov";
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             primary_id.clone(),
@@ -11205,7 +10406,6 @@ pub mod tests {
             }
             other => panic!("expected quorum rejection, got {other:?}"),
         }
-
         let mut metadata = Metadata::default();
         metadata.insert(
             (*super::GOV_APPROVERS_METADATA_KEY).clone(),
@@ -11222,7 +10422,6 @@ pub mod tests {
         let result = enforce_manifest_quorum(lane_alias, &rules, &tx);
         assert!(result.is_ok(), "quorum satisfied should pass: {result:?}");
     }
-
     #[test]
     fn state_manifest_quorum_rejects_duplicate_validators() {
         let primary_keypair = checked_fixture_keypair(vec![0x11; 32], Algorithm::Ed25519);
@@ -11231,7 +10430,6 @@ pub mod tests {
             validators: vec![primary_id.clone(), primary_id],
             ..GovernanceRules::default()
         };
-
         match super::canonical_manifest_validators("gov", &rules) {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
                 assert!(
@@ -11242,7 +10440,6 @@ pub mod tests {
             other => panic!("expected duplicate validator rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn state_manifest_quorum_rejects_duplicate_approvers() {
         let primary_keypair = checked_fixture_keypair(vec![0x11; 32], Algorithm::Ed25519);
@@ -11254,7 +10451,6 @@ pub mod tests {
             quorum: Some(2),
             ..GovernanceRules::default()
         };
-
         let mut metadata = Metadata::default();
         metadata.insert(
             (*super::GOV_APPROVERS_METADATA_KEY).clone(),
@@ -11268,7 +10464,6 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "noop".into())])
         .with_metadata(metadata)
         .sign(primary_keypair.private_key());
-
         match enforce_manifest_quorum("gov", &rules, &tx) {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
                 assert!(
@@ -11279,7 +10474,6 @@ pub mod tests {
             other => panic!("expected duplicate approver rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn manifest_protected_namespaces_require_metadata() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -11287,7 +10481,6 @@ pub mod tests {
         rules
             .protected_namespaces
             .insert(Name::from_str("apps").expect("namespace"));
-
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -11308,7 +10501,6 @@ pub mod tests {
         )
         .with_instructions([instruction])
         .sign(keypair.private_key());
-
         let world = World::default();
         let world_view = world.view();
         let err = super::enforce_manifest_protected_namespaces("lane-0", &rules, &tx, &world_view)
@@ -11323,7 +10515,6 @@ pub mod tests {
             other => panic!("expected NotPermitted rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn manifest_protected_rotation_requires_atomic_commit_instruction() {
         let (authority, keypair) = gen_account_in("wonderland");
@@ -11331,7 +10522,6 @@ pub mod tests {
         rules
             .protected_namespaces
             .insert(Name::from_str("apps").expect("namespace"));
-
         let old_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -11376,7 +10566,6 @@ pub mod tests {
         let world_view = world.view();
         super::enforce_manifest_protected_namespaces("lane-0", &rules, &tx, &world_view)
             .expect("single atomic deployment commit should pass protected address validation");
-
         let legacy = vec![
             InstructionBox::from(DeactivateContractInstance {
                 contract_address: old_address,
@@ -11408,7 +10597,6 @@ pub mod tests {
             other => panic!("expected NotPermitted rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn state_block_manifest_protects_native_contract_upload_lifecycle() {
         let chain: ChainId = "lane-native-upload-protected-ns".parse().unwrap();
@@ -11419,7 +10607,6 @@ pub mod tests {
         world
             .account_permissions
             .insert(authority.clone(), Permissions::from([lifecycle_permission]));
-
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
@@ -11446,7 +10633,6 @@ pub mod tests {
             },
         );
         state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
-
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -11461,7 +10647,6 @@ pub mod tests {
             (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
             Json::new(contract_address.to_string()),
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         macro_rules! validate_instruction {
@@ -11479,7 +10664,6 @@ pub mod tests {
                 block.validate_transaction(accepted, &mut ivm_cache).1
             }};
         }
-
         let (code, _) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest(
                 "seiyaku NativeUploadGovernance { view fn inspect() -> int { return 1; } }",
@@ -11496,7 +10680,6 @@ pub mod tests {
             total_size,
             chunk_count: 1,
         };
-
         let missing_upload_metadata = validate_instruction!(
             UploadSmartContractCodeChunk {
                 code_hash,
@@ -11520,7 +10703,6 @@ pub mod tests {
             None,
             "rejected upload must not create resumable staging"
         );
-
         let accepted_upload = validate_instruction!(
             UploadSmartContractCodeChunk {
                 code_hash,
@@ -11544,7 +10726,6 @@ pub mod tests {
                 received_chunks: 1,
             })
         );
-
         let missing_finalize_metadata = validate_instruction!(
             FinalizeSmartContractCodeUpload {
                 code_hash,
@@ -11570,7 +10751,6 @@ pub mod tests {
             "rejected finalization must preserve resumable staging"
         );
         assert!(block.world.contract_code().get(&code_hash).is_none());
-
         let accepted_finalize = validate_instruction!(
             FinalizeSmartContractCodeUpload {
                 code_hash,
@@ -11598,7 +10778,6 @@ pub mod tests {
             None,
             "successful finalization must clear staging"
         );
-
         let cancelled_hash = Hash::new(b"owner-scoped cleanup");
         let accepted_cancel_stage = validate_instruction!(
             UploadSmartContractCodeChunk {
@@ -11631,7 +10810,6 @@ pub mod tests {
             None
         );
     }
-
     #[test]
     fn generic_ivm_cannot_hide_contract_admin_syscalls_from_governance() {
         use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
@@ -11645,7 +10823,6 @@ pub mod tests {
         world
             .account_permissions
             .insert(authority.clone(), Permissions::from([lifecycle_permission]));
-
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
@@ -11673,7 +10850,6 @@ pub mod tests {
             },
         );
         state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         for syscall in [
@@ -11692,7 +10868,6 @@ pub mod tests {
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
             let mut ivm_cache = IvmCache::new();
             let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
-
             assert!(matches!(
                 result,
                 Err(TransactionRejectionReason::Validation(
@@ -11713,11 +10888,9 @@ pub mod tests {
             );
         }
     }
-
     #[test]
     fn runtime_upgrade_hook_requires_metadata() {
         let (authority, keypair) = gen_account_in("wonderland");
-
         let mut rules = GovernanceRules::default();
         rules.hooks.runtime_upgrade = Some(RuntimeUpgradeHook {
             allow: true,
@@ -11725,7 +10898,6 @@ pub mod tests {
             metadata_key: Some(Name::from_str("upgrade_id").expect("key")),
             allowed_ids: Some(BTreeSet::from(["v1".to_string()])),
         });
-
         let instruction = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade {
             manifest_bytes: vec![0x01, 0x02],
         };
@@ -11736,7 +10908,6 @@ pub mod tests {
         )
         .with_instructions([instruction.clone()])
         .sign(keypair.private_key());
-
         let err = super::enforce_runtime_upgrade_hook("lane-0", &rules, &tx)
             .expect_err("missing metadata should reject");
         match err {
@@ -11748,7 +10919,6 @@ pub mod tests {
             }
             other => panic!("expected NotPermitted rejection, got {other:?}"),
         }
-
         let mut metadata = Metadata::default();
         metadata.insert(Name::from_str("upgrade_id").expect("key"), Json::new("v1"));
         let tx = TransactionBuilder::new(
@@ -11763,7 +10933,6 @@ pub mod tests {
             .expect("runtime upgrade hook should allow");
         assert!(ok, "runtime upgrade hook should be applied");
     }
-
     #[test]
     fn state_enforces_lane_compliance_engine() {
         let chain: ChainId = "lane-compliance".parse().unwrap();
@@ -11771,7 +10940,6 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let policy = LaneCompliancePolicy {
             id: LaneCompliancePolicyId::new(Hash::prehashed([0xAA; 32])),
             version: 1,
@@ -11797,7 +10965,6 @@ pub mod tests {
             state.lane_compliance_engine().is_some(),
             "lane compliance engine should be installed"
         );
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
@@ -11813,7 +10980,6 @@ pub mod tests {
             dataspace_id: TestDataSpaceId::UNIVERSAL,
             dataspace_catalog: &stx.nexus.dataspace_catalog,
         };
-
         let err = super::enforce_lane_policies(&tx, &stx, &assignment)
             .expect_err("compliance denial should reject");
         match err {
@@ -11826,7 +10992,6 @@ pub mod tests {
             other => panic!("expected compliance rejection, got {other:?}"),
         }
     }
-
     #[test]
     fn non_governed_manifest_validators_do_not_gate_state_policy_for_ivm_contract_metadata() {
         use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
@@ -11837,7 +11002,6 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let mut rules = GovernanceRules {
             validators: vec![validator],
             quorum: Some(1),
@@ -11846,7 +11010,6 @@ pub mod tests {
         rules
             .protected_namespaces
             .insert(Name::from_str("is").expect("namespace"));
-
         let mut statuses = BTreeMap::new();
         statuses.insert(
             TestLaneId::SINGLE,
@@ -11864,7 +11027,6 @@ pub mod tests {
         );
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         state.install_lane_manifests(&manifests);
-
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -11887,19 +11049,16 @@ pub mod tests {
         .with_metadata(metadata)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![0xCA])))
         .sign(keypair.private_key());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let stx = block.transaction();
         let assignment = single_lane_assignment(&stx.nexus.dataspace_catalog);
-
         let result = super::enforce_lane_policies(&tx, &stx, &assignment);
         assert!(
             result.is_ok(),
             "non-governed manifest validators must not reject contract metadata: {result:?}"
         );
     }
-
     #[test]
     fn validate_transaction_without_context_uses_live_autoscale_route() {
         use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
@@ -11909,7 +11068,6 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         {
             let mut elastic_lane = LaneConfig {
                 id: TestLaneId::new(1),
@@ -11925,7 +11083,6 @@ pub mod tests {
                 .metadata
                 .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
             crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
-
             let mut nexus = state.nexus.write();
             nexus.enabled = true;
             nexus.autoscale.enabled = true;
@@ -11937,7 +11094,6 @@ pub mod tests {
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         }
-
         let mut statuses = BTreeMap::new();
         statuses.insert(
             TestLaneId::SINGLE,
@@ -11969,7 +11125,6 @@ pub mod tests {
         );
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         state.install_lane_manifests(&manifests);
-
         let mut selected = None;
         for attempt in 0_u64..256 {
             let mut metadata = Metadata::default();
@@ -12020,14 +11175,12 @@ pub mod tests {
         }
         let tx = selected.expect("fixture should find a tx routed to elastic lane");
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         result.expect("live autoscale-routed transaction should bypass blocked base lane");
     }
-
     #[test]
     fn validate_transaction_without_context_ignores_autoscale_when_nexus_disabled() {
         use iroha_data_model::transaction::{Executable, executable::IvmBytecode};
@@ -12037,7 +11190,6 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         {
             let mut elastic_lane = LaneConfig {
                 id: TestLaneId::new(1),
@@ -12053,7 +11205,6 @@ pub mod tests {
                 .metadata
                 .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
             crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
-
             let mut nexus = state.nexus.write();
             nexus.enabled = true;
             nexus.autoscale.enabled = true;
@@ -12065,7 +11216,6 @@ pub mod tests {
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         }
-
         let mut statuses = BTreeMap::new();
         statuses.insert(
             TestLaneId::SINGLE,
@@ -12097,7 +11247,6 @@ pub mod tests {
         );
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         state.install_lane_manifests(&manifests);
-
         let mut selected = None;
         for attempt in 0_u64..256 {
             let mut metadata = Metadata::default();
@@ -12158,7 +11307,6 @@ pub mod tests {
             selected.expect("fixture should find a tx that would route to elastic when enabled");
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         state.nexus.write().enabled = false;
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
@@ -12175,7 +11323,6 @@ pub mod tests {
             other => panic!("expected base-lane NotPermitted rejection, got {other:?}"),
         }
     }
-
     fn lane_execution_input_artifact(
         lane_id: TestLaneId,
         dataspace_id: TestDataSpaceId,
@@ -12223,7 +11370,6 @@ pub mod tests {
             payload_ownership_hash,
         )
         .expect("synthetic lane RBC instance should hash");
-
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id,
             dataspace_id,
@@ -12247,7 +11393,6 @@ pub mod tests {
             descriptor_hash: Hash::new(b"lane execution descriptor placeholder"),
         };
         descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
-
         let ownership = SumeragiLanePayloadOwnership {
             proposal_height: 1,
             proposal_view: 0,
@@ -12292,12 +11437,10 @@ pub mod tests {
             native_amx_receipts: Vec::new(),
         })
     }
-
     fn state_with_guarded_base_and_open_elastic_lane(chain: &ChainId, world: World) -> State {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
-
         let elastic_lane_id = TestLaneId::new(1);
         let mut elastic_lane = LaneConfig {
             id: elastic_lane_id,
@@ -12313,7 +11456,6 @@ pub mod tests {
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "1".to_string());
         crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
-
         {
             let mut nexus = state.nexus.write();
             nexus.enabled = true;
@@ -12326,7 +11468,6 @@ pub mod tests {
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         }
-
         let mut statuses = BTreeMap::new();
         statuses.insert(
             TestLaneId::SINGLE,
@@ -12359,13 +11500,11 @@ pub mod tests {
         state.install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(statuses)));
         state
     }
-
     #[test]
     fn lane_block_execution_input_uses_descriptor_indices_and_routing_context() {
         use iroha_data_model::transaction::{
             Executable, TransactionBuilder, executable::IvmBytecode,
         };
-
         let chain: ChainId = "lane-execution-input-route".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let validator = PeerId {
@@ -12422,14 +11561,12 @@ pub mod tests {
             entrypoints,
             validator,
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let results = block
             .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)
             .expect("valid lane execution input should execute");
-
         assert_eq!(results.len(), 2);
         assert_eq!(
             results
@@ -12446,13 +11583,11 @@ pub mod tests {
             result.expect("descriptor-routed lane transaction should pass");
         }
     }
-
     #[test]
     fn lane_block_execution_input_rejects_forged_hashes_before_state_execution() {
         use iroha_data_model::transaction::{
             Executable, TransactionBuilder, executable::IvmBytecode,
         };
-
         let chain: ChainId = "lane-execution-input-forged".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let validator = PeerId {
@@ -12476,26 +11611,22 @@ pub mod tests {
             validator,
         );
         artifact.entrypoint_hashes[0] = Hash::new(b"forged lane execution entrypoint hash");
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let err = block
             .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)
             .expect_err("forged execution input hashes must be rejected");
-
         assert_eq!(
             err,
             "execution input entrypoint hashes do not match proposal descriptor"
         );
     }
-
     #[test]
     fn lane_block_execution_input_rejects_duplicate_signed_entrypoints_before_state_execution() {
         use iroha_data_model::transaction::{
             Executable, TransactionBuilder, executable::IvmBytecode,
         };
-
         let chain: ChainId = "lane-execution-input-duplicate".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let validator = PeerId {
@@ -12521,23 +11652,19 @@ pub mod tests {
             ],
             validator,
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let err = block
             .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)
             .expect_err("duplicate lane execution entrypoints must be rejected");
-
         assert_eq!(err, "execution input contains duplicate entrypoints");
     }
-
     #[test]
     fn lane_block_execution_input_preserves_full_width_entrypoint_indices() {
         use iroha_data_model::transaction::{
             Executable, TransactionBuilder, executable::IvmBytecode,
         };
-
         let chain: ChainId = "lane-execution-input-full-width-index".parse().unwrap();
         let (world, authority, keypair) = world_with_authority("wonderland");
         let validator = PeerId {
@@ -12583,14 +11710,12 @@ pub mod tests {
             vec![TransactionEntrypoint::External(tx)],
             validator,
         );
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut ivm_cache = IvmCache::new();
         let results = block
             .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)
             .expect("full-width entrypoint index should be preserved");
-
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, u64::MAX);
         results[0]
@@ -12598,7 +11723,6 @@ pub mod tests {
             .clone()
             .expect("descriptor-routed lane transaction should pass");
     }
-
     #[test]
     fn install_lane_manifests_updates_privacy_registry() {
         let chain: ChainId = "lane-privacy-registry".parse().unwrap();
@@ -12606,7 +11730,6 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain);
-
         let commitment = LanePrivacyCommitment::merkle(
             LaneCommitmentId::new(9),
             MerkleCommitment::from_root_bytes([0x11; 32], 8),
@@ -12626,7 +11749,6 @@ pub mod tests {
         statuses.insert(TestLaneId::SINGLE, status);
         let registry = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         state.install_lane_manifests(&registry);
-
         let snapshot = state.lane_privacy_registry.read().clone();
         assert!(!snapshot.is_empty(), "privacy registry should not be empty");
         assert!(
@@ -12634,7 +11756,6 @@ pub mod tests {
             "privacy registry should contain lane entry"
         );
     }
-
     /// Lightweight end-to-end harness for exercising transaction, trigger, and block flow in tests.
     pub struct Sandbox {
         /// In-memory state under test.
@@ -12642,7 +11763,6 @@ pub mod tests {
         /// Buffered transactions that will be packed into the next block.
         pub transactions: Vec<SignedTransaction>,
     }
-
     /// Handle returned by [`Sandbox::block`] for asserting and committing a prepared block.
     pub struct SandboxBlock<'state> {
         /// View into the mutable world state for this block.
@@ -12650,7 +11770,6 @@ pub mod tests {
         /// The signed block prepared from queued transactions.
         pub block: Option<SignedBlock>,
     }
-
     /// Short names of pre-created test accounts used by the sandbox.
     pub const ACCOUNTS_STR: [&str; 5] = ["alice", "bob", "carol", "dave", "eve"];
     /// Initial balances for the sandbox asset, keyed by account short name.
@@ -12658,14 +11777,12 @@ pub mod tests {
         LazyLock::new(|| ACCOUNTS_STR.into_iter().zip([60, 10, 10, 10, 10]).collect());
     /// Default maximum smart contract execution depth used by the sandbox.
     pub const INIT_EXECUTION_DEPTH: u8 = u8::MAX;
-
     /// Mapping from account short name to its numeric asset balance.
     pub type AccountBalance = std::collections::BTreeMap<&'static str, u64>;
     /// Mapping from account short name to its credentials (ID and key).
     pub type AccountMap = std::collections::BTreeMap<&'static str, Credential>;
     /// Mapping from account identifier to its short alias.
     pub type AccountAliasMap = std::collections::BTreeMap<AccountId, &'static str>;
-
     /// Domain used for all sandbox entities.
     pub const DOMAIN_STR: &str = "wonderland";
     /// Asset definition name used by the sandbox.
@@ -12709,7 +11826,6 @@ pub mod tests {
             "bc4ff9e3d5cc415426f864c513f974ccd5ab2f86cda19fc20c4e1fec86585fa1",
         ),
     ];
-
     /// Pre-derived credentials for sandbox accounts (IDs and private keys).
     pub static ACCOUNT: LazyLock<AccountMap> = LazyLock::new(|| {
         SANDBOX_ACCOUNT_KEYS
@@ -12733,9 +11849,7 @@ pub mod tests {
             .map(|(alias, cred)| (cred.id.clone(), *alias))
             .collect()
     });
-
     include!("tx/sandbox_state_tests.rs");
 }
-
 #[cfg(test)]
 include!("tx/numeric_to_u64_tests.rs");

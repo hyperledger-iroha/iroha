@@ -47,7 +47,6 @@ fn enforce_payload_len_limit(len: usize) -> Result<(), NoritoFrameError> {
     }
     Ok(())
 }
-
 #[cfg(feature = "transparent_api")]
 #[doc = "Builder utilities for constructing blocks in transparent API mode."]
 pub mod builder;
@@ -143,7 +142,6 @@ pub enum SetTransactionResultsError {
     /// The supplied AXT policy snapshot was not canonical.
     InvalidAxtPolicySnapshot(crate::nexus::AxtPolicySnapshotValidationError),
 }
-
 impl fmt::Display for SetTransactionResultsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -173,16 +171,13 @@ impl fmt::Display for SetTransactionResultsError {
         }
     }
 }
-
 impl std::error::Error for SetTransactionResultsError {}
-
 /// Error returned when lane-finality statements are attached before execution results exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetLaneFinalityStatementsError {
     /// The block does not yet carry transaction results and therefore has no final header hash.
     MissingTransactionResults,
 }
-
 impl fmt::Display for SetLaneFinalityStatementsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -192,9 +187,7 @@ impl fmt::Display for SetLaneFinalityStatementsError {
         }
     }
 }
-
 impl std::error::Error for SetLaneFinalityStatementsError {}
-
 /// Error returned when independent-batch receipts cannot be attached to result leaves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetBatchTransferOutcomesError {
@@ -213,7 +206,6 @@ pub enum SetBatchTransferOutcomesError {
         hash: HashOf<TransactionEntrypoint>,
     },
 }
-
 impl fmt::Display for SetBatchTransferOutcomesError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -233,9 +225,7 @@ impl fmt::Display for SetBatchTransferOutcomesError {
         }
     }
 }
-
 impl std::error::Error for SetBatchTransferOutcomesError {}
-
 impl SignedBlock {
     /// Create new block with a given signature
     ///
@@ -269,7 +259,6 @@ impl SignedBlock {
             result: None,
         }
     }
-
     /// Create a block with a given signature and an explicit DA commitment bundle.
     ///
     /// The caller is responsible for ensuring `header.da_commitments_hash` matches the supplied
@@ -303,7 +292,6 @@ impl SignedBlock {
             result: None,
         }
     }
-
     /// Create a block with a given signature and payload.
     #[cfg(feature = "transparent_api")]
     pub fn presigned_with_payload(
@@ -318,7 +306,6 @@ impl SignedBlock {
             result: None,
         }
     }
-
     /// Set this block's transaction results and update the Merkle roots accordingly.
     ///
     /// # Errors
@@ -342,7 +329,6 @@ impl SignedBlock {
             crate::nexus::AxtPolicySnapshot::default(),
         )
     }
-
     /// Set this block's transaction results, including any FASTPQ transfer transcripts, and update the Merkle roots accordingly.
     ///
     /// # Errors
@@ -369,7 +355,6 @@ impl SignedBlock {
             axt_policy_snapshot,
         )
     }
-
     // Phase one fixes the result-bearing header while keeping the required
     // lane-finality field explicitly empty. Phase two attaches statements that
     // bind that final header via `set_lane_finality_statements`.
@@ -387,7 +372,6 @@ impl SignedBlock {
             .validate()
             .map_err(SetTransactionResultsError::InvalidAxtPolicySnapshot)?;
         let result_hashes = results.iter().map(TransactionResult::hash_from_inner);
-
         let external_hashes = self
             .external_entrypoints_cloned()
             .map(|entrypoint| entrypoint.hash())
@@ -424,10 +408,8 @@ impl SignedBlock {
             .copied()
             .chain(hashes.iter().copied().skip(external_count))
             .collect::<Vec<_>>();
-
         // Merkle tree over all entrypoints (external transactions first, then time triggers).
         let merkle = MerkleTree::from_iter(canonical_hashes);
-
         // Ensure the consensus merkle root covering only external transactions remains intact.
         let external_merkle: MerkleTree<TransactionEntrypoint> =
             external_hashes.iter().copied().collect();
@@ -443,7 +425,6 @@ impl SignedBlock {
                 },
             );
         }
-
         let trigger_completions = self
             .result
             .as_ref()
@@ -474,7 +455,6 @@ impl SignedBlock {
         });
         Ok(())
     }
-
     /// Replace trigger completion events captured while executing this block.
     #[cfg(feature = "transparent_api")]
     pub fn set_trigger_completions(
@@ -485,7 +465,6 @@ impl SignedBlock {
             result.trigger_completions = trigger_completions;
         }
     }
-
     /// Finalize the canonical post-execution lane effects after the result Merkle root is fixed.
     ///
     /// Lane-finality statements bind [`Self::hash`], so production construction must call this
@@ -509,7 +488,6 @@ impl SignedBlock {
         result.lane_finality_statements = lane_finality_statements;
         Ok(())
     }
-
     /// Replace the embedded AXT policy snapshot for adversarial validation fixtures.
     ///
     /// Production block construction must use
@@ -524,7 +502,6 @@ impl SignedBlock {
             .as_mut()
             .map(|result| core::mem::replace(&mut result.axt_policy_snapshot, snapshot))
     }
-
     /// Replace durable independent-batch outcomes captured while executing this block.
     ///
     /// # Errors
@@ -561,7 +538,6 @@ impl SignedBlock {
                     .ok_or(SetBatchTransferOutcomesError::UnknownEntrypoint { hash })
             })
             .collect::<Result<Vec<_>, _>>()?;
-
         for transaction_result in &mut result.transaction_results {
             transaction_result.set_batch_transfer_outcomes(Vec::new());
         }
@@ -576,7 +552,6 @@ impl SignedBlock {
         self.payload.header.result_merkle_root = result.result_merkle.root();
         Ok(())
     }
-
     /// Number of successful execution fragments recorded with this block result.
     #[inline]
     pub fn committed_fragment_count(&self) -> Option<u64> {
@@ -584,7 +559,6 @@ impl SignedBlock {
             .as_ref()
             .map(|result| result.committed_fragment_count)
     }
-
     /// Borrow canonical post-execution lane-finality statements.
     #[must_use]
     pub fn lane_finality_statements(&self) -> &[crate::nexus::LaneFinalityStatement] {
@@ -592,14 +566,12 @@ impl SignedBlock {
             .as_ref()
             .map_or(&[], |result| result.lane_finality_statements.as_slice())
     }
-
     /// Set the number of successful execution fragments recorded with this block result.
     pub fn set_committed_fragment_count(&mut self, count: u64) {
         if let Some(result) = self.result.as_mut() {
             result.committed_fragment_count = count;
         }
     }
-
     /// Incrementally update a single transaction result at `index`.
     #[cfg(feature = "transparent_api")]
     pub fn update_transaction_result(
@@ -615,14 +587,12 @@ impl SignedBlock {
         if index >= result_state.transaction_results.len() {
             return false;
         }
-
         result_state.transaction_results[index] = TransactionResult::from(result.clone());
         let hash = TransactionResult::hash_from_inner(result);
         result_state.result_merkle.update_typed_leaf(index, hash);
         self.payload.header.result_merkle_root = result_state.result_merkle.root();
         true
     }
-
     /// Produce Merkle proofs for the specified transaction entrypoint hash when available.
     #[must_use]
     pub fn proofs_for_entry_hash(
@@ -637,7 +607,6 @@ impl SignedBlock {
             .enumerate()
             .find(|(_, hash)| hash == entry_hash)?;
         let idx_u32: u32 = idx.try_into().ok()?;
-
         // The execution commitment authenticates the exact result-bearing
         // block wire, so every entrypoint (including external transactions)
         // uses the same full executed-entry tree. This avoids two proof-root
@@ -649,7 +618,6 @@ impl SignedBlock {
         }
         let entry_merkle_proof = result_state.merkle.get_proof(idx_u32)?;
         let entry_proof = BlockReceiptProof::new(*entry_hash, entry_merkle_proof);
-
         let expected_result_root = self.payload.header.result_merkle_root?;
         let result_commitment = result_state.result_merkle.commitment()?;
         if result_commitment.root() != &expected_result_root
@@ -663,7 +631,6 @@ impl SignedBlock {
         let result_proof = ExecutionReceiptProof::new(result_hash, proof);
         let block_hash = self.hash();
         let executed_block_wire_hash = self.executed_block_wire_hash().ok()?;
-
         Some(crate::block::proofs::BlockProofs {
             block_height: self.payload.header.height(),
             block_hash,
@@ -676,14 +643,12 @@ impl SignedBlock {
             fastpq_transcripts: self.fastpq_transcripts().clone(),
         })
     }
-
     /// Whether execution results are attached to this block.
     #[inline]
     #[must_use]
     pub fn has_results(&self) -> bool {
         self.result.is_some()
     }
-
     /// Whether this block is in the exact resultless shape accepted as a consensus proposal.
     ///
     /// Execution results and their derived header root are both absent from a canonical
@@ -694,7 +659,6 @@ impl SignedBlock {
     pub fn is_resultless_proposal(&self) -> bool {
         self.result.is_none() && self.payload.header.result_merkle_root.is_none()
     }
-
     /// Return the canonical resultless proposal corresponding to this block.
     ///
     /// This removes the deterministic execution result and the result Merkle root derived from
@@ -706,7 +670,6 @@ impl SignedBlock {
         proposal.payload.header.result_merkle_root = None;
         proposal
     }
-
     /// Hash the canonical resultless proposal wire used by [`consensus_v2::BlockSubject`].
     ///
     /// # Errors
@@ -716,7 +679,6 @@ impl SignedBlock {
             .encode_wire()
             .map(|wire| Hash::new(&wire))
     }
-
     /// Hash this exact canonical block wire, including deterministic execution results.
     ///
     /// # Errors
@@ -724,20 +686,17 @@ impl SignedBlock {
     pub fn executed_block_wire_hash(&self) -> Result<Hash, NoritoFrameError> {
         self.encode_wire().map(|wire| Hash::new(&wire))
     }
-
     #[inline]
     pub(crate) fn result_ref(&self) -> &BlockResult {
         self.result
             .as_ref()
             .expect("block results are unavailable; block not validated")
     }
-
     /// Block header
     #[inline]
     pub fn header(&self) -> BlockHeader {
         self.payload.header
     }
-
     /// Replace the header without rebuilding body Merkle material for adversarial fixtures.
     ///
     /// This is intentionally available only to data-model tests and the
@@ -747,7 +706,6 @@ impl SignedBlock {
     pub fn replace_header_for_testing(&mut self, header: BlockHeader) -> BlockHeader {
         core::mem::replace(&mut self.payload.header, header)
     }
-
     /// Replace DA sidecars without canonicalizing empty bundles for adversarial fixtures.
     ///
     /// This is intentionally available only to data-model tests and the
@@ -764,7 +722,6 @@ impl SignedBlock {
             core::mem::replace(&mut self.payload.da_pin_intents, da_pin_intents),
         )
     }
-
     /// Signatures of peers which approved this block.
     #[inline]
     pub fn signatures(
@@ -772,13 +729,11 @@ impl SignedBlock {
     ) -> impl ExactSizeIterator<Item = &BlockSignature> + DoubleEndedIterator {
         self.signatures.iter()
     }
-
     /// Calculate block hash
     #[inline]
     pub fn hash(&self) -> HashOf<BlockHeader> {
         self.payload.header.hash()
     }
-
     /// Fallibly add additional signature to this block.
     ///
     /// # Errors
@@ -797,14 +752,12 @@ impl SignedBlock {
         ));
         Ok(())
     }
-
     /// Add additional signature to this block.
     #[cfg(feature = "transparent_api")]
     pub fn sign(&mut self, private_key: &iroha_crypto::PrivateKey, signatory: usize) {
         self.try_sign(private_key, signatory)
             .expect("signing should succeed for a valid private key and finalized block header");
     }
-
     /// Add signature to the block
     ///
     /// # Errors
@@ -817,11 +770,9 @@ impl SignedBlock {
                 "Duplicate signature".to_owned(),
             ));
         }
-
         self.signatures.insert(signature);
         Ok(())
     }
-
     /// Replace signatures without verification
     ///
     /// # Errors
@@ -835,7 +786,6 @@ impl SignedBlock {
         if signatures.is_empty() {
             return Err(iroha_crypto::Error::Signing("Signatures empty".to_owned()));
         }
-
         signatures.iter().map(BlockSignature::index).try_fold(
             BTreeSet::new(),
             |mut acc, elem| {
@@ -844,14 +794,11 @@ impl SignedBlock {
                         "{elem}: Duplicate signature"
                     )));
                 }
-
                 Ok(acc)
             },
         )?;
-
         Ok(core::mem::replace(&mut self.signatures, signatures))
     }
-
     /// Creates genesis block signed with the genesis private key (and not signed by any peer).
     ///
     /// `da_commitments` lets the caller embed a [`DaCommitmentBundle`] into the genesis payload once
@@ -870,7 +817,6 @@ impl SignedBlock {
         )
         .expect("genesis block signing should succeed for non-empty transactions and valid key material")
     }
-
     /// Try to create genesis block signed with the genesis private key (and not signed by any peer).
     ///
     /// `da_commitments` lets the caller embed a [`DaCommitmentBundle`] into the genesis payload once
@@ -895,7 +841,6 @@ impl SignedBlock {
             None,
         )
     }
-
     /// Creates genesis block signed with the genesis private key, overriding DA proof policies.
     ///
     /// `da_commitments` lets the caller embed a [`DaCommitmentBundle`] into the genesis payload once
@@ -916,7 +861,6 @@ impl SignedBlock {
         )
         .expect("genesis block signing should succeed for non-empty transactions and valid key material")
     }
-
     /// Try to create genesis block signed with the genesis private key, overriding DA proof policies.
     ///
     /// `da_commitments` lets the caller embed a [`DaCommitmentBundle`] into the genesis payload once
@@ -949,7 +893,6 @@ impl SignedBlock {
         let confidential_features = confidential_features.or(Some(
             crate::confidential::DEFAULT_CONFIDENTIAL_FEATURE_DIGEST,
         ));
-
         let proof_policies = da_proof_policies.unwrap_or_else(|| {
             DaProofPolicyBundle::new(vec![DaProofPolicy {
                 lane_id: crate::nexus::LaneId::SINGLE,
@@ -962,7 +905,6 @@ impl SignedBlock {
         let da_commitments_hash = da_commitments
             .as_ref()
             .and_then(DaCommitmentBundle::merkle_commitment);
-
         let header = BlockHeader {
             height: nonzero!(1_u64),
             prev_block_hash: None,
@@ -979,7 +921,6 @@ impl SignedBlock {
             confidential_features,
             sccp_commitment_root: None,
         };
-
         let signature =
             BlockSignature::new(0, SignatureOf::try_from_hash(private_key, header.hash())?);
         let external_entrypoints: Vec<TransactionEntrypoint> = transactions
@@ -998,7 +939,6 @@ impl SignedBlock {
             previous_roster_evidence: None,
             npos_consensus_effects: None,
         };
-
         let result = BlockResult {
             external_entrypoints: Vec::new(),
             time_triggers: Vec::new(),
@@ -1018,7 +958,6 @@ impl SignedBlock {
             result: Some(result),
         })
     }
-
     /// Serialize this block into a canonical Norito wire frame (version byte + header + payload).
     ///
     /// # Errors
@@ -1026,7 +965,6 @@ impl SignedBlock {
     pub fn encode_wire(&self) -> Result<Vec<u8>, NoritoFrameError> {
         self.canonical_wire().map(SignedBlockWire::into_vec)
     }
-
     /// Obtain the canonical Norito wire helper for inspecting or framing this block.
     ///
     /// # Errors
@@ -1035,19 +973,15 @@ impl SignedBlock {
     pub fn canonical_wire(&self) -> Result<SignedBlockWire, NoritoFrameError> {
         let payload = encode_signed_block_payload(self);
         let version = self.version();
-
         let mut versioned = Vec::with_capacity(1 + payload.len());
         versioned.push(version);
         versioned.extend_from_slice(&payload);
-
         let mut frame = Vec::with_capacity(1 + norito::core::Header::SIZE + payload.len());
         frame.push(version);
         write_signed_block_header(&payload, &mut frame)?;
         frame.extend_from_slice(&payload);
-
         Ok(SignedBlockWire { frame, versioned })
     }
-
     fn get_genesis_block_creation_time(transactions: &[SignedTransaction]) -> u64 {
         let latest_txn_time = transactions
             .iter()
@@ -1061,23 +995,19 @@ impl SignedBlock {
             .expect("INTERNAL BUG: Unix timestamp exceedes u64::MAX")
     }
 }
-
 impl fmt::Display for SignedBlock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.header())
     }
 }
-
 impl iroha_version::Version for SignedBlock {
     fn version(&self) -> u8 {
         1
     }
-
     fn supported_versions() -> std::ops::Range<u8> {
         1..2
     }
 }
-
 impl iroha_version::codec::EncodeVersioned for SignedBlock {
     fn encode_versioned(&self) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(1);
@@ -1087,13 +1017,11 @@ impl iroha_version::codec::EncodeVersioned for SignedBlock {
         bytes
     }
 }
-
 impl iroha_version::codec::DecodeVersioned for SignedBlock {
     fn decode_all_versioned(input: &[u8]) -> iroha_version::error::Result<Self> {
         decode_versioned_signed_block_inner(input, input)
     }
 }
-
 #[cfg(feature = "http")]
 pub mod stream {
     //! Blocks for streaming API.
@@ -1123,7 +1051,6 @@ pub mod stream {
         )]
         #[repr(transparent)]
         pub struct BlockSubscriptionRequest(pub NonZeroU64);
-
         /// Message sent by the stream producer containing block.
         #[derive(Debug, Clone, Decode, Encode, IntoSchema)]
         #[cfg_attr(
@@ -1133,36 +1060,30 @@ pub mod stream {
         #[repr(transparent)]
         pub struct BlockMessage(pub SignedBlock);
     }
-
     impl From<BlockMessage> for SignedBlock {
         fn from(source: BlockMessage) -> Self {
             source.0
         }
     }
-
     /// Message sent by the stream producer containing block by shared ownership
     /// without requiring an additional clone of the block data.
     #[derive(Debug, Clone)]
     #[repr(transparent)]
     pub struct BlockMessageSend(pub Arc<SignedBlock>);
-
     impl NoritoSerialize for BlockMessageSend {
         fn schema_hash() -> [u8; 16] {
             <BlockMessage as NoritoSerialize>::schema_hash()
         }
-
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
             // Serialize as a BlockMessage wrapper to keep schema and layout consistent
             let msg = BlockMessage(self.0.as_ref().clone());
             NoritoSerialize::serialize(&msg, writer)
         }
     }
-
     /// Exports common structs and enums from this module.
     pub mod prelude {
         pub use super::{BlockMessage, BlockMessageSend, BlockSubscriptionRequest};
     }
-
     impl BlockSubscriptionRequest {
         /// Create a new [`BlockSubscriptionRequest`].
         pub fn new(height: NonZeroU64) -> Self {
@@ -1247,7 +1168,6 @@ pub mod error {
             SccpCommitmentRootMismatch,
         }
     }
-
     #[cfg(feature = "json")]
     impl BlockRejectionReason {
         fn json_label(self) -> &'static str {
@@ -1279,13 +1199,11 @@ pub mod error {
             }
         }
     }
-
     #[cfg(feature = "json")]
     impl norito::json::FastJsonWrite for BlockRejectionReason {
         fn write_json(&self, out: &mut String) {
             norito::json::write_json_string(self.json_label(), out);
         }
-
         fn write_json_to(
             &self,
             out: &mut dyn norito::json::JsonWriteSink,
@@ -1293,7 +1211,6 @@ pub mod error {
             norito::json::write_json_string_to(self.json_label(), out)
         }
     }
-
     #[cfg(feature = "json")]
     impl norito::json::JsonDeserialize for BlockRejectionReason {
         fn json_deserialize(
@@ -1339,10 +1256,8 @@ pub mod error {
             }
         }
     }
-
     impl std::error::Error for BlockRejectionReason {}
 }
-
 impl fmt::Display for error::BlockRejectionReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1417,7 +1332,6 @@ impl fmt::Display for error::BlockRejectionReason {
         }
     }
 }
-
 /// Prefix versioned [`SignedBlock`] bytes with a Norito header using the layout
 /// flags recorded by the encoder, falling back to the default framing flags.
 /// The returned buffer contains the original version byte followed by the
@@ -1435,52 +1349,43 @@ pub fn frame_versioned_signed_block_bytes(versioned: &[u8]) -> Result<Vec<u8>, N
     let version = versioned[0];
     let payload = &versioned[1..];
     enforce_payload_len_limit(payload.len())?;
-
     if payload.starts_with(MAGIC.as_slice()) {
         validate_signed_block_header(payload)?;
         return Ok(versioned.to_vec());
     }
-
     let mut out = Vec::with_capacity(1 + norito::core::Header::SIZE + payload.len());
     out.push(version);
     write_signed_block_header(payload, &mut out)?;
     out.extend_from_slice(payload);
     Ok(out)
 }
-
 /// Canonical wire representation of a [`SignedBlock`], exposing both the framed and bare bytes.
 #[derive(Clone)]
 pub struct SignedBlockWire {
     frame: Vec<u8>,
     versioned: Vec<u8>,
 }
-
 impl SignedBlockWire {
     /// Serialize into an owned `(frame, versioned)` pair, transferring ownership of the buffers.
     pub fn into_parts(self) -> (Vec<u8>, Vec<u8>) {
         (self.frame, self.versioned)
     }
-
     /// Consume the wire representation, returning the framed bytes.
     pub fn into_vec(self) -> Vec<u8> {
         self.frame
     }
-
     /// Borrowing accessor for the framed bytes (version byte + Norito header + payload).
     pub fn as_framed(&self) -> &[u8] {
         &self.frame
     }
-
     /// Clone the framed bytes into an owned vector.
     pub fn to_vec(&self) -> Vec<u8> {
         self.frame.clone()
     }
-
     /// Extract the bare versioned payload (version discriminator + Norito payload).
     pub fn as_versioned(&self) -> &[u8] {
         &self.versioned
     }
-
     /// Return the version byte encoded in this frame.
     pub fn version(&self) -> u8 {
         self.versioned
@@ -1488,14 +1393,12 @@ impl SignedBlockWire {
             .copied()
             .expect("canonical wire always contains a version byte")
     }
-
     /// Borrow the Norito payload bytes (without version byte or header).
     pub fn payload(&self) -> &[u8] {
         let header_size = norito::core::Header::SIZE;
         &self.frame[1 + header_size..]
     }
 }
-
 /// Ensure versioned [`SignedBlock`] bytes carry a Norito header. When the
 /// payload is already framed, the returned `bytes` borrow the input slice.
 /// Headerless payloads are rejected.
@@ -1512,7 +1415,6 @@ pub struct DeframedSignedBlockBytes<'a> {
     /// Versioned bytes without the Norito header (version discriminator + bare payload).
     pub bare_versioned: Cow<'a, [u8]>,
 }
-
 /// Deframe versioned [`SignedBlock`] bytes, requiring a Norito header.
 ///
 /// # Errors
@@ -1543,7 +1445,6 @@ pub fn deframe_versioned_signed_block_bytes(
         Err(NoritoFrameError::InvalidMagic)
     }
 }
-
 fn write_signed_block_header(payload: &[u8], out: &mut Vec<u8>) -> Result<(), NoritoFrameError> {
     enforce_payload_len_limit(payload.len())?;
     out.extend_from_slice(MAGIC.as_slice());
@@ -1554,7 +1455,6 @@ fn write_signed_block_header(payload: &[u8], out: &mut Vec<u8>) -> Result<(), No
     let len = u64::try_from(payload.len()).map_err(|_| NoritoFrameError::LengthMismatch)?;
     out.extend_from_slice(&len.to_le_bytes());
     out.extend_from_slice(&norito_crc64(payload).to_le_bytes());
-
     #[cfg(debug_assertions)]
     if norito::debug_trace_enabled() {
         eprintln!(
@@ -1570,7 +1470,6 @@ fn write_signed_block_header(payload: &[u8], out: &mut Vec<u8>) -> Result<(), No
     out.push(encode_flags);
     Ok(())
 }
-
 fn validate_signed_block_header(payload: &[u8]) -> Result<(), NoritoFrameError> {
     let header_size = norito::core::Header::SIZE;
     if payload.len() < header_size {
@@ -1634,7 +1533,6 @@ fn validate_signed_block_header(payload: &[u8]) -> Result<(), NoritoFrameError> 
     }
     Ok(())
 }
-
 #[cfg(test)]
 fn decode_field<T>(bytes: &[u8]) -> Result<(T, &[u8]), NoritoFrameError>
 where
@@ -1643,26 +1541,21 @@ where
     if bytes.len() < 8 {
         return Err(NoritoFrameError::LengthMismatch);
     }
-
     let mut len_prefix = [0u8; 8];
     len_prefix.copy_from_slice(&bytes[..8]);
     let field_len: usize = u64::from_le_bytes(len_prefix)
         .try_into()
         .map_err(|_| NoritoFrameError::LengthMismatch)?;
-
     let payload = bytes
         .get(8..8 + field_len)
         .ok_or(NoritoFrameError::LengthMismatch)?;
-
     let (value, used) = norito::core::decode_field_canonical::<T>(payload)?;
     if used != field_len {
         return Err(NoritoFrameError::LengthMismatch);
     }
-
     let rest = &bytes[8 + field_len..];
     Ok((value, rest))
 }
-
 /// Decode a versioned [`SignedBlock`] payload produced by the canonical frame
 /// (version byte + Norito header + payload).
 ///
@@ -1681,7 +1574,6 @@ pub fn decode_versioned_signed_block(
         .map_err(|err| VersionError::NoritoCodec(err.to_string()))?;
     decode_framed_versioned_signed_block_inner(version, framed_payload, bytes)
 }
-
 /// Decode a Norito-framed [`SignedBlock`] payload, validating the header before
 /// delegating to [`decode_versioned_signed_block`].
 ///
@@ -1702,7 +1594,6 @@ pub fn decode_framed_signed_block(
         .map_err(|err| VersionError::NoritoCodec(err.to_string()))?;
     decode_framed_versioned_signed_block_inner(version, framed_payload, bytes)
 }
-
 fn borrow_framed_signed_block_payload(bytes: &[u8]) -> Result<(u8, &[u8]), NoritoFrameError> {
     let (&version, framed_payload) = bytes
         .split_first()
@@ -1710,19 +1601,16 @@ fn borrow_framed_signed_block_payload(bytes: &[u8]) -> Result<(u8, &[u8]), Norit
     validate_signed_block_header(framed_payload)?;
     Ok((version, framed_payload))
 }
-
 fn encode_signed_block_payload(block: &SignedBlock) -> Vec<u8> {
     norito::core::reset_decode_state();
     norito::codec::encode_adaptive(block)
 }
-
 fn decode_versioned_signed_block_inner(
     bare_versioned: &[u8],
     raw_for_error: &[u8],
 ) -> Result<SignedBlock, iroha_version::error::Error> {
     iroha_version::codec::decode_exact_versioned_with_raw(bare_versioned, raw_for_error)
 }
-
 fn decode_framed_versioned_signed_block_inner(
     version: u8,
     framed_payload: &[u8],
@@ -1735,7 +1623,6 @@ fn decode_framed_versioned_signed_block_inner(
             UnsupportedVersion::new(version, RawVersioned::NoritoBytes(raw_for_error.to_vec())),
         )));
     }
-
     let view = norito::core::from_bytes_view(framed_payload).map_err(VersionError::from)?;
     view.decode::<SignedBlock>().map_err(VersionError::from)
 }
@@ -1744,7 +1631,6 @@ pub mod prelude {
     //! For glob-import
     pub use super::{BlockHeader, BlockSignature, SignedBlock, error::BlockRejectionReason};
 }
-
 #[cfg(test)]
 mod tests {
     use std::num::NonZeroU64;
@@ -1779,30 +1665,24 @@ mod tests {
         sorafs::pin_registry::ManifestDigest,
         transaction::{TransactionBuilder, signed::TransactionEntrypoint},
     };
-
     fn assert_predicate<T: HasProjection<PredicateMarker>>() {}
     fn assert_selector<T: HasProjection<SelectorMarker>>() {}
-
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("test fixture random key generation should succeed")
     }
-
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).unwrap_or_else(|err| {
             panic!("{algorithm:?} block fixture key generation should succeed: {err}")
         })
     }
-
     fn checked_bls_keypair() -> KeyPair {
         checked_random_keypair_with_algorithm(Algorithm::BlsNormal)
     }
-
     fn test_network_id() -> crate::NetworkId {
         crate::NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
             Hash::prehashed([0x15; Hash::LENGTH]),
         ))
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn block_rejection_reason_json_has_closed_output_bound() {
@@ -1818,7 +1698,6 @@ mod tests {
             Err(norito::json::BoundedJsonError::BodyTooLarge)
         );
     }
-
     fn test_pin_authorization(lane: LaneId, epoch: u64, sequence: u64) -> DaIngestAuthorizationV1 {
         let key_pair = KeyPair::try_from_seed(vec![0xDE; 32], Algorithm::Ed25519)
             .expect("valid deterministic block pin-intent key");
@@ -1840,7 +1719,6 @@ mod tests {
         });
         authorization
     }
-
     fn sample_da_bundle() -> DaCommitmentBundle {
         let record = DaCommitmentRecord::new(
             LaneId::new(7),
@@ -1858,7 +1736,6 @@ mod tests {
         );
         DaCommitmentBundle::new(vec![record])
     }
-
     fn checked_block_signature(
         index: u64,
         keypair: &KeyPair,
@@ -1870,7 +1747,6 @@ mod tests {
                 .expect("checked signed-block fixture signature"),
         )
     }
-
     fn block_with_execution_context(execution_context: BlockExecutionContextBundle) -> SignedBlock {
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 1, 0);
         SignedBlock {
@@ -1889,7 +1765,6 @@ mod tests {
             result: None,
         }
     }
-
     #[test]
     fn block_payload_ordering_includes_execution_context() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
@@ -1914,11 +1789,9 @@ mod tests {
                 DataSpaceId::new(2),
             ),
         ]));
-
         assert_ne!(payload, with_context);
         assert_ne!(payload.cmp(&with_context), std::cmp::Ordering::Equal);
     }
-
     #[test]
     fn signed_block_is_empty_without_entrypoints_or_artifacts() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
@@ -1937,17 +1810,13 @@ mod tests {
             },
             result: None,
         };
-
         assert!(block.is_empty());
     }
-
     #[test]
     fn signed_block_with_empty_execution_context_is_empty() {
         let block = block_with_execution_context(BlockExecutionContextBundle::default());
-
         assert!(block.is_empty());
     }
-
     #[test]
     fn signed_block_with_only_certified_merge_reference_is_not_empty() {
         let validators = Vec::<PeerId>::new();
@@ -1996,10 +1865,8 @@ mod tests {
             },
             result: None,
         };
-
         assert!(!block.is_empty());
     }
-
     #[test]
     fn signed_block_with_only_autonomous_lane_payload_is_not_empty() {
         let producer = PeerId::new(
@@ -2029,10 +1896,8 @@ mod tests {
         let execution_context = BlockExecutionContextBundle::new(Vec::new())
             .with_autonomous_lane_payloads(vec![envelope]);
         let block = block_with_execution_context(execution_context);
-
         assert!(!block.is_empty());
     }
-
     #[test]
     fn signed_block_with_only_lane_payload_ownership_is_not_empty() {
         let ownership = SumeragiLanePayloadOwnership {
@@ -2059,10 +1924,8 @@ mod tests {
         let execution_context = BlockExecutionContextBundle::new(Vec::new())
             .with_lane_payload_ownerships(vec![ownership]);
         let block = block_with_execution_context(execution_context);
-
         assert!(!block.is_empty());
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn signed_block_try_sign_adds_verifiable_signature() {
@@ -2084,11 +1947,9 @@ mod tests {
         };
         let key_pair = checked_random_keypair();
         let signatory_idx = 3;
-
         block
             .try_sign(key_pair.private_key(), signatory_idx)
             .expect("checked block signing succeeds");
-
         let signature = block
             .signatures()
             .find(|signature| signature.index() == signatory_idx as u64)
@@ -2098,7 +1959,6 @@ mod tests {
             .verify_hash(key_pair.public_key(), block.hash())
             .expect("checked block signature verifies");
     }
-
     #[test]
     fn signed_block_wire_skips_runtime_transaction_caches() {
         let key_pair = checked_random_keypair();
@@ -2110,7 +1970,6 @@ mod tests {
         .sign(key_pair.private_key());
         let entrypoint = TransactionEntrypoint::from(tx.clone());
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
-
         let mut block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -2129,7 +1988,6 @@ mod tests {
                 ..BlockResult::default()
             }),
         };
-
         let mut explicit_iter = block.external_entrypoints_cloned();
         assert_eq!(explicit_iter.len(), 1);
         assert_eq!(explicit_iter.next_back(), Some(entrypoint.clone()));
@@ -2152,7 +2010,6 @@ mod tests {
                 .expect("explicit transaction reference"),
             stored_tx
         ));
-
         let mut legacy_block = block.clone();
         legacy_block.payload.external_entrypoints.clear();
         legacy_block
@@ -2173,23 +2030,19 @@ mod tests {
             legacy_tx,
             &legacy_block.payload.transactions[0]
         ));
-
         let encoded = block.encode_versioned();
-
         block.payload.transactions.clear();
         assert_eq!(
             encoded,
             block.encode_versioned(),
             "legacy signed-transaction cache must not be serialized"
         );
-
         block.result.as_mut().unwrap().external_entrypoints.clear();
         assert_eq!(
             encoded,
             block.encode_versioned(),
             "legacy result entrypoint cache must not be serialized"
         );
-
         let decoded = SignedBlock::decode_all_versioned(&encoded).expect("decode versioned block");
         assert!(decoded.transactions_vec().is_empty());
         assert_eq!(
@@ -2198,7 +2051,6 @@ mod tests {
         );
         assert_eq!(decoded.external_transactions().next(), Some(&tx));
     }
-
     #[test]
     fn block_payload_decodes_legacy_payload_without_execution_context() {
         #[derive(norito::codec::Encode)]
@@ -2210,7 +2062,6 @@ mod tests {
             da_pin_intents: Option<DaPinIntentBundle>,
             previous_roster_evidence: Option<PreviousRosterEvidence>,
         }
-
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 10, 0);
         let legacy = LegacyBlockPayload {
             header,
@@ -2224,7 +2075,6 @@ mod tests {
         let mut cursor = bytes.as_slice();
         let decoded =
             BlockPayload::decode_all(&mut cursor).expect("decode legacy BlockPayload payload");
-
         assert_eq!(decoded.header, header);
         assert!(decoded.transactions.is_empty());
         assert!(decoded.external_entrypoints.is_empty());
@@ -2234,7 +2084,6 @@ mod tests {
         assert_eq!(decoded.da_pin_intents, None);
         assert_eq!(decoded.previous_roster_evidence, None);
     }
-
     #[test]
     fn block_result_rejects_wire_omitting_required_axt_policy_snapshot() {
         #[derive(norito::codec::Encode)]
@@ -2249,7 +2098,6 @@ mod tests {
             lane_finality_statements: Vec<crate::nexus::LaneFinalityStatement>,
             trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
         }
-
         let omitted_snapshot = BlockResultWithoutAxtPolicySnapshot {
             time_triggers: Vec::new(),
             merkle: MerkleTree::default(),
@@ -2263,13 +2111,11 @@ mod tests {
         };
         let bytes = omitted_snapshot.encode();
         let mut cursor = bytes.as_slice();
-
         assert!(
             BlockResult::decode_all(&mut cursor).is_err(),
             "the AXT policy snapshot is a required V1 BlockResult wire field"
         );
     }
-
     #[test]
     fn block_result_rejects_wire_omitting_required_lane_finality_statements() {
         #[derive(norito::codec::Encode)]
@@ -2284,7 +2130,6 @@ mod tests {
             trigger_completions: Vec<crate::events::trigger_completed::TriggerCompletedEvent>,
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot,
         }
-
         let omitted_lane_finality = BlockResultWithoutLaneFinalityStatements {
             time_triggers: Vec::new(),
             merkle: MerkleTree::default(),
@@ -2298,13 +2143,11 @@ mod tests {
         };
         let bytes = omitted_lane_finality.encode();
         let mut cursor = bytes.as_slice();
-
         assert!(
             BlockResult::decode_all(&mut cursor).is_err(),
             "lane-finality statements are a required V1 BlockResult wire field"
         );
     }
-
     #[test]
     #[cfg(feature = "transparent_api")]
     fn presigned_with_payload_preserves_payload_and_signature() {
@@ -2322,21 +2165,17 @@ mod tests {
         };
         let key_pair = checked_bls_keypair();
         let signature = checked_block_signature(0, &key_pair, &payload.header);
-
         let block = SignedBlock::presigned_with_payload(signature.clone(), payload.clone());
-
         assert_eq!(block.header(), payload.header);
         assert_eq!(block.transactions_vec(), &payload.transactions);
         assert!(block.signatures().any(|sig| sig == &signature));
     }
-
     #[test]
     #[cfg(feature = "transparent_api")]
     fn presigned_constructors_normalize_empty_da_bundles() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         let key_pair = checked_bls_keypair();
         let signature = checked_block_signature(0, &key_pair, &header);
-
         let with_da = SignedBlock::presigned_with_da(
             signature.clone(),
             header.clone(),
@@ -2345,7 +2184,6 @@ mod tests {
         );
         assert!(with_da.da_commitments().is_none());
         assert!(with_da.header().da_commitments_hash().is_none());
-
         let payload = BlockPayload {
             header,
             transactions: Vec::new(),
@@ -2363,7 +2201,6 @@ mod tests {
         assert!(with_payload.da_pin_intents().is_none());
         assert!(with_payload.header().da_pin_intents_hash().is_none());
     }
-
     #[test]
     #[cfg(feature = "transparent_api")]
     fn presigned_with_payload_does_not_hydrate_transactions_from_entrypoints() {
@@ -2387,13 +2224,10 @@ mod tests {
             npos_consensus_effects: None,
         };
         let signature = checked_block_signature(0, &key_pair, &payload.header);
-
         let block = SignedBlock::presigned_with_payload(signature, payload);
-
         assert!(block.transactions_vec().is_empty());
         assert_eq!(block.external_transactions().next(), Some(&tx));
     }
-
     #[test]
     #[cfg(feature = "transparent_api")]
     fn explicit_payload_hydration_populates_legacy_transaction_cache() {
@@ -2416,14 +2250,12 @@ mod tests {
             previous_roster_evidence: None,
             npos_consensus_effects: None,
         };
-
         assert_eq!(
             payload.hydrate_legacy_transaction_cache_from_entrypoints(),
             1
         );
         assert_eq!(payload.transactions.as_slice(), core::slice::from_ref(&tx));
     }
-
     #[test]
     fn signed_block_is_not_empty_with_time_triggers() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
@@ -2442,14 +2274,12 @@ mod tests {
         let entry_hash = entrypoint.hash_as_entrypoint();
         let mut entry_merkle = iroha_crypto::MerkleTree::default();
         entry_merkle.add(entry_hash);
-
         let result_inner = crate::transaction::signed::TransactionResultInner::Ok(
             crate::trigger::DataTriggerSequence::default(),
         );
         let mut result_merkle = iroha_crypto::MerkleTree::default();
         result_merkle
             .add(crate::transaction::signed::TransactionResult::hash_from_inner(&result_inner));
-
         let result = BlockResult {
             external_entrypoints: Vec::new(),
             time_triggers: vec![entrypoint],
@@ -2465,7 +2295,6 @@ mod tests {
             trigger_completions: Vec::new(),
             axt_policy_snapshot: crate::nexus::AxtPolicySnapshot::default(),
         };
-
         let block = SignedBlock {
             signatures: BTreeSet::new(),
             payload: BlockPayload {
@@ -2481,10 +2310,8 @@ mod tests {
             },
             result: Some(result),
         };
-
         assert!(!block.is_empty());
     }
-
     #[test]
     fn signed_block_is_not_empty_with_da_commitments() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
@@ -2503,12 +2330,9 @@ mod tests {
             },
             result: None,
         };
-
         block.set_da_commitments(Some(sample_da_bundle()));
-
         assert!(!block.is_empty());
     }
-
     #[test]
     fn signed_block_is_not_empty_with_da_pin_intents() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
@@ -2527,7 +2351,6 @@ mod tests {
             },
             result: None,
         };
-
         let intent = DaPinIntent::new(
             LaneId::new(7),
             9,
@@ -2538,16 +2361,13 @@ mod tests {
         );
         let bundle = DaPinIntentBundle::new(vec![intent]);
         block.set_da_pin_intents(Some(bundle));
-
         assert!(!block.is_empty());
     }
-
     #[test]
     fn block_header_has_projection_impls() {
         assert_predicate::<BlockHeader>();
         assert_selector::<BlockHeader>();
     }
-
     #[test]
     fn result_merkle_root_does_not_affect_block_hash() {
         let mut header = BlockHeader {
@@ -2577,7 +2397,6 @@ mod tests {
         let hash1 = header.hash();
         assert_eq!(hash0, hash1);
     }
-
     #[test]
     fn sccp_commitment_root_affects_block_hash() {
         let mut header = BlockHeader {
@@ -2605,13 +2424,11 @@ mod tests {
         let hash1 = header.hash();
         assert_ne!(hash0, hash1);
     }
-
     #[test]
     fn block_header_new_and_display() {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         assert_eq!(header.to_string(), format!("{} (№1)", header.hash()));
     }
-
     #[test]
     fn adversarial_fixture_header_replacement_preserves_body() {
         let keypair = checked_random_keypair();
@@ -2632,12 +2449,10 @@ mod tests {
             0,
         );
         let transaction_count = block.external_entrypoint_count();
-
         assert_eq!(block.replace_header_for_testing(replacement), original);
         assert_eq!(block.header(), replacement);
         assert_eq!(block.external_entrypoint_count(), transaction_count);
     }
-
     #[test]
     fn adversarial_fixture_da_sidecar_replacement_preserves_noncanonical_empty_bundles() {
         let keypair = checked_random_keypair();
@@ -2648,7 +2463,6 @@ mod tests {
         )
         .sign(keypair.private_key());
         let mut block = SignedBlock::genesis(vec![transaction], keypair.private_key(), None, None);
-
         assert_eq!(
             block.replace_da_sidecars_for_testing(
                 Some(DaCommitmentBundle::default()),
@@ -2667,13 +2481,11 @@ mod tests {
                 .is_some_and(DaPinIntentBundle::is_empty)
         );
     }
-
     #[test]
     fn genesis_defaults_confidential_digest() {
         use crate::{
             account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
         };
-
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -2688,7 +2500,6 @@ mod tests {
             Some(crate::confidential::DEFAULT_CONFIDENTIAL_FEATURE_DIGEST)
         );
     }
-
     #[test]
     fn encode_versioned_prefixes_norito_payload() {
         use nonzero_ext::nonzero;
@@ -2709,7 +2520,6 @@ mod tests {
             },
             result: None,
         };
-
         let versioned = block.encode_versioned();
         assert!(!versioned.is_empty());
         assert_eq!(versioned[0], block.version());
@@ -2718,7 +2528,6 @@ mod tests {
         assert_eq!(deframed.bare_versioned.as_ref(), versioned.as_slice());
         assert!(deframed.bytes.as_ref()[1..].starts_with(MAGIC.as_slice()));
     }
-
     #[test]
     fn versioned_block_roundtrip_preserves_instruction_order() {
         use crate::{
@@ -2726,11 +2535,9 @@ mod tests {
             parameter::{Parameter, system::SumeragiParameter},
             transaction::{Executable, signed::TransactionBuilder},
         };
-
         let key_pair = checked_random_keypair();
         let authority = AccountId::new(key_pair.public_key().clone());
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
-
         let ordered = vec![
             crate::isi::InstructionBox::from(crate::isi::SetParameter::new(Parameter::Sumeragi(
                 SumeragiParameter::MaxClockDriftMs(667),
@@ -2749,7 +2556,6 @@ mod tests {
                 crate::parameter::BlockParameter::MaxTransactions(NonZeroU64::new(10_000).unwrap()),
             ))),
         ];
-
         let tx = TransactionBuilder::new_genesis(
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -2771,13 +2577,11 @@ mod tests {
             },
             result: None,
         };
-
         let versioned = block.encode_versioned();
         let decoded_versioned =
             SignedBlock::decode_all_versioned(&versioned).expect("decode versioned block");
         let framed = frame_versioned_signed_block_bytes(&versioned).expect("frame versioned block");
         let decoded_framed = decode_framed_signed_block(&framed).expect("decode framed block");
-
         for decoded in [&decoded_versioned, &decoded_framed] {
             let tx = decoded
                 .external_transactions()
@@ -2787,19 +2591,16 @@ mod tests {
                 panic!("expected instruction executable after block roundtrip");
             };
             let actual = actual.iter().cloned().collect::<Vec<_>>();
-
             assert_eq!(
                 actual, ordered,
                 "instruction order must survive signed block roundtrip"
             );
         }
     }
-
     #[test]
     fn deframe_rejects_payload_exceeding_max_len() {
         use nonzero_ext::nonzero;
         const LENGTH_OFFSET: usize = 1 + 4 + 1 + 1 + 16 + 1;
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let block = SignedBlock {
             signatures: BTreeSet::new(),
@@ -2816,11 +2617,9 @@ mod tests {
             },
             result: None,
         };
-
         let versioned = block.encode_versioned();
         let mut framed =
             frame_versioned_signed_block_bytes(&versioned).expect("frame versioned payload");
-
         let limit = norito::core::max_archive_len();
         let oversized_len = limit
             .checked_add(1)
@@ -2828,7 +2627,6 @@ mod tests {
         // Patch the length field inside the Norito header (after version + magic + major + minor + schema + compression).
         let length_end = LENGTH_OFFSET + core::mem::size_of::<u64>();
         framed[LENGTH_OFFSET..length_end].copy_from_slice(&oversized_len.to_le_bytes());
-
         let err = deframe_versioned_signed_block_bytes(&framed)
             .expect_err("payload should exceed enforced Norito length cap");
         match err {
@@ -2842,7 +2640,6 @@ mod tests {
             other => panic!("unexpected error: {other}"),
         }
     }
-
     #[test]
     fn decode_versioned_signed_block_rejects_trailing_bytes() {
         use nonzero_ext::nonzero;
@@ -2863,10 +2660,8 @@ mod tests {
             },
             result: None,
         };
-
         let mut versioned = block.encode_versioned();
         versioned.push(0_u8);
-
         let err = SignedBlock::decode_all_versioned(versioned.as_slice())
             .expect_err("decode must report trailing bytes");
         match err {
@@ -2882,7 +2677,6 @@ mod tests {
             other => panic!("unexpected error: {other}"),
         }
     }
-
     #[test]
     fn frame_deframe_versioned_bytes_roundtrip() {
         use nonzero_ext::nonzero;
@@ -2903,10 +2697,8 @@ mod tests {
             },
             result: None,
         };
-
         let versioned = block.encode_versioned();
         let framed = frame_versioned_signed_block_bytes(&versioned).expect("frame versioned block");
-
         assert!(framed.len() > versioned.len());
         assert!(framed[1..].starts_with(MAGIC.as_slice()));
         let deframed = deframe_versioned_signed_block_bytes(&framed).expect("deframe framed block");
@@ -2914,27 +2706,22 @@ mod tests {
         assert_eq!(deframed.bare_versioned.as_ref(), versioned.as_slice());
         let decoded_framed = decode_framed_signed_block(&framed).expect("decode framed block");
         assert_eq!(decoded_framed, block);
-
         let decoded_versioned =
             SignedBlock::decode_all_versioned(versioned.as_ref()).expect("decode versioned block");
         assert_eq!(decoded_versioned, block);
     }
-
     #[test]
     fn framed_decode_borrows_payload_from_original_wire() {
         let wire_version = SignedBlock::supported_versions().start;
         let mut framed = vec![wire_version];
         let _ = norito::codec::take_last_encode_flags();
         write_signed_block_header(&[], &mut framed).expect("write empty canonical frame header");
-
         let (version, payload) = borrow_framed_signed_block_payload(&framed)
             .expect("canonical frame header must be borrowable");
-
         assert_eq!(version, wire_version);
         assert_eq!(payload.as_ptr(), framed[1..].as_ptr());
         assert_eq!(payload.len(), framed.len() - 1);
     }
-
     #[test]
     fn canonical_wire_matches_framed_payload() {
         use nonzero_ext::nonzero;
@@ -2955,27 +2742,22 @@ mod tests {
             },
             result: None,
         };
-
         let versioned = block.encode_versioned();
         let canonical = block.canonical_wire().expect("canonical wire");
         let framed = frame_versioned_signed_block_bytes(&versioned).expect("frame versioned block");
-
         assert_eq!(canonical.version(), block.version());
         assert_eq!(canonical.as_versioned(), versioned.as_slice());
         assert_eq!(canonical.as_framed(), framed.as_slice());
         assert_eq!(canonical.payload(), &versioned[1..]);
-
         let decoded = decode_framed_signed_block(canonical.as_framed())
             .expect("decode canonical framed block");
         assert_eq!(decoded, block);
     }
-
     #[test]
     fn canonical_wire_roundtrips_genesis_block() {
         use crate::{
             account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
         };
-
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -2986,21 +2768,17 @@ mod tests {
         .with_instructions(core::iter::empty::<crate::isi::InstructionBox>())
         .sign(keypair.private_key());
         let block = SignedBlock::genesis(vec![tx], keypair.private_key(), None, None);
-
         let wire = block.canonical_wire().expect("canonical wire");
         assert_eq!(wire.version(), block.version());
         assert!(wire.as_framed()[1..].starts_with(MAGIC.as_slice()));
-
         let deframed =
             deframe_versioned_signed_block_bytes(wire.as_framed()).expect("deframe framed");
         assert_eq!(deframed.bytes.as_ref(), wire.as_framed());
         assert_eq!(deframed.bare_versioned.as_ref(), wire.as_versioned());
-
         let decoded =
             decode_framed_signed_block(wire.as_framed()).expect("decode canonical framed genesis");
         assert_eq!(decoded, block);
     }
-
     #[test]
     fn set_da_commitments_updates_header_hash() {
         use nonzero_ext::nonzero;
@@ -3021,13 +2799,10 @@ mod tests {
             },
             result: None,
         };
-
         assert!(block.payload.header.da_commitments_hash().is_none());
-
         block.set_da_commitments(Some(DaCommitmentBundle::default()));
         assert!(block.da_commitments().is_none());
         assert!(block.payload.header.da_commitments_hash().is_none());
-
         let record = DaCommitmentRecord::new(
             LaneId::new(1),
             2,
@@ -3046,22 +2821,18 @@ mod tests {
         let expected = bundle.merkle_commitment();
         block.set_da_commitments(Some(bundle));
         assert_eq!(block.payload.header.da_commitments_hash(), expected);
-
         block.set_da_commitments(None);
         assert!(block.payload.header.da_commitments_hash().is_none());
     }
-
     #[test]
     fn decode_versioned_signed_block_handles_genesis_like_payload() {
         use crate::{
             account::AccountId, domain::DomainId, isi::InstructionBox,
             transaction::signed::TransactionBuilder,
         };
-
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-
         let tx1 = TransactionBuilder::new_genesis(
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -3074,9 +2845,7 @@ mod tests {
         )
         .with_instructions(core::iter::empty::<InstructionBox>())
         .sign(keypair.private_key());
-
         let block = SignedBlock::genesis(vec![tx1, tx2], keypair.private_key(), None, None);
-
         let versioned = block.encode_versioned();
         let mut manual_payload = Vec::new();
         block.encode_to(&mut manual_payload);
@@ -3091,7 +2860,6 @@ mod tests {
             .expect("versioned genesis payload must roundtrip");
         assert_eq!(decoded, block);
     }
-
     #[test]
     fn decode_versioned_signed_block_accepts_framed_payload() {
         use nonzero_ext::nonzero;
@@ -3112,20 +2880,16 @@ mod tests {
             },
             result: None,
         };
-
         let versioned = block.encode_versioned();
         let framed =
             frame_versioned_signed_block_bytes(&versioned).expect("frame versioned payload");
-
         let decoded_from_framed = decode_versioned_signed_block(&framed)
             .expect("decode framed payload via versioned API");
         assert_eq!(decoded_from_framed, block);
-
         let err = decode_versioned_signed_block(&versioned)
             .expect_err("headerless payloads must be rejected");
         assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
     }
-
     #[test]
     fn framed_signed_block_preserves_recorded_layout_flags() {
         use nonzero_ext::nonzero;
@@ -3146,18 +2910,15 @@ mod tests {
             },
             result: None,
         };
-
         let (payload, expected_flags) = norito::codec::encode_with_header_flags(&block);
         let mut versioned = Vec::with_capacity(1 + payload.len());
         versioned.push(block.version());
         versioned.extend_from_slice(&payload);
         let framed = frame_versioned_signed_block_bytes(&versioned).expect("frame payload");
-
         let header_size = norito::core::Header::SIZE;
         let flags = framed[1 + header_size - 1];
         assert_eq!(flags, expected_flags);
     }
-
     #[test]
     fn signed_block_da_commitments_roundtrip() {
         use nonzero_ext::nonzero;
@@ -3180,20 +2941,16 @@ mod tests {
         };
         let bundle = sample_da_bundle();
         assert!(block.da_commitments().is_none());
-
         block.set_da_commitments(Some(bundle.clone()));
         assert_eq!(block.da_commitments().unwrap(), &bundle);
         assert!(block.header().da_commitments_hash().is_some());
-
         let encoded = block.encode_versioned();
         let decoded = SignedBlock::decode_all_versioned(&encoded).expect("decode versioned block");
         assert_eq!(decoded.da_commitments().unwrap(), &bundle);
-
         block.set_da_commitments(None);
         assert!(block.da_commitments().is_none());
         assert!(block.header().da_commitments_hash().is_none());
     }
-
     #[test]
     fn set_da_pin_intents_updates_header_hash() {
         use nonzero_ext::nonzero;
@@ -3214,13 +2971,10 @@ mod tests {
             },
             result: None,
         };
-
         assert!(block.payload.header.da_pin_intents_hash().is_none());
-
         block.set_da_pin_intents(Some(DaPinIntentBundle::default()));
         assert!(block.da_pin_intents().is_none());
         assert!(block.payload.header.da_pin_intents_hash().is_none());
-
         let intent = DaPinIntent::new(
             LaneId::new(7),
             9,
@@ -3233,16 +2987,13 @@ mod tests {
         let expected = bundle
             .merkle_commitment()
             .expect("non-empty bundle must have a tree commitment");
-
         block.set_da_pin_intents(Some(bundle.clone()));
         assert_eq!(block.da_pin_intents().unwrap(), &bundle);
         assert_eq!(block.header().da_pin_intents_hash(), Some(expected));
-
         block.set_da_pin_intents(None);
         assert!(block.da_pin_intents().is_none());
         assert!(block.header().da_pin_intents_hash().is_none());
     }
-
     #[test]
     fn signed_block_previous_roster_evidence_setter_updates_header_hash_and_roundtrips() {
         use nonzero_ext::nonzero;
@@ -3258,7 +3009,6 @@ mod tests {
             PeerId::new(kp_a.public_key().clone()),
             PeerId::new(kp_b.public_key().clone()),
         ];
-
         let previous_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 1, 0);
         let previous_hash = previous_header.hash();
         let evidence = PreviousRosterEvidence {
@@ -3279,7 +3029,6 @@ mod tests {
             stake_snapshot: None,
         };
         let expected_hash = HashOf::new(&evidence);
-
         let header = BlockHeader::new(nonzero!(2_u64), Some(previous_hash), None, None, 2, 0);
         let mut block = SignedBlock {
             signatures: BTreeSet::new(),
@@ -3296,17 +3045,14 @@ mod tests {
             },
             result: None,
         };
-
         assert!(block.previous_roster_evidence().is_none());
         assert!(block.header().prev_roster_evidence_hash().is_none());
-
         block.set_previous_roster_evidence(Some(evidence.clone()));
         assert_eq!(block.previous_roster_evidence(), Some(&evidence));
         assert_eq!(
             block.header().prev_roster_evidence_hash(),
             Some(expected_hash)
         );
-
         let encoded = block.encode_versioned();
         let decoded =
             SignedBlock::decode_all_versioned(&encoded).expect("decode versioned signed block");
@@ -3315,19 +3061,16 @@ mod tests {
             decoded.header().prev_roster_evidence_hash(),
             Some(expected_hash)
         );
-
         block.set_previous_roster_evidence(None);
         assert!(block.previous_roster_evidence().is_none());
         assert!(block.header().prev_roster_evidence_hash().is_none());
     }
-
     #[test]
     fn genesis_can_embed_da_commitments() {
         use crate::{
             account::AccountId, domain::DomainId, isi::InstructionBox,
             transaction::signed::TransactionBuilder,
         };
-
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3338,17 +3081,14 @@ mod tests {
         .with_instructions(core::iter::empty::<InstructionBox>())
         .sign(keypair.private_key());
         let bundle = sample_da_bundle();
-
         let block = SignedBlock::genesis(
             vec![tx.clone()],
             keypair.private_key(),
             None,
             Some(bundle.clone()),
         );
-
         assert_eq!(block.da_commitments().unwrap(), &bundle);
         assert!(block.header().da_commitments_hash().is_some());
-
         let empty = SignedBlock::genesis(
             vec![tx],
             keypair.private_key(),
@@ -3358,7 +3098,6 @@ mod tests {
         assert!(empty.da_commitments().is_none());
         assert!(empty.header().da_commitments_hash().is_none());
     }
-
     #[test]
     fn genesis_can_override_da_proof_policies() {
         use crate::{
@@ -3369,7 +3108,6 @@ mod tests {
             nexus::{DataSpaceId, LaneId},
             transaction::signed::TransactionBuilder,
         };
-
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3386,7 +3124,6 @@ mod tests {
             proof_scheme: DaProofScheme::MerkleSha256,
         }]);
         let expected_hash = HashOf::new(&bundle);
-
         let block = SignedBlock::genesis_with_da_proof_policies(
             vec![tx],
             keypair.private_key(),
@@ -3394,11 +3131,9 @@ mod tests {
             None,
             Some(bundle.clone()),
         );
-
         assert_eq!(block.da_proof_policies(), Some(&bundle));
         assert_eq!(block.header().da_proof_policies_hash(), Some(expected_hash));
     }
-
     #[test]
     fn try_genesis_with_da_proof_policies_matches_compatibility_signature_and_rejects_empty() {
         use crate::{
@@ -3408,7 +3143,6 @@ mod tests {
             nexus::{DataSpaceId, LaneId},
             transaction::signed::TransactionBuilder,
         };
-
         let keypair = KeyPair::try_from_seed(vec![0x53; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
         let authority = AccountId::new(keypair.public_key().clone());
@@ -3424,7 +3158,6 @@ mod tests {
             alias: "checked".to_string(),
             proof_scheme: DaProofScheme::MerkleSha256,
         }]);
-
         let fallible = SignedBlock::try_genesis_with_da_proof_policies(
             vec![tx.clone()],
             keypair.private_key(),
@@ -3440,7 +3173,6 @@ mod tests {
             None,
             Some(bundle),
         );
-
         assert_eq!(fallible.header(), compatibility.header());
         let fallible_signature = fallible.signatures().next().expect("fallible signature");
         let compatibility_signature = compatibility
@@ -3452,7 +3184,6 @@ mod tests {
             .signature()
             .verify_hash(keypair.public_key(), fallible.hash())
             .expect("checked genesis signature verifies");
-
         let err = SignedBlock::try_genesis(Vec::new(), keypair.private_key(), None, None)
             .expect_err("empty genesis transaction set must fail");
         assert!(
@@ -3460,7 +3191,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn signed_block_has_results_only_after_assignment() {
@@ -3485,7 +3215,6 @@ mod tests {
                 .expect("hash resultless block wire"),
             proposal_hash
         );
-
         let entry_hashes: &[HashOf<TransactionEntrypoint>] = &[];
         block
             .set_transaction_results(Vec::new(), entry_hashes, Vec::new())
@@ -3507,7 +3236,6 @@ mod tests {
             proposal,
             "normalization must recover the exact resultless proposal"
         );
-
         let executed_hash = block
             .executed_block_wire_hash()
             .expect("hash executed block wire");
@@ -3528,7 +3256,6 @@ mod tests {
             "execution-only mutations must leave the normalized proposal hash unchanged"
         );
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_records_fastpq_transcripts() {
@@ -3543,17 +3270,14 @@ mod tests {
             domain::DomainId,
             fastpq::{TransferDeltaTranscript, TransferTranscript},
         };
-
         fn fixture_account(_domain: &DomainId) -> AccountId {
             let keypair = checked_random_keypair();
             AccountId::new(keypair.public_key().clone())
         }
-
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let keypair = checked_random_keypair();
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, Vec::new());
-
         let domain: DomainId = DomainId::try_new("test", "universal").expect("domain id");
         let from = fixture_account(&domain);
         let to = fixture_account(&domain);
@@ -3562,7 +3286,6 @@ mod tests {
                 DomainId::try_new("test", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
-
         let delta = TransferDeltaTranscript {
             from_account: from,
             to_account: to,
@@ -3582,10 +3305,8 @@ mod tests {
             authority_digest: Hash::prehashed([0x11; Hash::LENGTH]),
             poseidon_preimage_digest: None,
         };
-
         let mut transcripts = BTreeMap::new();
         transcripts.insert(batch_hash, vec![transcript]);
-
         block
             .set_transaction_results_with_transcripts(
                 Vec::new(),
@@ -3596,10 +3317,8 @@ mod tests {
                 crate::nexus::AxtPolicySnapshot::default(),
             )
             .expect("empty block has no external hash prefix to validate");
-
         assert_eq!(block.fastpq_transcripts(), &transcripts);
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn lane_finality_can_only_be_attached_after_results_fix_the_header() {
@@ -3609,7 +3328,6 @@ mod tests {
         let keypair = checked_random_keypair();
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, Vec::new());
-
         assert_eq!(
             block.set_lane_finality_statements(Vec::new()),
             Err(SetLaneFinalityStatementsError::MissingTransactionResults)
@@ -3628,7 +3346,6 @@ mod tests {
             .set_lane_finality_statements(Vec::new())
             .expect("lane-finality finalization follows result construction");
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_records_committed_fragment_count() {
@@ -3640,7 +3357,6 @@ mod tests {
         let keypair = checked_random_keypair();
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, Vec::new());
-
         block
             .set_transaction_results_with_transcripts(
                 Vec::new(),
@@ -3658,12 +3374,10 @@ mod tests {
                 crate::nexus::AxtPolicySnapshot::default(),
             )
             .expect("empty block has no external hash prefix to validate");
-
         assert_eq!(block.committed_fragment_count(), Some(1));
         block.set_committed_fragment_count(3);
         assert_eq!(block.committed_fragment_count(), Some(3));
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_rejects_noncanonical_snapshot_without_mutation() {
@@ -3689,7 +3403,6 @@ mod tests {
             entries,
         };
         let original_result_root = block.header().result_merkle_root();
-
         let error = block
             .set_transaction_results_with_transcripts(
                 Vec::new(),
@@ -3700,7 +3413,6 @@ mod tests {
                 snapshot,
             )
             .unwrap_err();
-
         assert!(matches!(
             error,
             SetTransactionResultsError::InvalidAxtPolicySnapshot(
@@ -3710,7 +3422,6 @@ mod tests {
         assert!(!block.has_results());
         assert_eq!(block.header().result_merkle_root(), original_result_root);
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     #[allow(clippy::too_many_lines)]
@@ -3727,7 +3438,6 @@ mod tests {
             fastpq::{TransferDeltaTranscript, TransferTranscript},
             transaction::{TransactionResultInner, signed::TransactionBuilder},
         };
-
         let keypair = checked_random_keypair();
         let _authority_domain: DomainId =
             DomainId::try_new("chain", "universal").expect("chain domain id");
@@ -3741,7 +3451,6 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-
         let asset: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("chain", "universal").unwrap(),
@@ -3798,7 +3507,6 @@ mod tests {
         .with_computed_version()
         .expect("test policy snapshot is canonical");
         let expected_policy_snapshot = policy_snapshot.clone();
-
         block
             .set_transaction_results_with_transcripts(
                 Vec::new(),
@@ -3811,12 +3519,10 @@ mod tests {
                 policy_snapshot,
             )
             .expect("entrypoint hash should match payload");
-
         let proofs = block
             .proofs_for_entry_hash(&entry_hash)
             .expect("proofs present");
         assert_eq!(proofs.fastpq_transcripts, transcripts);
-
         let bytes = norito::to_bytes(&block).expect("encode block");
         let decoded: SignedBlock = norito::decode_from_bytes(&bytes).expect("decode block");
         assert_eq!(
@@ -3828,7 +3534,6 @@ mod tests {
             Some(&expected_policy_snapshot)
         );
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_updates_merkle_roots_with_time_triggers() {
@@ -3846,11 +3551,9 @@ mod tests {
             },
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
         };
-
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
@@ -3862,7 +3565,6 @@ mod tests {
             instructions: ExecutionStep(ConstVec::new_empty()),
             authority: authority.clone(),
         };
-
         let external_hash = tx.hash_as_entrypoint();
         let entry_hashes = vec![external_hash, time_trigger.hash_as_entrypoint()];
         let expected_consensus_root = MerkleTree::from_iter([external_hash]).root();
@@ -3871,7 +3573,6 @@ mod tests {
             .copied()
             .collect::<MerkleTree<_>>()
             .root();
-
         let results_inner = vec![
             TransactionResultInner::Ok(DataTriggerSequence::default()),
             TransactionResultInner::Ok(DataTriggerSequence::default()),
@@ -3881,15 +3582,12 @@ mod tests {
             let tree: MerkleTree<TransactionResult> = hashes.collect();
             tree.root()
         };
-
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-
         block
             .set_transaction_results(vec![time_trigger], &entry_hashes, results_inner)
             .expect("entrypoint hashes should match payload");
-
         assert_eq!(
             block.entrypoint_hashes().collect::<Vec<_>>(),
             entry_hashes,
@@ -3903,7 +3601,6 @@ mod tests {
         );
         assert_eq!(block.header().result_merkle_root(), expected_result_root);
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_rejects_too_short_external_hash_prefix() {
@@ -3913,7 +3610,6 @@ mod tests {
             account::AccountId, transaction::signed::TransactionBuilder,
             trigger::DataTriggerSequence,
         };
-
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
@@ -3925,7 +3621,6 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-
         let err = block
             .set_transaction_results(
                 Vec::new(),
@@ -3933,7 +3628,6 @@ mod tests {
                 vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
             )
             .expect_err("external entrypoint hash is required");
-
         assert_eq!(
             err,
             SetTransactionResultsError::TooFewEntrypointHashes {
@@ -3942,7 +3636,6 @@ mod tests {
             }
         );
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_rejects_result_count_mismatch() {
@@ -3953,7 +3646,6 @@ mod tests {
             transaction::signed::{TransactionBuilder, TransactionResultInner},
             trigger::DataTriggerSequence,
         };
-
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
@@ -3967,7 +3659,6 @@ mod tests {
         let signature = checked_block_signature(0, &keypair, &header);
         let mut missing_result_block =
             SignedBlock::presigned(signature.clone(), header, vec![tx.clone()]);
-
         let err = missing_result_block
             .set_transaction_results(Vec::new(), &[entry_hash], Vec::new())
             .expect_err("missing external result must be rejected");
@@ -3978,7 +3669,6 @@ mod tests {
                 actual: 0,
             }
         );
-
         let mut extra_result_block = SignedBlock::presigned(signature, header, vec![tx]);
         let err = extra_result_block
             .set_transaction_results(
@@ -3998,7 +3688,6 @@ mod tests {
             }
         );
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_rejects_external_hash_mismatch() {
@@ -4010,7 +3699,6 @@ mod tests {
             account::AccountId, transaction::signed::TransactionBuilder,
             trigger::DataTriggerSequence,
         };
-
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
@@ -4024,7 +3712,6 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-
         let err = block
             .set_transaction_results(
                 Vec::new(),
@@ -4032,7 +3719,6 @@ mod tests {
                 vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
             )
             .expect_err("mismatched external entrypoint hash should be rejected");
-
         assert_eq!(
             err,
             SetTransactionResultsError::ExternalHashMismatch {
@@ -4042,7 +3728,6 @@ mod tests {
             }
         );
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn set_transaction_results_rejects_existing_header_merkle_mismatch() {
@@ -4054,7 +3739,6 @@ mod tests {
             account::AccountId, transaction::signed::TransactionBuilder,
             trigger::DataTriggerSequence,
         };
-
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
         let tx = TransactionBuilder::new(
@@ -4071,7 +3755,6 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, actual, None, 0, 0);
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
-
         let err = block
             .set_transaction_results(
                 Vec::new(),
@@ -4079,13 +3762,11 @@ mod tests {
                 vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
             )
             .expect_err("existing header Merkle root mismatch should be rejected");
-
         assert_eq!(
             err,
             SetTransactionResultsError::ExistingHeaderMerkleRootMismatch { expected, actual }
         );
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn proofs_for_entry_hash_matches_merkle_roots() {
@@ -4098,11 +3779,9 @@ mod tests {
             domain::DomainId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
         };
-
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
@@ -4110,12 +3789,10 @@ mod tests {
         )
         .sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
-
         let entry_hashes = vec![entry_hash];
         let results_inner = vec![TransactionResultInner::Ok(
             crate::trigger::DataTriggerSequence::default(),
         )];
-
         let expected_entry_root = entry_hashes
             .iter()
             .copied()
@@ -4127,14 +3804,12 @@ mod tests {
             let tree: MerkleTree<TransactionResult> = result_hashes.collect();
             tree.root().expect("result root")
         };
-
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         block
             .set_transaction_results(Vec::new(), &entry_hashes, results_inner)
             .expect("entrypoint hashes should match payload");
-
         let proofs = block
             .proofs_for_entry_hash(&entry_hash)
             .expect("proofs should exist");
@@ -4154,7 +3829,6 @@ mod tests {
         assert_eq!(entry_commitment.leaf_count().get(), 1);
         assert!(proofs.entry_proof.verify(entry_commitment));
         assert_eq!(entry_commitment.root(), &expected_entry_root);
-
         let result_commitment = &proofs.result_commitment;
         assert_eq!(
             result_commitment.root(),
@@ -4168,7 +3842,6 @@ mod tests {
         assert!(result_proof.verify(result_commitment));
         assert_eq!(result_commitment.root(), &expected_result_root);
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn proofs_for_external_entry_with_time_trigger_use_full_executed_root() {
@@ -4185,10 +3858,8 @@ mod tests {
             },
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
         };
-
         let keypair = checked_random_keypair();
         let authority = AccountId::new(keypair.public_key().clone());
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
@@ -4200,7 +3871,6 @@ mod tests {
             instructions: ExecutionStep(ConstVec::new_empty()),
             authority,
         };
-
         let external_hash = tx.hash_as_entrypoint();
         let time_hash = time_trigger.hash_as_entrypoint();
         let entry_hashes = vec![external_hash, time_hash];
@@ -4213,14 +3883,12 @@ mod tests {
             let tree: MerkleTree<TransactionResult> = result_hashes.collect();
             tree.root().expect("result root")
         };
-
         let header = BlockHeader::new(NonZeroU64::new(4).unwrap(), None, None, None, 0, 0);
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         block
             .set_transaction_results(vec![time_trigger], &entry_hashes, results_inner)
             .expect("entrypoint hashes should match payload");
-
         let proofs = block
             .proofs_for_entry_hash(&external_hash)
             .expect("external proof exists");
@@ -4230,7 +3898,6 @@ mod tests {
         assert_eq!(proofs.entry_commitment.root(), &full_root);
         assert_eq!(proofs.entry_commitment.leaf_count().get(), 2);
         assert!(proofs.entry_proof.verify(&proofs.entry_commitment));
-
         let result_commitment = &proofs.result_commitment;
         assert_eq!(result_commitment.root(), &expected_result_root);
         assert_eq!(result_commitment.leaf_count().get(), 2);
@@ -4242,7 +3909,6 @@ mod tests {
         let result_proof = &proofs.result_proof;
         assert!(result_proof.verify(result_commitment));
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn proofs_for_time_trigger_use_extended_root() {
@@ -4260,11 +3926,9 @@ mod tests {
             },
             trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
         };
-
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
@@ -4276,7 +3940,6 @@ mod tests {
             instructions: ExecutionStep(ConstVec::new_empty()),
             authority: authority.clone(),
         };
-
         let external_hash = tx.hash_as_entrypoint();
         let time_hash = time_trigger.hash_as_entrypoint();
         let entry_hashes = vec![external_hash, time_hash];
@@ -4286,7 +3949,6 @@ mod tests {
             .collect::<MerkleTree<_>>()
             .root()
             .expect("full root");
-
         let results_inner = vec![
             TransactionResultInner::Ok(DataTriggerSequence::default()),
             TransactionResultInner::Ok(DataTriggerSequence::default()),
@@ -4296,14 +3958,12 @@ mod tests {
             let tree: MerkleTree<TransactionResult> = result_hashes.collect();
             tree.root().expect("result root")
         };
-
         let header = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, None, 0, 0);
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
         block
             .set_transaction_results(vec![time_trigger], &entry_hashes, results_inner)
             .expect("entrypoint hashes should match payload");
-
         let proofs = block
             .proofs_for_entry_hash(&time_hash)
             .expect("time trigger proof exists");
@@ -4321,14 +3981,12 @@ mod tests {
         assert_eq!(proofs.entry_commitment.leaf_count().get(), 2);
         assert!(proofs.entry_proof.verify(&proofs.entry_commitment));
         assert_eq!(proofs.entry_commitment.root(), &expected_full_root);
-
         let result_commitment = &proofs.result_commitment;
         assert_eq!(result_commitment.root(), &expected_result_root);
         assert_eq!(result_commitment.leaf_count().get(), 2);
         let result_proof = &proofs.result_proof;
         assert!(result_proof.verify(result_commitment));
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn proofs_for_entry_hash_missing_returns_none() {
@@ -4341,11 +3999,9 @@ mod tests {
             domain::DomainId,
             transaction::signed::{TransactionBuilder, TransactionResultInner},
         };
-
         let keypair = checked_random_keypair();
         let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-
         let tx = TransactionBuilder::new(
             test_network_id(),
             authority.clone(),
@@ -4353,7 +4009,6 @@ mod tests {
         )
         .sign(keypair.private_key());
         let entry_hash = tx.hash_as_entrypoint();
-
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let signature = checked_block_signature(0, &keypair, &header);
         let mut block = SignedBlock::presigned(signature, header, vec![tx]);
@@ -4366,65 +4021,53 @@ mod tests {
                 )],
             )
             .expect("entrypoint hash should match payload");
-
         let mut missing_bytes = *entry_hash.as_ref();
         missing_bytes[0] ^= 0xFF;
         let missing = HashOf::from_untyped_unchecked(Hash::prehashed(missing_bytes));
         assert!(block.proofs_for_entry_hash(&missing).is_none());
     }
-
     #[test]
     fn canonical_wire_and_deframe_preserve_layout_flags() {
         use crate::{
             account::AccountId, block::deframe_versioned_signed_block_bytes, domain::DomainId,
             transaction::signed::TransactionBuilder,
         };
-
         let keypair = checked_random_keypair();
         let _domain_id: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-
         let transaction = TransactionBuilder::new_genesis(
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .sign(keypair.private_key());
         let block = SignedBlock::genesis(vec![transaction], keypair.private_key(), None, None);
-
         let wire = block.canonical_wire().expect("canonical wire");
         let header_index = 1 + norito::core::Header::SIZE - 1;
         let header_flags = wire.as_framed()[header_index];
-
         assert_eq!(header_flags, norito::core::default_encode_flags());
-
         let versioned = block.encode_versioned();
         let deframed =
             deframe_versioned_signed_block_bytes(wire.as_framed()).expect("deframe framed block");
         assert_eq!(deframed.bare_versioned.as_ref(), versioned.as_slice());
-
         super::decode_framed_signed_block(wire.as_framed()).expect("decode canonical wire");
         let err = super::decode_framed_signed_block(&versioned)
             .expect_err("headerless payloads must be rejected");
         assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
     }
-
     #[test]
     fn framing_derives_flags_instead_of_reusing_tls_state() {
         use crate::{
             account::AccountId, domain::DomainId, transaction::signed::TransactionBuilder,
         };
-
         let keypair = checked_random_keypair();
         let _domain_id: DomainId = DomainId::try_new("genesis", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
-
         let transaction = TransactionBuilder::new_genesis(
             authority.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .sign(keypair.private_key());
         let block = SignedBlock::genesis(vec![transaction], keypair.private_key(), None, None);
-
         let versioned = block.encode_versioned();
         let header_index = 1 + norito::core::Header::SIZE - 1;
         let expected_flags = norito::core::default_encode_flags();
@@ -4434,29 +4077,24 @@ mod tests {
             framed[header_index], expected_flags,
             "Framing must use the canonical fixed layout flags",
         );
-
         let deframed =
             deframe_versioned_signed_block_bytes(&framed).expect("deframe framed payload");
         assert_eq!(deframed.bare_versioned.as_ref(), versioned.as_slice());
     }
-
     #[test]
     fn decode_field_respects_length_and_consumes_payload() {
         // Prepare bare Norito payload representing a String value.
         let value = String::from("field-value");
         let mut payload = Vec::new();
         value.encode_to(&mut payload);
-
         // Prefix the payload with its little-endian length header.
         let mut input = Vec::with_capacity(8 + payload.len());
         input.extend_from_slice(&(payload.len() as u64).to_le_bytes());
         input.extend_from_slice(&payload);
-
         let (decoded, rest) = super::decode_field::<String>(&input).expect("decode field");
         assert_eq!(decoded, value);
         assert!(rest.is_empty());
     }
-
     #[cfg(feature = "transparent_api")]
     #[test]
     fn update_transaction_result_incremental_matches_full_rebuild() {
@@ -4468,7 +4106,6 @@ mod tests {
         let keypair = checked_random_keypair();
         let mut block =
             SignedBlock::presigned(checked_block_signature(0, &keypair, &header), header, txs);
-
         // Seed with 4 entrypoints (2 external hashes, 2 time triggers) and 4 results
         let tx_hashes: Vec<HashOf<TransactionEntrypoint>> = (0..4)
             .map(|i| {
@@ -4500,13 +4137,11 @@ mod tests {
             )
             .expect("block has no external hash prefix to validate");
         let root_initial = block.header().result_merkle_root;
-
         // Update one result incrementally
         let idx = 1usize;
         let new_inner = TransactionResultInner::Ok(DataTriggerSequence::default());
         assert!(block.update_transaction_result(idx, &new_inner));
         let root_after_inc = block.header().result_merkle_root;
-
         // Rebuild a fresh block with the updated results and compare roots
         let mut rebuilt = block.clone();
         let mut new_results = results_inner;
@@ -4515,7 +4150,6 @@ mod tests {
             .set_transaction_results(Vec::<TimeTriggerEntrypoint>::new(), &tx_hashes, new_results)
             .expect("block has no external hash prefix to validate");
         let root_rebuilt = rebuilt.header().result_merkle_root;
-
         assert_ne!(root_initial, root_after_inc);
         assert_eq!(root_after_inc, root_rebuilt);
     }

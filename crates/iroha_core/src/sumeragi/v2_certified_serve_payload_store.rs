@@ -36,6 +36,8 @@ const TEMPORARY_FILE_SUFFIX: &str = ".norito.tmp";
 const FRAME_MAGIC: &[u8; 8] = b"SUM2SRV1";
 const FORMAT_VERSION: u16 = 1;
 const CHECKSUM_BYTES: usize = Hash::LENGTH;
+const ADMISSION_RECEIPT_BINDING_DOMAIN: &[u8] =
+    b"iroha:sumeragi:v2:certified-serve-admission-receipt:v1";
 const FRAME_HEADER_BYTES: usize =
     FRAME_MAGIC.len() + size_of::<u16>() + size_of::<u64>() + CHECKSUM_BYTES;
 const ENTRY_FIXED_HEADROOM_BYTES: u64 = 64 * 1024;
@@ -129,6 +131,7 @@ pub(crate) struct DurableCertifiedServeAdmissionReceipt {
     certificate_hash: HashOf<wire::QuorumCertificate>,
     payload_hash: Hash,
     local_retainer: wire::ValidatorIndex,
+    coordinate_binding: Hash,
 }
 
 impl DurableCertifiedServeAdmissionReceipt {
@@ -151,6 +154,70 @@ impl DurableCertifiedServeAdmissionReceipt {
     /// before this receipt reached durable storage.
     pub(crate) const fn local_retainer(self) -> wire::ValidatorIndex {
         self.local_retainer
+    }
+
+    /// Recompute the canonical Pending frame and compare every receipt
+    /// coordinate with one exact authenticated request.
+    pub(crate) fn exactly_matches_pending(
+        self,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+    ) -> bool {
+        let request = authenticated.request();
+        let payload = PersistedCertifiedServePayloadV1 {
+            format_version: FORMAT_VERSION,
+            context_id: request.round.context_id,
+            height: request.round.height,
+            request_hash: authenticated.request_hash(),
+            request: request.clone(),
+            state: PersistedCertifiedServePayloadStateV1::Pending,
+        };
+        self.id == payload.id()
+            && self.certificate_hash == HashOf::new(&request.certificate)
+            && self.payload_hash == payload.payload_hash()
+            && self.coordinate_binding
+                == admission_receipt_coordinate_binding(
+                    self.id,
+                    self.certificate_hash,
+                    self.payload_hash,
+                    self.local_retainer,
+                )
+    }
+
+    /// Replace the signed-request identity in a negative fixture.
+    #[cfg(test)]
+    pub(crate) fn with_request_hash_for_test(
+        mut self,
+        request_hash: HashOf<wire::CertifiedBodyRequest>,
+    ) -> Self {
+        self.id = CertifiedServePayloadId(request_hash);
+        self
+    }
+
+    /// Replace the certificate identity in a negative fixture.
+    #[cfg(test)]
+    pub(crate) fn with_certificate_hash_for_test(
+        mut self,
+        certificate_hash: HashOf<wire::QuorumCertificate>,
+    ) -> Self {
+        self.certificate_hash = certificate_hash;
+        self
+    }
+
+    /// Replace the durable frame identity in a negative fixture.
+    #[cfg(test)]
+    pub(crate) fn with_payload_hash_for_test(mut self, payload_hash: Hash) -> Self {
+        self.payload_hash = payload_hash;
+        self
+    }
+
+    /// Replace the independently verified retainer in a negative fixture.
+    #[cfg(test)]
+    pub(crate) fn with_local_retainer_for_test(
+        mut self,
+        local_retainer: wire::ValidatorIndex,
+    ) -> Self {
+        self.local_retainer = local_retainer;
+        self
     }
 }
 
@@ -371,6 +438,7 @@ pub(crate) enum AuthenticatedRecoveredCertifiedServePayloadState {
 pub(crate) struct AuthenticatedRecoveredCertifiedServePayload {
     request: AuthenticatedCertifiedBodyRequest,
     payload_hash: Hash,
+    local_retainer: wire::ValidatorIndex,
     state: AuthenticatedRecoveredCertifiedServePayloadState,
 }
 
@@ -395,9 +463,47 @@ impl AuthenticatedRecoveredCertifiedServePayload {
         self.payload_hash
     }
 
+    /// Independently verified frozen-roster index retaining this request.
+    pub(crate) const fn local_retainer(&self) -> wire::ValidatorIndex {
+        self.local_retainer
+    }
+
     /// Borrow the exact post-authentication recovery state.
     pub(crate) const fn state(&self) -> &AuthenticatedRecoveredCertifiedServePayloadState {
         &self.state
+    }
+
+    /// Recompute the exact canonical payload frame from the authenticated
+    /// request and state retained by this recovery cut.
+    pub(crate) fn exactly_matches_persisted_payload(&self) -> bool {
+        let state = match &self.state {
+            AuthenticatedRecoveredCertifiedServePayloadState::Pending => {
+                PersistedCertifiedServePayloadStateV1::Pending
+            }
+            AuthenticatedRecoveredCertifiedServePayloadState::Completed(completed) => {
+                let response = completed.response();
+                PersistedCertifiedServePayloadStateV1::Completed {
+                    response_hash: HashOf::new(response),
+                    manifest: response.manifest.clone(),
+                    responder: response.responder,
+                    signature: response.signature.clone(),
+                }
+            }
+            AuthenticatedRecoveredCertifiedServePayloadState::Negative(outcome) => {
+                PersistedCertifiedServePayloadStateV1::Negative { outcome: *outcome }
+            }
+        };
+        let request = self.request.request();
+        PersistedCertifiedServePayloadV1 {
+            format_version: FORMAT_VERSION,
+            context_id: request.round.context_id,
+            height: request.round.height,
+            request_hash: self.request.request_hash(),
+            request: request.clone(),
+            state,
+        }
+        .payload_hash()
+            == self.payload_hash
     }
 }
 
@@ -622,6 +728,7 @@ impl CertifiedServePayloadRecoveryCut {
             let recovered = AuthenticatedRecoveredCertifiedServePayload {
                 request,
                 payload_hash,
+                local_retainer,
                 state,
             };
             if authenticated.insert(id, recovered).is_some() {
@@ -1183,7 +1290,9 @@ impl CertifiedServePayloadStoreV1 {
         }
         for recovered in authenticated.iter() {
             let payload = self.load_id(recovered.id())?;
-            if payload.payload_hash() != recovered.payload_hash() {
+            if !recovered.exactly_matches_persisted_payload()
+                || payload.payload_hash() != recovered.payload_hash()
+            {
                 return Err(CertifiedServePayloadStoreError::AuthenticatedRecoveryCutMismatch);
             }
         }
@@ -1601,12 +1710,40 @@ fn admission_receipt(
     payload: &PersistedCertifiedServePayloadV1,
     local_retainer: wire::ValidatorIndex,
 ) -> DurableCertifiedServeAdmissionReceipt {
+    let id = payload.id();
+    let certificate_hash = HashOf::new(&payload.request.certificate);
+    let payload_hash = payload.payload_hash();
     DurableCertifiedServeAdmissionReceipt {
-        id: payload.id(),
-        certificate_hash: HashOf::new(&payload.request.certificate),
-        payload_hash: payload.payload_hash(),
+        id,
+        certificate_hash,
+        payload_hash,
         local_retainer,
+        coordinate_binding: admission_receipt_coordinate_binding(
+            id,
+            certificate_hash,
+            payload_hash,
+            local_retainer,
+        ),
     }
+}
+
+fn admission_receipt_coordinate_binding(
+    id: CertifiedServePayloadId,
+    certificate_hash: HashOf<wire::QuorumCertificate>,
+    payload_hash: Hash,
+    local_retainer: wire::ValidatorIndex,
+) -> Hash {
+    let mut preimage = Vec::with_capacity(
+        ADMISSION_RECEIPT_BINDING_DOMAIN.len()
+            + 3 * Hash::LENGTH
+            + size_of::<wire::ValidatorIndex>(),
+    );
+    preimage.extend_from_slice(ADMISSION_RECEIPT_BINDING_DOMAIN);
+    preimage.extend_from_slice(id.request_hash().as_ref());
+    preimage.extend_from_slice(certificate_hash.as_ref());
+    preimage.extend_from_slice(payload_hash.as_ref());
+    preimage.extend_from_slice(&local_retainer.to_le_bytes());
+    Hash::new(preimage)
 }
 
 fn completed_receipt(
@@ -2218,6 +2355,7 @@ mod tests {
         let pending = store
             .persist_pending(&request)
             .expect("persist pending request");
+        assert!(pending.exactly_matches_pending(&request));
         assert_eq!(pending.id().request_hash(), request.request_hash());
         assert_eq!(
             pending.certificate_hash(),
@@ -2388,6 +2526,8 @@ mod tests {
         assert_eq!(recovered.id(), pending.id());
         assert_eq!(recovered.request().request_hash(), request.request_hash());
         assert_eq!(recovered.certificate_hash(), pending.certificate_hash());
+        assert_eq!(recovered.local_retainer(), 0);
+        assert!(recovered.exactly_matches_persisted_payload());
         assert_ne!(recovered.payload_hash(), pending.payload_hash());
         assert!(matches!(
             recovered.state(),
@@ -2561,6 +2701,8 @@ mod tests {
         else {
             panic!("completed response must remain terminal after authentication");
         };
+        assert_eq!(recovered.local_retainer(), 0);
+        assert!(recovered.exactly_matches_persisted_payload());
         assert_eq!(completed.response(), &response);
         assert_eq!(HashOf::new(completed.response()), HashOf::new(&response));
     }

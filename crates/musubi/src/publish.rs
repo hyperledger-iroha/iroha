@@ -539,7 +539,7 @@ pub(crate) fn archive_registration_intent_valid_until_ms(
 }
 
 /// Exact finalized registry evidence that an archive identity remained absent.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct PublicationArchiveAbsenceEvidenceV1 {
     /// Exact genesis-derived network identity returned by the finalized query.
     pub network_id: NetworkId,

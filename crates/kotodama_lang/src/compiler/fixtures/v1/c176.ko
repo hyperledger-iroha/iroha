@@ -1,0 +1,13 @@
+
+        seiyaku Demo {
+            kotoage fn run() authorize("Admin") {
+                debug::info("run");
+            }
+
+            #[test]
+            fn smoke() {
+                let AccountId expected = context::authority();
+                require_authority(expected);
+            }
+        }
+        

@@ -55,7 +55,6 @@ pub mod gpu_zstd;
 /// Default upper bound on Norito archive length (bytes) when hosts do not
 /// provide an explicit configuration.
 const DEFAULT_MAX_ARCHIVE_LEN: u64 = 64 * 1024 * 1024; // 64 MiB
-
 /// Maximum number of recursively owned values reconstructed by one decoder.
 ///
 /// `Box`, `Rc`, and `Arc` make it possible for a wire value to have a
@@ -63,9 +62,7 @@ const DEFAULT_MAX_ARCHIVE_LEN: u64 = 64 * 1024 * 1024; // 64 MiB
 /// this limit in the codec prevents an untrusted archive from exhausting the
 /// native stack before the decoded value reaches its domain validator.
 pub const MAX_OWNED_VALUE_DECODE_DEPTH: usize = 256;
-
 static MAX_ARCHIVE_LEN: AtomicU64 = AtomicU64::new(DEFAULT_MAX_ARCHIVE_LEN);
-
 /// Per-decode resource limits for attacker-controlled archives.
 ///
 /// Per-value sequence and field limits are enforced before allocation. The
@@ -82,7 +79,6 @@ pub struct DecodeLimits {
     max_total_allocated_bytes: usize,
     max_nesting_depth: usize,
 }
-
 impl DecodeLimits {
     /// Construct a complete resource budget for one decode operation.
     ///
@@ -107,38 +103,32 @@ impl DecodeLimits {
             max_nesting_depth,
         }
     }
-
     /// Maximum number of elements permitted in any one decoded sequence.
     #[must_use]
     pub const fn max_sequence_elements(self) -> usize {
         self.max_sequence_elements
     }
-
     /// Maximum byte length permitted for one length-delimited field or blob.
     #[must_use]
     pub const fn max_field_bytes(self) -> usize {
         self.max_field_bytes
     }
-
     /// Maximum cumulative sequence elements permitted across the decode tree.
     #[must_use]
     pub const fn max_total_elements(self) -> usize {
         self.max_total_elements
     }
-
     /// Maximum cumulative allocation budget in bytes.
     #[must_use]
     pub const fn max_total_allocated_bytes(self) -> usize {
         self.max_total_allocated_bytes
     }
-
     /// Maximum permitted nested value-decode depth.
     #[must_use]
     pub const fn max_nesting_depth(self) -> usize {
         self.max_nesting_depth
     }
 }
-
 fn serialize_owned<W: Write, T: NoritoSerialize>(mut writer: W, value: &T) -> Result<(), Error> {
     let _flags_guard = if decode_flags_active() {
         None
@@ -159,12 +149,10 @@ fn serialize_owned<W: Write, T: NoritoSerialize>(mut writer: W, value: &T) -> Re
     // incomplete enclosing serialization.
     serialize_to_writer_exact(value, &mut writer, exact_len)
 }
-
 #[cfg(test)]
 mod serialize_owned_tests {
     include!("core/serialize_owned_tests.rs");
 }
-
 fn owned_bytes_from_ctx<A>(archived: &Archived<A>) -> Result<&[u8], Error> {
     let ptr = archived as *const _ as *const u8;
     let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
@@ -177,7 +165,6 @@ fn owned_bytes_from_ctx<A>(archived: &Archived<A>) -> Result<&[u8], Error> {
     let payload = unsafe { std::slice::from_raw_parts(base as *const u8, total) };
     Ok(&payload[offset..])
 }
-
 fn parse_owned_payload(bytes: &[u8]) -> Result<(&[u8], usize), Error> {
     // The wrapper decoder borrows this field directly and charges only the
     // allocation it actually constructs (`Box`, `Rc`, or `Arc`) below.
@@ -188,7 +175,6 @@ fn parse_owned_payload(bytes: &[u8]) -> Result<(&[u8], usize), Error> {
     }
     Ok((&bytes[hdr..end], end))
 }
-
 /// Override the maximum allowed Norito archive length (bytes).
 ///
 /// Hosts should call this during initialization using the configured limit. A
@@ -199,7 +185,6 @@ pub fn set_max_archive_len(limit: u64) {
     let capped = resolved.min(usize::MAX as u64);
     MAX_ARCHIVE_LEN.store(capped, Ordering::Relaxed);
 }
-
 /// Effective maximum Norito archive length in bytes.
 #[inline]
 pub fn max_archive_len() -> u64 {
@@ -207,7 +192,6 @@ pub fn max_archive_len() -> u64 {
         .load(Ordering::Relaxed)
         .min(usize::MAX as u64)
 }
-
 /// Convert a header-declared length into a `usize`, enforcing the configured cap.
 pub(crate) fn payload_len_to_usize(length: u64) -> Result<usize, Error> {
     let limit = max_archive_len();
@@ -216,16 +200,13 @@ pub(crate) fn payload_len_to_usize(length: u64) -> Result<usize, Error> {
     }
     usize::try_from(length).map_err(|_| Error::ArchiveLengthExceeded { length, limit })
 }
-
 #[inline]
 pub(crate) fn len_u64_to_usize(length: u64) -> Result<usize, Error> {
     usize::try_from(length).map_err(|_| Error::LengthMismatch)
 }
-
 /// Maximum padding (bytes) allowed between a Norito header and the payload when
 /// the target type's alignment is unknown.
 const MAX_HEADER_PADDING: usize = 64;
-
 /// Strip alignment padding that was inserted between the header and the payload.
 ///
 /// Rejects inputs whose leading bytes exceed `max_padding` to prevent accepting
@@ -250,7 +231,6 @@ pub(crate) fn payload_without_leading_padding(
         _ => &slice[padding..],
     })
 }
-
 /// Strip alignment padding between the header and payload, requiring an exact
 /// padding length and zero-filled padding bytes.
 pub(crate) fn payload_without_leading_padding_exact(
@@ -269,11 +249,9 @@ pub(crate) fn payload_without_leading_padding_exact(
     }
     Ok(&slice[padding..])
 }
-
 const TYPE_NAME_SCHEMA_HASH_DOMAIN: &[u8] = b"norito:v1:type-name\0";
 #[cfg(feature = "schema-structural")]
 const STRUCTURAL_SCHEMA_HASH_DOMAIN: &[u8] = b"norito:v1:structural-schema\0";
-
 /// CRC64 polynomial used to compute integrity checks.
 /// Header flags stored in the final padding byte.
 pub mod header_flags {
@@ -294,7 +272,6 @@ pub mod header_flags {
     /// Applies only when packed-struct and compact-len are enabled.
     pub const FIELD_BITSET: u8 = 0x20;
 }
-
 fn schema_hash_with_domain(domain: &[u8], bytes: &[u8]) -> [u8; 16] {
     let mut hasher = Sha256::new();
     hasher.update(domain);
@@ -304,16 +281,13 @@ fn schema_hash_with_domain(domain: &[u8], bytes: &[u8]) -> [u8; 16] {
     out.copy_from_slice(&digest[..16]);
     out
 }
-
 fn type_name_schema_hash_from_bytes(bytes: &[u8]) -> [u8; 16] {
     schema_hash_with_domain(TYPE_NAME_SCHEMA_HASH_DOMAIN, bytes)
 }
-
 #[cfg(feature = "schema-structural")]
 fn structural_schema_hash_from_bytes(bytes: &[u8]) -> [u8; 16] {
     schema_hash_with_domain(STRUCTURAL_SCHEMA_HASH_DOMAIN, bytes)
 }
-
 /// Generate a 16-byte schema hash for type `T`.
 ///
 /// The hash is derived from the domain-prefixed SHA-256 digest of the fully
@@ -322,24 +296,20 @@ pub(crate) fn compute_schema_hash<T>() -> [u8; 16] {
     let name = core::any::type_name::<T>();
     type_name_schema_hash_from_bytes(name.as_bytes())
 }
-
 /// Public helper to compute type-name based schema hash (fallback when structural schema is not used).
 pub fn type_name_schema_hash<T>() -> [u8; 16] {
     compute_schema_hash::<T>()
 }
-
 /// Compute a type-name-based schema hash for an arbitrary type name string.
 pub fn schema_hash_for_name(name: &str) -> [u8; 16] {
     type_name_schema_hash_from_bytes(name.as_bytes())
 }
-
 #[cfg(feature = "schema-structural")]
 /// Compute a structural schema hash using `iroha_schema`'s canonical serialization.
 pub fn schema_hash_structural<T: iroha_schema::IntoSchema>() -> [u8; 16] {
     let map = <T as iroha_schema::IntoSchema>::schema();
     schema_hash_from_json_serializable(&map)
 }
-
 #[cfg(feature = "schema-structural")]
 fn schema_hash_from_json_serializable<T>(value: &T) -> [u8; 16]
 where
@@ -349,7 +319,6 @@ where
     json::JsonSerialize::json_serialize(value, &mut out);
     structural_schema_hash_from_bytes(out.as_bytes())
 }
-
 #[cfg(feature = "schema-structural")]
 /// Compute a structural schema hash from a pre-built Norito JSON [`Value`].
 ///
@@ -358,7 +327,6 @@ where
 pub fn schema_hash_structural_value(value: &json::Value) -> [u8; 16] {
     schema_hash_from_json_serializable(value)
 }
-
 #[cfg(feature = "schema-structural")]
 /// Compute a structural schema hash from a JSON string descriptor.
 ///
@@ -368,21 +336,17 @@ pub fn schema_hash_structural_from_json_str(input: &str) -> Result<[u8; 16], jso
     let value = json::parse_value(input)?;
     Ok(schema_hash_structural_value(&value))
 }
-
 #[cfg(feature = "schema-structural")]
 /// Compute a structural schema hash from UTF-8 JSON bytes.
 pub fn schema_hash_structural_from_json_bytes(bytes: &[u8]) -> Result<[u8; 16], json::Error> {
     let input = std::str::from_utf8(bytes).map_err(|_| json::Error::InvalidUtf8)?;
     schema_hash_structural_from_json_str(input)
 }
-
 /// Compute the CRC64-XZ checksum over `data` using the ECMA polynomial.
 fn crc64(data: &[u8]) -> u64 {
     simd_crc64::hardware_crc64(data)
 }
-
 const MAX_VARINT_BYTES: usize = 10;
-
 /// Number of bytes used to encode a length prefix for `value`.
 ///
 /// Honors the active `COMPACT_LEN` layout flag so callers can pre-compute
@@ -390,7 +354,6 @@ const MAX_VARINT_BYTES: usize = 10;
 pub fn len_prefix_len(value: usize) -> usize {
     len_prefix_len_with_flags(value, effective_layout_flags())
 }
-
 /// Number of bytes used to encode a length prefix for `value` under `flags`.
 ///
 /// This is the flag-explicit variant of [`len_prefix_len`] for tight loops
@@ -403,29 +366,24 @@ pub fn len_prefix_len_with_flags(value: usize, flags: u8) -> usize {
         8
     }
 }
-
 #[inline]
 fn len_prefixed_payload_len_with_flags(payload_len: usize, flags: u8) -> Option<usize> {
     len_prefix_len_with_flags(payload_len, flags).checked_add(payload_len)
 }
-
 #[inline]
 fn len_prefixed_payload_len(payload_len: usize) -> Option<usize> {
     len_prefixed_payload_len_with_flags(payload_len, effective_layout_flags())
 }
-
 #[inline]
 fn tagged_len_prefixed_payload_len_with_flags(payload_len: usize, flags: u8) -> Option<usize> {
     1usize
         .checked_add(len_prefix_len_with_flags(payload_len, flags))?
         .checked_add(payload_len)
 }
-
 #[inline]
 fn tagged_len_prefixed_payload_len(payload_len: usize) -> Option<usize> {
     tagged_len_prefixed_payload_len_with_flags(payload_len, effective_layout_flags())
 }
-
 /// Number of bytes used to encode a sequence length prefix for `value`.
 ///
 /// Sequence length headers are fixed-width in v1.
@@ -433,18 +391,15 @@ pub fn seq_len_prefix_len(value: usize) -> usize {
     let _ = value;
     8
 }
-
 /// Number of bytes used to encode a compact varint length prefix.
 pub fn varint_len_prefix_len(value: usize) -> usize {
     varint_encoded_len(value as u64)
 }
-
 #[inline]
 pub const fn should_emit_varint_tail(_len: usize) -> bool {
     let _ = _len;
     false
 }
-
 #[inline]
 /// Return the set of Norito header layout flags supported by this build.
 pub const fn supported_header_flags() -> u8 {
@@ -454,7 +409,6 @@ pub const fn supported_header_flags() -> u8 {
         | header_flags::PACKED_STRUCT
         | header_flags::FIELD_BITSET
 }
-
 #[inline]
 /// Validate that a Norito header flag byte uses only supported v1 layout combinations.
 pub fn validate_header_flags(flags: u8) -> Result<(), Error> {
@@ -470,12 +424,10 @@ pub fn validate_header_flags(flags: u8) -> Result<(), Error> {
     }
     Ok(())
 }
-
 #[inline]
 fn sanitize_layout_flags(flags: u8) -> u8 {
     flags & supported_header_flags()
 }
-
 /// Return the default v1 encode layout flags.
 ///
 /// The v1 minor byte remains fixed at [`VERSION_MINOR`]; payloads advertise
@@ -486,7 +438,6 @@ fn sanitize_layout_flags(flags: u8) -> u8 {
 pub const fn default_encode_flags() -> u8 {
     V1_DECODE_FLAGS | header_flags::COMPACT_LEN
 }
-
 #[derive(Clone)]
 struct PayloadCtxState {
     base: usize,
@@ -497,56 +448,44 @@ struct PayloadCtxState {
     flags_hint: u8,
     flags_active: bool,
 }
-
 // Decode context managed per-thread; set based on header flags.
 thread_local! {
     static DECODE_FLAGS: Cell<u8> = const { Cell::new(0) };
 }
-
 thread_local! {
     static DECODE_FLAGS_ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
-
 thread_local! {
     static DECODE_FLAGS_HINT: Cell<u8> = const { Cell::new(0) };
 }
-
 thread_local! {
     static ENCODE_CONTEXT_ACTIVE: Cell<bool> = const { Cell::new(false) };
 }
-
 thread_local! {
     static ENCODE_PACKED_FIXED_USED: Cell<bool> = const { Cell::new(false) };
 }
-
 thread_local! {
     static ENCODE_FIELD_BITSET_USED: Cell<bool> = const { Cell::new(false) };
 }
-
 thread_local! {
     static ENCODE_COMPACT_LEN_USED: Cell<bool> = const { Cell::new(false) };
 }
-
 thread_local! {
     static LAST_HEADER_FLAGS: Cell<Option<u8>> = const { Cell::new(None) };
 }
-
 thread_local! {
     static FORCE_SEQUENTIAL: Cell<bool> = const { Cell::new(false) };
 }
-
 #[derive(Debug, Default)]
 struct DecodeBudgetCounters {
     total_elements: AtomicU64,
     total_allocated_bytes: AtomicU64,
 }
-
 #[derive(Clone)]
 struct DecodeBudgetLayer {
     limits: DecodeLimits,
     counters: Arc<DecodeBudgetCounters>,
 }
-
 impl DecodeBudgetLayer {
     fn new(limits: DecodeLimits) -> Self {
         Self {
@@ -555,13 +494,11 @@ impl DecodeBudgetLayer {
         }
     }
 }
-
 #[derive(Clone)]
 struct ActiveDecodeBudgetLayer {
     budget: DecodeBudgetLayer,
     base_depth: usize,
 }
-
 /// Cloneable handle used to propagate an active decode budget without moving a
 /// thread-local guard between threads.
 #[derive(Clone)]
@@ -569,7 +506,6 @@ pub(crate) struct DecodeBudgetContext {
     layers: Vec<ActiveDecodeBudgetLayer>,
     depth: usize,
 }
-
 impl DecodeBudgetContext {
     pub(crate) fn new(limits: DecodeLimits) -> Self {
         let depth = DECODE_NESTING_DEPTH.with(Cell::get);
@@ -582,23 +518,19 @@ impl DecodeBudgetContext {
         }
     }
 }
-
 thread_local! {
     static DECODE_BUDGET_LAYERS: RefCell<Vec<ActiveDecodeBudgetLayer>> = const { RefCell::new(Vec::new()) };
     static DECODE_NESTING_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
-
 pub(crate) struct DecodeLimitsGuard {
     previous_layer_count: usize,
     previous_depth: usize,
     _not_send: PhantomData<Rc<()>>,
 }
-
 impl DecodeLimitsGuard {
     fn enter(limits: DecodeLimits) -> Self {
         Self::enter_context(&DecodeBudgetContext::new(limits))
     }
-
     pub(crate) fn enter_context(context: &DecodeBudgetContext) -> Self {
         let previous_depth = DECODE_NESTING_DEPTH.with(Cell::get);
         let previous_layer_count = DECODE_BUDGET_LAYERS.with(|slot| {
@@ -622,14 +554,12 @@ impl DecodeLimitsGuard {
         }
     }
 }
-
 impl Drop for DecodeLimitsGuard {
     fn drop(&mut self) {
         DECODE_BUDGET_LAYERS.with(|slot| slot.borrow_mut().truncate(self.previous_layer_count));
         DECODE_NESTING_DEPTH.with(|slot| slot.set(self.previous_depth));
     }
 }
-
 #[cfg(feature = "parallel-decode")]
 pub(crate) fn active_decode_budget_context() -> Option<DecodeBudgetContext> {
     let layers = DECODE_BUDGET_LAYERS.with(|slot| slot.borrow().clone());
@@ -642,19 +572,16 @@ pub(crate) fn active_decode_budget_context() -> Option<DecodeBudgetContext> {
         })
     }
 }
-
 /// Return whether the current thread is inside at least one decode-limit scope.
 #[inline]
 #[doc(hidden)]
 pub fn decode_limits_active() -> bool {
     DECODE_BUDGET_LAYERS.with(|slot| !slot.borrow().is_empty())
 }
-
 #[inline]
 fn limit_to_u64(limit: usize) -> u64 {
     u64::try_from(limit).unwrap_or(u64::MAX)
 }
-
 fn charge_atomic_budget(counter: &AtomicU64, amount: u64, limit: u64) -> Result<u64, u64> {
     counter
         .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
@@ -663,13 +590,11 @@ fn charge_atomic_budget(counter: &AtomicU64, amount: u64, limit: u64) -> Result<
         .map(|previous| previous.saturating_add(amount))
         .map_err(|current| current.saturating_add(amount))
 }
-
 /// Guard representing one nested length-delimited value decode.
 pub(crate) struct DecodeDepthGuard {
     previous_depth: usize,
     _not_send: PhantomData<Rc<()>>,
 }
-
 impl DecodeDepthGuard {
     pub(crate) fn enter() -> Result<Self, Error> {
         let previous_depth = DECODE_NESTING_DEPTH.with(Cell::get);
@@ -700,13 +625,11 @@ impl DecodeDepthGuard {
         })
     }
 }
-
 impl Drop for DecodeDepthGuard {
     fn drop(&mut self) {
         DECODE_NESTING_DEPTH.with(|slot| slot.set(self.previous_depth));
     }
 }
-
 /// Run a decode operation with limits scoped to the current thread.
 ///
 /// Nested scopes compose by taking the stricter limit, so a decoder invoked by
@@ -725,7 +648,6 @@ pub fn with_decode_limits<T>(
 ) -> Result<T, Error> {
     with_decode_limits_scope(limits, decode)
 }
-
 /// Run an operation under decode limits without constraining its return type.
 ///
 /// This is the scope primitive for versioned or layered codecs whose public
@@ -736,7 +658,6 @@ pub fn with_decode_limits_scope<T>(limits: DecodeLimits, decode: impl FnOnce() -
     let _guard = DecodeLimitsGuard::enter(limits);
     decode()
 }
-
 #[inline]
 pub(crate) fn enforce_decode_sequence_length(length: u64) -> Result<(), Error> {
     DECODE_BUDGET_LAYERS.with(|slot| {
@@ -762,7 +683,6 @@ pub(crate) fn enforce_decode_sequence_length(length: u64) -> Result<(), Error> {
     // separately when their field lengths are read or buffers are allocated.
     reserve_decode_allocation_u64(length)
 }
-
 #[inline]
 pub(crate) fn check_decode_sequence_length(length: u64) -> Result<(), Error> {
     DECODE_BUDGET_LAYERS.with(|slot| {
@@ -775,13 +695,11 @@ pub(crate) fn check_decode_sequence_length(length: u64) -> Result<(), Error> {
         Ok(())
     })
 }
-
 #[inline]
 pub(crate) fn enforce_decode_field_length(length: u64) -> Result<(), Error> {
     check_decode_field_length(length)?;
     reserve_decode_allocation_u64(length)
 }
-
 #[inline]
 fn check_decode_field_length(length: u64) -> Result<(), Error> {
     DECODE_BUDGET_LAYERS.with(|slot| {
@@ -794,13 +712,11 @@ fn check_decode_field_length(length: u64) -> Result<(), Error> {
         Ok(())
     })
 }
-
 #[inline]
 #[doc(hidden)]
 pub fn reserve_decode_allocation(length: usize) -> Result<(), Error> {
     reserve_decode_allocation_u64(limit_to_u64(length))
 }
-
 fn reserve_decode_allocation_u64(length: u64) -> Result<(), Error> {
     DECODE_BUDGET_LAYERS.with(|slot| {
         for layer in slot.borrow().iter() {
@@ -814,14 +730,12 @@ fn reserve_decode_allocation_u64(length: u64) -> Result<(), Error> {
         Ok(())
     })
 }
-
 pub(crate) struct EncodeContextGuard {
     prev_active: bool,
     prev_fixed_used: bool,
     prev_field_bitset_used: bool,
     prev_compact_len_used: bool,
 }
-
 impl EncodeContextGuard {
     pub(crate) fn enter() -> Self {
         let prev_active = ENCODE_CONTEXT_ACTIVE.with(|cell| {
@@ -852,11 +766,9 @@ impl EncodeContextGuard {
         }
     }
 }
-
 pub struct SequentialOverrideGuard {
     prev: bool,
 }
-
 impl SequentialOverrideGuard {
     pub fn enter() -> Self {
         let prev = FORCE_SEQUENTIAL.with(|cell| {
@@ -871,7 +783,6 @@ impl SequentialOverrideGuard {
         Self { prev }
     }
 }
-
 impl Drop for SequentialOverrideGuard {
     fn drop(&mut self) {
         #[cfg(debug_assertions)]
@@ -884,7 +795,6 @@ impl Drop for SequentialOverrideGuard {
         FORCE_SEQUENTIAL.with(|cell| cell.set(self.prev));
     }
 }
-
 impl Drop for EncodeContextGuard {
     fn drop(&mut self) {
         ENCODE_CONTEXT_ACTIVE.with(|cell| cell.set(self.prev_active));
@@ -893,7 +803,6 @@ impl Drop for EncodeContextGuard {
         ENCODE_COMPACT_LEN_USED.with(|cell| cell.set(self.prev_compact_len_used));
     }
 }
-
 fn mark_fixed_offsets_used_if_encoding() {
     ENCODE_CONTEXT_ACTIVE.with(|active| {
         if active.get() {
@@ -901,12 +810,10 @@ fn mark_fixed_offsets_used_if_encoding() {
         }
     });
 }
-
 /// Record that a packed sequence emitted fixed-width offsets in the current encode pass.
 pub fn note_fixed_offsets_emitted() {
     mark_fixed_offsets_used_if_encoding();
 }
-
 fn mark_compact_len_used_if_encoding() {
     ENCODE_CONTEXT_ACTIVE.with(|active| {
         if active.get() {
@@ -914,7 +821,6 @@ fn mark_compact_len_used_if_encoding() {
         }
     });
 }
-
 pub fn note_compact_len_emitted() {
     mark_compact_len_used_if_encoding();
     #[cfg(debug_assertions)]
@@ -925,7 +831,6 @@ pub fn note_compact_len_emitted() {
         );
     }
 }
-
 pub fn mark_field_bitset_used_if_encoding() {
     ENCODE_CONTEXT_ACTIVE.with(|active| {
         if active.get() {
@@ -933,29 +838,23 @@ pub fn mark_field_bitset_used_if_encoding() {
         }
     });
 }
-
 pub(crate) fn fixed_offsets_used() -> bool {
     ENCODE_PACKED_FIXED_USED.with(|flag| flag.get())
 }
-
 /// Return whether field bitsets were emitted during the current encode pass.
 pub(crate) fn field_bitset_used() -> bool {
     ENCODE_FIELD_BITSET_USED.with(|flag| flag.get())
 }
-
 pub(crate) fn compact_len_used() -> bool {
     ENCODE_COMPACT_LEN_USED.with(|flag| flag.get())
 }
-
 pub(crate) fn record_last_header_flags(flags: u8) {
     let sanitized = flags & supported_header_flags();
     LAST_HEADER_FLAGS.with(|cell| cell.set(Some(sanitized)));
 }
-
 pub(crate) fn take_last_header_flags() -> Option<u8> {
     LAST_HEADER_FLAGS.with(|cell| cell.replace(None))
 }
-
 #[inline]
 pub(crate) fn finalized_encode_flags(
     base_flags: u8,
@@ -964,7 +863,6 @@ pub(crate) fn finalized_encode_flags(
     compact_len_used: bool,
 ) -> u8 {
     debug_assert!(validate_header_flags(base_flags).is_ok());
-
     let mut final_flags = base_flags;
     if fixed_offsets_used {
         final_flags |= header_flags::PACKED_SEQ;
@@ -984,16 +882,13 @@ pub(crate) fn finalized_encode_flags(
     }
     final_flags
 }
-
 // Thread-local payload context: base pointer, length, and optional schema hash.
 thread_local! {
     static DECODE_PAYLOAD_CTX: RefCell<Option<PayloadCtxState>> = const { RefCell::new(None) };
     static DECODE_ROOT_SPAN: RefCell<Option<(usize, usize)>> = const { RefCell::new(None) };
     static OWNED_VALUE_DECODE_DEPTH: Cell<usize> = const { Cell::new(0) };
 }
-
 struct OwnedValueDecodeDepthGuard;
-
 impl OwnedValueDecodeDepthGuard {
     fn enter() -> Result<Self, Error> {
         OWNED_VALUE_DECODE_DEPTH.with(|depth| {
@@ -1010,7 +905,6 @@ impl OwnedValueDecodeDepthGuard {
         })
     }
 }
-
 impl Drop for OwnedValueDecodeDepthGuard {
     fn drop(&mut self) {
         OWNED_VALUE_DECODE_DEPTH.with(|depth| {
@@ -1019,22 +913,18 @@ impl Drop for OwnedValueDecodeDepthGuard {
         });
     }
 }
-
 /// Record the root payload span for the current thread.
 pub fn set_decode_root(bytes: &[u8]) {
     DECODE_ROOT_SPAN.with(|slot| *slot.borrow_mut() = Some((bytes.as_ptr() as usize, bytes.len())));
 }
-
 /// Clear the root payload span for the current thread.
 pub fn clear_decode_root() {
     DECODE_ROOT_SPAN.with(|slot| *slot.borrow_mut() = None);
 }
-
 /// Fetch the currently recorded root payload span, if any.
 pub fn payload_root_span() -> Option<(usize, usize)> {
     DECODE_ROOT_SPAN.with(|slot| *slot.borrow())
 }
-
 // Per-thread payload context (base pointer, length, and optional schema hash).
 fn set_payload_ctx_state(
     bytes: &[u8],
@@ -1044,7 +934,6 @@ fn set_payload_ctx_state(
 ) {
     set_payload_ctx_state_with_len(bytes, bytes.len(), schema, flags, hint);
 }
-
 fn set_payload_ctx_state_with_len(
     bytes: &[u8],
     len: usize,
@@ -1067,26 +956,21 @@ fn set_payload_ctx_state_with_len(
         });
     });
 }
-
 /// Set the current payload context for slice-based decoders.
 pub fn set_payload_ctx(bytes: &[u8]) {
     set_payload_ctx_state(bytes, None, None, None);
 }
-
 /// Set the payload context and record negotiated decode flags.
 pub fn set_payload_ctx_with_flags(bytes: &[u8], flags: u8) {
     set_payload_ctx_state(bytes, None, Some(flags), Some(flags));
 }
-
 /// Clear the payload context.
 pub fn clear_payload_ctx() {
     DECODE_PAYLOAD_CTX.with(|c| *c.borrow_mut() = None);
 }
-
 pub fn payload_ctx() -> Option<(usize, usize)> {
     payload_ctx_state().map(|state| (state.base, state.len))
 }
-
 fn payload_ctx_flags() -> Option<(u8, u8)> {
     payload_ctx_state().and_then(|state| {
         if state.flags_active {
@@ -1096,18 +980,15 @@ fn payload_ctx_flags() -> Option<(u8, u8)> {
         }
     })
 }
-
 fn payload_ctx_state() -> Option<PayloadCtxState> {
     DECODE_PAYLOAD_CTX.with(|c| c.borrow().clone())
 }
-
 fn payload_ctx_state_mut<R>(f: impl FnOnce(&mut PayloadCtxState) -> R) -> Option<R> {
     DECODE_PAYLOAD_CTX.with(|c| {
         let mut guard = c.borrow_mut();
         guard.as_mut().map(f)
     })
 }
-
 struct DecodeStateSnapshot {
     flags: u8,
     flags_hint: u8,
@@ -1116,7 +997,6 @@ struct DecodeStateSnapshot {
     payload_ctx: Option<PayloadCtxState>,
     root_span: Option<(usize, usize)>,
 }
-
 impl DecodeStateSnapshot {
     fn capture() -> Self {
         Self {
@@ -1128,7 +1008,6 @@ impl DecodeStateSnapshot {
             root_span: payload_root_span(),
         }
     }
-
     fn restore(self) {
         set_decode_flags_raw(self.flags);
         set_decode_flags_hint(self.flags_hint);
@@ -1138,11 +1017,9 @@ impl DecodeStateSnapshot {
         DECODE_ROOT_SPAN.with(|slot| *slot.borrow_mut() = self.root_span);
     }
 }
-
 struct IsolatedDecodeGuard {
     snapshot: Option<DecodeStateSnapshot>,
 }
-
 impl IsolatedDecodeGuard {
     fn enter() -> Self {
         let snapshot = DecodeStateSnapshot::capture();
@@ -1154,7 +1031,6 @@ impl IsolatedDecodeGuard {
         }
     }
 }
-
 impl Drop for IsolatedDecodeGuard {
     fn drop(&mut self) {
         if let Some(snapshot) = self.snapshot.take() {
@@ -1162,7 +1038,6 @@ impl Drop for IsolatedDecodeGuard {
         }
     }
 }
-
 fn record_payload_access(ptr: *const u8, len: usize) {
     if len == 0 {
         return;
@@ -1182,11 +1057,9 @@ fn record_payload_access(ptr: *const u8, len: usize) {
         }
     });
 }
-
 pub(crate) fn payload_ctx_max_access() -> Option<usize> {
     payload_ctx_state().map(|state| state.max_access)
 }
-
 fn record_slice_access(bytes: &[u8], len: usize) {
     let cap = bytes.len();
     let used = len.min(cap);
@@ -1195,7 +1068,6 @@ fn record_slice_access(bytes: &[u8], len: usize) {
     }
     record_payload_access(bytes.as_ptr(), used);
 }
-
 /// Record that `len` bytes of `bytes` were accessed while decoding within an active payload
 /// context.
 ///
@@ -1205,7 +1077,6 @@ fn record_slice_access(bytes: &[u8], len: usize) {
 pub fn note_payload_access(bytes: &[u8], len: usize) {
     record_slice_access(bytes, len);
 }
-
 #[inline]
 fn payload_bytes_with_offset(ptr: *const u8) -> Result<(&'static [u8], usize), Error> {
     let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
@@ -1216,16 +1087,13 @@ fn payload_bytes_with_offset(ptr: *const u8) -> Result<(&'static [u8], usize), E
         let payload = unsafe { core::slice::from_raw_parts(base as *const u8, total) };
         return Ok((payload, offset));
     }
-
     Err(Error::LengthMismatch)
 }
-
 #[inline]
 pub fn payload_slice_from_ptr(ptr: *const u8) -> Result<&'static [u8], Error> {
     let (payload, offset) = payload_bytes_with_offset(ptr)?;
     Ok(&payload[offset..])
 }
-
 /// Return an exact, bounds-checked range from the active decode payload.
 ///
 /// Generated decoders use this instead of constructing slices directly from
@@ -1241,7 +1109,6 @@ pub fn payload_range_from_ptr(ptr: *const u8, len: usize) -> Result<&'static [u8
     record_payload_access(ptr, len);
     Ok(&payload[offset..end])
 }
-
 #[inline]
 fn ensure_len_within_remaining(len: usize, remaining: usize) -> Result<(), Error> {
     if len > remaining {
@@ -1249,7 +1116,6 @@ fn ensure_len_within_remaining(len: usize, remaining: usize) -> Result<(), Error
     }
     Ok(())
 }
-
 #[cfg(test)]
 #[inline]
 fn btreemap_entry_slices<'a>(
@@ -1288,16 +1154,13 @@ fn btreemap_entry_slices<'a>(
     record_slice_access(value_slice, value_slice.len());
     Ok((key_slice, value_slice))
 }
-
 pub fn set_payload_ctx_with_schema(bytes: &[u8], schema: [u8; 16]) {
     set_payload_ctx_state(bytes, Some(schema), None, None);
 }
-
 /// Set payload context with both schema and negotiated decode flags.
 pub fn set_payload_ctx_with_schema_and_flags(bytes: &[u8], schema: [u8; 16], flags: u8) {
     set_payload_ctx_state(bytes, Some(schema), Some(flags), Some(flags));
 }
-
 #[inline]
 #[allow(dead_code)]
 fn safe_read_u64_from_ctx(ptr: *const u8, offset: usize) -> Option<u64> {
@@ -1317,7 +1180,6 @@ fn safe_read_u64_from_ctx(ptr: *const u8, offset: usize) -> Option<u64> {
     lb.copy_from_slice(&payload[off..slice_end]);
     Some(u64::from_le_bytes(lb))
 }
-
 /// Read a dynamic length header at a given pointer using the current payload context.
 /// Returns (value, bytes_consumed).
 fn read_len_dyn_at_ptr(ptr: *const u8) -> Result<(usize, usize), Error> {
@@ -1341,7 +1203,6 @@ fn read_len_dyn_at_ptr(ptr: *const u8) -> Result<(usize, usize), Error> {
     record_payload_access(ptr, used);
     Ok((len, used))
 }
-
 /// Allocate a raw buffer for `layout` without invoking the process-wide OOM
 /// handler.
 ///
@@ -1366,14 +1227,12 @@ unsafe fn alloc_checked(layout: Layout) -> Result<(*mut u8, bool), Error> {
     }
     Ok((ptr, true))
 }
-
 #[inline]
 unsafe fn dealloc_checked(ptr: *mut u8, layout: Layout, needs_dealloc: bool) {
     if needs_dealloc {
         unsafe { std::alloc::dealloc(ptr, layout) };
     }
 }
-
 fn try_decode_vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, Error> {
     let bytes = capacity
         .checked_mul(core::mem::size_of::<T>())
@@ -1387,7 +1246,6 @@ fn try_decode_vec_with_capacity<T>(capacity: usize) -> Result<Vec<T>, Error> {
         })?;
     Ok(values)
 }
-
 #[inline]
 unsafe fn copy_from_payload(src: *const u8, dst: *mut u8, len: usize) -> Result<(), Error> {
     if len == 0 {
@@ -1399,7 +1257,6 @@ unsafe fn copy_from_payload(src: *const u8, dst: *mut u8, len: usize) -> Result<
     dst_slice.copy_from_slice(slice);
     Ok(())
 }
-
 /// RAII guard to set and restore the current payload context.
 pub struct PayloadCtxGuard {
     prev: Option<PayloadCtxState>,
@@ -1435,7 +1292,6 @@ impl PayloadCtxGuard {
         };
         PayloadCtxGuard { prev, flags_guard }
     }
-
     /// Install a payload context with an explicit logical length while preserving
     /// any active schema/flag state from the current decode context.
     pub fn enter_with_len(bytes: &[u8], logical_len: usize) -> Self {
@@ -1467,7 +1323,6 @@ impl PayloadCtxGuard {
         };
         PayloadCtxGuard { prev, flags_guard }
     }
-
     pub fn enter_with_schema(bytes: &[u8], schema: [u8; 16]) -> Self {
         let prev = payload_ctx_state();
         set_payload_ctx_with_schema(bytes, schema);
@@ -1476,7 +1331,6 @@ impl PayloadCtxGuard {
             flags_guard: None,
         }
     }
-
     pub fn enter_with_flags(bytes: &[u8], flags: u8) -> Self {
         let prev = payload_ctx_state();
         let prev_active = decode_flags_active();
@@ -1491,7 +1345,6 @@ impl PayloadCtxGuard {
         };
         PayloadCtxGuard { prev, flags_guard }
     }
-
     pub fn enter_with_flags_hint(bytes: &[u8], flags: u8, hint: u8) -> Self {
         let prev = payload_ctx_state();
         let prev_active = decode_flags_active();
@@ -1506,7 +1359,6 @@ impl PayloadCtxGuard {
         };
         PayloadCtxGuard { prev, flags_guard }
     }
-
     pub fn enter_with_schema_and_flags(bytes: &[u8], schema: [u8; 16], flags: u8) -> Self {
         let prev = payload_ctx_state();
         let prev_active = decode_flags_active();
@@ -1521,7 +1373,6 @@ impl PayloadCtxGuard {
         };
         PayloadCtxGuard { prev, flags_guard }
     }
-
     pub fn enter_with_schema_flags_hint(
         bytes: &[u8],
         schema: [u8; 16],
@@ -1541,7 +1392,6 @@ impl PayloadCtxGuard {
         };
         PayloadCtxGuard { prev, flags_guard }
     }
-
     /// Install a payload context using `logical_len` bytes from `bytes` while tracking
     /// decode flags.
     pub fn enter_with_flags_len(bytes: &[u8], logical_len: usize, flags: u8) -> Self {
@@ -1558,7 +1408,6 @@ impl PayloadCtxGuard {
         };
         PayloadCtxGuard { prev, flags_guard }
     }
-
     /// Install a payload context using `logical_len` bytes and explicit flags + hint.
     pub fn enter_with_flags_hint_len(
         bytes: &[u8],
@@ -1614,41 +1463,33 @@ impl Drop for PayloadCtxGuard {
         });
     }
 }
-
 /// Set decode flags for the current thread.
 fn set_decode_flags_raw(flags: u8) {
     DECODE_FLAGS.with(|c| c.set(sanitize_layout_flags(flags)));
 }
-
 fn set_decode_flags_active(active: bool) {
     DECODE_FLAGS_ACTIVE.with(|c| c.set(active));
 }
-
 pub fn set_decode_flags(flags: u8) {
     set_decode_flags_raw(flags);
     set_decode_flags_active(true);
     set_decode_flags_hint(flags);
 }
-
 /// Get decode flags for the current thread.
 pub fn get_decode_flags() -> u8 {
     DECODE_FLAGS.with(|c| c.get())
 }
-
 pub(crate) fn decode_flags_active() -> bool {
     DECODE_FLAGS_ACTIVE.with(|c| c.get())
 }
-
 fn set_decode_flags_hint(flags: u8) {
     DECODE_FLAGS_HINT.with(|c| c.set(sanitize_layout_flags(flags)));
 }
-
 // Effective flags for encode/decode: if none were set explicitly for the
 // current thread, fall back to compile-time defaults so that bare encoders
 // produce compact layouts when the crate is compiled with `compact-len`.
 // Note: removed — encoding uses explicit defaults via Encode guard; decoders
 // rely on flags set by header or caller.
-
 /// RAII guard to restore previous decode flags.
 pub struct DecodeFlagsGuard {
     prev_flags: u8,
@@ -1659,7 +1500,6 @@ impl DecodeFlagsGuard {
     pub fn enter(flags: u8) -> Self {
         Self::enter_with_hint(flags, flags)
     }
-
     pub fn enter_with_hint(flags: u8, hint: u8) -> Self {
         let prev_flags = get_decode_flags();
         let prev_hint = DECODE_FLAGS_HINT.with(|c| c.get());
@@ -1687,7 +1527,6 @@ impl Drop for DecodeFlagsGuard {
         set_decode_flags_hint(self.prev_hint);
     }
 }
-
 /// Convenience: reset both decode flags and payload context.
 ///
 /// Useful in tests or when switching between payloads with different negotiated
@@ -1700,12 +1539,10 @@ pub fn reset_decode_state() {
     clear_payload_ctx();
     set_decode_flags_hint(0);
 }
-
 #[inline]
 fn decode_flags_hint() -> u8 {
     DECODE_FLAGS_HINT.with(|c| c.get())
 }
-
 pub(crate) fn prepare_header_decode(flags: u8, hint: u8, require_match: bool) -> Result<(), Error> {
     if decode_flags_active() {
         let active_flags = get_decode_flags();
@@ -1724,12 +1561,10 @@ pub(crate) fn prepare_header_decode(flags: u8, hint: u8, require_match: bool) ->
     reset_decode_state();
     Ok(())
 }
-
 #[inline]
 fn combine_flags(flags: u8, _hint: u8) -> u8 {
     flags
 }
-
 fn current_decode_flags_effective() -> Option<u8> {
     if decode_flags_active() {
         let flags = get_decode_flags();
@@ -1741,7 +1576,6 @@ fn current_decode_flags_effective() -> Option<u8> {
         None
     }
 }
-
 /// Return the currently effective decode flags, if any.
 ///
 /// When a Norito header is being decoded this reflects the stored flag set.
@@ -1749,17 +1583,14 @@ fn current_decode_flags_effective() -> Option<u8> {
 pub fn effective_decode_flags() -> Option<u8> {
     current_decode_flags_effective()
 }
-
 #[inline]
 fn sequential_override_active() -> bool {
     FORCE_SEQUENTIAL.with(|flag| flag.get())
 }
-
 #[inline]
 fn effective_layout_flags() -> u8 {
     current_decode_flags_effective().unwrap_or_else(default_encode_flags)
 }
-
 #[inline]
 fn layout_flag_enabled(flag: u8) -> bool {
     if sequential_override_active() {
@@ -1767,7 +1598,6 @@ fn layout_flag_enabled(flag: u8) -> bool {
     }
     (effective_layout_flags() & flag) != 0
 }
-
 #[inline]
 fn layout_flag_enabled_for_flags(flags: u8, flag: u8) -> bool {
     if sequential_override_active() {
@@ -1775,39 +1605,32 @@ fn layout_flag_enabled_for_flags(flags: u8, flag: u8) -> bool {
     }
     (sanitize_layout_flags(flags) & flag) != 0
 }
-
 /// True if packed sequence layouts are enabled for the current decode.
 pub fn use_packed_seq() -> bool {
     layout_flag_enabled(header_flags::PACKED_SEQ)
 }
-
 /// True if packed sequence layouts are enabled in an explicit flag snapshot.
 #[doc(hidden)]
 pub fn packed_seq_enabled_for_flags(flags: u8) -> bool {
     layout_flag_enabled_for_flags(flags, header_flags::PACKED_SEQ)
 }
-
 /// True if compact varint length encoding is enabled for the current decode.
 pub fn use_compact_len() -> bool {
     layout_flag_enabled(header_flags::COMPACT_LEN)
 }
-
 /// True if compact length encoding is enabled in an explicit flag snapshot.
 #[doc(hidden)]
 pub fn compact_len_enabled_for_flags(flags: u8) -> bool {
     layout_flag_enabled_for_flags(flags, header_flags::COMPACT_LEN)
 }
-
 /// True if packed struct layout is enabled for the current decode.
 pub fn use_packed_struct() -> bool {
     layout_flag_enabled(header_flags::PACKED_STRUCT)
 }
-
 /// True if packed-struct encodes a bitset selecting fields with explicit sizes.
 pub fn use_field_bitset() -> bool {
     layout_flag_enabled(header_flags::FIELD_BITSET)
 }
-
 /// Decode packed-struct offsets when the layout is enabled.
 ///
 /// Returns the computed offsets, number of header bytes consumed, packed data
@@ -1827,13 +1650,11 @@ pub fn decode_packed_offsets_slice(
         }
         return Ok((vec![0], 8, 0, 0));
     }
-
     let entries = count.checked_add(1).ok_or(Error::LengthMismatch)?;
     let bytes_needed = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
     if slice.len() < bytes_needed {
         return Err(Error::LengthMismatch);
     }
-
     let mut offsets: Vec<usize> = try_decode_vec_with_capacity(entries)?;
     for idx in 0..entries {
         let start = idx * 8;
@@ -1860,7 +1681,6 @@ pub fn decode_packed_offsets_slice(
     }
     Ok((offsets, bytes_needed, data_len, 0))
 }
-
 /// Byte range for a planned binary sequence element.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1870,7 +1690,6 @@ pub struct SequenceSpan {
     /// Exclusive end offset in the source byte slice.
     pub end: usize,
 }
-
 impl SequenceSpan {
     /// Return this span as a slice of `bytes`.
     ///
@@ -1883,14 +1702,12 @@ impl SequenceSpan {
     pub fn get<'a>(&self, bytes: &'a [u8]) -> Result<&'a [u8], Error> {
         bytes.get(self.start..self.end).ok_or(Error::LengthMismatch)
     }
-
     /// Length of the planned element payload.
     #[doc(hidden)]
     #[inline]
     pub fn len(&self) -> usize {
         self.end.saturating_sub(self.start)
     }
-
     /// Whether the planned element payload is empty.
     #[doc(hidden)]
     #[inline]
@@ -1898,7 +1715,6 @@ impl SequenceSpan {
         self.start == self.end
     }
 }
-
 /// Planned element spans and total bytes consumed by a binary sequence.
 #[doc(hidden)]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1908,7 +1724,6 @@ pub struct SequencePlan {
     /// Total bytes consumed from the source sequence payload.
     pub used: usize,
 }
-
 /// Binary sequence layout to plan.
 #[doc(hidden)]
 #[repr(u32)]
@@ -1919,7 +1734,6 @@ pub enum BinarySequenceLayout {
     /// Sequence is encoded as `[count_u64][(count + 1) u64 offsets][payloads...]`.
     FixedOffsets = 1,
 }
-
 impl BinarySequenceLayout {
     /// Resolve the sequence layout advertised by Norito header flags.
     #[doc(hidden)]
@@ -1931,14 +1745,12 @@ impl BinarySequenceLayout {
             Self::LengthPrefixed
         }
     }
-
     #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
     #[inline]
     fn abi_kind(self) -> u32 {
         self as u32
     }
 }
-
 #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
 const SEQUENCE_GPU_MIN_BYTES: usize = 1 << 20;
 #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
@@ -1947,7 +1759,6 @@ const SEQUENCE_GPU_MIN_ELEMENTS: usize = 4096;
 const PARALLEL_DECODE_MIN_BYTES: usize = 256 * 1024;
 #[cfg(feature = "parallel-decode")]
 const PARALLEL_DECODE_MIN_ELEMENTS: usize = 4096;
-
 /// Plan element byte spans for a Norito binary sequence without materializing
 /// values.
 ///
@@ -1964,7 +1775,6 @@ pub fn plan_binary_sequence(
     let (count, _) = read_seq_len_slice(bytes)?;
     plan_binary_sequence_with_count(bytes, flags, layout, count)
 }
-
 fn plan_binary_sequence_with_count(
     bytes: &[u8],
     flags: u8,
@@ -1972,7 +1782,6 @@ fn plan_binary_sequence_with_count(
     count: usize,
 ) -> Result<SequencePlan, Error> {
     validate_header_flags(flags)?;
-
     #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
     if !decode_limits_active()
         && bytes.len() >= SEQUENCE_GPU_MIN_BYTES
@@ -1982,12 +1791,10 @@ fn plan_binary_sequence_with_count(
         note_payload_access(bytes, plan.used);
         return Ok(plan);
     }
-
     let plan = plan_binary_sequence_scalar_with_count(bytes, flags, layout, count)?;
     note_payload_access(bytes, plan.used);
     Ok(plan)
 }
-
 /// Decode a pre-planned sequence in parallel at typed call sites that can prove
 /// `T: Send`.
 ///
@@ -2035,14 +1842,12 @@ where
             Ok(value)
         })
         .collect();
-
     let mut out = try_decode_vec_with_capacity(decoded.len())?;
     for value in decoded {
         out.push(value?);
     }
     Ok(out)
 }
-
 #[cfg(feature = "parallel-decode")]
 #[inline]
 fn should_decode_sequence_parallel(plan: &SequencePlan) -> bool {
@@ -2050,7 +1855,6 @@ fn should_decode_sequence_parallel(plan: &SequencePlan) -> bool {
         && plan.used >= PARALLEL_DECODE_MIN_BYTES
         && plan.spans.len() >= PARALLEL_DECODE_MIN_ELEMENTS
 }
-
 #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
 fn plan_binary_sequence_scalar(
     bytes: &[u8],
@@ -2061,7 +1865,6 @@ fn plan_binary_sequence_scalar(
     let (count, _) = read_seq_len_slice(bytes)?;
     plan_binary_sequence_scalar_with_count(bytes, flags, layout, count)
 }
-
 fn plan_binary_sequence_scalar_with_count(
     bytes: &[u8],
     flags: u8,
@@ -2104,7 +1907,6 @@ fn plan_binary_sequence_scalar_with_count(
             let offsets = bytes
                 .get(offsets_start..offsets_end)
                 .ok_or(Error::LengthMismatch)?;
-
             let first = read_u64_le_at(offsets, 0)?;
             if first != 0 {
                 return Err(Error::LengthMismatch);
@@ -2119,9 +1921,7 @@ fn plan_binary_sequence_scalar_with_count(
             if data_end > bytes.len() {
                 return Err(Error::LengthMismatch);
             }
-
             let mut spans = try_decode_vec_with_capacity(count)?;
-
             let mut prev = 0usize;
             for idx in 0..count {
                 let next = read_u64_le_at(offsets, idx + 1)?
@@ -2138,7 +1938,6 @@ fn plan_binary_sequence_scalar_with_count(
             if prev != data_len {
                 return Err(Error::LengthMismatch);
             }
-
             Ok(SequencePlan {
                 spans,
                 used: data_end,
@@ -2146,7 +1945,6 @@ fn plan_binary_sequence_scalar_with_count(
         }
     }
 }
-
 fn validate_binary_sequence_reservation(
     bytes: &[u8],
     flags: u8,
@@ -2192,7 +1990,6 @@ fn validate_binary_sequence_reservation(
     }
     Ok(())
 }
-
 fn validate_current_sequence_reservation(bytes: &[u8], count: usize) -> Result<(), Error> {
     let flags = effective_decode_flags().unwrap_or_else(default_encode_flags);
     let layout = if use_packed_seq() {
@@ -2202,7 +1999,6 @@ fn validate_current_sequence_reservation(bytes: &[u8], count: usize) -> Result<(
     };
     validate_binary_sequence_reservation(bytes, flags, layout, count)
 }
-
 fn validate_current_map_reservation(bytes: &[u8], count: usize) -> Result<(), Error> {
     let (declared_count, offset) = inspect_seq_len_slice(bytes)?;
     if declared_count != count {
@@ -2250,7 +2046,6 @@ fn validate_current_map_reservation(bytes: &[u8], count: usize) -> Result<(), Er
     }
     Ok(())
 }
-
 #[inline]
 fn read_u64_le_at(bytes: &[u8], idx: usize) -> Result<u64, Error> {
     let start = idx.checked_mul(8).ok_or(Error::LengthMismatch)?;
@@ -2259,12 +2054,10 @@ fn read_u64_le_at(bytes: &[u8], idx: usize) -> Result<u64, Error> {
     buf.copy_from_slice(bytes.get(start..end).ok_or(Error::LengthMismatch)?);
     Ok(u64::from_le_bytes(buf))
 }
-
 #[inline]
 fn read_fixed_offset_usize_at(bytes: &[u8], idx: usize) -> Result<usize, Error> {
     len_u64_to_usize(read_u64_le_at(bytes, idx)?)
 }
-
 fn validate_fixed_offset_table(bytes: &[u8], entries: usize) -> Result<usize, Error> {
     let mut prev = 0usize;
     for idx in 0..entries {
@@ -2280,7 +2073,6 @@ fn validate_fixed_offset_table(bytes: &[u8], entries: usize) -> Result<usize, Er
     }
     Ok(prev)
 }
-
 #[cfg(any(feature = "codec-gpu-metal", feature = "codec-gpu-cuda"))]
 mod sequence_gpu {
     use std::{
@@ -2297,7 +2089,6 @@ mod sequence_gpu {
         start: usize,
         end: usize,
     }
-
     type SequencePlanHelperFn = unsafe extern "C" fn(
         input_ptr: *const u8,
         input_len: usize,
@@ -2308,34 +2099,27 @@ mod sequence_gpu {
         out_count: *mut usize,
         out_used: *mut usize,
     ) -> i32;
-
     const RC_OK: i32 = 0;
     const RC_INVALID: i32 = 1;
     const RC_NO_SPACE: i32 = 2;
     const RC_UNAVAILABLE: i32 = 3;
-
     struct SequencePlanLib {
         handle: *mut c_void,
         func: SequencePlanHelperFn,
     }
-
     unsafe impl Send for SequencePlanLib {}
     unsafe impl Sync for SequencePlanLib {}
-
     impl Drop for SequencePlanLib {
         fn drop(&mut self) {
             unsafe { close_library(self.handle) };
         }
     }
-
     enum SequencePlanCache {
         Unknown,
         Loaded(SequencePlanLib),
         Disabled,
     }
-
     static SEQUENCE_PLAN_LIB: OnceLock<Mutex<SequencePlanCache>> = OnceLock::new();
-
     pub(super) fn try_plan_binary_sequence(
         bytes: &[u8],
         flags: u8,
@@ -2373,14 +2157,12 @@ mod sequence_gpu {
             }
         }
     }
-
     enum HelperOutcome {
         Planned(SequencePlan),
         InvalidInput,
         BackendUnavailable,
         BackendFailure,
     }
-
     unsafe fn call_helper(
         func: SequencePlanHelperFn,
         bytes: &[u8],
@@ -2478,7 +2260,6 @@ mod sequence_gpu {
             None => HelperOutcome::BackendFailure,
         }
     }
-
     unsafe fn load_sequence_plan_library() -> Option<SequencePlanLib> {
         #[cfg(unix)]
         {
@@ -2498,7 +2279,6 @@ mod sequence_gpu {
         }
         None
     }
-
     fn sequence_plan_helper_self_test(func: SequencePlanHelperFn) -> bool {
         let cases = [
             (
@@ -2512,7 +2292,6 @@ mod sequence_gpu {
                 BinarySequenceLayout::FixedOffsets,
             ),
         ];
-
         for (bytes, flags, layout) in cases {
             let accel = match unsafe { call_helper(func, &bytes, flags, layout) } {
                 HelperOutcome::Planned(plan) => plan,
@@ -2529,7 +2308,6 @@ mod sequence_gpu {
         }
         true
     }
-
     fn make_unpacked_case(flags: u8) -> Vec<u8> {
         let _guard = super::DecodeFlagsGuard::enter_with_hint(flags, flags);
         let mut out = Vec::new();
@@ -2540,7 +2318,6 @@ mod sequence_gpu {
         }
         out
     }
-
     fn make_packed_case() -> Vec<u8> {
         let mut out = Vec::new();
         super::write_seq_len(&mut out, 3).expect("write sequence length");
@@ -2550,7 +2327,6 @@ mod sequence_gpu {
         out.extend_from_slice(b"abcdef");
         out
     }
-
     fn candidate_paths() -> Vec<PathBuf> {
         let mut candidates = Vec::new();
         if let Ok(exe) = std::env::current_exe()
@@ -2571,14 +2347,12 @@ mod sequence_gpu {
         }
         candidates
     }
-
     #[cfg(unix)]
     unsafe extern "C" {
         fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
         fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
         fn dlclose(handle: *mut c_void) -> c_int;
     }
-
     #[cfg(unix)]
     unsafe fn load_library_unix(path: &std::path::Path) -> Option<*mut c_void> {
         use std::{ffi::CString, os::unix::ffi::OsStrExt};
@@ -2592,12 +2366,10 @@ mod sequence_gpu {
         let handle = unsafe { dlopen(cpath.as_ptr(), RTLD_LAZY) };
         if handle.is_null() { None } else { Some(handle) }
     }
-
     #[cfg(not(unix))]
     unsafe fn load_library_unix(_path: &std::path::Path) -> Option<*mut c_void> {
         None
     }
-
     unsafe fn resolve_symbol(handle: *mut c_void) -> Option<SequencePlanHelperFn> {
         #[cfg(unix)]
         {
@@ -2613,7 +2385,6 @@ mod sequence_gpu {
             None
         }
     }
-
     unsafe fn close_library(handle: *mut c_void) {
         #[cfg(unix)]
         if !handle.is_null() {
@@ -2622,16 +2393,13 @@ mod sequence_gpu {
         #[cfg(not(unix))]
         let _ = handle;
     }
-
     #[cfg(test)]
     include!("core/sequence_plan_helper_tests.rs");
 }
-
 /// Write a length prefix honoring `COMPACT_LEN`.
 pub fn write_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
     write_len_with_flags(writer, value, effective_layout_flags())
 }
-
 /// Write a length prefix honoring `COMPACT_LEN` from an explicit flag snapshot.
 #[doc(hidden)]
 pub fn write_len_with_flags<W: Write>(
@@ -2649,18 +2417,15 @@ pub fn write_len_with_flags<W: Write>(
         writer.write_all(&value.to_le_bytes())
     }
 }
-
 /// Write a sequence length prefix (fixed u64).
 pub fn write_seq_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
     writer.write_all(&value.to_le_bytes())
 }
-
 /// Append a length prefix honoring `COMPACT_LEN` to `out`.
 #[inline]
 pub fn write_len_to_vec(out: &mut Vec<u8>, value: u64) {
     write_len_to_vec_with_flags(out, value, effective_layout_flags());
 }
-
 /// Append a length prefix honoring `COMPACT_LEN` from an explicit flag snapshot.
 #[inline]
 #[doc(hidden)]
@@ -2674,7 +2439,6 @@ pub fn write_len_to_vec_with_flags(out: &mut Vec<u8>, value: u64, flags: u8) {
         out.extend_from_slice(&value.to_le_bytes());
     }
 }
-
 /// Count a value, then write its length prefix and serialize it directly.
 ///
 /// The historical implementation materialized every field in `buf`, whose
@@ -2699,7 +2463,6 @@ pub fn write_len_prefixed<W: Write, const N: usize>(
     write_len_with_flags(writer, len, flags)?;
     serialize_to_writer_exact(value, writer, exact_len)
 }
-
 /// Write a trusted exact length prefix, then serialize the value directly.
 ///
 /// This avoids materializing a temporary field buffer for hot paths whose
@@ -2723,21 +2486,18 @@ pub fn write_len_prefixed_exact<W: Write, const N: usize>(
     write_len_with_flags(writer, len, flags)?;
     serialize_to_writer_exact(value, writer, exact_len)
 }
-
 /// Write a compact varint length prefix regardless of layout flags.
 pub fn write_varint_len<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
     let mut buf = [0u8; MAX_VARINT_BYTES];
     let used = encode_varint(value, &mut buf);
     writer.write_all(&buf[..used])
 }
-
 /// Append a compact varint length prefix regardless of layout flags.
 pub fn write_varint_len_to_vec(out: &mut Vec<u8>, value: u64) {
     let mut buf = [0u8; MAX_VARINT_BYTES];
     let used = encode_varint(value, &mut buf);
     out.extend_from_slice(&buf[..used]);
 }
-
 /// Write the canonical packed-sequence offset table for counted payload lengths.
 ///
 /// The table always starts at zero and contains one checked cumulative offset
@@ -2753,7 +2513,6 @@ pub fn write_fixed_offsets<W: Write>(writer: &mut W, lengths: &[usize]) -> Resul
     }
     Ok(())
 }
-
 fn collect_payload_lengths<'a, T, I>(len: usize, iter: I) -> Result<Vec<usize>, Error>
 where
     T: NoritoSerialize + 'a,
@@ -2779,7 +2538,6 @@ where
     }
     Ok(lengths)
 }
-
 fn write_payloads_with_lengths<'a, T, I>(
     writer: &mut Encoder<'_>,
     iter: I,
@@ -2801,7 +2559,6 @@ where
     }
     Ok(())
 }
-
 fn encode_seq_payloads<'a, T, I>(writer: &mut Encoder<'_>, len: usize, iter: I) -> Result<(), Error>
 where
     T: NoritoSerialize + 'a,
@@ -2829,20 +2586,17 @@ where
         }
         return (count == len).then_some(()).ok_or(Error::LengthMismatch);
     }
-
     note_fixed_offsets_emitted();
     let lengths = collect_payload_lengths(len, iter.clone())?;
     write_fixed_offsets(writer, &lengths)?;
     write_payloads_with_lengths(writer, iter, &lengths)
 }
-
 fn encode_slice_payloads<T>(writer: &mut Encoder<'_>, slice: &[T]) -> Result<(), Error>
 where
     T: NoritoSerialize,
 {
     encode_seq_payloads(writer, slice.len(), slice.iter())
 }
-
 fn sequence_encoded_len_hint<'a, T, I>(len: usize, items: I) -> Option<usize>
 where
     T: NoritoSerialize + 'a,
@@ -2860,7 +2614,6 @@ where
         }
         return Some(total);
     }
-
     let flags = effective_layout_flags();
     for item in items {
         let elem_len = item
@@ -2871,7 +2624,6 @@ where
     }
     Some(total)
 }
-
 fn sequence_encoded_len_exact<'a, T, I>(len: usize, items: I) -> Option<usize>
 where
     T: NoritoSerialize + 'a,
@@ -2886,7 +2638,6 @@ where
         }
         return Some(total);
     }
-
     let flags = effective_layout_flags();
     for item in items {
         let elem_len = item.encoded_len_exact()?;
@@ -2895,7 +2646,6 @@ where
     }
     Some(total)
 }
-
 fn map_encoded_len_hint<'a, K, V, I>(len: usize, entries: I) -> Option<usize>
 where
     K: NoritoSerialize + 'a,
@@ -2918,7 +2668,6 @@ where
         }
         return Some(total);
     }
-
     let flags = effective_layout_flags();
     for (key, value) in entries {
         let key_len = key.encoded_len_exact().or_else(|| key.encoded_len_hint())?;
@@ -2932,7 +2681,6 @@ where
     }
     Some(total)
 }
-
 fn map_encoded_len_exact<'a, K, V, I>(len: usize, entries: I) -> Option<usize>
 where
     K: NoritoSerialize + 'a,
@@ -2951,7 +2699,6 @@ where
         }
         return Some(total);
     }
-
     let flags = effective_layout_flags();
     for (key, value) in entries {
         let key_len = key.encoded_len_exact()?;
@@ -2963,7 +2710,6 @@ where
     }
     Some(total)
 }
-
 fn encode_map_payloads<'a, K, V, I>(
     writer: &mut Encoder<'_>,
     len: usize,
@@ -3002,7 +2748,6 @@ where
         }
         return (count == len).then_some(()).ok_or(Error::LengthMismatch);
     }
-
     note_fixed_offsets_emitted();
     let key_lengths =
         collect_payload_lengths(len, entries.clone().into_iter().map(|(key, _)| key))?;
@@ -3021,14 +2766,12 @@ where
         &value_lengths,
     )
 }
-
 #[cfg(test)]
 mod encode_seq_payloads_tests {
     use super::{
         DecodeFlagsGuard, Encoder, encode_seq_payloads, encode_slice_payloads, header_flags,
         serialize_to_buffer,
     };
-
     #[test]
     fn encode_seq_payloads_packed_counts_and_keeps_layout() {
         let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
@@ -3036,7 +2779,6 @@ mod encode_seq_payloads_tests {
         let mut out = Vec::new();
         let mut encoder = Encoder::for_buffer(&mut out);
         encode_seq_payloads(&mut encoder, items.len(), items.iter()).expect("encode packed seq");
-
         let encoded_items: Vec<Vec<u8>> = items
             .iter()
             .map(|item| {
@@ -3045,13 +2787,11 @@ mod encode_seq_payloads_tests {
                 bytes
             })
             .collect();
-
         let mut cursor = 0usize;
         let len_bytes: [u8; 8] = out[cursor..cursor + 8].try_into().expect("len bytes");
         let len = u64::from_le_bytes(len_bytes) as usize;
         cursor += 8;
         assert_eq!(len, items.len());
-
         let mut offsets = Vec::with_capacity(len + 1);
         for _ in 0..=len {
             let off_bytes: [u8; 8] = out[cursor..cursor + 8].try_into().expect("off bytes");
@@ -3061,21 +2801,17 @@ mod encode_seq_payloads_tests {
         assert_eq!(offsets.first().copied(), Some(0));
         let expected_total: usize = encoded_items.iter().map(Vec::len).sum();
         assert_eq!(offsets.last().copied(), Some(expected_total));
-
         let data = &out[cursor..];
         let expected: Vec<u8> = encoded_items.into_iter().flatten().collect();
         assert_eq!(data, expected.as_slice());
     }
-
     #[test]
     fn encode_slice_payloads_matches_packed_layout() {
         let _guard = DecodeFlagsGuard::enter(header_flags::PACKED_SEQ);
         let items = [0x0102_u16, 0x0304_u16, 0x0506_u16];
         let mut out = Vec::new();
         let mut encoder = Encoder::for_buffer(&mut out);
-
         encode_slice_payloads(&mut encoder, &items).expect("encode packed slice");
-
         assert_eq!(&out[..8], &(3u64).to_le_bytes());
         assert_eq!(&out[8..16], &(0u64).to_le_bytes());
         assert_eq!(&out[16..24], &(2u64).to_le_bytes());
@@ -3084,7 +2820,6 @@ mod encode_seq_payloads_tests {
         assert_eq!(&out[40..], &[0x02, 0x01, 0x04, 0x03, 0x06, 0x05]);
     }
 }
-
 /// Emit a length prefix honoring the `COMPACT_LEN` layout flag.
 ///
 /// When `COMPACT_LEN` is set this writes a compact varint. Otherwise it falls
@@ -3092,7 +2827,6 @@ mod encode_seq_payloads_tests {
 pub fn write_len_header<W: Write>(writer: &mut W, value: u64) -> std::io::Result<()> {
     write_len(writer, value)
 }
-
 /// Append a length prefix honoring the `COMPACT_LEN` layout flag.
 ///
 /// Writes a compact varint when `COMPACT_LEN` is set, or an 8-byte
@@ -3100,13 +2834,11 @@ pub fn write_len_header<W: Write>(writer: &mut W, value: u64) -> std::io::Result
 pub fn write_len_header_to_vec(out: &mut Vec<u8>, value: u64) {
     write_len_to_vec(out, value);
 }
-
 /// Read a length prefix from a slice honoring `COMPACT_LEN`.
 /// Returns (value, bytes_consumed).
 pub fn read_len_from_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
     read_len_from_slice_with_flags(bytes, effective_layout_flags())
 }
-
 /// Inspect a length prefix without charging an allocation for the referenced
 /// bytes.
 ///
@@ -3120,7 +2852,6 @@ pub fn inspect_len_from_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
     let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
     Ok((len, used))
 }
-
 /// Read a length prefix from a slice using an explicit Norito flag snapshot.
 /// Returns (value, bytes consumed).
 #[doc(hidden)]
@@ -3130,7 +2861,6 @@ pub fn read_len_from_slice_with_flags(bytes: &[u8], flags: u8) -> Result<(usize,
     let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
     Ok((len, used))
 }
-
 fn read_raw_len_from_slice_with_flags(bytes: &[u8], flags: u8) -> Result<(u64, usize), Error> {
     if compact_len_enabled_for_flags(flags) {
         let (value, used) = decode_varint_from_slice(bytes)?;
@@ -3147,7 +2877,6 @@ fn read_raw_len_from_slice_with_flags(bytes: &[u8], flags: u8) -> Result<(u64, u
         Ok((value, 8))
     }
 }
-
 /// Read an AoS-style sequence count that follows the active flexible length
 /// encoding, accounting it as elements rather than as a field body.
 pub(crate) fn read_sequence_len_from_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
@@ -3156,19 +2885,16 @@ pub(crate) fn read_sequence_len_from_slice(bytes: &[u8]) -> Result<(usize, usize
     let len = usize::try_from(value).map_err(|_| Error::LengthMismatch)?;
     Ok((len, used))
 }
-
 /// Dynamically read a length prefix from a slice, honoring `COMPACT_LEN`.
 /// Returns (value, bytes consumed).
 pub fn read_len_dyn_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
     read_len_from_slice(bytes)
 }
-
 /// Read a top-level sequence length header from a slice (fixed u64).
 /// Returns (value, bytes consumed).
 pub fn read_seq_len_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
     read_seq_len_slice_impl(bytes, true)
 }
-
 /// Inspect a sequence count without charging cumulative elements or an
 /// allocation.
 ///
@@ -3178,7 +2904,6 @@ pub fn read_seq_len_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
 pub fn inspect_seq_len_slice(bytes: &[u8]) -> Result<(usize, usize), Error> {
     read_seq_len_slice_impl(bytes, false)
 }
-
 fn read_seq_len_slice_impl(bytes: &[u8], account: bool) -> Result<(usize, usize), Error> {
     if bytes.len() < 8 {
         return Err(Error::LengthMismatch);
@@ -3195,7 +2920,6 @@ fn read_seq_len_slice_impl(bytes: &[u8], account: bool) -> Result<(usize, usize)
     let len = len_u64_to_usize(raw_len)?;
     Ok((len, 8))
 }
-
 /// Pointer-based length read without relying on a global payload context.
 ///
 /// # Safety
@@ -3211,7 +2935,6 @@ pub unsafe fn read_len_ptr_unchecked(ptr: *const u8) -> (usize, usize) {
         }
     }
 }
-
 /// Fallible variant of [`read_len_ptr_unchecked`] that returns an error if a
 /// compact-varint length exceeds 10 bytes (malformed input).
 ///
@@ -3236,7 +2959,6 @@ pub unsafe fn try_read_len_ptr_unchecked(ptr: *const u8) -> Result<(usize, usize
         Ok((len, 8))
     }
 }
-
 #[inline]
 fn encode_varint(mut value: u64, out: &mut [u8; MAX_VARINT_BYTES]) -> usize {
     let mut i = 0;
@@ -3254,17 +2976,14 @@ fn encode_varint(mut value: u64, out: &mut [u8; MAX_VARINT_BYTES]) -> usize {
     }
     i
 }
-
 #[inline]
 fn varint_encoded_len(value: u64) -> usize {
     let mut buf = [0u8; MAX_VARINT_BYTES];
     encode_varint(value, &mut buf)
 }
-
 pub(crate) fn varint_encoded_len_u64(value: u64) -> usize {
     varint_encoded_len(value)
 }
-
 fn decode_varint_from_slice(bytes: &[u8]) -> Result<(u64, usize), Error> {
     if bytes.is_empty() {
         return Err(Error::LengthMismatch);
@@ -3291,14 +3010,12 @@ fn decode_varint_from_slice(bytes: &[u8]) -> Result<(u64, usize), Error> {
     }
     Err(Error::LengthMismatch)
 }
-
 #[inline]
 unsafe fn decode_varint_from_ptr(ptr: *const u8) -> Result<(u64, usize), Error> {
     let (payload, offset) = payload_bytes_with_offset(ptr)?;
     let slice = &payload[offset..];
     decode_varint_from_slice(slice)
 }
-
 /// Read a top-level sequence length header at a raw pointer (fixed u64).
 /// Returns (value, bytes consumed).
 ///
@@ -3318,7 +3035,6 @@ pub unsafe fn read_seq_len_ptr(ptr: *const u8) -> Result<(usize, usize), Error> 
     record_payload_access(ptr, used);
     Ok((len, used))
 }
-
 /// Pointer-based helper for reading a length header within the current payload context.
 ///
 /// # Safety
@@ -3327,19 +3043,16 @@ pub unsafe fn read_seq_len_ptr(ptr: *const u8) -> Result<(usize, usize), Error> 
 pub unsafe fn read_len_dyn(ptr: *const u8) -> Result<(usize, usize), Error> {
     read_len_dyn_at_ptr(ptr)
 }
-
 /// Safe decode-from-slice trait used by the strict-safe path.
 pub trait DecodeFromSlice<'a>: Sized {
     /// Decode from the front of `bytes`, returning the value and bytes consumed.
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error>;
 }
-
 impl<'a> DecodeFromSlice<'a> for () {
     fn decode_from_slice(_bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         Ok(((), 0))
     }
 }
-
 // DecodeFromSlice for primitives and common types
 impl<'a> DecodeFromSlice<'a> for u8 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
@@ -3347,21 +3060,18 @@ impl<'a> DecodeFromSlice<'a> for u8 {
         Ok((b, 1))
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for i8 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let b = *bytes.first().ok_or(Error::LengthMismatch)? as i8;
         Ok((b, 1))
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for bool {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let b = *bytes.first().ok_or(Error::LengthMismatch)?;
         Ok((b != 0, 1))
     }
 }
-
 macro_rules! impl_decode_from_slice_le_int {
     ($t:ty, $n:expr) => {
         impl<'a> DecodeFromSlice<'a> for $t {
@@ -3376,7 +3086,6 @@ macro_rules! impl_decode_from_slice_le_int {
         }
     };
 }
-
 impl_decode_from_slice_le_int!(u16, 2);
 impl_decode_from_slice_le_int!(i16, 2);
 impl_decode_from_slice_le_int!(u32, 4);
@@ -3385,7 +3094,6 @@ impl_decode_from_slice_le_int!(u64, 8);
 impl_decode_from_slice_le_int!(i64, 8);
 impl_decode_from_slice_le_int!(u128, 16);
 impl_decode_from_slice_le_int!(i128, 16);
-
 impl<'a> DecodeFromSlice<'a> for usize {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         if bytes.len() < 8 {
@@ -3397,7 +3105,6 @@ impl<'a> DecodeFromSlice<'a> for usize {
         Ok((value, 8))
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for isize {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         if bytes.len() < 8 {
@@ -3410,7 +3117,6 @@ impl<'a> DecodeFromSlice<'a> for isize {
         Ok((value, 8))
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for f32 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         if bytes.len() < 4 {
@@ -3421,7 +3127,6 @@ impl<'a> DecodeFromSlice<'a> for f32 {
         Ok((f32::from_bits(u32::from_le_bytes(b)), 4))
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for f64 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         if bytes.len() < 8 {
@@ -3432,7 +3137,6 @@ impl<'a> DecodeFromSlice<'a> for f64 {
         Ok((f64::from_bits(u64::from_le_bytes(b)), 8))
     }
 }
-
 // DecodeFromSlice for NonZero integer wrappers via their primitive
 impl<'a> DecodeFromSlice<'a> for NonZeroU16 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
@@ -3441,7 +3145,6 @@ impl<'a> DecodeFromSlice<'a> for NonZeroU16 {
         Ok((nz, used))
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for NonZeroU32 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (v, used) = <u32 as DecodeFromSlice>::decode_from_slice(bytes)?;
@@ -3449,7 +3152,6 @@ impl<'a> DecodeFromSlice<'a> for NonZeroU32 {
         Ok((nz, used))
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for NonZeroU64 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (v, used) = <u64 as DecodeFromSlice>::decode_from_slice(bytes)?;
@@ -3457,7 +3159,6 @@ impl<'a> DecodeFromSlice<'a> for NonZeroU64 {
         Ok((nz, used))
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for char {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         if bytes.len() < 4 {
@@ -3470,7 +3171,6 @@ impl<'a> DecodeFromSlice<'a> for char {
         Ok((c, 4))
     }
 }
-
 fn decode_sequence_plan_serial<'a, T>(bytes: &'a [u8], plan: &SequencePlan) -> Result<Vec<T>, Error>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
@@ -3487,7 +3187,6 @@ where
     }
     Ok(out)
 }
-
 fn decode_vec_from_slice_with<'a, T, F>(
     bytes: &'a [u8],
     decode_planned: F,
@@ -3533,15 +3232,12 @@ where
     {
         return decode_length_prefixed_sequence_legacy::<T>(bytes, len, offset);
     }
-
     if let Some(out) = decode_planned(bytes, flags, &plan)? {
         return Ok((out, plan.used));
     }
-
     let out = decode_sequence_plan_serial::<T>(bytes, &plan)?;
     Ok((out, plan.used))
 }
-
 /// Decode a binary sequence from a slice using the scalar sequence planner.
 #[doc(hidden)]
 pub fn decode_vec_from_slice_serial<'a, T>(bytes: &'a [u8]) -> Result<(Vec<T>, usize), Error>
@@ -3550,7 +3246,6 @@ where
 {
     decode_vec_from_slice_with::<T, _>(bytes, |_, _, _| Ok(None))
 }
-
 #[cfg(not(feature = "parallel-decode"))]
 impl<'a, T> DecodeFromSlice<'a> for Vec<T>
 where
@@ -3560,7 +3255,6 @@ where
         decode_vec_from_slice_serial::<T>(bytes)
     }
 }
-
 #[cfg(feature = "parallel-decode")]
 impl<'a, T> DecodeFromSlice<'a> for Vec<T>
 where
@@ -3575,7 +3269,6 @@ where
         })
     }
 }
-
 fn decode_length_prefixed_sequence_legacy<'a, T>(
     bytes: &'a [u8],
     len: usize,
@@ -3631,7 +3324,6 @@ where
     }
     Ok((out, offset))
 }
-
 fn decode_length_prefixed_sequence_legacy_with<'a, T, F>(
     bytes: &'a [u8],
     len: usize,
@@ -3679,7 +3371,6 @@ where
     }
     Ok(offset)
 }
-
 fn decode_sequence_elements<'a, T, F>(bytes: &'a [u8], mut on_value: F) -> Result<usize, Error>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
@@ -3699,7 +3390,6 @@ where
     {
         return decode_length_prefixed_sequence_legacy_with::<T, _>(bytes, len, offset, on_value);
     }
-
     for span in &plan.spans {
         let element_slice = span.get(bytes)?;
         record_slice_access(element_slice, span.len());
@@ -3711,7 +3401,6 @@ where
     }
     Ok(plan.used)
 }
-
 impl<'a> DecodeFromSlice<'a> for &'a [u8] {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, hdr) = read_len_dyn_slice(bytes)?;
@@ -3720,7 +3409,6 @@ impl<'a> DecodeFromSlice<'a> for &'a [u8] {
         Ok((data, end))
     }
 }
-
 impl<'a, T: DecodeFromSlice<'a> + 'static, const N: usize> DecodeFromSlice<'a> for [T; N] {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         if TypeId::of::<T>() == TypeId::of::<u8>() {
@@ -3738,7 +3426,6 @@ impl<'a, T: DecodeFromSlice<'a> + 'static, const N: usize> DecodeFromSlice<'a> f
                     return Ok((arr.assume_init(), N));
                 }
             }
-
             let mut tmp = [0u8; N];
             let mut offset = 0usize;
             for slot in &mut tmp {
@@ -3766,7 +3453,6 @@ impl<'a, T: DecodeFromSlice<'a> + 'static, const N: usize> DecodeFromSlice<'a> f
                 return Ok((arr.assume_init(), bytes.len()));
             }
         }
-
         let mut offset = 0usize;
         let out = try_decode_array(|| {
             let remaining = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
@@ -3790,7 +3476,6 @@ impl<'a, T: DecodeFromSlice<'a> + 'static, const N: usize> DecodeFromSlice<'a> f
         Ok((out, offset))
     }
 }
-
 impl<'a, T> DecodeFromSlice<'a> for VecDeque<T>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
@@ -3815,9 +3500,7 @@ where
         Ok((deque, used))
     }
 }
-
 include!("core/owned_collection_allocation.rs");
-
 impl<'a, T> DecodeFromSlice<'a> for LinkedList<T>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
@@ -3834,7 +3517,6 @@ where
         Ok((list, used))
     }
 }
-
 impl<'a, T> DecodeFromSlice<'a> for BinaryHeap<T>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Ord,
@@ -3857,7 +3539,6 @@ where
         Ok((heap, used))
     }
 }
-
 impl<'a, T> DecodeFromSlice<'a> for BTreeSet<T>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Ord,
@@ -3876,7 +3557,6 @@ where
         Ok((out, used))
     }
 }
-
 impl<'a, T> DecodeFromSlice<'a> for HashSet<T>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Eq + Hash + Ord,
@@ -3899,7 +3579,6 @@ where
         Ok((out, used))
     }
 }
-
 fn decode_map_entries<'a, K, V, F>(
     bytes: &'a [u8],
     mut on_entry: F,
@@ -3920,7 +3599,6 @@ where
         if header_end > bytes.len() {
             return Err(Error::LengthMismatch);
         }
-
         let key_offsets = bytes
             .get(offset..offset + table_len)
             .ok_or(Error::LengthMismatch)?;
@@ -3929,7 +3607,6 @@ where
             .get(value_offsets_start..header_end)
             .ok_or(Error::LengthMismatch)?;
         offset = header_end;
-
         let key_total = validate_fixed_offset_table(key_offsets, entries)?;
         let val_total = validate_fixed_offset_table(value_offsets, entries)?;
         let key_data_start = offset;
@@ -3943,7 +3620,6 @@ where
         if val_data_end > bytes.len() {
             return Err(Error::LengthMismatch);
         }
-
         for idx in 0..len {
             let key_start_offset = read_fixed_offset_usize_at(key_offsets, idx)?;
             let key_end_offset = read_fixed_offset_usize_at(key_offsets, idx + 1)?;
@@ -3962,7 +3638,6 @@ where
             if key_used != key_end - key_start {
                 return Err(Error::LengthMismatch);
             }
-
             let value_start_offset = read_fixed_offset_usize_at(value_offsets, idx)?;
             let value_end_offset = read_fixed_offset_usize_at(value_offsets, idx + 1)?;
             let value_start = val_data_start
@@ -3986,7 +3661,6 @@ where
         }
         return Ok((len, val_data_end));
     }
-
     for _ in 0..len {
         let (key_len, key_hdr) = read_len_dyn_slice(&bytes[offset..])?;
         offset = offset.checked_add(key_hdr).ok_or(Error::LengthMismatch)?;
@@ -4001,7 +3675,6 @@ where
             return Err(Error::LengthMismatch);
         }
         offset = key_end;
-
         let (value_len, value_hdr) = read_len_dyn_slice(&bytes[offset..])?;
         offset = offset.checked_add(value_hdr).ok_or(Error::LengthMismatch)?;
         let value_end = offset.checked_add(value_len).ok_or(Error::LengthMismatch)?;
@@ -4019,7 +3692,6 @@ where
     }
     Ok((len, offset))
 }
-
 impl<'a, K, V> DecodeFromSlice<'a> for BTreeMap<K, V>
 where
     K: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Ord,
@@ -4039,7 +3711,6 @@ where
         Ok((out, used))
     }
 }
-
 impl<'a, K, V> DecodeFromSlice<'a> for HashMap<K, V>
 where
     K: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Eq + Hash + Ord,
@@ -4063,7 +3734,6 @@ where
         Ok((out, used))
     }
 }
-
 impl<K, V> NoritoSerialize for BTreeMap<K, V>
 where
     K: NoritoSerialize + Ord,
@@ -4072,16 +3742,13 @@ where
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         encode_map_payloads(writer, self.len(), self.iter())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         map_encoded_len_hint(self.len(), self.iter())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         map_encoded_len_exact(self.len(), self.iter())
     }
 }
-
 impl<'a, K, V> NoritoDeserialize<'a> for BTreeMap<K, V>
 where
     K: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Ord,
@@ -4090,7 +3757,6 @@ where
     fn deserialize(archived: &'a Archived<BTreeMap<K, V>>) -> Self {
         Self::try_deserialize(archived).expect("BTreeMap decode")
     }
-
     fn try_deserialize(archived: &'a Archived<BTreeMap<K, V>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
         let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
@@ -4106,7 +3772,6 @@ where
         Ok(map)
     }
 }
-
 impl<K, V> NoritoSerialize for HashMap<K, V>
 where
     K: NoritoSerialize + Eq + Hash + Ord,
@@ -4127,16 +3792,13 @@ where
         entries.sort_by(|(ka, _), (kb, _)| ka.cmp(kb));
         encode_map_payloads(writer, entries.len(), entries.iter().copied())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         map_encoded_len_hint(self.len(), self.iter())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         map_encoded_len_exact(self.len(), self.iter())
     }
 }
-
 impl<'a, K, V> NoritoDeserialize<'a> for HashMap<K, V>
 where
     K: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Eq + Hash + Ord,
@@ -4145,7 +3807,6 @@ where
     fn deserialize(archived: &'a Archived<HashMap<K, V>>) -> Self {
         Self::try_deserialize(archived).expect("HashMap decode")
     }
-
     fn try_deserialize(archived: &'a Archived<HashMap<K, V>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
         let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
@@ -4161,7 +3822,6 @@ where
         Ok(map)
     }
 }
-
 impl<T> NoritoSerialize for BTreeSet<T>
 where
     T: NoritoSerialize + Ord,
@@ -4169,16 +3829,13 @@ where
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         encode_seq_payloads(writer, self.len(), self.iter())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         sequence_encoded_len_hint(self.len(), self.iter())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
-
 impl<'a, T> NoritoDeserialize<'a> for BTreeSet<T>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Ord,
@@ -4186,7 +3843,6 @@ where
     fn deserialize(archived: &'a Archived<BTreeSet<T>>) -> Self {
         Self::try_deserialize(archived).expect("BTreeSet decode")
     }
-
     fn try_deserialize(archived: &'a Archived<BTreeSet<T>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
         let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
@@ -4202,7 +3858,6 @@ where
         Ok(set)
     }
 }
-
 impl<T> NoritoSerialize for HashSet<T>
 where
     T: NoritoSerialize + Eq + Hash + Ord,
@@ -4222,16 +3877,13 @@ where
         items.sort();
         encode_seq_payloads(writer, items.len(), items.iter().copied())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         sequence_encoded_len_hint(self.len(), self.iter())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
-
 impl<'a, T> NoritoDeserialize<'a> for HashSet<T>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Eq + Hash + Ord,
@@ -4239,7 +3891,6 @@ where
     fn deserialize(archived: &'a Archived<HashSet<T>>) -> Self {
         Self::try_deserialize(archived).expect("HashSet decode")
     }
-
     fn try_deserialize(archived: &'a Archived<HashSet<T>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
         let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
@@ -4255,7 +3906,6 @@ where
         Ok(set)
     }
 }
-
 impl<'a, T> DecodeFromSlice<'a> for Box<T>
 where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
@@ -4271,7 +3921,6 @@ where
         Ok((Box::new(value), used))
     }
 }
-
 impl<'a, T> DecodeFromSlice<'a> for Rc<T>
 where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
@@ -4287,7 +3936,6 @@ where
         Ok((Rc::new(value), used))
     }
 }
-
 impl<'a, T> DecodeFromSlice<'a> for Arc<T>
 where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
@@ -4303,21 +3951,18 @@ where
         Ok((Arc::new(value), used))
     }
 }
-
 impl<'a, T: DecodeFromSlice<'a> + Copy> DecodeFromSlice<'a> for Cell<T> {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (v, used) = T::decode_from_slice(bytes)?;
         Ok((Cell::new(v), used))
     }
 }
-
 impl<'a, T: DecodeFromSlice<'a>> DecodeFromSlice<'a> for RefCell<T> {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (v, used) = T::decode_from_slice(bytes)?;
         Ok((RefCell::new(v), used))
     }
 }
-
 macro_rules! impl_decode_tuple_from_slice {
     ($( $name:ident $var:ident ),+ ) => {
         impl<'a, $( $name: DecodeFromSlice<'a> ),+> DecodeFromSlice<'a> for ( $( $name, )+ ) {
@@ -4340,7 +3985,6 @@ macro_rules! impl_decode_tuple_from_slice {
         }
     };
 }
-
 impl_decode_tuple_from_slice!(A a, B b);
 impl_decode_tuple_from_slice!(A a, B b, C c);
 impl_decode_tuple_from_slice!(A a, B b, C c, D d);
@@ -4352,7 +3996,6 @@ impl_decode_tuple_from_slice!(A a, B b, C c, D d, E e, F f, G g, H h, I i);
 impl_decode_tuple_from_slice!(A a, B b, C c, D d, E e, F f, G g, H h, I i, J j);
 impl_decode_tuple_from_slice!(A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k);
 impl_decode_tuple_from_slice!(A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k, L l);
-
 impl<'a, T> DecodeFromSlice<'a> for Option<T>
 where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
@@ -4392,7 +4035,6 @@ where
         }
     }
 }
-
 impl<'a, T: DecodeFromSlice<'a>, E: DecodeFromSlice<'a>> DecodeFromSlice<'a> for Result<T, E> {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let tag = *bytes.first().ok_or(Error::LengthMismatch)?;
@@ -4426,20 +4068,17 @@ impl<'a, T: DecodeFromSlice<'a>, E: DecodeFromSlice<'a>> DecodeFromSlice<'a> for
         }
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for Box<str> {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         String::decode_from_slice(bytes).map(|(s, used)| (s.into_boxed_str(), used))
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for Cow<'a, str> {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         <&'a str as DecodeFromSlice>::decode_from_slice(bytes)
             .map(|(s, used)| (Cow::Borrowed(s), used))
     }
 }
-
 /// Small, stack-backed write buffer to avoid heap allocations for small fields.
 ///
 /// This buffer writes into a fixed-size stack array first and spills over to a
@@ -4452,7 +4091,6 @@ pub struct SmallBuf<const N: usize = 256> {
     spill: Vec<u8>,
     spilled: bool,
 }
-
 #[allow(clippy::new_without_default)]
 impl<const N: usize> SmallBuf<N> {
     /// Create a new empty buffer.
@@ -4464,7 +4102,6 @@ impl<const N: usize> SmallBuf<N> {
             spilled: false,
         }
     }
-
     /// Reset to empty without freeing spill capacity.
     pub fn clear(&mut self) {
         self.len = 0;
@@ -4473,7 +4110,6 @@ impl<const N: usize> SmallBuf<N> {
             self.spilled = false;
         }
     }
-
     /// Current length in bytes.
     pub fn len(&self) -> usize {
         if self.spilled {
@@ -4482,12 +4118,10 @@ impl<const N: usize> SmallBuf<N> {
             self.len
         }
     }
-
     /// True if empty.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-
     /// Get a read-only view of the written bytes.
     pub fn as_slice(&self) -> &[u8] {
         if self.spilled {
@@ -4497,7 +4131,6 @@ impl<const N: usize> SmallBuf<N> {
         }
     }
 }
-
 impl<const N: usize> std::io::Write for SmallBuf<N> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         if !self.spilled {
@@ -4527,24 +4160,19 @@ impl<const N: usize> std::io::Write for SmallBuf<N> {
         self.spill.extend_from_slice(buf);
         Ok(buf.len())
     }
-
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
-
 /// Preferred small temporary buffer size for derive-generated serializers.
 ///
 /// This size balances stack usage and the goal of avoiding heap spills for
 /// common small and medium fields. Adjust via benchmarks as needed.
 pub const DERIVE_SMALLBUF_SIZE: usize = 384;
-
 /// Type alias used by proc-macro derives for their per-field temporary buffer.
 pub type DeriveSmallBuf = SmallBuf<{ DERIVE_SMALLBUF_SIZE }>;
-
 /// Magic bytes that identify a Norito archive.
 pub const MAGIC: [u8; 4] = *b"NRT0";
-
 /// Current major version of the format.
 pub const VERSION_MAJOR: u8 = 0;
 /// Fixed v1 minor-version layout hint.
@@ -4556,7 +4184,6 @@ pub const V1_DECODE_FLAGS: u8 = V1_LAYOUT_FLAGS;
 /// This stays `0` for v1. Header flags carry all active layout selections for a
 /// payload, including the compact-length default.
 pub const VERSION_MINOR: u8 = V1_DECODE_FLAGS;
-
 /// Compression algorithm used for the payload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Compression {
@@ -4565,7 +4192,6 @@ pub enum Compression {
     /// Zstd compression.
     Zstd = 1,
 }
-
 impl Compression {
     fn from_u8(value: u8) -> Result<Self, Error> {
         match value {
@@ -4575,7 +4201,6 @@ impl Compression {
         }
     }
 }
-
 /// Errors returned during serialization and deserialization.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -4703,7 +4328,6 @@ pub enum Error {
     #[error("{0}")]
     Message(String),
 }
-
 /// Errors returned by [`to_bytes_bounded`].
 #[derive(Debug, thiserror::Error)]
 pub enum BoundedEncodeError {
@@ -4725,7 +4349,6 @@ pub enum BoundedEncodeError {
     #[error(transparent)]
     Serialization(#[from] Error),
 }
-
 impl Error {
     /// Return whether this error represents a terminal decode resource boundary.
     ///
@@ -4746,19 +4369,16 @@ impl Error {
         )
     }
 }
-
 impl From<String> for Error {
     fn from(msg: String) -> Self {
         Self::Message(msg)
     }
 }
-
 impl From<&str> for Error {
     fn from(msg: &str) -> Self {
         msg.to_owned().into()
     }
 }
-
 impl Error {
     /// Construct a detailed length mismatch error while preserving the canonical variant.
     pub fn length_mismatch_detail(
@@ -4771,17 +4391,14 @@ impl Error {
             "{context}: need {required} bytes at offset {offset}, but only {available} remain"
         ))
     }
-
     /// Construct an invalid tag error with contextual information.
     pub fn invalid_tag(context: &'static str, tag: u8) -> Self {
         Self::InvalidTag { context, tag }
     }
-
     /// Construct a decode panic error annotated with the type being decoded.
     pub fn decode_panic(context: &'static str) -> Self {
         Self::DecodePanic { context }
     }
-
     /// Construct a misalignment error including the offending address.
     pub fn misaligned(align: usize, addr: *const u8) -> Self {
         Self::Misaligned {
@@ -4789,7 +4406,6 @@ impl Error {
             addr: addr as usize,
         }
     }
-
     fn supported_compressions() -> &'static [Compression] {
         #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
         {
@@ -4802,7 +4418,6 @@ impl Error {
             SUPPORTED
         }
     }
-
     /// Construct an unsupported compression error using the default supported set.
     pub fn unsupported_compression(found: u8) -> Self {
         Self::UnsupportedCompression {
@@ -4810,13 +4425,11 @@ impl Error {
             supported: Self::supported_compressions(),
         }
     }
-
     /// Construct an unsupported compression error with an explicit supported list.
     pub fn unsupported_compression_with(found: u8, supported: &'static [Compression]) -> Self {
         Self::UnsupportedCompression { found, supported }
     }
 }
-
 /// Metadata header that prefixes every archive.
 ///
 /// All serialized objects start with this structure.  It allows the
@@ -4840,7 +4453,6 @@ pub struct Header {
     /// Feature flags (stored in the final padding byte).
     pub flags: u8,
 }
-
 impl Header {
     /// Size of the serialized header in bytes.
     ///
@@ -4849,7 +4461,6 @@ impl Header {
     /// layout.
     pub const SIZE: usize = 4 + 1 + 1 + 16 + 1 + 8 + 8 + 1;
 }
-
 #[inline]
 const fn payload_alignment_padding_for_align(align: usize) -> usize {
     if align <= 1 {
@@ -4858,12 +4469,10 @@ const fn payload_alignment_padding_for_align(align: usize) -> usize {
     let remainder = Header::SIZE % align;
     if remainder == 0 { 0 } else { align - remainder }
 }
-
 #[inline]
 pub(crate) fn payload_alignment_padding_for<T>() -> usize {
     payload_alignment_padding_for_align(archived_payload_align::<T>())
 }
-
 #[inline]
 fn append_payload_with_padding<T>(out: &mut Vec<u8>, payload: &[u8]) {
     let padding = payload_alignment_padding_for::<T>();
@@ -4873,13 +4482,11 @@ fn append_payload_with_padding<T>(out: &mut Vec<u8>, payload: &[u8]) {
     }
     out.extend_from_slice(payload);
 }
-
 impl Default for Header {
     fn default() -> Self {
         Self::new([0; 16], 0, 0)
     }
 }
-
 impl Header {
     /// Create a new header with provided fields.
     ///
@@ -4897,7 +4504,6 @@ impl Header {
             flags: 0,
         }
     }
-
     /// Write the header to the given writer.
     fn write(&self, mut w: impl Write) -> Result<(), Error> {
         validate_header_flags(self.flags)?;
@@ -4911,7 +4517,6 @@ impl Header {
         w.write_all(&[self.flags])?; // flags in padding byte
         Ok(())
     }
-
     /// Read and validate one fixed-size Norito archive header.
     ///
     /// # Errors
@@ -4959,7 +4564,6 @@ impl Header {
         })
     }
 }
-
 /// Trait implemented for types that can be archived.
 ///
 /// The archived representation of `Self` is [`Archived<Self>`].
@@ -4976,7 +4580,6 @@ pub trait NoritoSerialize {
     }
     /// Serialize `self` into the encoder.
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error>;
-
     /// Optional hint: estimated encoded byte length for `self`.
     ///
     /// Implementations should return `Some(len)` when the exact or a tight
@@ -4987,7 +4590,6 @@ pub trait NoritoSerialize {
     fn encoded_len_hint(&self) -> Option<usize> {
         None
     }
-
     /// Exact encoded length for this value, if cheaply computable.
     ///
     /// Returns the exact number of bytes that `serialize()` will write for the
@@ -4998,7 +4600,6 @@ pub trait NoritoSerialize {
         None
     }
 }
-
 /// Serialize a value into an arbitrary writer after erasing its concrete type.
 ///
 /// This is intended for codec internals and generated implementations. Normal
@@ -5011,7 +4612,6 @@ pub fn serialize_to_writer(
     let mut encoder = Encoder::new(writer);
     value.serialize(&mut encoder)
 }
-
 /// Serialize a value directly and reject a mismatch with its counted length.
 ///
 /// This is a codec-internal seam for packed containers that must emit offset
@@ -5036,7 +4636,6 @@ pub fn serialize_to_writer_exact<W: Write>(
         .then_some(())
         .ok_or(Error::LengthMismatch)
 }
-
 /// Serialize a value by appending directly to a byte vector.
 ///
 /// This is the buffer-specialized counterpart to [`serialize_to_writer`] used
@@ -5046,7 +4645,6 @@ pub fn serialize_to_buffer(value: &dyn NoritoSerialize, buffer: &mut Vec<u8>) ->
     let mut encoder = Encoder::for_buffer(buffer);
     value.serialize(&mut encoder)
 }
-
 /// Trait for reconstructing types from their archived form.
 pub trait NoritoDeserialize<'a>: Sized {
     /// Schema hash used for validation.
@@ -5057,7 +4655,6 @@ pub trait NoritoDeserialize<'a>: Sized {
     }
     /// Deserialize from bytes without allocations.
     fn deserialize(archived: &'a Archived<Self>) -> Self;
-
     /// Fallible deserialization helper.
     ///
     /// Types that can fail during deserialization can override this method to
@@ -5067,7 +4664,6 @@ pub trait NoritoDeserialize<'a>: Sized {
         Ok(Self::deserialize(archived))
     }
 }
-
 /// Opaque address marker for the archived bytes of `T`.
 ///
 /// This type deliberately does not contain a `T`. Archived payload bytes are
@@ -5079,12 +4675,10 @@ pub trait NoritoDeserialize<'a>: Sized {
 pub struct Archived<T: ?Sized> {
     _marker: PhantomData<T>,
 }
-
 #[inline]
 fn empty_archived_ptr<T: ?Sized>() -> *const Archived<T> {
     core::ptr::NonNull::<Archived<T>>::dangling().as_ptr()
 }
-
 #[inline]
 pub(crate) fn empty_archived_marker<'a, T: ?Sized>() -> &'a Archived<T> {
     // SAFETY: every `Archived<_>` is the same zero-sized, byte-aligned marker,
@@ -5092,7 +4686,6 @@ pub(crate) fn empty_archived_marker<'a, T: ?Sized>() -> &'a Archived<T> {
     // unconstrained lifetime is sound because no borrowed `T` is stored.
     unsafe { &*empty_archived_ptr::<T>() }
 }
-
 /// Return the logical archived-storage footprint associated with `T`.
 ///
 /// This is intentionally separate from `size_of::<Archived<T>>()`: an
@@ -5102,7 +4695,6 @@ pub(crate) fn empty_archived_marker<'a, T: ?Sized>() -> &'a Archived<T> {
 pub const fn archived_payload_size<T>() -> usize {
     core::mem::size_of::<T>()
 }
-
 /// Return the archived payload alignment associated with `T`.
 ///
 /// The marker itself has byte alignment. Framing and temporary-storage code
@@ -5111,7 +4703,6 @@ pub const fn archived_payload_size<T>() -> usize {
 pub const fn archived_payload_align<T>() -> usize {
     core::mem::align_of::<T>()
 }
-
 #[inline]
 fn try_read_archived_bytes<T: ?Sized, const N: usize>(
     archived: &Archived<T>,
@@ -5122,12 +4713,10 @@ fn try_read_archived_bytes<T: ?Sized, const N: usize>(
     bytes.copy_from_slice(payload);
     Ok(bytes)
 }
-
 #[inline]
 fn read_archived_bytes<T: ?Sized, const N: usize>(archived: &Archived<T>) -> [u8; N] {
     try_read_archived_bytes(archived).expect("archived scalar footprint")
 }
-
 impl<T: ?Sized> Archived<T> {
     /// Retag this archived-byte address for another decoder.
     ///
@@ -5143,12 +4732,10 @@ impl<T: ?Sized> Archived<T> {
         unsafe { &*core::ptr::from_ref(self).cast::<Archived<U>>() }
     }
 }
-
 enum ArchivedBacking<'a> {
     Borrowed(&'a [u8]),
     Owned(ArchiveSlice),
 }
-
 /// Owned or borrowed handle to an archived value reconstructed from a byte
 /// slice. When the input slice is misaligned for `T` the bytes are copied into
 /// an internal buffer with suitable alignment for decoders that perform
@@ -5158,7 +4745,6 @@ pub struct ArchivedRef<'a, T: ?Sized> {
     backing: ArchivedBacking<'a>,
     _marker: PhantomData<&'a Archived<T>>,
 }
-
 impl<'a, T: ?Sized> ArchivedRef<'a, T> {
     #[inline]
     #[allow(unsafe_code)]
@@ -5167,7 +4753,6 @@ impl<'a, T: ?Sized> ArchivedRef<'a, T> {
         // and the corresponding payload backing outlives this reference.
         unsafe { &*self.ptr }
     }
-
     /// Return the typed marker at the start of the archived payload.
     ///
     /// The marker does not contain a `T`. Callers of
@@ -5177,7 +4762,6 @@ impl<'a, T: ?Sized> ArchivedRef<'a, T> {
     pub fn archived(&self) -> &Archived<T> {
         self.as_ref_impl()
     }
-
     /// Underlying byte slice backing the archived value.
     #[inline]
     pub fn bytes(&self) -> &[u8] {
@@ -5186,7 +4770,6 @@ impl<'a, T: ?Sized> ArchivedRef<'a, T> {
             ArchivedBacking::Owned(slice) => slice.as_slice(),
         }
     }
-
     /// Retag the payload-start marker for a different decoder.
     ///
     /// This preserves only the marker address; it neither validates the bytes
@@ -5196,23 +4779,19 @@ impl<'a, T: ?Sized> ArchivedRef<'a, T> {
         self.archived().cast::<U>()
     }
 }
-
 impl<'a, T: ?Sized> std::convert::AsRef<Archived<T>> for ArchivedRef<'a, T> {
     #[inline]
     fn as_ref(&self) -> &Archived<T> {
         self.as_ref_impl()
     }
 }
-
 impl<'a, T: ?Sized> std::ops::Deref for ArchivedRef<'a, T> {
     type Target = Archived<T>;
-
     #[inline]
     fn deref(&self) -> &Self::Target {
         self.as_ref_impl()
     }
 }
-
 /// Owned archived payload backed by an aligned byte buffer.
 ///
 /// This owns the payload bytes (plus any alignment padding) and guarantees the
@@ -5223,7 +4802,6 @@ pub struct ArchivedBox<T> {
     len: usize,
     _marker: PhantomData<Archived<T>>,
 }
-
 impl<T> ArchivedBox<T> {
     #[inline]
     pub(crate) fn from_payload(payload: Vec<u8>) -> Self {
@@ -5246,7 +4824,6 @@ impl<T> ArchivedBox<T> {
                 _marker: PhantomData,
             };
         }
-
         let mut buffer = vec![0u8; len + align];
         let buf_base = buffer.as_ptr() as usize;
         let offset = (align - (buf_base % align)) % align;
@@ -5258,7 +4835,6 @@ impl<T> ArchivedBox<T> {
             _marker: PhantomData,
         }
     }
-
     /// Return the typed marker at the start of the owned archived payload.
     ///
     /// The marker does not contain a `T`. Decoding is valid only while a
@@ -5275,7 +4851,6 @@ impl<T> ArchivedBox<T> {
         // itself has no storage-alignment requirement.
         unsafe { &*ptr }
     }
-
     /// Underlying archived bytes.
     #[inline]
     pub fn bytes(&self) -> &[u8] {
@@ -5285,23 +4860,19 @@ impl<T> ArchivedBox<T> {
         &self.buffer[self.offset..self.offset + self.len]
     }
 }
-
 impl<T> std::convert::AsRef<Archived<T>> for ArchivedBox<T> {
     #[inline]
     fn as_ref(&self) -> &Archived<T> {
         self.archived()
     }
 }
-
 impl<T> std::ops::Deref for ArchivedBox<T> {
     type Target = Archived<T>;
-
     #[inline]
     fn deref(&self) -> &Self::Target {
         self.archived()
     }
 }
-
 /// Decode an already length-bounded archived field from owned aligned storage.
 ///
 /// This is an implementation detail shared by generated deserializers. It
@@ -5342,7 +4913,6 @@ where
     // this entire deserialization call.
     crate::guarded_try_deserialize(|| T::try_deserialize(unsafe { &*archived_ptr }))
 }
-
 /// Interpret `bytes` as an archived value and ensure the slice is large enough.
 ///
 /// This validates the archived footprint and produces suitably aligned backing
@@ -5386,7 +4956,6 @@ pub fn archived_from_slice<'a, T>(bytes: &'a [u8]) -> Result<ArchivedRef<'a, T>,
         })
     }
 }
-
 impl NoritoSerialize for u8 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&[*self])?;
@@ -5399,17 +4968,14 @@ impl NoritoSerialize for u8 {
         Some(1)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for u8 {
     fn deserialize(archived: &'a Archived<u8>) -> Self {
         read_archived_bytes::<_, 1>(archived)[0]
     }
-
     fn try_deserialize(archived: &'a Archived<u8>) -> Result<Self, Error> {
         Ok(try_read_archived_bytes::<_, 1>(archived)?[0])
     }
 }
-
 impl NoritoSerialize for i8 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&[*self as u8])?;
@@ -5422,17 +4988,14 @@ impl NoritoSerialize for i8 {
         Some(1)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for i8 {
     fn deserialize(archived: &'a Archived<i8>) -> Self {
         i8::from_le_bytes(read_archived_bytes(archived))
     }
-
     fn try_deserialize(archived: &'a Archived<i8>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(i8::from_le_bytes)
     }
 }
-
 impl NoritoSerialize for u16 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
@@ -5445,45 +5008,37 @@ impl NoritoSerialize for u16 {
         Some(2)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for u16 {
     fn deserialize(archived: &'a Archived<u16>) -> Self {
         u16::from_le_bytes(read_archived_bytes(archived))
     }
-
     fn try_deserialize(archived: &'a Archived<u16>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(u16::from_le_bytes)
     }
 }
-
 impl NoritoSerialize for NonZeroU16 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.get().serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.get().encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.get().encoded_len_exact()
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for NonZeroU16 {
     fn deserialize(archived: &'a Archived<NonZeroU16>) -> Self {
         let val_arch: &Archived<u16> = archived.cast();
         let value = <u16 as NoritoDeserialize>::deserialize(val_arch);
         NonZeroU16::new(value).expect("non-zero")
     }
-
     fn try_deserialize(archived: &'a Archived<NonZeroU16>) -> Result<Self, Error> {
         let val_arch: &Archived<u16> = archived.cast();
         let value = <u16 as NoritoDeserialize>::try_deserialize(val_arch)?;
         NonZeroU16::new(value).ok_or(Error::InvalidNonZero)
     }
 }
-
 impl NoritoSerialize for i16 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
@@ -5496,17 +5051,14 @@ impl NoritoSerialize for i16 {
         Some(2)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for i16 {
     fn deserialize(archived: &'a Archived<i16>) -> Self {
         i16::from_le_bytes(read_archived_bytes(archived))
     }
-
     fn try_deserialize(archived: &'a Archived<i16>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(i16::from_le_bytes)
     }
 }
-
 impl NoritoSerialize for u32 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
@@ -5519,45 +5071,37 @@ impl NoritoSerialize for u32 {
         Some(4)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for u32 {
     fn deserialize(archived: &'a Archived<u32>) -> Self {
         u32::from_le_bytes(read_archived_bytes(archived))
     }
-
     fn try_deserialize(archived: &'a Archived<u32>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(u32::from_le_bytes)
     }
 }
-
 impl NoritoSerialize for NonZeroU32 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.get().serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.get().encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.get().encoded_len_exact()
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for NonZeroU32 {
     fn deserialize(archived: &'a Archived<NonZeroU32>) -> Self {
         let val_arch: &Archived<u32> = archived.cast();
         let value = <u32 as NoritoDeserialize>::deserialize(val_arch);
         NonZeroU32::new(value).expect("non-zero")
     }
-
     fn try_deserialize(archived: &'a Archived<NonZeroU32>) -> Result<Self, Error> {
         let val_arch: &Archived<u32> = archived.cast();
         let value = <u32 as NoritoDeserialize>::try_deserialize(val_arch)?;
         NonZeroU32::new(value).ok_or(Error::InvalidNonZero)
     }
 }
-
 impl NoritoSerialize for bool {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&[*self as u8])?;
@@ -5570,12 +5114,10 @@ impl NoritoSerialize for bool {
         Some(1)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for bool {
     fn deserialize(archived: &'a Archived<bool>) -> Self {
         Self::try_deserialize(archived).expect("invalid bool")
     }
-
     fn try_deserialize(archived: &'a Archived<bool>) -> Result<Self, Error> {
         match <u8 as NoritoDeserialize>::try_deserialize(archived.cast())? {
             0 => Ok(false),
@@ -5584,7 +5126,6 @@ impl<'a> NoritoDeserialize<'a> for bool {
         }
     }
 }
-
 impl NoritoSerialize for char {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&(*self as u32).to_le_bytes())?;
@@ -5597,20 +5138,17 @@ impl NoritoSerialize for char {
         Some(4)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for char {
     fn deserialize(archived: &'a Archived<char>) -> Self {
         let v = <u32 as NoritoDeserialize>::deserialize(archived.cast());
         char::from_u32(v).expect("invalid char")
     }
-
     fn try_deserialize(archived: &'a Archived<char>) -> Result<Self, Error> {
         let value = <u32 as NoritoDeserialize>::try_deserialize(archived.cast())?;
         char::from_u32(value)
             .ok_or_else(|| Error::Message(format!("invalid Unicode scalar value {value:#x}")))
     }
 }
-
 impl NoritoSerialize for () {
     fn serialize(&self, _encoder: &mut Encoder<'_>) -> Result<(), Error> {
         Ok(())
@@ -5622,31 +5160,26 @@ impl NoritoSerialize for () {
         Some(0)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for () {
     fn deserialize(_archived: &'a Archived<()>) -> Self {
         // unit type has no data
     }
 }
-
 impl<T> NoritoSerialize for PhantomData<T> {
     fn serialize(&self, _encoder: &mut Encoder<'_>) -> Result<(), Error> {
         Ok(())
     }
 }
-
 impl<'a, T> NoritoDeserialize<'a> for PhantomData<T> {
     fn deserialize(_archived: &'a Archived<PhantomData<T>>) -> Self {
         PhantomData
     }
 }
-
 impl<'a, T> DecodeFromSlice<'a> for PhantomData<T> {
     fn decode_from_slice(_bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         Ok((PhantomData, 0))
     }
 }
-
 impl NoritoSerialize for i32 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
@@ -5659,17 +5192,14 @@ impl NoritoSerialize for i32 {
         Some(4)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for i32 {
     fn deserialize(archived: &'a Archived<i32>) -> Self {
         i32::from_le_bytes(read_archived_bytes(archived))
     }
-
     fn try_deserialize(archived: &'a Archived<i32>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(i32::from_le_bytes)
     }
 }
-
 impl NoritoSerialize for u64 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
@@ -5682,45 +5212,37 @@ impl NoritoSerialize for u64 {
         Some(8)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for u64 {
     fn deserialize(archived: &'a Archived<u64>) -> Self {
         u64::from_le_bytes(read_archived_bytes(archived))
     }
-
     fn try_deserialize(archived: &'a Archived<u64>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(u64::from_le_bytes)
     }
 }
-
 impl NoritoSerialize for NonZeroU64 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.get().serialize(writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.get().encoded_len_hint()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         self.get().encoded_len_exact()
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for NonZeroU64 {
     fn deserialize(archived: &'a Archived<NonZeroU64>) -> Self {
         let val_arch: &Archived<u64> = archived.cast();
         let value = <u64 as NoritoDeserialize>::deserialize(val_arch);
         NonZeroU64::new(value).expect("non-zero")
     }
-
     fn try_deserialize(archived: &'a Archived<NonZeroU64>) -> Result<Self, Error> {
         let val_arch: &Archived<u64> = archived.cast();
         let value = <u64 as NoritoDeserialize>::try_deserialize(val_arch)?;
         NonZeroU64::new(value).ok_or(Error::InvalidNonZero)
     }
 }
-
 impl NoritoSerialize for i64 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
@@ -5733,17 +5255,14 @@ impl NoritoSerialize for i64 {
         Some(8)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for i64 {
     fn deserialize(archived: &'a Archived<i64>) -> Self {
         i64::from_le_bytes(read_archived_bytes(archived))
     }
-
     fn try_deserialize(archived: &'a Archived<i64>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(i64::from_le_bytes)
     }
 }
-
 impl NoritoSerialize for usize {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&(*self as u64).to_le_bytes())?;
@@ -5756,18 +5275,15 @@ impl NoritoSerialize for usize {
         Some(8)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for usize {
     fn deserialize(archived: &'a Archived<usize>) -> Self {
         Self::try_deserialize(archived).expect("archived usize does not fit this target")
     }
-
     fn try_deserialize(archived: &'a Archived<usize>) -> Result<Self, Error> {
         let value = u64::from_le_bytes(try_read_archived_bytes(archived)?);
         usize::try_from(value).map_err(|_| Error::LengthMismatch)
     }
 }
-
 impl NoritoSerialize for isize {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&(*self as i64).to_le_bytes())?;
@@ -5780,18 +5296,15 @@ impl NoritoSerialize for isize {
         Some(8)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for isize {
     fn deserialize(archived: &'a Archived<isize>) -> Self {
         Self::try_deserialize(archived).expect("archived isize does not fit this target")
     }
-
     fn try_deserialize(archived: &'a Archived<isize>) -> Result<Self, Error> {
         let value = i64::from_le_bytes(try_read_archived_bytes(archived)?);
         isize::try_from(value).map_err(|_| Error::LengthMismatch)
     }
 }
-
 impl NoritoSerialize for u128 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
@@ -5804,17 +5317,14 @@ impl NoritoSerialize for u128 {
         Some(16)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for u128 {
     fn deserialize(archived: &'a Archived<u128>) -> Self {
         u128::from_le_bytes(read_archived_bytes(archived))
     }
-
     fn try_deserialize(archived: &'a Archived<u128>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(u128::from_le_bytes)
     }
 }
-
 impl NoritoSerialize for i128 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_le_bytes())?;
@@ -5827,17 +5337,14 @@ impl NoritoSerialize for i128 {
         Some(16)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for i128 {
     fn deserialize(archived: &'a Archived<i128>) -> Self {
         i128::from_le_bytes(read_archived_bytes(archived))
     }
-
     fn try_deserialize(archived: &'a Archived<i128>) -> Result<Self, Error> {
         try_read_archived_bytes(archived).map(i128::from_le_bytes)
     }
 }
-
 impl NoritoSerialize for f32 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_bits().to_le_bytes())?;
@@ -5850,17 +5357,14 @@ impl NoritoSerialize for f32 {
         Some(4)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for f32 {
     fn deserialize(archived: &'a Archived<f32>) -> Self {
         Self::from_bits(<u32 as NoritoDeserialize>::deserialize(archived.cast()))
     }
-
     fn try_deserialize(archived: &'a Archived<f32>) -> Result<Self, Error> {
         <u32 as NoritoDeserialize>::try_deserialize(archived.cast()).map(Self::from_bits)
     }
 }
-
 impl NoritoSerialize for f64 {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&self.to_bits().to_le_bytes())?;
@@ -5873,17 +5377,14 @@ impl NoritoSerialize for f64 {
         Some(8)
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for f64 {
     fn deserialize(archived: &'a Archived<f64>) -> Self {
         Self::from_bits(<u64 as NoritoDeserialize>::deserialize(archived.cast()))
     }
-
     fn try_deserialize(archived: &'a Archived<f64>) -> Result<Self, Error> {
         <u64 as NoritoDeserialize>::try_deserialize(archived.cast()).map(Self::from_bits)
     }
 }
-
 impl NoritoSerialize for String {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let bytes = self.as_bytes();
@@ -5899,13 +5400,11 @@ impl NoritoSerialize for String {
         len_prefixed_payload_len(self.len())
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for String {
     fn deserialize(archived: &'a Archived<String>) -> Self {
         Self::try_deserialize(archived)
             .unwrap_or_else(|err| panic!("norito: invalid archived String: {err:?}"))
     }
-
     fn try_deserialize(archived: &'a Archived<String>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
         let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
@@ -5927,12 +5426,10 @@ impl<'a> NoritoDeserialize<'a> for String {
         String::from_utf8(bytes.to_vec()).map_err(|_| Error::InvalidUtf8)
     }
 }
-
 impl NoritoSerialize for &str {
     fn schema_hash() -> [u8; 16] {
         compute_schema_hash::<String>()
     }
-
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let bytes = self.as_bytes();
         let len = u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?;
@@ -5947,17 +5444,14 @@ impl NoritoSerialize for &str {
         len_prefixed_payload_len(self.len())
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for &'a str {
     fn schema_hash() -> [u8; 16] {
         compute_schema_hash::<String>()
     }
-
     fn deserialize(archived: &'a Archived<&'a str>) -> Self {
         Self::try_deserialize(archived)
             .unwrap_or_else(|err| panic!("norito: invalid archived &str: {err:?}"))
     }
-
     fn try_deserialize(archived: &'a Archived<&'a str>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
         let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
@@ -5979,7 +5473,6 @@ impl<'a> NoritoDeserialize<'a> for &'a str {
         std::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)
     }
 }
-
 // Strict-safe implementations for decoding from slices (no raw pointers)
 impl<'a> DecodeFromSlice<'a> for String {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
@@ -5992,7 +5485,6 @@ impl<'a> DecodeFromSlice<'a> for String {
         Ok((s, end))
     }
 }
-
 impl<'a> DecodeFromSlice<'a> for &'a str {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, hdr) = read_len_dyn_slice(bytes)?;
@@ -6003,12 +5495,10 @@ impl<'a> DecodeFromSlice<'a> for &'a str {
         Ok((s, end))
     }
 }
-
 impl NoritoSerialize for Cow<'_, str> {
     fn schema_hash() -> [u8; 16] {
         compute_schema_hash::<String>()
     }
-
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let bytes = self.as_ref().as_bytes();
         let len = u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?;
@@ -6023,23 +5513,19 @@ impl NoritoSerialize for Cow<'_, str> {
         len_prefixed_payload_len(self.len())
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for Cow<'a, str> {
     fn schema_hash() -> [u8; 16] {
         compute_schema_hash::<String>()
     }
-
     fn deserialize(archived: &'a Archived<Cow<'a, str>>) -> Self {
         let s = <&'a str as NoritoDeserialize>::deserialize(archived.cast());
         Cow::Borrowed(s)
     }
 }
-
 impl NoritoSerialize for Box<str> {
     fn schema_hash() -> [u8; 16] {
         compute_schema_hash::<String>()
     }
-
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.as_ref().serialize(writer)
     }
@@ -6050,23 +5536,19 @@ impl NoritoSerialize for Box<str> {
         len_prefixed_payload_len(self.len())
     }
 }
-
 impl<'a> NoritoDeserialize<'a> for Box<str> {
     fn schema_hash() -> [u8; 16] {
         compute_schema_hash::<String>()
     }
-
     fn deserialize(archived: &'a Archived<Box<str>>) -> Self {
         let s = String::deserialize(archived.cast());
         s.into_boxed_str()
     }
-
     fn try_deserialize(archived: &'a Archived<Box<str>>) -> Result<Self, Error> {
         guarded_try_deserialize(|| String::try_deserialize(archived.cast()))
             .map(|s| s.into_boxed_str())
     }
 }
-
 impl<T: NoritoSerialize> NoritoSerialize for Box<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         serialize_owned(writer, &**self)
@@ -6083,7 +5565,6 @@ impl<T: NoritoSerialize> NoritoSerialize for Box<T> {
             .and_then(len_prefixed_payload_len)
     }
 }
-
 impl<'a, T> NoritoDeserialize<'a> for Box<T>
 where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
@@ -6091,14 +5572,12 @@ where
     fn deserialize(archived: &'a Archived<Box<T>>) -> Self {
         Self::try_deserialize(archived).expect("Box decode")
     }
-
     fn try_deserialize(archived: &'a Archived<Box<T>>) -> Result<Self, Error> {
         let bytes = owned_bytes_from_ctx(archived)?;
         let (value, _) = <Box<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(value)
     }
 }
-
 impl<T: NoritoSerialize> NoritoSerialize for Rc<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         serialize_owned(writer, &**self)
@@ -6115,7 +5594,6 @@ impl<T: NoritoSerialize> NoritoSerialize for Rc<T> {
             .and_then(len_prefixed_payload_len)
     }
 }
-
 impl<'a, T> NoritoDeserialize<'a> for Rc<T>
 where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
@@ -6123,14 +5601,12 @@ where
     fn deserialize(archived: &'a Archived<Rc<T>>) -> Self {
         Self::try_deserialize(archived).expect("Rc decode")
     }
-
     fn try_deserialize(archived: &'a Archived<Rc<T>>) -> Result<Self, Error> {
         let bytes = owned_bytes_from_ctx(archived)?;
         let (value, _) = <Rc<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(value)
     }
 }
-
 impl<T: NoritoSerialize> NoritoSerialize for Arc<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         serialize_owned(writer, &**self)
@@ -6147,7 +5623,6 @@ impl<T: NoritoSerialize> NoritoSerialize for Arc<T> {
             .and_then(len_prefixed_payload_len)
     }
 }
-
 impl<'a, T> NoritoDeserialize<'a> for Arc<T>
 where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
@@ -6155,14 +5630,12 @@ where
     fn deserialize(archived: &'a Archived<Arc<T>>) -> Self {
         Self::try_deserialize(archived).expect("Arc decode")
     }
-
     fn try_deserialize(archived: &'a Archived<Arc<T>>) -> Result<Self, Error> {
         let bytes = owned_bytes_from_ctx(archived)?;
         let (value, _) = <Arc<T> as DecodeFromSlice>::decode_from_slice(bytes)?;
         Ok(value)
     }
 }
-
 impl<T: NoritoSerialize + Copy> NoritoSerialize for Cell<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.get().serialize(writer)
@@ -6174,17 +5647,14 @@ impl<T: NoritoSerialize + Copy> NoritoSerialize for Cell<T> {
         Some(core::mem::size_of::<T>())
     }
 }
-
 impl<'a, T: NoritoDeserialize<'a> + Copy> NoritoDeserialize<'a> for Cell<T> {
     fn deserialize(archived: &'a Archived<Cell<T>>) -> Self {
         Cell::new(T::deserialize(archived.cast()))
     }
-
     fn try_deserialize(archived: &'a Archived<Cell<T>>) -> Result<Self, Error> {
         guarded_try_deserialize(|| T::try_deserialize(archived.cast())).map(Cell::new)
     }
 }
-
 impl<T: NoritoSerialize> NoritoSerialize for RefCell<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.borrow().serialize(writer)
@@ -6196,17 +5666,14 @@ impl<T: NoritoSerialize> NoritoSerialize for RefCell<T> {
         self.borrow().encoded_len_exact()
     }
 }
-
 impl<'a, T: NoritoDeserialize<'a>> NoritoDeserialize<'a> for RefCell<T> {
     fn deserialize(archived: &'a Archived<RefCell<T>>) -> Self {
         RefCell::new(T::deserialize(archived.cast()))
     }
-
     fn try_deserialize(archived: &'a Archived<RefCell<T>>) -> Result<Self, Error> {
         guarded_try_deserialize(|| T::try_deserialize(archived.cast())).map(RefCell::new)
     }
 }
-
 impl<T: NoritoSerialize> NoritoSerialize for Option<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
@@ -6239,7 +5706,6 @@ impl<T: NoritoSerialize> NoritoSerialize for Option<T> {
         }
     }
 }
-
 impl<'a, T> NoritoDeserialize<'a> for Option<T>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
@@ -6250,7 +5716,6 @@ where
             Err(err) => panic!("norito: Option decode failed: {err:?}"),
         }
     }
-
     fn try_deserialize(archived: &'a Archived<Option<T>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
         let tag = payload_range_from_ptr(ptr, 1)?[0];
@@ -6287,7 +5752,6 @@ where
         }
     }
 }
-
 impl<T: NoritoSerialize, E: NoritoSerialize> NoritoSerialize for Result<T, E> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let mut tmp: DeriveSmallBuf = DeriveSmallBuf::new();
@@ -6315,7 +5779,6 @@ impl<T: NoritoSerialize, E: NoritoSerialize> NoritoSerialize for Result<T, E> {
                 .and_then(tagged_len_prefixed_payload_len),
         }
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         match self {
             Ok(v) => v
@@ -6327,7 +5790,6 @@ impl<T: NoritoSerialize, E: NoritoSerialize> NoritoSerialize for Result<T, E> {
         }
     }
 }
-
 impl<'a, T, E> NoritoDeserialize<'a> for Result<T, E>
 where
     T: NoritoDeserialize<'a> + DecodeFromSlice<'a>,
@@ -6339,7 +5801,6 @@ where
             Err(err) => panic!("norito: Result decode failed: {err:?}"),
         }
     }
-
     fn try_deserialize(archived: &'a Archived<Result<T, E>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
         let payload = payload_slice_from_ptr(ptr)?;
@@ -6396,7 +5857,6 @@ where
         }
     }
 }
-
 impl<T: NoritoSerialize, const N: usize> NoritoSerialize for [T; N] {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let flags = effective_layout_flags();
@@ -6411,7 +5871,6 @@ impl<T: NoritoSerialize, const N: usize> NoritoSerialize for [T; N] {
         }
         Ok(())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         let flags = effective_layout_flags();
         let mut total = 0usize;
@@ -6425,7 +5884,6 @@ impl<T: NoritoSerialize, const N: usize> NoritoSerialize for [T; N] {
         }
         Some(total)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         let flags = effective_layout_flags();
         let mut total = 0usize;
@@ -6438,7 +5896,6 @@ impl<T: NoritoSerialize, const N: usize> NoritoSerialize for [T; N] {
         Some(total)
     }
 }
-
 impl<'a, T: NoritoDeserialize<'a> + 'static, const N: usize> NoritoDeserialize<'a> for [T; N] {
     fn deserialize(archived: &'a Archived<[T; N]>) -> Self {
         match Self::try_deserialize(archived) {
@@ -6446,7 +5903,6 @@ impl<'a, T: NoritoDeserialize<'a> + 'static, const N: usize> NoritoDeserialize<'
             Err(err) => panic!("norito: array decode failed: {err:?}"),
         }
     }
-
     fn try_deserialize(archived: &'a Archived<[T; N]>) -> Result<Self, Error> {
         if TypeId::of::<T>() == TypeId::of::<u8>() {
             let ptr = archived as *const _ as *const u8;
@@ -6471,7 +5927,6 @@ impl<'a, T: NoritoDeserialize<'a> + 'static, const N: usize> NoritoDeserialize<'
                 return Ok(arr.assume_init());
             }
         }
-
         let ptr = archived as *const _ as *const u8;
         let mut offset = 0usize;
         let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
@@ -6567,7 +6022,6 @@ pub mod stream {
             Ok(decoder.total_len())
         })
     }
-
     pub(crate) fn fold_sequence_from_reader<R, T, Acc, Init, F>(
         mut reader: R,
         init: Init,
@@ -6587,7 +6041,6 @@ pub mod stream {
             return Err(Error::SchemaMismatch);
         }
         let payload_len = super::payload_len_to_usize(header.length)?;
-
         let padding = match header.compression {
             Compression::None => padding,
             Compression::Zstd => 0,
@@ -6597,13 +6050,10 @@ pub mod stream {
         }
         let _fg = DecodeFlagsGuard::enter(header.flags);
         let mut payload = DigestingReader::new(PayloadStream::new(reader, header.compression)?);
-
         let mut len_decoder = SeqLenDecoder::new(&mut payload, header.flags, payload_len)?;
         let mut acc = init(len_decoder.total_len())?;
-
         let mut scratch = AlignedScratch::new();
         let archived_align = archived_payload_align::<T>();
-
         while let Some(elem_len) = len_decoder.next_len(&mut payload)? {
             let available = payload_len
                 .checked_sub(payload.consumed)
@@ -6637,25 +6087,20 @@ pub mod stream {
                 }
             }
         }
-
         if len_decoder.remaining() != 0 {
             return Err(Error::LengthMismatch);
         }
-
         let remaining_tail = payload_len
             .checked_sub(payload.consumed)
             .ok_or(Error::LengthMismatch)?;
         len_decoder.finish(&mut payload, remaining_tail)?;
-
         let _ = payload.finalize(payload_len, header.checksum)?;
         Ok(acc)
     }
-
     #[inline]
     pub(crate) fn u64_to_usize(value: u64) -> Result<usize, Error> {
         super::payload_len_to_usize(value)
     }
-
     #[inline]
     pub(crate) fn skip_padding<R: Read>(reader: &mut R, mut padding: usize) -> Result<(), Error> {
         if padding == 0 {
@@ -6675,14 +6120,12 @@ pub mod stream {
         }
         Ok(())
     }
-
     pub(crate) struct AlignedScratch {
         ptr: *mut u8,
         layout: Option<Layout>,
         capacity: usize,
         align: usize,
     }
-
     impl AlignedScratch {
         pub(crate) fn new() -> Self {
             Self {
@@ -6692,7 +6135,6 @@ pub mod stream {
                 align: 1,
             }
         }
-
         pub(crate) unsafe fn ensure(&mut self, len: usize, align: usize) -> Result<*mut u8, Error> {
             if len == 0 {
                 return Ok(std::ptr::NonNull::<u8>::dangling().as_ptr());
@@ -6720,7 +6162,6 @@ pub mod stream {
             Ok(ptr)
         }
     }
-
     impl Drop for AlignedScratch {
         fn drop(&mut self) {
             if let Some(layout) = self.layout.take()
@@ -6730,13 +6171,11 @@ pub mod stream {
             }
         }
     }
-
     pub(super) enum PayloadStream<R: Read> {
         Plain(R),
         #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
         Zstd(zstd::Decoder<'static, BufReader<R>>),
     }
-
     impl<R: Read> PayloadStream<R> {
         pub(super) fn new(reader: R, compression: Compression) -> Result<Self, Error> {
             match compression {
@@ -6755,7 +6194,6 @@ pub mod stream {
             }
         }
     }
-
     impl<R: Read> Read for PayloadStream<R> {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             match self {
@@ -6765,13 +6203,11 @@ pub mod stream {
             }
         }
     }
-
     pub(crate) struct DigestingReader<R> {
         inner: R,
         digest: Digest,
         consumed: usize,
     }
-
     impl<R: Read> DigestingReader<R> {
         pub(crate) fn new(inner: R) -> Self {
             Self {
@@ -6780,25 +6216,21 @@ pub mod stream {
                 consumed: 0,
             }
         }
-
         pub(crate) fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
             self.inner.read_exact(buf)?;
             self.digest.write(buf);
             self.consumed += buf.len();
             Ok(())
         }
-
         pub(crate) fn read_exact_into(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             self.read_exact(buf)?;
             Ok(buf.len())
         }
-
         pub(crate) fn read_u64(&mut self) -> io::Result<u64> {
             let mut b = [0u8; 8];
             self.read_exact(&mut b)?;
             Ok(u64::from_le_bytes(b))
         }
-
         pub(crate) fn read_varint_u64(&mut self) -> Result<u64, Error> {
             let mut result = 0u64;
             let mut shift = 0u32;
@@ -6826,12 +6258,10 @@ pub mod stream {
             }
             Err(Error::LengthMismatch)
         }
-
         pub(crate) fn read_varint_len(&mut self) -> Result<usize, Error> {
             let raw = self.read_varint_u64()?;
             super::len_u64_to_usize(raw)
         }
-
         pub(crate) fn finalize(self, expected_len: usize, checksum: u64) -> Result<R, Error> {
             if self.consumed != expected_len {
                 dbg!(self.consumed, expected_len);
@@ -6842,23 +6272,19 @@ pub mod stream {
             }
             Ok(self.inner)
         }
-
         pub(crate) fn consumed(&self) -> usize {
             self.consumed
         }
     }
-
     pub(crate) struct SeqLenDecoder {
         flags: u8,
         total: usize,
         mode: SeqLenMode,
     }
-
     enum SeqLenMode {
         Plain { remaining: usize },
         Packed { lengths: Vec<usize>, index: usize },
     }
-
     impl SeqLenDecoder {
         #[inline]
         fn read_u64_len<R: Read>(reader: &mut DigestingReader<R>) -> Result<u64, Error> {
@@ -6870,7 +6296,6 @@ pub mod stream {
                 }
             })
         }
-
         #[inline]
         fn map_unexpected_eof(err: Error) -> Error {
             match err {
@@ -6878,7 +6303,6 @@ pub mod stream {
                 other => other,
             }
         }
-
         pub(crate) fn new<R: Read>(
             reader: &mut DigestingReader<R>,
             flags: u8,
@@ -6892,7 +6316,6 @@ pub mod stream {
             if unsupported != 0 {
                 return Err(Error::UnsupportedFeature("sequence layout flag"));
             }
-
             let packed = (flags & header_flags::PACKED_SEQ) != 0;
             let len = Self::read_u64_len(reader)?;
             super::enforce_decode_sequence_length(len)?;
@@ -6900,7 +6323,6 @@ pub mod stream {
             let remaining_payload = payload_len
                 .checked_sub(reader.consumed())
                 .ok_or(Error::LengthMismatch)?;
-
             let mode = if packed {
                 let entries = total.checked_add(1).ok_or(Error::LengthMismatch)?;
                 let offsets_bytes = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
@@ -6947,10 +6369,8 @@ pub mod stream {
                 }
                 SeqLenMode::Plain { remaining: total }
             };
-
             Ok(Self { flags, total, mode })
         }
-
         pub(crate) fn next_len<R: Read>(
             &mut self,
             reader: &mut DigestingReader<R>,
@@ -6984,18 +6404,15 @@ pub mod stream {
                 }
             }
         }
-
         pub(crate) fn remaining(&self) -> usize {
             match &self.mode {
                 SeqLenMode::Plain { remaining } => *remaining,
                 SeqLenMode::Packed { lengths, index } => lengths.len().saturating_sub(*index),
             }
         }
-
         pub(crate) fn total_len(&self) -> usize {
             self.total
         }
-
         pub(crate) fn finish<R: Read>(
             &self,
             _reader: &mut DigestingReader<R>,
@@ -7008,21 +6425,17 @@ pub mod stream {
         }
     }
 }
-
 impl<T: NoritoSerialize> NoritoSerialize for VecDeque<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         encode_seq_payloads(writer, self.len(), self.iter())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         sequence_encoded_len_hint(self.len(), self.iter())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
-
 impl<'a, T> NoritoDeserialize<'a> for VecDeque<T>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
@@ -7030,7 +6443,6 @@ where
     fn deserialize(archived: &'a Archived<VecDeque<T>>) -> Self {
         Self::try_deserialize(archived).expect("norito: VecDeque decode failed")
     }
-
     fn try_deserialize(archived: &'a Archived<VecDeque<T>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
         let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
@@ -7046,21 +6458,17 @@ where
         Ok(deque)
     }
 }
-
 impl<T: NoritoSerialize> NoritoSerialize for LinkedList<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         encode_seq_payloads(writer, self.len(), self.iter())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         sequence_encoded_len_hint(self.len(), self.iter())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
-
 impl<'a, T> NoritoDeserialize<'a> for LinkedList<T>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
@@ -7068,7 +6476,6 @@ where
     fn deserialize(archived: &'a Archived<LinkedList<T>>) -> Self {
         Self::try_deserialize(archived).expect("norito: LinkedList decode failed")
     }
-
     fn try_deserialize(archived: &'a Archived<LinkedList<T>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
         let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
@@ -7084,7 +6491,6 @@ where
         Ok(list)
     }
 }
-
 impl<T> NoritoSerialize for BinaryHeap<T>
 where
     T: NoritoSerialize + Ord,
@@ -7107,12 +6513,10 @@ where
     fn encoded_len_hint(&self) -> Option<usize> {
         sequence_encoded_len_hint(self.len(), self.iter())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
-
 impl<'a, T> NoritoDeserialize<'a> for BinaryHeap<T>
 where
     T: NoritoDeserialize<'a> + Ord,
@@ -7120,7 +6524,6 @@ where
     fn deserialize(archived: &'a Archived<BinaryHeap<T>>) -> Self {
         Self::try_deserialize(archived).expect("BinaryHeap decode")
     }
-
     fn try_deserialize(archived: &'a Archived<BinaryHeap<T>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
         let payload = payload_slice_from_ptr(ptr)?;
@@ -7230,7 +6633,6 @@ where
         Ok(out)
     }
 }
-
 impl<T: NoritoSerialize> NoritoSerialize for Vec<T> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         if core::any::type_name::<T>() == "u8" {
@@ -7244,14 +6646,12 @@ impl<T: NoritoSerialize> NoritoSerialize for Vec<T> {
         }
         encode_slice_payloads(writer, self)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         if core::any::type_name::<T>() == "u8" {
             return self.len().checked_add(8);
         }
         sequence_encoded_len_hint(self.len(), self.iter())
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         if core::any::type_name::<T>() == "u8" {
             return self.len().checked_add(8);
@@ -7259,7 +6659,6 @@ impl<T: NoritoSerialize> NoritoSerialize for Vec<T> {
         sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
-
 impl<'a, T> NoritoDeserialize<'a> for Vec<T>
 where
     T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
@@ -7267,7 +6666,6 @@ where
     fn deserialize(archived: &'a Archived<Vec<T>>) -> Self {
         Self::try_deserialize(archived).expect("Vec decode")
     }
-
     fn try_deserialize(archived: &'a Archived<Vec<T>>) -> Result<Self, Error> {
         let ptr = archived as *const _ as *const u8;
         let (base, total) = payload_ctx().ok_or(Error::MissingPayloadContext)?;
@@ -7281,7 +6679,6 @@ where
         Ok(vec)
     }
 }
-
 #[inline]
 fn tuple_serialization_flags() -> u8 {
     let defaults = default_encode_flags();
@@ -7302,7 +6699,6 @@ fn tuple_serialization_flags() -> u8 {
         }
     }
 }
-
 macro_rules! impl_tuple {
     ($( $name:ident $var:ident $idx:tt ),+ $(,)?) => {
         impl<$( $name: NoritoSerialize ),+> NoritoSerialize for ( $( $name, )+ ) {
@@ -7332,7 +6728,6 @@ macro_rules! impl_tuple {
                 )+
                 Ok(())
             }
-
             fn encoded_len_hint(&self) -> Option<usize> {
                 let mut total = 0usize;
                 let flags = tuple_serialization_flags();
@@ -7347,7 +6742,6 @@ macro_rules! impl_tuple {
                 )+
                 Some(total)
             }
-
             fn encoded_len_exact(&self) -> Option<usize> {
                 let mut total = 0usize;
                 let flags = tuple_serialization_flags();
@@ -7361,13 +6755,11 @@ macro_rules! impl_tuple {
                 Some(total)
             }
         }
-
         impl<'a, $( $name: NoritoDeserialize<'a> ),+> NoritoDeserialize<'a> for ( $( $name, )+ ) {
             fn deserialize(archived: &'a Archived<( $( $name, )+ )>) -> Self {
                 Self::try_deserialize(archived)
                     .unwrap_or_else(|err| panic!("norito: tuple decode failed: {err:?}"))
             }
-
             fn try_deserialize(archived: &'a Archived<( $( $name, )+ )>) -> Result<Self, Error> {
                 let ptr = archived as *const _ as *const u8;
                 let payload = payload_slice_from_ptr(ptr)?;
@@ -7410,7 +6802,6 @@ macro_rules! impl_tuple {
         }
     };
 }
-
 impl_tuple!(A a 0, B b 1);
 impl_tuple!(A a 0, B b 1, C c 2);
 impl_tuple!(A a 0, B b 1, C c 2, D d 3);
@@ -7422,7 +6813,6 @@ impl_tuple!(A a 0, B b 1, C c 2, D d 3, E e 4, F f 5, G g 6, H h 7, I i 8);
 impl_tuple!(A a 0, B b 1, C c 2, D d 3, E e 4, F f 5, G g 6, H h 7, I i 8, J j 9);
 impl_tuple!(A a 0, B b 1, C c 2, D d 3, E e 4, F f 5, G g 6, H h 7, I i 8, J j 9, K k 10);
 impl_tuple!(A a 0, B b 1, C c 2, D d 3, E e 4, F f 5, G g 6, H h 7, I i 8, J j 9, K k 10, L l 11);
-
 /// Internal byte sink with aligned growth and incremental CRC64.
 ///
 /// ByteSink implements `Write` and is optimized for small, frequent writes by
@@ -7434,7 +6824,6 @@ pub(crate) struct ByteSink {
     headroom: usize,
     digest: crc64fast::Digest,
 }
-
 impl ByteSink {
     /// Create a new sink with capacity hint for payload and reserved headroom.
     pub(crate) fn with_headroom(payload_capacity: usize, headroom: usize) -> Self {
@@ -7447,7 +6836,6 @@ impl ByteSink {
             digest: crc64fast::Digest::new(),
         }
     }
-
     /// Reuse an existing buffer while reserving headroom and payload capacity.
     fn with_headroom_from(mut buf: Vec<u8>, payload_capacity: usize, headroom: usize) -> Self {
         buf.clear();
@@ -7462,7 +6850,6 @@ impl ByteSink {
             digest: crc64fast::Digest::new(),
         }
     }
-
     #[inline]
     fn ensure_capacity(&mut self, extra: usize) {
         let needed = self.buf.len() + extra;
@@ -7475,14 +6862,12 @@ impl ByteSink {
             self.buf.reserve(cap - self.buf.capacity());
         }
     }
-
     #[inline]
     pub(crate) fn write_bytes(&mut self, bytes: &[u8]) {
         self.ensure_capacity(bytes.len());
         self.buf.extend_from_slice(bytes);
         self.digest.write(bytes);
     }
-
     #[inline]
     #[allow(dead_code)]
     pub(crate) fn write_u8(&mut self, v: u8) {
@@ -7490,28 +6875,24 @@ impl ByteSink {
         self.buf.push(v);
         self.digest.write(&[v]);
     }
-
     #[inline]
     #[allow(dead_code)]
     fn write_u16_le(&mut self, v: u16) {
         let b = v.to_le_bytes();
         self.write_bytes(&b);
     }
-
     #[inline]
     #[allow(dead_code)]
     pub(crate) fn write_u32_le(&mut self, v: u32) {
         let b = v.to_le_bytes();
         self.write_bytes(&b);
     }
-
     #[inline]
     #[allow(dead_code)]
     pub(crate) fn write_u64_le(&mut self, v: u64) {
         let b = v.to_le_bytes();
         self.write_bytes(&b);
     }
-
     #[inline]
     #[allow(dead_code)]
     pub(crate) fn write_var_u64(&mut self, mut v: u64) {
@@ -7525,7 +6906,6 @@ impl ByteSink {
         buf[idx] = v as u8;
         self.write_bytes(&buf[..=idx]);
     }
-
     /// Write a compact varint (7-bit) length when `compact-len` is enabled.
     /// Align the payload to `align` bytes by writing zero padding.
     #[inline]
@@ -7542,19 +6922,16 @@ impl ByteSink {
             self.digest.write(&self.buf[start..start + pad]);
         }
     }
-
     #[inline]
     #[allow(dead_code)]
     fn checksum(&self) -> u64 {
         self.digest.sum64()
     }
-
     #[inline]
     pub(crate) fn into_inner(self) -> Vec<u8> {
         self.buf
     }
 }
-
 impl Write for ByteSink {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.write_bytes(bytes);
@@ -7564,7 +6941,6 @@ impl Write for ByteSink {
         Ok(())
     }
 }
-
 pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
     value: &T,
 ) -> Result<(Vec<u8>, u8), Error> {
@@ -7596,7 +6972,6 @@ pub(crate) fn encode_bare_with_flags<T: NoritoSerialize>(
     record_last_header_flags(final_flags);
     Ok((payload, final_flags))
 }
-
 /// Return the exact canonical payload length without allocating an output buffer.
 ///
 /// This deliberately counts a real serialization pass instead of trusting
@@ -7625,7 +7000,6 @@ pub fn encoded_payload_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error
     drop(encode_guard);
     Ok(payload_len)
 }
-
 /// Return the exact canonical framed length without allocating an output buffer.
 ///
 /// Like [`encoded_payload_len`], this counts a real serialization pass instead
@@ -7642,9 +7016,7 @@ pub fn encoded_frame_len<T: NoritoSerialize>(value: &T) -> Result<usize, Error> 
         .and_then(|framing| framing.checked_add(payload_len))
         .ok_or(Error::LengthMismatch)
 }
-
 include!("core/exact_byte_vec.rs");
-
 /// Serialize one canonical frame without allowing the output buffer to grow
 /// beyond a caller-provided byte limit.
 ///
@@ -7673,7 +7045,6 @@ pub fn to_bytes_bounded<T: NoritoSerialize>(
             max_bytes: max_frame_bytes,
         });
     }
-
     let padding = payload_alignment_padding_for::<T>();
     let headroom = Header::SIZE
         .checked_add(padding)
@@ -7683,14 +7054,11 @@ pub fn to_bytes_bounded<T: NoritoSerialize>(
         .ok_or(Error::LengthMismatch)?;
     let header_payload_len =
         u64::try_from(expected_payload_len).map_err(|_| Error::LengthMismatch)?;
-
     let mut out = exact_byte_vec_with_capacity(encoded_bytes)?;
     out.resize(headroom, 0);
-
     let encode_guard = EncodeContextGuard::enter();
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
     validate_header_flags(base_flags)?;
-
     let mut bounded = FixedCapacityVecWriter::new(&mut out, encoded_bytes);
     let (serialize_result, payload_len, checksum, destination_rejected_write) = {
         let mut payload_writer = FramedPayloadWriter {
@@ -7710,7 +7078,6 @@ pub fn to_bytes_bounded<T: NoritoSerialize>(
             payload_writer.inner.rejected_write,
         )
     };
-
     if destination_rejected_write {
         return Err(Error::LengthMismatch.into());
     }
@@ -7718,7 +7085,6 @@ pub fn to_bytes_bounded<T: NoritoSerialize>(
     if payload_len != expected_payload_len || bounded.len() != encoded_bytes {
         return Err(Error::LengthMismatch.into());
     }
-
     let fixed_offsets_used = fixed_offsets_used();
     let field_bitset_used = field_bitset_used();
     let compact_len_used = compact_len_used();
@@ -7729,7 +7095,6 @@ pub fn to_bytes_bounded<T: NoritoSerialize>(
         field_bitset_used,
         compact_len_used,
     );
-
     let mut header = Header::new(T::schema_hash(), header_payload_len, checksum);
     header.flags |= final_flags;
     {
@@ -7739,7 +7104,6 @@ pub fn to_bytes_bounded<T: NoritoSerialize>(
     record_last_header_flags(final_flags);
     Ok(out)
 }
-
 /// Serialize an object to a new byte vector.
 ///
 /// The returned buffer begins with [`Header::SIZE`] bytes reserved for the
@@ -7758,7 +7122,6 @@ pub fn to_bytes<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
     append_payload_with_padding::<T>(&mut out, &payload);
     Ok(out)
 }
-
 /// Serialize an object into the provided byte buffer.
 ///
 /// The output buffer will be overwritten with a Norito-framed payload containing
@@ -7786,7 +7149,6 @@ pub fn to_bytes_in<T: NoritoSerialize>(value: &T, out: &mut Vec<u8>) -> Result<(
     let field_bitset_used = field_bitset_used();
     let compact_len_used = compact_len_used();
     drop(encode_guard);
-
     let final_flags = finalized_encode_flags(
         flags,
         fixed_offsets_used,
@@ -7794,7 +7156,6 @@ pub fn to_bytes_in<T: NoritoSerialize>(value: &T, out: &mut Vec<u8>) -> Result<(
         compact_len_used,
     );
     record_last_header_flags(final_flags);
-
     let mut header = Header::new(T::schema_hash(), payload_len, checksum);
     header.flags |= final_flags;
     {
@@ -7804,7 +7165,6 @@ pub fn to_bytes_in<T: NoritoSerialize>(value: &T, out: &mut Vec<u8>) -> Result<(
     *out = sink.into_inner();
     Ok(())
 }
-
 /// Serialize an object with a Norito header directly into a seekable writer.
 ///
 /// This is the file-backed equivalent of [`to_bytes`]. It writes a placeholder
@@ -7820,10 +7180,8 @@ where
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
     validate_header_flags(base_flags)?;
     let flags = base_flags;
-
     let zero_header = [0u8; Header::SIZE];
     writer.write_all(&zero_header)?;
-
     let mut padding = payload_alignment_padding_for::<T>();
     if padding != 0 {
         const ZEROS: [u8; 64] = [0; 64];
@@ -7833,7 +7191,6 @@ where
             padding -= chunk;
         }
     }
-
     let mut payload_writer = FramedPayloadWriter {
         inner: writer,
         len: 0,
@@ -7846,12 +7203,10 @@ where
     }
     let payload_len = u64::try_from(payload_writer.len).map_err(|_| Error::LengthMismatch)?;
     let checksum = payload_writer.digest.sum64();
-
     let fixed_offsets_used = fixed_offsets_used();
     let field_bitset_used = field_bitset_used();
     let compact_len_used = compact_len_used();
     drop(encode_guard);
-
     let final_flags = finalized_encode_flags(
         flags,
         fixed_offsets_used,
@@ -7859,7 +7214,6 @@ where
         compact_len_used,
     );
     record_last_header_flags(final_flags);
-
     let end = payload_writer.inner.stream_position()?;
     let mut header = Header::new(T::schema_hash(), payload_len, checksum);
     header.flags |= final_flags;
@@ -7868,7 +7222,6 @@ where
     payload_writer.inner.seek(SeekFrom::Start(end))?;
     Ok(())
 }
-
 /// Serialize one canonical Norito frame directly into a non-seekable writer.
 ///
 /// A first, allocation-free pass counts the payload, computes its checksum, and
@@ -7897,7 +7250,6 @@ where
 {
     write_frame_to_writer_with_flags(value, writer, default_encode_flags())
 }
-
 /// Serialize one Norito frame directly using the active layout flags.
 ///
 /// This is the non-seekable, allocation-free-output counterpart to
@@ -7919,7 +7271,6 @@ where
     let base_flags = current_decode_flags_effective().unwrap_or_else(default_encode_flags);
     write_frame_to_writer_with_flags(value, writer, base_flags)
 }
-
 fn write_frame_to_writer_with_flags<T, W>(
     value: &T,
     writer: &mut W,
@@ -7930,7 +7281,6 @@ where
     W: Write,
 {
     validate_header_flags(base_flags)?;
-
     let first_guard = EncodeContextGuard::enter();
     let mut discard = std::io::sink();
     let mut first_payload = FramedPayloadWriter {
@@ -7953,7 +7303,6 @@ where
         compact_len_used(),
     );
     drop(first_guard);
-
     let mut header = Header::new(T::schema_hash(), payload_len_u64, first_checksum);
     header.flags |= first_flags;
     header.write(&mut *writer)?;
@@ -7964,7 +7313,6 @@ where
         writer.write_all(&ZEROS[..chunk])?;
         padding -= chunk;
     }
-
     let second_guard = EncodeContextGuard::enter();
     let mut second_payload = FramedPayloadWriter {
         inner: writer,
@@ -7988,7 +7336,6 @@ where
         compact_len_used(),
     );
     drop(second_guard);
-
     if rejected_write {
         return Err(Error::LengthMismatch);
     }
@@ -8005,18 +7352,15 @@ where
     record_last_header_flags(first_flags);
     Ok(())
 }
-
 #[cfg(test)]
 mod write_canonical_tests {
     include!("core/write_canonical_tests.rs");
 }
-
 struct FramedPayloadWriter<'a, W> {
     inner: &'a mut W,
     len: usize,
     digest: crc64fast::Digest,
 }
-
 impl<W: Write> Write for FramedPayloadWriter<'_, W> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.inner.write_all(bytes)?;
@@ -8024,12 +7368,10 @@ impl<W: Write> Write for FramedPayloadWriter<'_, W> {
         self.digest.write(bytes);
         Ok(bytes.len())
     }
-
     fn flush(&mut self) -> std::io::Result<()> {
         self.inner.flush()
     }
 }
-
 /// Vec destination whose capacity was reserved before construction.
 ///
 /// Every write checks both the semantic frame limit and the already-reserved
@@ -8040,7 +7382,6 @@ struct FixedCapacityVecWriter<'a> {
     max_len: usize,
     rejected_write: bool,
 }
-
 impl<'a> FixedCapacityVecWriter<'a> {
     fn new(out: &'a mut Vec<u8>, max_len: usize) -> Self {
         Self {
@@ -8049,18 +7390,15 @@ impl<'a> FixedCapacityVecWriter<'a> {
             rejected_write: false,
         }
     }
-
     fn len(&self) -> usize {
         self.out.len()
     }
 }
-
 impl Write for FixedCapacityVecWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         self.write_all(bytes)?;
         Ok(bytes.len())
     }
-
     fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         let Some(end) = self.out.len().checked_add(bytes.len()) else {
             self.rejected_write = true;
@@ -8079,12 +7417,10 @@ impl Write for FixedCapacityVecWriter<'_> {
         self.out.extend_from_slice(bytes);
         Ok(())
     }
-
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }
-
 /// Frame a bare payload (produced by `codec::Encode::encode_to`) with a Norito header
 /// using the layout flags recorded by the most recent encode/decode context.
 ///
@@ -8104,7 +7440,6 @@ pub fn frame_bare_with_header_flags<T: NoritoSerialize>(
     append_payload_with_padding::<T>(&mut out, payload);
     Ok(out)
 }
-
 /// Write a bare payload with a Norito header directly to `writer`.
 ///
 /// This is the streaming equivalent of [`frame_bare_with_header_flags`]. It is
@@ -8122,7 +7457,6 @@ where
     let mut header = Header::new(T::schema_hash(), payload.len() as u64, crc64(payload));
     header.flags |= flags;
     header.write(&mut *writer)?;
-
     let mut padding = payload_alignment_padding_for::<T>();
     if padding != 0 {
         const ZEROS: [u8; 64] = [0; 64];
@@ -8135,7 +7469,6 @@ where
     writer.write_all(payload)?;
     Ok(())
 }
-
 #[cfg(test)]
 pub(crate) fn frame_bare_with_default_header<T: NoritoSerialize>(
     payload: &[u8],
@@ -8148,7 +7481,6 @@ pub(crate) fn frame_bare_with_default_header<T: NoritoSerialize>(
     }
     Err(Error::MissingLayoutFlags)
 }
-
 /// Convenience: frame the currently-decoding bare payload (from payload context)
 /// with a Norito header using the active decode flags so it can be decoded via
 /// `from_bytes`.
@@ -8175,7 +7507,6 @@ pub fn frame_current_payload_with_default_header<T: NoritoSerialize>() -> Result
         Err(Error::MissingPayloadContext)
     }
 }
-
 #[cfg(test)]
 mod bytesink_tests {
     use super::*;
@@ -8186,7 +7517,6 @@ mod bytesink_tests {
         s.write_all(&[1, 2, 3, 4, 5]).unwrap();
         assert_eq!(s.checksum(), crc64(&[1, 2, 3, 4, 5]));
     }
-
     #[test]
     fn smallbuf_clear_returns_short_writes_to_stack_storage() {
         use std::io::Write as _;
@@ -8195,20 +7525,16 @@ mod bytesink_tests {
         buf.write_all(&[1, 2, 3, 4, 5]).unwrap();
         assert!(buf.spilled);
         assert_eq!(buf.as_slice(), &[1, 2, 3, 4, 5]);
-
         buf.clear();
         assert!(!buf.spilled);
         assert!(buf.is_empty());
-
         buf.write_all(&[9, 8]).unwrap();
         assert!(!buf.spilled);
         assert_eq!(buf.as_slice(), &[9, 8]);
-
         buf.write_all(&[7, 6, 5]).unwrap();
         assert!(buf.spilled);
         assert_eq!(buf.as_slice(), &[9, 8, 7, 6, 5]);
     }
-
     #[test]
     fn bytesink_typed_writes_le() {
         let mut s = ByteSink::with_headroom(0, 0);
@@ -8221,7 +7547,6 @@ mod bytesink_tests {
         assert_eq!(&b[2..6], &0x89ABCDEFu32.to_le_bytes());
         assert_eq!(&b[6..14], &0x0123456789ABCDEFu64.to_le_bytes());
     }
-
     #[test]
     fn bytesink_align_to() {
         let mut s = ByteSink::with_headroom(0, 0);
@@ -8237,14 +7562,12 @@ mod bytesink_tests {
         assert_eq!(b[8], 0xBB);
     }
 }
-
 /// Configuration for compression.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CompressionConfig {
     /// Compression level for zstd.
     pub level: i32,
 }
-
 // Lightweight telemetry for compression decisions and cost.
 // Always counts calls and bytes; timing is gated behind `adaptive-telemetry`.
 mod telemetry_compress {
@@ -8257,7 +7580,6 @@ mod telemetry_compress {
     static BYTES_OUT_TOTAL: AtomicU64 = AtomicU64::new(0);
     #[cfg(feature = "adaptive-telemetry")]
     static COMPRESS_TIME_NS_TOTAL: AtomicU64 = AtomicU64::new(0);
-
     #[derive(Clone, Copy, Debug)]
     pub struct Snapshot {
         pub calls: u64,
@@ -8268,7 +7590,6 @@ mod telemetry_compress {
         #[cfg(feature = "adaptive-telemetry")]
         pub compress_time_ns_total: u64,
     }
-
     #[inline]
     pub fn record(is_zstd: bool, bytes_in: usize, bytes_out: usize, _time_ns: u64) {
         CALLS.fetch_add(1, Ordering::Relaxed);
@@ -8284,7 +7605,6 @@ mod telemetry_compress {
             COMPRESS_TIME_NS_TOTAL.fetch_add(_time_ns, Ordering::Relaxed);
         }
     }
-
     pub fn snapshot() -> Snapshot {
         Snapshot {
             calls: CALLS.load(Ordering::Relaxed),
@@ -8296,7 +7616,6 @@ mod telemetry_compress {
             compress_time_ns_total: COMPRESS_TIME_NS_TOTAL.load(Ordering::Relaxed),
         }
     }
-
     pub fn reset() {
         CALLS.store(0, Ordering::Relaxed);
         NONE_SELECTED.store(0, Ordering::Relaxed);
@@ -8311,18 +7630,15 @@ mod telemetry_compress {
 
     pub(crate) use Snapshot as CompressSnapshot;
 }
-
 /// Return a snapshot of compression telemetry metrics.
 pub fn compression_metrics_snapshot() -> telemetry_compress::CompressSnapshot {
     telemetry_compress::snapshot()
 }
-
 /// Reset compression telemetry metrics.
 #[allow(dead_code)]
 pub fn compression_metrics_reset() {
     telemetry_compress::reset()
 }
-
 /// JSON: export compression telemetry metrics as a compact JSON value.
 #[cfg(feature = "json")]
 pub fn compression_metrics_json_value() -> crate::json::Value {
@@ -8354,14 +7670,12 @@ pub fn compression_metrics_json_value() -> crate::json::Value {
     }
     crate::json::Value::Object(map)
 }
-
 /// JSON: export compression telemetry metrics as a compact JSON string.
 #[cfg(feature = "json")]
 pub fn compression_metrics_json_string() -> String {
     let v = compression_metrics_json_value();
     crate::json::to_string(&v).unwrap_or_else(|_| String::from("{}"))
 }
-
 /// JSON: compute fieldwise delta between two compression telemetry JSON maps.
 #[cfg(feature = "json")]
 pub fn compression_metrics_delta_json(
@@ -8390,7 +7704,6 @@ pub fn compression_metrics_delta_json(
     }
     Value::Object(out)
 }
-
 /// Serialize an object and adaptively choose compression based on payload size
 /// and hardware availability.
 ///
@@ -8402,7 +7715,6 @@ pub fn to_bytes_auto<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
     let (payload, flags) = encode_bare_with_flags(value)?;
     let checksum = crc64(&payload);
     let len = payload.len() as u64;
-
     // Choose compression engine using heuristics module
     #[cfg(feature = "adaptive-telemetry")]
     let __t0 = std::time::Instant::now();
@@ -8421,7 +7733,6 @@ pub fn to_bytes_auto<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
         body.len(),
         __ns,
     );
-
     let padding = if matches!(algorithm, Compression::None) {
         payload_alignment_padding_for::<T>()
     } else {
@@ -8439,7 +7750,6 @@ pub fn to_bytes_auto<T: NoritoSerialize>(value: &T) -> Result<Vec<u8>, Error> {
     out.extend_from_slice(&body);
     Ok(out)
 }
-
 /// Serialize an object using optional compression.
 ///
 /// When the `gpu-compression` feature is enabled, the zstd encoder is executed
@@ -8462,7 +7772,6 @@ pub fn to_compressed_bytes<T: NoritoSerialize>(
                 let _ = cfg;
                 return Err(std::io::Error::other("compression support disabled").into());
             }
-
             #[cfg(all(
                 feature = "compression",
                 feature = "gpu-compression",
@@ -8511,7 +7820,6 @@ pub fn to_compressed_bytes<T: NoritoSerialize>(
     out.extend_from_slice(&body);
     Ok(out)
 }
-
 #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
 fn validate_zstd_stream(compressed: &[u8]) -> Result<(), Error> {
     if compressed.is_empty() {
@@ -8524,7 +7832,6 @@ fn validate_zstd_stream(compressed: &[u8]) -> Result<(), Error> {
     }
     Ok(())
 }
-
 /// Decompress bytes produced by [`to_compressed_bytes`].
 ///
 /// If the `gpu-compression` feature is enabled, decompression runs on the GPU
@@ -8595,7 +7902,6 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
     );
     Ok(archived)
 }
-
 /// Obtain a reference to an archived value from bytes.
 ///
 /// The function validates the frame header, checksum, schema hash, payload
@@ -8643,7 +7949,6 @@ pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a A
     // dangling marker used only for a zero-sized archived payload.
     Ok(unsafe { &*ptr })
 }
-
 /// A validated view over an archived payload.
 ///
 /// This contains a reference to the payload bytes (after the header) and carries
@@ -8659,28 +7964,23 @@ pub struct ArchiveView<'a> {
     flags_hint: u8,
     schema: [u8; 16],
 }
-
 impl<'a> ArchiveView<'a> {
     /// Payload bytes (already validated by checksum and header length).
     pub fn as_bytes(&self) -> &'a [u8] {
         self.bytes
     }
-
     /// Expose header layout flags.
     pub fn flags(&self) -> u8 {
         self.flags
     }
-
     /// Expose header minor flags (hint).
     pub fn flags_hint(&self) -> u8 {
         self.flags_hint
     }
-
     /// Expose the schema hash stored in the header.
     pub fn schema(&self) -> [u8; 16] {
         self.schema
     }
-
     fn decode_with<T, F>(&self, allow_zero_padding: bool, decode: F) -> Result<T, Error>
     where
         F: FnOnce(&'a [u8]) -> Result<(T, usize), Error>,
@@ -8695,11 +7995,9 @@ impl<'a> ArchiveView<'a> {
         validate_decode_consumption(self.bytes, used, allow_zero_padding)?;
         Ok(value)
     }
-
     fn decode_inner<T: DecodeFromSlice<'a>>(&self, allow_zero_padding: bool) -> Result<T, Error> {
         self.decode_with(allow_zero_padding, T::decode_from_slice)
     }
-
     /// Decode a value from the payload using the strict-safe slice-based path,
     /// enforcing the header schema hash and payload-derived resource limits.
     pub fn decode<T>(&self) -> Result<T, Error>
@@ -8716,7 +8014,6 @@ impl<'a> ArchiveView<'a> {
             self.decode_inner(true)
         })
     }
-
     /// Decode a value under payload-derived resource limits while requiring the
     /// slice decoder to consume the complete payload.
     ///
@@ -8737,7 +8034,6 @@ impl<'a> ArchiveView<'a> {
             self.decode_inner(false)
         })
     }
-
     /// Decode a value with a custom payload decoder while enforcing the header
     /// schema, type-specific padding, payload-derived resource limits, and
     /// complete payload consumption.
@@ -8760,7 +8056,6 @@ impl<'a> ArchiveView<'a> {
             self.decode_with(false, decode)
         })
     }
-
     /// Decode a value under payload-derived resource limits without enforcing
     /// the schema hash.
     pub fn decode_unchecked<T: DecodeFromSlice<'a>>(&self) -> Result<T, Error> {
@@ -8769,7 +8064,6 @@ impl<'a> ArchiveView<'a> {
         })
     }
 }
-
 fn validate_decode_consumption(
     bytes: &[u8],
     used: usize,
@@ -8789,7 +8083,6 @@ fn validate_decode_consumption(
     }
     Ok(())
 }
-
 /// Validate bytes and return an archive view over the payload slice.
 pub fn from_bytes_view<'a>(bytes: &'a [u8]) -> Result<ArchiveView<'a>, Error> {
     let mut cursor = std::io::Cursor::new(bytes);
@@ -8816,7 +8109,6 @@ pub fn from_bytes_view<'a>(bytes: &'a [u8]) -> Result<ArchiveView<'a>, Error> {
         schema: header.schema,
     })
 }
-
 /// Decode a value of `T` directly from bytes via an archive view under a
 /// payload-derived resource budget.
 pub fn decode_from_bytes<'a, T>(bytes: &'a [u8]) -> Result<T, Error>
@@ -8827,7 +8119,6 @@ where
         decode_from_bytes_inner(bytes)
     })
 }
-
 fn decode_from_bytes_inner<'a, T>(bytes: &'a [u8]) -> Result<T, Error>
 where
     T: crate::NoritoDeserialize<'a> + DecodeFromSlice<'a> + 'a,
@@ -8848,7 +8139,6 @@ where
     let ptr_us = payload_src.as_ptr() as usize;
     let needs_realign = align > 1 && !ptr_us.is_multiple_of(align);
     let needs_slice = needs_realign || (header_len > 0 && payload_src.len() < header_len);
-
     if needs_slice {
         return crate::guarded_try_deserialize(|| {
             let _guard = PayloadCtxGuard::enter_with_flags_hint(payload_src, flags, flags_hint);
@@ -8857,20 +8147,17 @@ where
             Ok(value)
         });
     }
-
     let archived_ptr: *const Archived<T> = if header_len == 0 {
         empty_archived_ptr::<T>()
     } else {
         payload_src.as_ptr() as *const Archived<T>
     };
-
     crate::guarded_try_deserialize(|| {
         let _guard = PayloadCtxGuard::enter_with_flags_hint(payload_src, flags, flags_hint);
         let archived = unsafe { &*archived_ptr };
         T::try_deserialize(archived)
     })
 }
-
 /// Strict-safe slice decode with an explicit resource budget.
 ///
 /// This enters the private decoder directly, allowing a caller to select a
@@ -8890,35 +8177,29 @@ where
 {
     with_decode_limits(limits, || decode_from_bytes_inner(bytes))
 }
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum FieldDecodeBoundary {
     Canonical,
     Prefix,
 }
-
 thread_local! {
     static FIELD_DECODE_BOUNDARY: Cell<FieldDecodeBoundary> =
         const { Cell::new(FieldDecodeBoundary::Canonical) };
 }
-
 struct FieldDecodeBoundaryGuard {
     previous: FieldDecodeBoundary,
 }
-
 impl FieldDecodeBoundaryGuard {
     fn enter(boundary: FieldDecodeBoundary) -> Self {
         let previous = FIELD_DECODE_BOUNDARY.with(|slot| slot.replace(boundary));
         Self { previous }
     }
 }
-
 impl Drop for FieldDecodeBoundaryGuard {
     fn drop(&mut self) {
         FIELD_DECODE_BOUNDARY.with(|slot| slot.set(self.previous));
     }
 }
-
 trait ErasedFieldSlot {
     fn archived_align(&self) -> usize;
     fn archived_size(&self) -> usize;
@@ -8927,21 +8208,17 @@ trait ErasedFieldSlot {
     unsafe fn try_decode(&mut self, archived: *const u8) -> Result<(), Error>;
     fn canonical_len(&self) -> Result<usize, Error>;
 }
-
 struct TypedFieldSlot<T> {
     value: Option<T>,
 }
-
 impl<T> TypedFieldSlot<T> {
     fn new() -> Self {
         Self { value: None }
     }
-
     fn into_value(mut self) -> Result<T, Error> {
         self.value.take().ok_or(Error::LengthMismatch)
     }
 }
-
 impl<T> ErasedFieldSlot for TypedFieldSlot<T>
 where
     T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
@@ -8949,32 +8226,26 @@ where
     fn archived_align(&self) -> usize {
         archived_payload_align::<T>()
     }
-
     fn archived_size(&self) -> usize {
         archived_payload_size::<T>()
     }
-
     fn dangling_archived(&self) -> *const u8 {
         empty_archived_ptr::<T>().cast::<u8>()
     }
-
     fn type_name(&self) -> &'static str {
         core::any::type_name::<T>()
     }
-
     unsafe fn try_decode(&mut self, archived: *const u8) -> Result<(), Error> {
         let archived = unsafe { &*archived.cast::<Archived<T>>() };
         let value = T::try_deserialize(archived)?;
         self.value = Some(value);
         Ok(())
     }
-
     fn canonical_len(&self) -> Result<usize, Error> {
         let value = self.value.as_ref().ok_or(Error::LengthMismatch)?;
         recompute_canonical_len(value)
     }
 }
-
 fn invoke_erased_field_decoder(
     slot: &mut dyn ErasedFieldSlot,
     archived: *const u8,
@@ -8983,7 +8254,6 @@ fn invoke_erased_field_decoder(
     let mut decode = || unsafe { slot.try_decode(archived) };
     crate::guarded_try_deserialize_erased(type_name, &mut decode)
 }
-
 fn resolve_erased_field_used(
     boundary: FieldDecodeBoundary,
     slot: &dyn ErasedFieldSlot,
@@ -9036,7 +8306,6 @@ fn resolve_erased_field_used(
         },
     }
 }
-
 #[inline(never)]
 fn decode_field_erased(
     bytes: &[u8],
@@ -9050,7 +8319,6 @@ fn decode_field_erased(
         check_decode_field_length(u64::try_from(bytes.len()).map_err(|_| Error::LengthMismatch)?)?;
     }
     let _depth = DecodeDepthGuard::enter()?;
-
     if bytes.is_empty() {
         if slot.archived_size() != 0 {
             return Err(Error::LengthMismatch);
@@ -9060,7 +8328,6 @@ fn decode_field_erased(
         invoke_erased_field_decoder(slot, dangling)?;
         return Ok(0);
     }
-
     struct RootGuard(bool);
     impl Drop for RootGuard {
         fn drop(&mut self) {
@@ -9075,13 +8342,11 @@ fn decode_field_erased(
     } else {
         None
     };
-
     let _flags_guard = if decode_flags_active() {
         None
     } else {
         Some(DecodeFlagsGuard::enter(default_encode_flags()))
     };
-
     let align = slot.archived_align();
     let needs_realign = align > 1 && !(bytes.as_ptr() as usize).is_multiple_of(align);
     let aligned = if needs_realign {
@@ -9093,7 +8358,6 @@ fn decode_field_erased(
         Some(aligned) => aligned.as_slice(),
         None => bytes,
     };
-
     if crate::debug_trace_enabled() && matches!(boundary, FieldDecodeBoundary::Canonical) {
         let path = if needs_realign {
             "misaligned"
@@ -9107,13 +8371,11 @@ fn decode_field_erased(
             align
         );
     }
-
     let payload_guard = PayloadCtxGuard::enter(payload);
     let _boundary_guard = FieldDecodeBoundaryGuard::enter(boundary);
     invoke_erased_field_decoder(slot, payload.as_ptr())?;
     let used_ctx = payload_ctx_max_access();
     drop(payload_guard);
-
     let used = resolve_erased_field_used(boundary, slot, bytes.len(), used_ctx)?;
     // A realigned copy cannot merge its child context into the caller, and
     // scalar decoders may not record an access at all. Record the resolved
@@ -9121,7 +8383,6 @@ fn decode_field_erased(
     note_payload_access(bytes, used);
     Ok(used)
 }
-
 /// Decode a field payload using the canonical codec implementation without
 /// requiring a specialized `DecodeFromSlice` implementation.
 ///
@@ -9135,7 +8396,6 @@ where
     let used = decode_field_erased(bytes, FieldDecodeBoundary::Canonical, &mut slot)?;
     Ok((slot.into_value()?, used))
 }
-
 /// Decode a single field from the front of `bytes`, permitting trailing bytes after the field.
 ///
 /// This is intended for packed layouts where a self-delimiting field is followed by additional
@@ -9149,7 +8409,6 @@ where
     let used = decode_field_erased(bytes, FieldDecodeBoundary::Prefix, &mut slot)?;
     Ok((slot.into_value()?, used))
 }
-
 #[inline(never)]
 fn take_context_field(
     ptr: *const u8,
@@ -9161,7 +8420,6 @@ fn take_context_field(
     let field = payload.get(offset..end).ok_or(Error::LengthMismatch)?;
     Ok((field, end))
 }
-
 #[inline(never)]
 fn take_length_prefixed_context_field(
     ptr: *const u8,
@@ -9181,13 +8439,11 @@ fn take_length_prefixed_context_field(
         .ok_or(Error::LengthMismatch)?;
     Ok((field, data_end))
 }
-
 #[inline(never)]
 fn remaining_context_field(ptr: *const u8, offset: usize) -> Result<&'static [u8], Error> {
     let payload = payload_slice_from_ptr(ptr)?;
     payload.get(offset..).ok_or(Error::LengthMismatch)
 }
-
 /// Decode one length-prefixed field relative to an active payload context.
 ///
 /// This is a shared implementation detail for derive-generated decoders. It
@@ -9207,7 +8463,6 @@ where
     *offset = next_offset;
     Ok(value)
 }
-
 /// Decode one length-prefixed field through the archived-value compatibility path.
 #[doc(hidden)]
 #[inline(never)]
@@ -9220,7 +8475,6 @@ where
     *offset = next_offset;
     Ok(value)
 }
-
 /// Decode one fixed-width field relative to an active payload context.
 #[doc(hidden)]
 #[inline(never)]
@@ -9237,7 +8491,6 @@ where
     *offset = next_offset;
     Ok(value)
 }
-
 /// Canonically decode one fixed-width field relative to an active payload context.
 #[doc(hidden)]
 #[inline(never)]
@@ -9257,7 +8510,6 @@ where
     *offset = next_offset;
     Ok(value)
 }
-
 /// Copy one fixed-width byte-array field relative to an active payload context.
 #[doc(hidden)]
 #[inline(never)]
@@ -9271,7 +8523,6 @@ pub fn decode_context_byte_array<const N: usize>(
     *offset = next_offset;
     Ok(value)
 }
-
 /// Copy one length-prefixed byte-array field relative to an active payload context.
 #[doc(hidden)]
 #[inline(never)]
@@ -9288,7 +8539,6 @@ pub fn decode_context_framed_byte_array<const N: usize>(
     *offset = next_offset;
     Ok(value)
 }
-
 /// Decode one self-delimiting field from the remaining active payload.
 #[doc(hidden)]
 #[inline(never)]
@@ -9304,7 +8554,6 @@ where
     *offset = offset.checked_add(used).ok_or(Error::LengthMismatch)?;
     Ok(value)
 }
-
 /// Decode a bounded field canonically, retaining the archived compatibility fallback.
 #[doc(hidden)]
 #[inline(never)]
@@ -9325,7 +8574,6 @@ where
     *offset = next_offset;
     Ok(value)
 }
-
 /// Decode an archived field and retain the compact-length nested-frame fallback.
 #[doc(hidden)]
 #[inline(never)]
@@ -9361,7 +8609,6 @@ where
     *offset = next_offset;
     Ok(value)
 }
-
 /// Finish a derive-generated field sequence at the active decode boundary.
 ///
 /// Canonical field decodes must consume the complete payload. Prefix decodes
@@ -9379,7 +8626,6 @@ pub fn finish_context_fields(ptr: *const u8, offset: usize) -> Result<(), Error>
     note_payload_access(payload, offset);
     Ok(())
 }
-
 /// Decode a field using its `DecodeFromSlice` implementation, ensuring full
 /// consumption without re-encoding for canonical length checks.
 ///
@@ -9402,7 +8648,6 @@ where
         }
         return Err(Error::LengthMismatch);
     }
-
     struct RootGuard(bool);
     impl Drop for RootGuard {
         fn drop(&mut self) {
@@ -9417,13 +8662,11 @@ where
     } else {
         None
     };
-
     let _flags_guard = if decode_flags_active() {
         None
     } else {
         Some(DecodeFlagsGuard::enter(default_encode_flags()))
     };
-
     let payload_guard = PayloadCtxGuard::enter(bytes);
     let (value, used) = <T as DecodeFromSlice>::decode_from_slice(bytes)?;
     if require_full_consumption && used != bytes.len() {
@@ -9433,14 +8676,12 @@ where
     drop(payload_guard);
     Ok((value, used))
 }
-
 pub fn decode_field_canonical_slice<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
     T: for<'de> crate::NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
 {
     decode_field_with_slice_decoder(bytes, true)
 }
-
 /// Decode a field using its `DecodeFromSlice` implementation, ensuring full
 /// consumption without re-encoding for canonical length checks.
 ///
@@ -9452,8 +8693,6 @@ where
 {
     decode_field_canonical_slice(bytes)
 }
-
 include!("core/recompute_canonical_len.rs");
-
 #[cfg(test)]
 mod tests;

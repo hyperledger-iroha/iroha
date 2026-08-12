@@ -2239,8 +2239,7 @@ pub mod query {
             OracleProviderStats, OracleProviderStatsRecord, TwitterBindingRecord,
         },
         query::{
-            dsl::CompoundPredicate,
-            dsl_fast::EvaluatePredicate,
+            dsl::{CompoundPredicate, EvaluatePredicate},
             error::{FindError, QueryExecutionFail as Error},
             oracle::prelude::{
                 FindDefiOracleAttestationsByKey, FindLatestDefiOracleAttestation,

@@ -1,0 +1,8 @@
+
+seiyaku ArgumentDecode {
+  kotoage fn run(int count, Name label, bytes payload) -> int authorize("Entry") {
+    let _label = label;
+    let _payload = payload;
+    return count;
+  }
+}

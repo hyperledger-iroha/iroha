@@ -843,6 +843,7 @@ fn variant_name(error: &AccountAddressError) -> &'static str {
         UnexpectedExtensionFlag => "UnexpectedExtensionFlag",
         UnknownControllerTag(_) => "UnknownControllerTag",
         InvalidPublicKey => "InvalidPublicKey",
+        DecodeResourceLimit => "DecodeResourceLimit",
         UnknownCurve(_) => "UnknownCurve",
         UnexpectedTrailingBytes => "UnexpectedTrailingBytes",
         MissingI105Sentinel => "MissingI105Sentinel",

@@ -155,6 +155,14 @@ def _timeout_vote_episode_source_fidelity_errors(
             ),
         )
 
+    queue_gate = bind_item(
+        "ingress::fair_v2_ingress_queue_gate_verdict",
+        "ingress",
+        "fair_v2_ingress_queue_gate_verdict",
+        (),
+        "queue-local timeout-vote barrier verdict",
+    )
+
     run_inner = bind_item(
         "runner::run_inner",
         "runner",
@@ -250,6 +258,7 @@ def _timeout_vote_episode_source_fidelity_errors(
         "ingress::try_recv_if_checked_retiring_obsolete_with_barrier_bypass",
         "ingress::try_recv_if_at_checked",
         "ingress::try_recv_if_at_checked_classified",
+        "ingress::fair_v2_ingress_queue_gate_verdict",
         "runner::run_inner",
         "runner::drain_v2_ingress",
         "runtime::RuntimeTimeoutVoteEpisodeOwner::validate_against",

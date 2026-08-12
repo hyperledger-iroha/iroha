@@ -1,0 +1,46 @@
+
+            seiyaku StagedMintRequest {
+              state int MintRequestNextSequence;
+              state StateMap<Name, int> MintRequestSequenceById;
+              state StateMap<int, int> MintRequestSequences;
+              state StateMap<int, Name> MintRequestRequestIds;
+              state StateMap<int, Name> MintRequestFiIds;
+              state StateMap<int, AccountId> MintRequestFiAuthorities;
+              state StateMap<int, AccountId> MintRequestToAccounts;
+              state StateMap<int, int> MintRequestAmounts;
+              state StateMap<int, Json> MintRequestRequestedBy;
+              state StateMap<int, int> MintRequestStates;
+              state StateMap<int, int> MintRequestCreatedAt;
+              state StateMap<int, int> MintRequestExpiresAt;
+              state StateMap<int, int> MintRequestFinalizedAt;
+              state StateMap<int, int> MintRequestCanceledAt;
+
+              hajimari() { MintRequestNextSequence = 0; }
+
+              fn update_record(int sequence,
+                               Name request_id,
+                               Name fi_id,
+                               AccountId fi_multisig_account_id,
+                               AccountId to_account_id,
+                               int amount_i64,
+                               Json requested_by_actor_id,
+                               int state_code,
+                               int created_at_ms,
+                               int expires_at_ms,
+                               int finalized_at_ms,
+                               int canceled_at_ms) {
+                MintRequestSequences[sequence] = sequence;
+                MintRequestRequestIds[sequence] = request_id;
+                MintRequestFiIds[sequence] = fi_id;
+                MintRequestFiAuthorities[sequence] = fi_multisig_account_id;
+                MintRequestToAccounts[sequence] = to_account_id;
+                MintRequestAmounts[sequence] = amount_i64;
+                MintRequestRequestedBy[sequence] = requested_by_actor_id;
+                MintRequestStates[sequence] = state_code;
+                MintRequestCreatedAt[sequence] = created_at_ms;
+                MintRequestExpiresAt[sequence] = expires_at_ms;
+                MintRequestFinalizedAt[sequence] = finalized_at_ms;
+                MintRequestCanceledAt[sequence] = canceled_at_ms;
+              }
+            }
+        

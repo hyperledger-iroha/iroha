@@ -4,13 +4,12 @@
 
 use std::sync::Arc;
 
-use axum::{Router, http::Request, routing::post};
+use axum::{Router, http::Request, response::IntoResponse as _, routing::post};
 use base64::Engine as _;
 use hex::ToHex;
 use http::StatusCode;
 use http_body_util::BodyExt as _;
 use iroha_core::{
-    kiso::KisoHandle,
     kura::Kura,
     nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
     query::store::LiveQueryStore,
@@ -31,7 +30,6 @@ use iroha_data_model::{
     transaction::{Executable, signed::TransactionPayload},
 };
 use iroha_primitives::numeric::Quantity;
-use iroha_torii::Torii;
 use norito::codec::Decode;
 use norito::json::{self, Value};
 use tower::ServiceExt as _;
@@ -51,6 +49,34 @@ fn checked_space_directory_account_fixture() -> AccountId {
             .public_key()
             .clone(),
     )
+}
+
+fn cbdc_manifest_entry(
+    dataspace: DataSpaceId,
+    method: &str,
+    max_amount: u64,
+    notes: Option<&str>,
+) -> ManifestEntry {
+    ManifestEntry {
+        scope: CapabilityScope {
+            dataspace: Some(dataspace),
+            program: Some("cbdc.transfer".parse().unwrap()),
+            method: Some(method.parse().unwrap()),
+            asset: Some(AssetDefinitionId::derive_from_components(
+                DomainId::try_new("bank", "universal").expect("domain id"),
+                "cbdc".parse().expect("asset definition name"),
+            )),
+            role: None,
+        },
+        effect: ManifestEffect::Allow(Allowance {
+            max_amount: Some(Quantity::from(max_amount)),
+            window: AllowanceWindow::PerDay,
+        }),
+        notes: match notes {
+            Some(notes) => Some(notes.into()),
+            None => None,
+        },
+    }
 }
 
 async fn decode_unsigned_transaction_draft(
@@ -82,6 +108,93 @@ async fn decode_unsigned_transaction_draft(
     payload
 }
 
+struct ManifestMutationState {
+    queue: Arc<Queue>,
+    state: Arc<State>,
+}
+
+struct ManifestMutationHarness {
+    router: Router,
+    queue: Arc<Queue>,
+    state: Arc<State>,
+}
+
+async fn test_manifest_publish_handler(
+    axum::extract::State(context): axum::extract::State<Arc<ManifestMutationState>>,
+    request: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestPublishDto>,
+) -> axum::response::Response {
+    iroha_torii::handle_post_space_directory_manifest_publish(
+        context.queue.clone(),
+        context.state.clone(),
+        request,
+    )
+    .await
+    .into_response()
+}
+
+async fn test_manifest_revoke_handler(
+    axum::extract::State(context): axum::extract::State<Arc<ManifestMutationState>>,
+    request: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestRevokeDto>,
+) -> axum::response::Response {
+    iroha_torii::handle_post_space_directory_manifest_revoke(
+        context.queue.clone(),
+        context.state.clone(),
+        request,
+    )
+    .await
+    .into_response()
+}
+
+fn manifest_publish_harness() -> ManifestMutationHarness {
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = Arc::new(State::new_for_testing(World::default(), kura, query));
+    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+    let queue = Arc::new(Queue::from_config(
+        iroha_config::parameters::actual::Queue::default(),
+        events,
+    ));
+    let context = Arc::new(ManifestMutationState {
+        queue: queue.clone(),
+        state: state.clone(),
+    });
+    ManifestMutationHarness {
+        router: Router::new()
+            .route(
+                "/v1/space-directory/manifests",
+                post(test_manifest_publish_handler),
+            )
+            .with_state(context),
+        queue,
+        state,
+    }
+}
+
+fn manifest_revoke_harness() -> ManifestMutationHarness {
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = Arc::new(State::new_for_testing(World::default(), kura, query));
+    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+    let queue = Arc::new(Queue::from_config(
+        iroha_config::parameters::actual::Queue::default(),
+        events,
+    ));
+    let context = Arc::new(ManifestMutationState {
+        queue: queue.clone(),
+        state: state.clone(),
+    });
+    ManifestMutationHarness {
+        router: Router::new()
+            .route(
+                "/v1/space-directory/manifests/revoke",
+                post(test_manifest_revoke_handler),
+            )
+            .with_state(context),
+        queue,
+        state,
+    }
+}
+
 #[test]
 fn space_directory_ed25519_fixture_uses_checked_key_generation() {
     let key_pair = checked_space_directory_ed25519_key_fixture();
@@ -108,7 +221,6 @@ fn space_directory_account_fixture_uses_checked_ed25519_key_generation() {
 #[allow(clippy::too_many_lines)]
 async fn space_directory_manifest_endpoint_returns_records() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
@@ -131,23 +243,12 @@ async fn space_directory_manifest_endpoint_returns_records() {
         issued_ms: 1_762_723_200_000,
         activation_epoch: 4_096,
         expiry_epoch: Some(8_192),
-        entries: vec![ManifestEntry {
-            scope: CapabilityScope {
-                dataspace: Some(dataspace),
-                program: Some("cbdc.transfer".parse().unwrap()),
-                method: Some("transfer".parse().unwrap()),
-                asset: Some(AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("bank", "universal").expect("domain id"),
-                    "cbdc".parse().expect("asset definition name"),
-                )),
-                role: None,
-            },
-            effect: ManifestEffect::Allow(Allowance {
-                max_amount: Some(Quantity::from(500_u64)),
-                window: AllowanceWindow::PerDay,
-            }),
-            notes: Some("Wholesale daily cap".into()),
-        }],
+        entries: vec![cbdc_manifest_entry(
+            dataspace,
+            "transfer",
+            500,
+            Some("Wholesale daily cap"),
+        )],
     };
 
     let mut record = SpaceDirectoryManifestRecord::new(manifest);
@@ -173,78 +274,10 @@ async fn space_directory_manifest_endpoint_returns_records() {
     state.nexus.get_mut().dataspace_catalog = dataspace_catalog;
     let state = Arc::new(state);
 
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(iroha_core::queue::Queue::from_config(
-        queue_cfg,
-        events_sender,
-    ));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry as core_telemetry;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) =
-            iroha_primitives::time::TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id,
-            ts,
-            false,
-        )
-        .0
-    };
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state.clone(),
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state.clone(),
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
+    let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
 
-    let app = torii.api_router_for_tests();
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/space-directory/uaids/{uaid}/manifests"))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
+    let app = torii.router();
+    let resp = fixtures::request_get(&app, &format!("/v1/space-directory/uaids/{uaid}/manifests"))
         .await
         .expect("response");
     assert_eq!(resp.status(), StatusCode::OK);
@@ -271,14 +304,8 @@ async fn space_directory_manifest_endpoint_returns_records() {
     let raw_uaid = uaid.to_string().trim_start_matches("uaid:").to_owned();
 
     // Bindings endpoint returns canonical account literals.
-    let app = torii.api_router_for_tests();
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/space-directory/uaids/{uaid}"))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
+    let app = torii.router();
+    let resp = fixtures::request_get(&app, &format!("/v1/space-directory/uaids/{uaid}"))
         .await
         .expect("bindings response");
     assert_eq!(resp.status(), StatusCode::OK);
@@ -294,14 +321,8 @@ async fn space_directory_manifest_endpoint_returns_records() {
     );
 
     // Raw 64-hex UAID paths are accepted and canonicalized in the response payload.
-    let app = torii.api_router_for_tests();
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/space-directory/uaids/{raw_uaid}"))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
+    let app = torii.router();
+    let resp = fixtures::request_get(&app, &format!("/v1/space-directory/uaids/{raw_uaid}"))
         .await
         .expect("raw-hex bindings response");
     assert_eq!(resp.status(), StatusCode::OK);
@@ -314,19 +335,16 @@ async fn space_directory_manifest_endpoint_returns_records() {
     );
 
     // Dataspace filter excludes unknown ids.
-    let app = torii.api_router_for_tests();
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}/manifests?dataspace={}",
-                    dataspace.as_u64() + 1
-                ))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("response");
+    let app = torii.router();
+    let resp = fixtures::request_get(
+        &app,
+        &format!(
+            "/v1/space-directory/uaids/{uaid}/manifests?dataspace={}",
+            dataspace.as_u64() + 1
+        ),
+    )
+    .await
+    .expect("response");
     assert_eq!(resp.status(), StatusCode::OK);
     let filtered = resp.into_body().collect().await.unwrap().to_bytes();
     let filtered_doc: Value = json::from_slice(&filtered).expect("filter payload");
@@ -338,19 +356,16 @@ async fn space_directory_manifest_endpoint_returns_records() {
     );
 
     // Configured dataspace with no explicit lane route still falls back to fanout filtering.
-    let app = torii.api_router_for_tests();
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}/manifests?dataspace={}",
-                    dataspace.as_u64()
-                ))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("response");
+    let app = torii.router();
+    let resp = fixtures::request_get(
+        &app,
+        &format!(
+            "/v1/space-directory/uaids/{uaid}/manifests?dataspace={}",
+            dataspace.as_u64()
+        ),
+    )
+    .await
+    .expect("response");
     assert_eq!(resp.status(), StatusCode::OK);
     let filtered_existing = resp.into_body().collect().await.unwrap().to_bytes();
     let filtered_existing_doc: Value =
@@ -366,16 +381,13 @@ async fn space_directory_manifest_endpoint_returns_records() {
         Value::from(expected_hash.as_str())
     );
 
-    let app = torii.api_router_for_tests();
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/space-directory/uaids/{raw_uaid}/manifests"))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("raw-hex manifests response");
+    let app = torii.router();
+    let resp = fixtures::request_get(
+        &app,
+        &format!("/v1/space-directory/uaids/{raw_uaid}/manifests"),
+    )
+    .await
+    .expect("raw-hex manifests response");
     assert_eq!(resp.status(), StatusCode::OK);
     let raw_manifests = resp.into_body().collect().await.unwrap().to_bytes();
     let raw_manifests_doc: Value = json::from_slice(&raw_manifests).expect("raw manifests payload");
@@ -387,18 +399,13 @@ async fn space_directory_manifest_endpoint_returns_records() {
     );
 
     // Status filter (active) yields the entry, limit/offset paginate.
-    let app = torii.api_router_for_tests();
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}/manifests?status=Active&limit=1"
-                ))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("response");
+    let app = torii.router();
+    let resp = fixtures::request_get(
+        &app,
+        &format!("/v1/space-directory/uaids/{uaid}/manifests?status=Active&limit=1"),
+    )
+    .await
+    .expect("response");
     assert_eq!(resp.status(), StatusCode::OK);
     let active = resp.into_body().collect().await.unwrap().to_bytes();
     let active_doc: Value = json::from_slice(&active).expect("active payload");
@@ -410,18 +417,13 @@ async fn space_directory_manifest_endpoint_returns_records() {
     );
 
     // Invalid status values are rejected by the manifest query parser.
-    let app = torii.api_router_for_tests();
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}/manifests?status=DefinitelyNotAStatus"
-                ))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("response");
+    let app = torii.router();
+    let resp = fixtures::request_get(
+        &app,
+        &format!("/v1/space-directory/uaids/{uaid}/manifests?status=DefinitelyNotAStatus"),
+    )
+    .await
+    .expect("response");
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     // Build a revoked + second manifest world to test inactive/pagination.
@@ -489,85 +491,33 @@ async fn space_directory_manifest_endpoint_returns_records() {
     ])
     .expect("dataspace catalog");
     let state_revoked = Arc::new(state_revoked);
-
-    let (kiso_rev, _child_rev) = KisoHandle::start(cfg_rev.clone());
     let queue_cfg_rev = iroha_config::parameters::actual::Queue::default();
     let events_sender_rev: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue_rev = Arc::new(iroha_core::queue::Queue::from_config(
         queue_cfg_rev,
         events_sender_rev,
     ));
-    let (revoked_peers_tx, revoked_peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = revoked_peers_tx;
-    #[cfg(feature = "telemetry")]
-    let telemetry_rev = {
-        use iroha_core::telemetry as core_telemetry;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) =
-            iroha_primitives::time::TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            metrics,
-            state_revoked.clone(),
-            kura_rev.clone(),
-            queue_rev.clone(),
-            revoked_peers_rx.clone(),
-            local_peer_id_rev,
-            ts,
-            false,
-        )
-        .0
-    };
-    let da_receipt_signer_rev = cfg_rev.common.key_pair.clone();
-    let torii_rev = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain-2"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso_rev,
-                cfg_rev.torii.clone(),
-                queue_rev,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura_rev,
-                state_revoked.clone(),
-                da_receipt_signer_rev.clone(),
-                iroha_torii::OnlinePeersProvider::new(revoked_peers_rx),
-                telemetry_rev,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain-2"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso_rev,
-                cfg_rev.torii.clone(),
-                queue_rev,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura_rev,
-                state_revoked.clone(),
-                da_receipt_signer_rev,
-                iroha_torii::OnlinePeersProvider::new(revoked_peers_rx),
-            )
-        }
-    };
+    let torii_rev = fixtures::ToriiHarness::new(
+        &cfg_rev,
+        iroha_data_model::ChainId::from("test-chain-2"),
+        iroha_torii::test_utils::signed_query_network_id(),
+        &kura_rev,
+        &state_revoked,
+        &queue_rev,
+        &local_peer_id_rev,
+        tokio::sync::broadcast::channel(1).0,
+        true,
+        false,
+    );
 
     // Inactive filter returns revoked manifest.
-    let resp = torii_rev
-        .api_router_for_tests()
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}/manifests?status=Inactive"
-                ))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("inactive response");
+    let app = torii_rev.router();
+    let resp = fixtures::request_get(
+        &app,
+        &format!("/v1/space-directory/uaids/{uaid}/manifests?status=Inactive"),
+    )
+    .await
+    .expect("inactive response");
     assert_eq!(resp.status(), StatusCode::OK);
     let inactive = resp.into_body().collect().await.unwrap().to_bytes();
     let inactive_doc: Value = json::from_slice(&inactive).expect("inactive payload");
@@ -583,18 +533,12 @@ async fn space_directory_manifest_endpoint_returns_records() {
     );
 
     // Active filter + pagination.
-    let resp = torii_rev
-        .api_router_for_tests()
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}/manifests?status=Active&limit=1&offset=0"
-                ))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("active response");
+    let resp = fixtures::request_get(
+        &app,
+        &format!("/v1/space-directory/uaids/{uaid}/manifests?status=Active&limit=1&offset=0"),
+    )
+    .await
+    .expect("active response");
     assert_eq!(resp.status(), StatusCode::OK);
     let active = resp.into_body().collect().await.unwrap().to_bytes();
     let active_doc: Value = json::from_slice(&active).expect("active payload");
@@ -606,18 +550,12 @@ async fn space_directory_manifest_endpoint_returns_records() {
     );
 
     // limit=0 is treated as "no limit" even when multiple manifests exist.
-    let resp = torii_rev
-        .api_router_for_tests()
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}/manifests?limit=0"
-                ))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("no-limit response");
+    let resp = fixtures::request_get(
+        &app,
+        &format!("/v1/space-directory/uaids/{uaid}/manifests?limit=0"),
+    )
+    .await
+    .expect("no-limit response");
     assert_eq!(resp.status(), StatusCode::OK);
     let no_limit = resp.into_body().collect().await.unwrap().to_bytes();
     let no_limit_doc: Value = json::from_slice(&no_limit).expect("no-limit payload");
@@ -632,7 +570,6 @@ async fn space_directory_manifest_endpoint_returns_records() {
 #[tokio::test]
 async fn space_directory_get_routes_reject_invalid_uaid_literals() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
@@ -640,98 +577,24 @@ async fn space_directory_get_routes_reject_invalid_uaid_literals() {
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
 
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(iroha_core::queue::Queue::from_config(
-        queue_cfg,
-        events_sender,
-    ));
-    let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry as core_telemetry;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) =
-            iroha_primitives::time::TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id,
-            ts,
-            false,
-        )
-        .0
-    };
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
+    let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
 
-    let bindings_resp = torii
-        .api_router_for_tests()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/space-directory/uaids/uaid:1234")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
+    let app = torii.router();
+    let bindings_resp = fixtures::request_get(&app, "/v1/space-directory/uaids/uaid:1234")
         .await
         .expect("bindings response");
     assert_eq!(bindings_resp.status(), StatusCode::BAD_REQUEST);
 
-    let manifests_resp = torii
-        .api_router_for_tests()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/space-directory/uaids/uaid:1234/manifests")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .expect("manifests response");
+    let manifests_resp =
+        fixtures::request_get(&app, "/v1/space-directory/uaids/uaid:1234/manifests")
+            .await
+            .expect("manifests response");
     assert_eq!(manifests_resp.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
 async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
@@ -794,77 +657,13 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
     .expect("dataspace catalog");
     let state = Arc::new(state);
 
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(iroha_core::queue::Queue::from_config(
-        queue_cfg,
-        events_sender,
-    ));
-    let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry as core_telemetry;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) =
-            iroha_primitives::time::TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id,
-            ts,
-            false,
-        )
-        .0
-    };
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
+    let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
 
     let resp = torii
-        .api_router_for_tests()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/space-directory/uaids/{uaid}"))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
+        .router()
+        .oneshot(fixtures::get_request(
+            &(format!("/v1/space-directory/uaids/{uaid}")),
+        ))
         .await
         .expect("bindings response");
     assert_eq!(resp.status(), StatusCode::OK);
@@ -908,7 +707,6 @@ async fn space_directory_bindings_route_returns_multiple_dataspaces_with_aliases
 #[tokio::test]
 async fn space_directory_manifest_endpoint_keeps_prefilter_total_when_public_page_is_empty() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
@@ -968,79 +766,13 @@ async fn space_directory_manifest_endpoint_keeps_prefilter_total_when_public_pag
     .expect("dataspace catalog");
     let state = Arc::new(state);
 
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(iroha_core::queue::Queue::from_config(
-        queue_cfg,
-        events_sender,
-    ));
-    let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry as core_telemetry;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) =
-            iroha_primitives::time::TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id,
-            ts,
-            false,
-        )
-        .0
-    };
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
+    let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
 
     let resp = torii
-        .api_router_for_tests()
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}/manifests?status=ACTIVE&limit=1&offset=1"
-                ))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
+        .router()
+        .oneshot(fixtures::get_request(
+            &(format!("/v1/space-directory/uaids/{uaid}/manifests?status=ACTIVE&limit=1&offset=1")),
+        ))
         .await
         .expect("manifests response");
     assert_eq!(resp.status(), StatusCode::OK);
@@ -1058,7 +790,6 @@ async fn space_directory_manifest_endpoint_keeps_prefilter_total_when_public_pag
 #[tokio::test]
 async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
@@ -1105,79 +836,13 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
     .expect("dataspace catalog");
     let state = Arc::new(state);
 
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(iroha_core::queue::Queue::from_config(
-        queue_cfg,
-        events_sender,
-    ));
-    let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry as core_telemetry;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) =
-            iroha_primitives::time::TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id,
-            ts,
-            false,
-        )
-        .0
-    };
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
+    let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
 
     let resp = torii
-        .api_router_for_tests()
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/space-directory/uaids/{uaid}/manifests?status=Inactive"
-                ))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
+        .router()
+        .oneshot(fixtures::get_request(
+            &(format!("/v1/space-directory/uaids/{uaid}/manifests?status=Inactive")),
+        ))
         .await
         .expect("inactive response");
     assert_eq!(resp.status(), StatusCode::OK);
@@ -1201,27 +866,7 @@ async fn space_directory_manifest_endpoint_keeps_null_revocation_reason_in_json(
 
 #[tokio::test]
 async fn manifest_publish_endpoint_returns_unsigned_transaction_draft() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let router = Router::new().route(
-        "/v1/space-directory/manifests",
-        post({
-            let queue = queue.clone();
-            let state = state.clone();
-            move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestPublishDto>| {
-                let queue = queue.clone();
-                let state = state.clone();
-                async move {
-                    iroha_torii::handle_post_space_directory_manifest_publish(queue, state, req)
-                        .await
-                }
-            }
-        }),
-    );
+    let ManifestMutationHarness { router, queue, .. } = manifest_publish_harness();
 
     let creds = iroha_torii::test_utils::random_authority();
     let dataspace = DataSpaceId::new(11);
@@ -1233,23 +878,7 @@ async fn manifest_publish_endpoint_returns_unsigned_transaction_draft() {
         issued_ms: 1_762_723_200_000,
         activation_epoch: 4_096,
         expiry_epoch: Some(8_192),
-        entries: vec![ManifestEntry {
-            scope: CapabilityScope {
-                dataspace: Some(dataspace),
-                program: Some("cbdc.transfer".parse().unwrap()),
-                method: Some("transfer".parse().unwrap()),
-                asset: Some(AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("bank", "universal").expect("domain id"),
-                    "cbdc".parse().expect("asset definition name"),
-                )),
-                role: None,
-            },
-            effect: ManifestEffect::Allow(Allowance {
-                max_amount: Some(Quantity::from(500_u64)),
-                window: AllowanceWindow::PerDay,
-            }),
-            notes: None,
-        }],
+        entries: vec![cbdc_manifest_entry(dataspace, "transfer", 500, None)],
     };
     let manifest_value = norito::json::to_value(&manifest).expect("manifest json");
     let value = iroha_torii::json_object(vec![
@@ -1265,9 +894,7 @@ async fn manifest_publish_endpoint_returns_unsigned_transaction_draft() {
         .body(axum::body::Body::from(body))
         .expect("request");
 
-    let resp = router
-        .clone()
-        .oneshot(req)
+    let resp = fixtures::request(&router, req)
         .await
         .expect("publish response body");
     let payload = decode_unsigned_transaction_draft(resp).await;
@@ -1280,27 +907,7 @@ async fn manifest_publish_endpoint_returns_unsigned_transaction_draft() {
 
 #[tokio::test]
 async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let router = Router::new().route(
-        "/v1/space-directory/manifests",
-        post({
-            let queue = queue.clone();
-            let state = state.clone();
-            move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestPublishDto>| {
-                let queue = queue.clone();
-                let state = state.clone();
-                async move {
-                    iroha_torii::handle_post_space_directory_manifest_publish(queue, state, req)
-                        .await
-                }
-            }
-        }),
-    );
+    let ManifestMutationHarness { router, queue, .. } = manifest_publish_harness();
 
     let creds = iroha_torii::test_utils::random_authority();
     let dataspace = DataSpaceId::new(11);
@@ -1313,40 +920,8 @@ async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes(
         activation_epoch: 4_096,
         expiry_epoch: Some(8_192),
         entries: vec![
-            ManifestEntry {
-                scope: CapabilityScope {
-                    dataspace: Some(dataspace),
-                    program: Some("cbdc.transfer".parse().unwrap()),
-                    method: Some("transfer".parse().unwrap()),
-                    asset: Some(AssetDefinitionId::derive_from_components(
-                        DomainId::try_new("bank", "universal").expect("domain id"),
-                        "cbdc".parse().expect("asset definition name"),
-                    )),
-                    role: None,
-                },
-                effect: ManifestEffect::Allow(Allowance {
-                    max_amount: Some(Quantity::from(500_u64)),
-                    window: AllowanceWindow::PerDay,
-                }),
-                notes: None,
-            },
-            ManifestEntry {
-                scope: CapabilityScope {
-                    dataspace: Some(dataspace),
-                    program: Some("cbdc.transfer".parse().unwrap()),
-                    method: Some("refund".parse().unwrap()),
-                    asset: Some(AssetDefinitionId::derive_from_components(
-                        DomainId::try_new("bank", "universal").expect("domain id"),
-                        "cbdc".parse().expect("asset definition name"),
-                    )),
-                    role: None,
-                },
-                effect: ManifestEffect::Allow(Allowance {
-                    max_amount: Some(Quantity::from(100_u64)),
-                    window: AllowanceWindow::PerDay,
-                }),
-                notes: Some("keep existing".into()),
-            },
+            cbdc_manifest_entry(dataspace, "transfer", 500, None),
+            cbdc_manifest_entry(dataspace, "refund", 100, Some("keep existing")),
         ],
     };
     let manifest_value = norito::json::to_value(&manifest).expect("manifest json");
@@ -1363,9 +938,7 @@ async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes(
         .body(axum::body::Body::from(body))
         .expect("request");
 
-    let resp = router
-        .clone()
-        .oneshot(req)
+    let resp = fixtures::request(&router, req)
         .await
         .expect("publish response body");
     let payload = decode_unsigned_transaction_draft(resp).await;
@@ -1390,27 +963,7 @@ async fn manifest_publish_endpoint_applies_reason_only_to_entries_missing_notes(
 
 #[tokio::test]
 async fn manifest_publish_endpoint_preserves_missing_notes_when_reason_is_omitted() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let router = Router::new().route(
-        "/v1/space-directory/manifests",
-        post({
-            let queue = queue.clone();
-            let state = state.clone();
-            move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestPublishDto>| {
-                let queue = queue.clone();
-                let state = state.clone();
-                async move {
-                    iroha_torii::handle_post_space_directory_manifest_publish(queue, state, req)
-                        .await
-                }
-            }
-        }),
-    );
+    let ManifestMutationHarness { router, queue, .. } = manifest_publish_harness();
 
     let creds = iroha_torii::test_utils::random_authority();
     let dataspace = DataSpaceId::new(12);
@@ -1422,23 +975,7 @@ async fn manifest_publish_endpoint_preserves_missing_notes_when_reason_is_omitte
         issued_ms: 1_762_723_200_000,
         activation_epoch: 4_096,
         expiry_epoch: Some(8_192),
-        entries: vec![ManifestEntry {
-            scope: CapabilityScope {
-                dataspace: Some(dataspace),
-                program: Some("cbdc.transfer".parse().unwrap()),
-                method: Some("transfer".parse().unwrap()),
-                asset: Some(AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("bank", "universal").expect("domain id"),
-                    "cbdc".parse().expect("asset definition name"),
-                )),
-                role: None,
-            },
-            effect: ManifestEffect::Allow(Allowance {
-                max_amount: Some(Quantity::from(500_u64)),
-                window: AllowanceWindow::PerDay,
-            }),
-            notes: None,
-        }],
+        entries: vec![cbdc_manifest_entry(dataspace, "transfer", 500, None)],
     };
     let manifest_value = norito::json::to_value(&manifest).expect("manifest json");
     let value = iroha_torii::json_object(vec![
@@ -1453,9 +990,7 @@ async fn manifest_publish_endpoint_preserves_missing_notes_when_reason_is_omitte
         .body(axum::body::Body::from(body))
         .expect("request");
 
-    let resp = router
-        .clone()
-        .oneshot(req)
+    let resp = fixtures::request(&router, req)
         .await
         .expect("publish response body");
     let payload = decode_unsigned_transaction_draft(resp).await;
@@ -1475,27 +1010,7 @@ async fn manifest_publish_endpoint_preserves_missing_notes_when_reason_is_omitte
 
 #[tokio::test]
 async fn manifest_revoke_endpoint_returns_unsigned_transaction_draft() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let router = Router::new().route(
-        "/v1/space-directory/manifests/revoke",
-        post({
-            let queue = queue.clone();
-            let state = state.clone();
-            move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestRevokeDto>| {
-                let queue = queue.clone();
-                let state = state.clone();
-                async move {
-                    iroha_torii::handle_post_space_directory_manifest_revoke(queue, state, req)
-                        .await
-                }
-            }
-        }),
-    );
+    let ManifestMutationHarness { router, queue, .. } = manifest_revoke_harness();
 
     let creds = iroha_torii::test_utils::random_authority();
     let uaid_hash = iroha_crypto::Hash::new(b"space-directory-revoke");
@@ -1515,9 +1030,7 @@ async fn manifest_revoke_endpoint_returns_unsigned_transaction_draft() {
         .body(axum::body::Body::from(body))
         .expect("request");
 
-    let resp = router
-        .clone()
-        .oneshot(req)
+    let resp = fixtures::request(&router, req)
         .await
         .expect("revoke response body");
     let payload = decode_unsigned_transaction_draft(resp).await;
@@ -1530,27 +1043,7 @@ async fn manifest_revoke_endpoint_returns_unsigned_transaction_draft() {
 
 #[tokio::test]
 async fn manifest_revoke_endpoint_canonicalizes_uaid_literal_in_queued_instruction() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let router = Router::new().route(
-        "/v1/space-directory/manifests/revoke",
-        post({
-            let queue = queue.clone();
-            let state = state.clone();
-            move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestRevokeDto>| {
-                let queue = queue.clone();
-                let state = state.clone();
-                async move {
-                    iroha_torii::handle_post_space_directory_manifest_revoke(queue, state, req)
-                        .await
-                }
-            }
-        }),
-    );
+    let ManifestMutationHarness { router, queue, .. } = manifest_revoke_harness();
 
     let creds = iroha_torii::test_utils::random_authority();
     let uaid_hash = iroha_crypto::Hash::new(b"space-directory-revoke-canonical");
@@ -1574,9 +1067,7 @@ async fn manifest_revoke_endpoint_canonicalizes_uaid_literal_in_queued_instructi
         .body(axum::body::Body::from(body))
         .expect("request");
 
-    let resp = router
-        .clone()
-        .oneshot(req)
+    let resp = fixtures::request(&router, req)
         .await
         .expect("revoke response body");
     let payload = decode_unsigned_transaction_draft(resp).await;
@@ -1596,27 +1087,7 @@ async fn manifest_revoke_endpoint_canonicalizes_uaid_literal_in_queued_instructi
 
 #[tokio::test]
 async fn manifest_revoke_endpoint_accepts_raw_hex_uaid_without_reason() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let router = Router::new().route(
-        "/v1/space-directory/manifests/revoke",
-        post({
-            let queue = queue.clone();
-            let state = state.clone();
-            move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestRevokeDto>| {
-                let queue = queue.clone();
-                let state = state.clone();
-                async move {
-                    iroha_torii::handle_post_space_directory_manifest_revoke(queue, state, req)
-                        .await
-                }
-            }
-        }),
-    );
+    let ManifestMutationHarness { router, queue, .. } = manifest_revoke_harness();
 
     let creds = iroha_torii::test_utils::random_authority();
     let uaid_hash = iroha_crypto::Hash::new(b"space-directory-revoke-raw-no-reason");
@@ -1636,9 +1107,7 @@ async fn manifest_revoke_endpoint_accepts_raw_hex_uaid_without_reason() {
         .body(axum::body::Body::from(body))
         .expect("request");
 
-    let resp = router
-        .clone()
-        .oneshot(req)
+    let resp = fixtures::request(&router, req)
         .await
         .expect("revoke response body");
     let payload = decode_unsigned_transaction_draft(resp).await;
@@ -1661,27 +1130,11 @@ async fn manifest_revoke_endpoint_accepts_raw_hex_uaid_without_reason() {
 
 #[tokio::test]
 async fn manifest_revoke_endpoint_rejects_invalid_uaid_before_queueing() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(World::default(), kura, query));
-    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let queue = Arc::new(Queue::from_config(queue_cfg, events));
-    let router = Router::new().route(
-        "/v1/space-directory/manifests/revoke",
-        post({
-            let queue = queue.clone();
-            let state = state.clone();
-            move |req: iroha_torii::NoritoJson<iroha_torii::SpaceDirectoryManifestRevokeDto>| {
-                let queue = queue.clone();
-                let state = state.clone();
-                async move {
-                    iroha_torii::handle_post_space_directory_manifest_revoke(queue, state, req)
-                        .await
-                }
-            }
-        }),
-    );
+    let ManifestMutationHarness {
+        router,
+        queue,
+        state,
+    } = manifest_revoke_harness();
 
     let creds = iroha_torii::test_utils::random_authority();
     let value = iroha_torii::json_object(vec![
@@ -1699,9 +1152,7 @@ async fn manifest_revoke_endpoint_rejects_invalid_uaid_before_queueing() {
         .body(axum::body::Body::from(body))
         .expect("request");
 
-    let resp = router
-        .clone()
-        .oneshot(req)
+    let resp = fixtures::request(&router, req)
         .await
         .expect("revoke response body");
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -1723,72 +1174,7 @@ async fn manifest_revoke_endpoint_rejects_invalid_uaid_before_queueing() {
 #[tokio::test]
 async fn api_router_registers_space_directory_manifest_mutation_routes() {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
-    let (_peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry as core_telemetry;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) =
-            iroha_primitives::time::TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id,
-            ts,
-            false,
-        )
-        .0
-    };
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue.clone(),
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue.clone(),
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
+    let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
 
     let creds = iroha_torii::test_utils::random_authority();
     let dataspace = DataSpaceId::new(11);
@@ -1800,23 +1186,12 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
         issued_ms: 1_762_723_200_000,
         activation_epoch: 4_096,
         expiry_epoch: Some(8_192),
-        entries: vec![ManifestEntry {
-            scope: CapabilityScope {
-                dataspace: Some(dataspace),
-                program: Some("cbdc.transfer".parse().unwrap()),
-                method: Some("transfer".parse().unwrap()),
-                asset: Some(AssetDefinitionId::derive_from_components(
-                    DomainId::try_new("bank", "universal").expect("domain id"),
-                    "cbdc".parse().expect("asset definition name"),
-                )),
-                role: None,
-            },
-            effect: ManifestEffect::Allow(Allowance {
-                max_amount: Some(Quantity::from(500_u64)),
-                window: AllowanceWindow::PerDay,
-            }),
-            notes: Some("router registration".into()),
-        }],
+        entries: vec![cbdc_manifest_entry(
+            dataspace,
+            "transfer",
+            500,
+            Some("router registration"),
+        )],
     };
     let manifest_value = norito::json::to_value(&manifest).expect("manifest json");
     let publish_body = norito::json::to_json(&iroha_torii::json_object(vec![
@@ -1826,7 +1201,7 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
     ]))
     .expect("serialize publish request");
     let publish_resp = torii
-        .api_router_for_tests()
+        .router()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -1861,7 +1236,7 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
     ]))
     .expect("serialize revoke request");
     let revoke_resp = torii
-        .api_router_for_tests()
+        .router()
         .oneshot(
             Request::builder()
                 .method("POST")

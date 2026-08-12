@@ -543,14 +543,14 @@ occurrence.  The selected head must therefore itself be overdue before its
 removal can witness `PostGstOverduePacketOwnershipExits`.
 ***************************************************************************)
 
-IngressCoalescingGateAllows(item) ==
-  /\ IngressHasCoalescingOwner(item)
+IngressCoalescingGateAllows(item, authenticatedSource) ==
+  /\ IngressHasCoalescingOwnerVia(item, authenticatedSource)
   /\ \/ item.kind # "CertifiedResponse"
      \/ CertifiedResponseClaimMatches(item)
 
-IngressPacketCanLeaveTransport(item) ==
-  \/ CanAdmitIngressItem(item)
-  \/ IngressCoalescingGateAllows(item)
+IngressPacketCanLeaveTransport(item, authenticatedSource) ==
+  \/ CanAdmitIngressItemVia(item, authenticatedSource)
+  \/ IngressCoalescingGateAllows(item, authenticatedSource)
   \/ IngressPacketPolicyRejected(item)
 
 AdmissibleOverdueLaneHead(recipient, source) ==
@@ -558,25 +558,27 @@ AdmissibleOverdueLaneHead(recipient, source) ==
   /\ LET packet == OldestDueSourcePacket(recipient, source)
          item == packet.item
      IN /\ packet \in OverdueResponsivePackets
-        /\ IngressPacketCanLeaveTransport(item)
+        /\ IngressPacketCanLeaveTransport(item, source)
 
-FiniteIngressResourceOwnershipBlocked(item) ==
+FiniteIngressResourceOwnershipBlocked(item, authenticatedSource) ==
   \/ ~(IngressDepth(item.envelope.recipient)
-         < IngressUsableCapacityAfterAdmission(item))
+         < IngressUsableCapacityAfterAdmissionVia(
+             item, authenticatedSource))
   \/ ~AsyncTimeoutVoteByteGateAllows(item)
   \/ ~AsyncTransportCompletionOwnerGateAllows(item)
 
-IngressCapacityOrDeferredOwnershipBlocked(item) ==
-  \/ FiniteIngressResourceOwnershipBlocked(item)
+IngressCapacityOrDeferredOwnershipBlocked(item, authenticatedSource) ==
+  \/ FiniteIngressResourceOwnershipBlocked(item, authenticatedSource)
   \/ ~CertifiedResponseFreshClaimGateAllows(item)
   \/ ~AsyncUntrustedGenericCompletionGateAllows(item)
 
 THEOREM IngressGateBlockIsExact ==
-  \A item:
-    ~CanAdmitIngressItem(item)
-      <=> IngressCapacityOrDeferredOwnershipBlocked(item)
+  \A item, authenticatedSource:
+    ~CanAdmitIngressItemVia(item, authenticatedSource)
+      <=> IngressCapacityOrDeferredOwnershipBlocked(
+            item, authenticatedSource)
 BY Isa
-   DEF CanAdmitIngressItem,
+   DEF CanAdmitIngressItemVia,
        IngressCapacityOrDeferredOwnershipBlocked
 
 CertifiedResponseRecipientClaimContention(item) ==
@@ -586,10 +588,10 @@ CertifiedResponseRecipientClaimContention(item) ==
   /\ ~CertifiedResponseRecipientClaimAvailable(item)
 
 THEOREM CertifiedResponseClaimGateBlockIsCoalescedRejectedOrRetained ==
-  \A item:
+  \A item, authenticatedSource:
     /\ AsyncStrongTypeInvariant
     /\ ~CertifiedResponseFreshClaimGateAllows(item)
-      => \/ IngressCoalescingGateAllows(item)
+      => \/ IngressCoalescingGateAllows(item, authenticatedSource)
          \/ IngressPacketPolicyRejected(item)
          \/ CertifiedResponseRecipientClaimContention(item)
 BY Isa
@@ -609,8 +611,8 @@ BY Isa
        IngressCoalescingGateAllows,
        CertifiedResponsePacketPolicyRejected,
        IngressPacketPolicyRejected,
-       IngressHasCoalescingOwner, IngressCoalescingIdentity,
-       IngressResourceSource, IngressLaneDepth, SequenceSet,
+       IngressHasCoalescingOwnerVia, IngressCoalescingIdentity,
+       IngressResourceSourceVia, IngressLaneDepth, SequenceSet,
        CertifiedResponseRecipientClaimContention
 
 THEOREM GenericUntrustedGateBlockIsPolicyRejected ==
@@ -623,10 +625,11 @@ BY Isa
        IngressPacketPolicyRejected
 
 THEOREM NonLeavingIngressPacketHasFiniteResourceOrClaimDebt ==
-  \A item:
+  \A item, authenticatedSource:
     /\ AsyncStrongTypeInvariant
-    /\ ~IngressPacketCanLeaveTransport(item)
-      => \/ FiniteIngressResourceOwnershipBlocked(item)
+    /\ ~IngressPacketCanLeaveTransport(item, authenticatedSource)
+      => \/ FiniteIngressResourceOwnershipBlocked(
+              item, authenticatedSource)
          \/ CertifiedResponseRecipientClaimContention(item)
 BY IngressGateBlockIsExact,
    CertifiedResponseClaimGateBlockIsCoalescedRejectedOrRetained,
@@ -637,20 +640,21 @@ BY IngressGateBlockIsExact,
 
 OverduePacketLaneHeadBlocked(packet) ==
   LET recipient == packet.item.envelope.recipient
-      source == packet.item.source
+      source == packet.authenticatedSource
       head == OldestDueSourcePacket(recipient, source)
   IN \/ head \notin OverdueResponsivePackets
-     \/ ~IngressPacketCanLeaveTransport(head.item)
+     \/ ~IngressPacketCanLeaveTransport(head.item, source)
 
 THEOREM OverdueLaneHeadBlockIsShadowResourceOrClaimDebt ==
   \A packet:
     /\ AsyncStrongTypeInvariant
     /\ OverduePacketLaneHeadBlocked(packet)
       => LET recipient == packet.item.envelope.recipient
-             source == packet.item.source
+             source == packet.authenticatedSource
              head == OldestDueSourcePacket(recipient, source)
          IN \/ head \notin OverdueResponsivePackets
-            \/ FiniteIngressResourceOwnershipBlocked(head.item)
+            \/ FiniteIngressResourceOwnershipBlocked(
+                 head.item, source)
             \/ CertifiedResponseRecipientClaimContention(head.item)
 BY NonLeavingIngressPacketHasFiniteResourceOrClaimDebt, Isa
    DEF OverduePacketLaneHeadBlocked
@@ -663,7 +667,7 @@ THEOREM OverduePacketHasTypedDueLane ==
   AsyncStrongTypeInvariant
     => \A packet \in OverdueResponsivePackets:
          LET recipient == packet.item.envelope.recipient
-             source == packet.item.source
+             source == packet.authenticatedSource
          IN /\ recipient \in ValidatorIds
             /\ source \in AsyncIngressSources
             /\ DueSourcePackets(recipient, source) # {}
@@ -808,7 +812,7 @@ PROOF
              ~OverduePacketLaneHeadBlocked(packet)
       BY <1>1 DEF AllOverduePacketLaneHeadsBlocked
     <2> DEFINE Recipient == packet.item.envelope.recipient
-    <2> DEFINE Source == packet.item.source
+    <2> DEFINE Source == packet.authenticatedSource
     <2>1a. /\ Recipient \in ValidatorIds
             /\ Source \in AsyncIngressSources
             /\ DueSourcePackets(Recipient, Source) # {}
@@ -816,7 +820,7 @@ PROOF
          DEF Recipient, Source
     <2>2. LET head == OldestDueSourcePacket(Recipient, Source)
            IN /\ head \in OverdueResponsivePackets
-              /\ IngressPacketCanLeaveTransport(head.item)
+              /\ IngressPacketCanLeaveTransport(head.item, Source)
       BY <2>1, Isa
          DEF OverduePacketLaneHeadBlocked, Recipient, Source
     <2>3. AdmissibleOverdueLaneHead(Recipient, Source)
@@ -909,13 +913,13 @@ CertifiedResponse can be overdue through its authentication history while its
 outer relay source differs from its aggregate untrusted resource lane.  An
 older unauthenticated packet in the same outer transport lane can therefore
 remain due but not overdue and is a genuine head-of-line shadow.  Ingress
-capacity and owner accounting, unlike transport ordering, always use
-`IngressResourceSource`.
+capacity and owner accounting, unlike transport ordering, use the
+`IngressResourceSourceVia` lane selected by the authenticated packet source.
 ***************************************************************************)
 
 OlderDueNonOverdueLaneShadows(packet) ==
   LET recipient == packet.item.envelope.recipient
-      source == packet.item.source
+      source == packet.authenticatedSource
   IN {shadow \in DueSourcePackets(recipient, source):
         /\ shadow \notin OverdueResponsivePackets
         /\ shadow.sentAt <= packet.sentAt}
@@ -923,35 +927,42 @@ OlderDueNonOverdueLaneShadows(packet) ==
 OlderDueNonOverdueShadowDebt(packet) ==
   Cardinality(OlderDueNonOverdueLaneShadows(packet))
 
-FreshIngressCapacityOwnerDebt(item) ==
+FreshIngressCapacityOwnerDebt(item, authenticatedSource) ==
   IF IngressDepth(item.envelope.recipient)
-       < IngressUsableCapacityAfterAdmission(item)
+       < IngressUsableCapacityAfterAdmissionVia(
+           item, authenticatedSource)
   THEN 0
   ELSE IngressDepth(item.envelope.recipient) + 1
 
-TimeoutVoteByteOwnerIndices(item) ==
-  {index \in 1..Len(
+TimeoutVoteByteOwnerIndices(item, authenticatedSource) ==
+  LET resourceSource ==
+        IngressResourceSourceVia(item, authenticatedSource)
+  IN {index \in 1..Len(
       IngressLane(
-        item.envelope.recipient, IngressResourceSource(item))):
+        item.envelope.recipient, resourceSource)):
      IngressLane(
        item.envelope.recipient,
-       IngressResourceSource(item))[index].kind
+       resourceSource)[index].kind
        = "TimeoutVote"}
 
-TimeoutVoteByteOwnerDebt(item) ==
-  Cardinality(TimeoutVoteByteOwnerIndices(item))
+TimeoutVoteByteOwnerDebt(item, authenticatedSource) ==
+  Cardinality(
+    TimeoutVoteByteOwnerIndices(item, authenticatedSource))
 
-TransportCompletionOwnerIndices(item) ==
-  {index \in 1..Len(
+TransportCompletionOwnerIndices(item, authenticatedSource) ==
+  LET resourceSource ==
+        IngressResourceSourceVia(item, authenticatedSource)
+  IN {index \in 1..Len(
       IngressLane(
-        item.envelope.recipient, IngressResourceSource(item))):
+        item.envelope.recipient, resourceSource)):
      IngressUsesPhysicalCompletionOwner(
        IngressLane(
          item.envelope.recipient,
-         IngressResourceSource(item))[index])}
+         resourceSource)[index])}
 
-TransportCompletionOwnerDebt(item) ==
-  Cardinality(TransportCompletionOwnerIndices(item))
+TransportCompletionOwnerDebt(item, authenticatedSource) ==
+  Cardinality(
+    TransportCompletionOwnerIndices(item, authenticatedSource))
 
 (***************************************************************************
 Exact shared-completion debt under indexed lane removal.
@@ -1218,20 +1229,23 @@ THEOREM PositivePhysicalCompletionDebtAdmissionPreservesDebt ==
      source \in AsyncIngressSources:
     /\ AsyncStrongTypeInvariant
     /\ AsyncItemTyped(blocked)
-    /\ TransportCompletionOwnerDebt(blocked) > 0
+    /\ TransportCompletionOwnerDebt(blocked, blocked.source) > 0
     /\ AdmitIngressPacket(recipient, source)
-    => TransportCompletionOwnerDebt(blocked)' =
-         TransportCompletionOwnerDebt(blocked)
+    => TransportCompletionOwnerDebt(blocked, blocked.source)' =
+         TransportCompletionOwnerDebt(blocked, blocked.source)
 PROOF
   <1>1. ASSUME NEW blocked,
                 NEW recipient \in ValidatorIds,
                 NEW source \in AsyncIngressSources,
                 AsyncStrongTypeInvariant,
                 AsyncItemTyped(blocked),
-                TransportCompletionOwnerDebt(blocked) > 0,
+                TransportCompletionOwnerDebt(
+                  blocked, blocked.source) > 0,
                 AdmitIngressPacket(recipient, source)
-         PROVE TransportCompletionOwnerDebt(blocked)' =
-                 TransportCompletionOwnerDebt(blocked)
+         PROVE TransportCompletionOwnerDebt(
+                   blocked, blocked.source)' =
+                 TransportCompletionOwnerDebt(
+                   blocked, blocked.source)
     <2>1. CASE CoalesceHiddenPacket(recipient, source)
       BY <2>1
          DEF CoalesceHiddenPacket, TransportCompletionOwnerDebt,
@@ -1244,19 +1258,22 @@ PROOF
     <2>3. CASE AdmitHiddenPacket(recipient, source)
       <3> DEFINE Packet == OldestDueSourcePacket(recipient, source)
       <3> DEFINE Item == Packet.item
-      <3> DEFINE Resource == IngressResourceSource(Item)
+      <3> DEFINE Resource ==
+             IngressResourceSourceVia(Item, source)
       <3> DEFINE BlockedRecipient == blocked.envelope.recipient
-      <3> DEFINE BlockedResource == IngressResourceSource(blocked)
+      <3> DEFINE BlockedResource ==
+             IngressResourceSourceVia(blocked, blocked.source)
       <3> DEFINE BlockedLane ==
              IngressLane(BlockedRecipient, BlockedResource)
       <3>1. /\ asyncIngressLanes' =
                     [asyncIngressLanes EXCEPT
                        ![recipient][Resource] = Append(@, Item)]
-             /\ CanAdmitIngressItem(Item)
+             /\ CanAdmitIngressItemVia(Item, source)
         BY <2>3
            DEF AdmitHiddenPacket, Packet, Item, Resource
       <3>2. /\ BlockedLane \in Seq(Range(BlockedLane))
-             /\ TransportCompletionOwnerIndices(blocked) # {}
+             /\ TransportCompletionOwnerIndices(
+                  blocked, blocked.source) # {}
              /\ IngressLaneHasTransportCompletionIn(
                   asyncIngressLanes,
                   BlockedRecipient,
@@ -1285,7 +1302,7 @@ PROOF
                    /\ Resource = BlockedResource
         <4>1. ~IngressUsesPhysicalCompletionOwner(Item)
           BY <3>1, <3>2, <3>4, Isa
-             DEF CanAdmitIngressItem,
+             DEF CanAdmitIngressItemVia,
                  AsyncTransportCompletionOwnerGateAllows,
                  Resource, BlockedRecipient, BlockedResource
         <4>2. IngressPhysicalCompletionPositions(
@@ -1293,8 +1310,10 @@ PROOF
                  = IngressPhysicalCompletionPositions(BlockedLane)
           BY <3>2, <4>1,
              NonPhysicalAppendPreservesIngressPhysicalCompletionPositions
-        <4>3. TransportCompletionOwnerDebt(blocked)' =
-                    TransportCompletionOwnerDebt(blocked)
+        <4>3. TransportCompletionOwnerDebt(
+                    blocked, blocked.source)' =
+                    TransportCompletionOwnerDebt(
+                      blocked, blocked.source)
           BY <3>1, <3>4, <4>2, Isa
              DEF TransportCompletionOwnerDebt,
                  TransportCompletionOwnerIndices,
@@ -1357,13 +1376,19 @@ PROOF
 
 THEOREM IngressGateOwnerDebtsAreFiniteNaturals ==
   \A item:
-    /\ AsyncStrongTypeInvariant
-    /\ AsyncItemTyped(item)
-    => /\ FreshIngressCapacityOwnerDebt(item) \in Nat
-       /\ TimeoutVoteByteOwnerDebt(item) \in Nat
-       /\ TransportCompletionOwnerDebt(item) \in Nat
-       /\ TimeoutVoteByteOwnerDebt(item) <= AsyncIngressCapacity
-       /\ TransportCompletionOwnerDebt(item) <= AsyncIngressCapacity
+    \A authenticatedSource \in AsyncIngressSources:
+      /\ AsyncStrongTypeInvariant
+      /\ AsyncItemTyped(item)
+      => /\ FreshIngressCapacityOwnerDebt(
+               item, authenticatedSource) \in Nat
+         /\ TimeoutVoteByteOwnerDebt(
+               item, authenticatedSource) \in Nat
+         /\ TransportCompletionOwnerDebt(
+               item, authenticatedSource) \in Nat
+         /\ TimeoutVoteByteOwnerDebt(item, authenticatedSource)
+              <= AsyncIngressCapacity
+         /\ TransportCompletionOwnerDebt(item, authenticatedSource)
+              <= AsyncIngressCapacity
 BY AsyncIngressDepthForIsNatural,
    FS_Interval, FS_Subset, FS_CardinalityType, SMT, Isa
    DEF AsyncStrongTypeInvariant,
@@ -1373,7 +1398,7 @@ BY AsyncIngressDepthForIsNatural,
        AsyncIngressCapacityTypeInvariant,
        AsyncIngressDepthFor, AsyncIngressPairIndicesFor,
        IngressDepth, IngressLaneDepth,
-       IngressResourceSource,
+       IngressResourceSourceVia,
        FreshIngressCapacityOwnerDebt,
        TimeoutVoteByteOwnerDebt, TimeoutVoteByteOwnerIndices,
        TransportCompletionOwnerDebt,
@@ -1387,7 +1412,7 @@ THEOREM TimeoutByteGateHasExactFiniteOwner ==
     => (~AsyncTimeoutVoteByteGateAllows(item)
           <=> /\ item.kind = "TimeoutVote"
               /\ IngressResourceSource(item) \in ValidatorIds
-              /\ TimeoutVoteByteOwnerDebt(item) > 0)
+              /\ TimeoutVoteByteOwnerDebt(item, item.source) > 0)
 BY IngressGateOwnerDebtsAreFiniteNaturals, Isa
    DEF AsyncStrongTypeInvariant, AsyncConfiguration,
        AsyncTimeoutVoteByteGateAllows,
@@ -1401,7 +1426,7 @@ THEOREM TransportCompletionGateHasExactFiniteOwner ==
     /\ AsyncItemTyped(item)
     => (~AsyncTransportCompletionOwnerGateAllows(item)
           <=> /\ IngressUsesPhysicalCompletionOwner(item)
-              /\ TransportCompletionOwnerDebt(item) > 0)
+              /\ TransportCompletionOwnerDebt(item, item.source) > 0)
 BY IngressGateOwnerDebtsAreFiniteNaturals, Isa
    DEF AsyncTransportCompletionOwnerGateAllows,
        IngressLaneHasTransportCompletionIn,
@@ -1526,12 +1551,15 @@ IngressBoundaryDependencyOrdering ==
 
 IngressBoundaryDependencyRank(packet, node, serviceRank, serveRank) ==
   <<OlderDueNonOverdueShadowDebt(packet),
-    <<FreshIngressCapacityOwnerDebt(packet.item),
-      <<TimeoutVoteByteOwnerDebt(packet.item),
-        <<TransportCompletionOwnerDebt(packet.item),
+    <<FreshIngressCapacityOwnerDebt(
+         packet.item, packet.authenticatedSource),
+      <<TimeoutVoteByteOwnerDebt(
+           packet.item, packet.authenticatedSource),
+        <<TransportCompletionOwnerDebt(
+             packet.item, packet.authenticatedSource),
           <<BoundedTransportServiceRank(
                packet.item.envelope.recipient,
-               packet.item.source),
+               packet.authenticatedSource),
             <<ResetAwareIngressReachRank(node),
               <<ReadyRunAuxRank(node),
                 <<Stage4CapacityRank(node),
@@ -1679,14 +1707,14 @@ merely by virtue of that progress.
 
 NonOverdueShadowAtLaneHead(packet) ==
   LET recipient == packet.item.envelope.recipient
-      source == packet.item.source
+      source == packet.authenticatedSource
       head == OldestDueSourcePacket(recipient, source)
   IN /\ packet \in OverdueResponsivePackets
      /\ head \notin OverdueResponsivePackets
 
 AdmitNonOverdueShadowFor(packet) ==
   LET recipient == packet.item.envelope.recipient
-      source == packet.item.source
+      source == packet.authenticatedSource
   IN \/ PostGstAdmitHiddenPacket(recipient, source)
      \/ PostGstAdmitHistoricalRecoveryPacket(recipient, source)
 
@@ -1709,7 +1737,7 @@ THEOREM NonOverdueShadowAdmissionRemovesExactShadow ==
     /\ NonOverdueShadowAtLaneHead(packet)
     /\ AdmitNonOverdueShadowFor(packet)
     => LET recipient == packet.item.envelope.recipient
-           source == packet.item.source
+           source == packet.authenticatedSource
            head == OldestDueSourcePacket(recipient, source)
        IN /\ packet \in asyncTransport'
           /\ OlderDueNonOverdueLaneShadows(packet)'
@@ -2043,9 +2071,11 @@ THEOREM PreExistingGenericCompletionIsFiniteCertifiedResponseDebt ==
     /\ AsyncItemTyped(response)
     /\ GenericCompletionOwnsCertifiedResponsePhysicalSlot(
          response, completion)
-    => /\ TransportCompletionOwnerDebt(response) \in Nat
-       /\ TransportCompletionOwnerDebt(response) > 0
-       /\ TransportCompletionOwnerDebt(response)
+    => /\ TransportCompletionOwnerDebt(
+              response, response.source) \in Nat
+       /\ TransportCompletionOwnerDebt(
+              response, response.source) > 0
+       /\ TransportCompletionOwnerDebt(response, response.source)
             <= AsyncIngressCapacity
 BY IngressGateOwnerDebtsAreFiniteNaturals,
    PreExistingGenericCompletionBlocksCertifiedResponsePhysicalGate,

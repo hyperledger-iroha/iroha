@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  test::assert(1);
+}
+
+}

@@ -1830,6 +1830,48 @@ pub async fn destructured_start(Config { max_frame_bytes, .. }: Config) {
     )
 
 
+def test_async_candidate_producer_continuation_owner_rejects_target_only_narrowing(
+    tmp_path: Path,
+) -> None:
+    """A leader-owned frozen producer continuation remains a concrete owner."""
+
+    module = load_checker()
+    module_name = "SumeragiV2AsyncCandidateProducerContinuationProofs"
+    source_path = module.FORMAL_DIR / f"{module_name}.tla"
+    target_path = tmp_path / source_path.name
+    source = source_path.read_text(encoding="utf-8")
+    target_path.write_text(source, encoding="utf-8")
+    network_name = "SumeragiV2AsyncNetwork.tla"
+    shutil.copy2(module.FORMAL_DIR / network_name, tmp_path / network_name)
+
+    assert (
+        module._async_candidate_producer_continuation_contract_errors(tmp_path)
+        == []
+    )
+
+    for old, new in (
+        ("record.node \\in {target, leader}", "record.node = target"),
+        (
+            "record.identity = AsyncCandidateServiceIdentity(record.candidate)",
+            "record.identity.leader = record.candidate.leader",
+        ),
+    ):
+        target_path.write_text(
+            mutate_tla_operator(
+                source, "AsyncCandidateProducerContinuationExactOwner", old, new
+            ),
+            encoding="utf-8",
+        )
+        errors = module._async_candidate_producer_continuation_contract_errors(
+            tmp_path
+        )
+        assert any(
+            "AsyncCandidateProducerContinuationExactOwner" in error
+            and "finite producer-continuation contract" in error
+            for error in errors
+        ), errors
+
+
 def test_asyncnetwork_authority_and_order_migrations_fail_closed(
     tmp_path: Path,
 ) -> None:

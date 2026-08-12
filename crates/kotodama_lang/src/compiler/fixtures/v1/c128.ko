@@ -1,0 +1,6 @@
+
+seiyaku Test {
+  kotoage fn main()  authorize("Entry") {
+    test::assert_eq(actual: 1, expected: 1);
+  }
+}

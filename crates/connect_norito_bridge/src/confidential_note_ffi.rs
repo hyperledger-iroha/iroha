@@ -164,8 +164,8 @@ fn derive_merkle_path_v3(
     let mut encoded = [0; MERKLE_PATH_BYTES];
     encoded[..DIGEST_BYTES].copy_from_slice(&path.root);
     let mut offset = DIGEST_BYTES;
-    for sibling in path.siblings {
-        encoded[offset..offset + DIGEST_BYTES].copy_from_slice(&sibling);
+    for sibling in &path.siblings {
+        encoded[offset..offset + DIGEST_BYTES].copy_from_slice(sibling);
         offset += DIGEST_BYTES;
     }
     encoded[offset..].copy_from_slice(&path.directions);
@@ -242,8 +242,8 @@ fn advance_merkle_path_v3(
     encoded[..DIGEST_BYTES].copy_from_slice(&advanced.final_root);
     encoded[DIGEST_BYTES..DIGEST_BYTES * 2].copy_from_slice(&advanced.next_zero_path.root);
     let mut offset = DIGEST_BYTES * 2;
-    for sibling in advanced.next_zero_path.siblings {
-        encoded[offset..offset + DIGEST_BYTES].copy_from_slice(&sibling);
+    for sibling in &advanced.next_zero_path.siblings {
+        encoded[offset..offset + DIGEST_BYTES].copy_from_slice(sibling);
         offset += DIGEST_BYTES;
     }
     encoded[offset..].copy_from_slice(&advanced.next_zero_path.directions);

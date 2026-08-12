@@ -552,7 +552,7 @@ height-context state are not migrated in place.
   wake-up, predecessor drop, successor retry, frozen recipients, and Kura
   revalidation. Fresh isolated Rust 1.93.1 locked/offline slices passed the 18
   exact Kura replica tests and four exact configuration tests; the complete
-  524-test `G-UNIT` run, formal-engine receipts, and network corridors remain
+  525-test `G-UNIT` run, formal-engine receipts, and network corridors remain
   separate release obligations.
   One hundred six `_bug.cfg` controls deliberately weaken one boundary each and
   must produce the named invariant counterexample.
@@ -1345,8 +1345,8 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 861 named tests
-across 41 Rust modules. The preceding 298-name inventory was produced from the
+Before network startup, the executable wrapper inventories 854 named tests
+across 40 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
 historical/current applied-height rollover; 2 bind peer-writer flush and
@@ -1460,10 +1460,14 @@ partition regression brings the 848-test checkpoint. The late passive-Fetch
 completion and one-shot completed-Serve reopening regressions bring the
 850-test checkpoint. Seven Native AMX finality-bound merge-projection
 regressions bring the 857-test checkpoint across 40 modules. Three Kura recovery
-regressions and the governance-unlock audit bring the current
-inventory to 861 tests across 41 modules.
+regressions and the governance-unlock audit bring the 861-test checkpoint
+across 41 modules. The production-adapter activation guard and two deferred-
+canonical-carrier completion regressions produced that historical 864-test,
+41-module checkpoint. Retiring the duplicate inline network-simulation rows
+brings the current
+inventory to 854 tests across 40 modules.
 Together with the source-sealed command and tooling legs, the pre-network
-corridor contains 89 legs. The
+corridor contains 88 legs. The
 G-SCALE runner/validator preflight remains part of that sealed corridor.
 The first-release sidecar keeps wire protocol version 1 and uses positive
 `NonZeroU64` responder generation, requester epoch, and per-stream semantic
@@ -1536,7 +1540,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`8c39cb3717a9cab79e4d442e8179030c3af5af74947864d45838b80864290d2f`.
+`df90ef7d94284bc805ff55ead6c6d938ba0f681a1d39e7b929fc275e8019aefa`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
 conversion, block rollover until the decided lane session is durable, reopen a
 globally finalized tip whose lane evidence is incomplete, filter terminal
@@ -1573,16 +1577,15 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The five integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 89 legs, including the dedicated
-ten-test V2 core network-simulation leg, the governance-unlock audit module, the
-autonomous lifecycle-recovery module, and separate exact
+the complete pre-network corridor now spans 88 legs, including the governance-
+unlock audit module, the autonomous lifecycle-recovery module, and separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, and source-sealed
 command-success legs. Its finality, offline compact-QC,
 and height-context proposal-origin modules each use a dedicated
 `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of those forty-one modules or eighty-nine legs. The
+geometry tests as part of those forty modules or eighty-eight legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -1706,18 +1709,21 @@ launches the bound runner under a closed environment. It imposes no outer
 runner timeout or output-capture bound and never signals the runner process
 group.
 
-The runner reproduces the candidate in a detached read-only worktree and
+The runner reproduces the candidate in an independent clone made with no local
+object sharing, hardlinks, or alternates, then seals that clone read-only and
 records both the original checkout manifest and the permission-aware sealed
 manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 89 pre-network legs and the exact
-861-test inventory, the pinned harness lock and resolved toolchain, the formal
+binds original HEAD/tree/`Cargo.lock`, all 88 pre-network legs and the exact
+854-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
-pointer; after success the external bootstrap independently validates it and
-publishes a separate no-clobber completion marker. The complete operator
+pointer. The protected archived validator first publishes a no-clobber
+acknowledgment; the protected helper then prunes disposable runtime state and
+publishes the exact retained result/inventory. The external bootstrap
+authenticates those records before a separate no-clobber completion marker. The complete operator
 contract is documented in
 [`../../source/sumeragi_v2_liveness.md`](../../source/sumeragi_v2_liveness.md).
 
@@ -1726,10 +1732,12 @@ protected inputs, but is not remote host attestation. The host image,
 pre-Python dynamic loader, same UID, trusted ancestor owners, and correct
 storage `fsync` semantics remain external prerequisites. Malformed, incomplete,
 cross-source, semantically mismatched, or digest-mismatched evidence is
-rejected. Cargo/rustc are
-resolved to the repository-pinned 1.93.1 toolchain, run with sanitized semantic
-environment overrides and an isolated configuration-free `CARGO_HOME`, and
-their exact paths, versions, and hashes are retained in the corridor receipt.
+rejected. Cargo/rustc are resolved to the repository-pinned 1.93.1 toolchain,
+copied with their complete selected toolchain to private inodes before child
+launch, run with sanitized semantic environment overrides and an isolated
+private `CARGO_HOME`, and bound by path-withheld input plus private-runtime
+inventories in the corridor receipt. Shell core utilities remain an explicit
+admitted-host-image prerequisite pending inclusion in that protected inventory.
 Java resolution rejects a non-working launcher such as the macOS
 `/usr/bin/java` stub, honors an explicit `JAVA_BIN` only when it executes, and
 otherwise selects a canonical working JDK from `JAVA_HOME`, `PATH`, the macOS

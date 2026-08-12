@@ -662,8 +662,9 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ AsyncCandidateServiceLifecycleInvariant "
         "/\\ TimeoutPhysicalControlPacketOwner(item) "
         "/\\ packet \\in TimeoutPhysicalControlExactPackets(item) "
-        "/\\ packet = OldestDueSourcePacket(recipient, item.source) "
-        "/\\ AdmitIngressPacket(recipient, item.source) "
+        "/\\ packet = OldestDueSourcePacket( "
+        "recipient, packet.authenticatedSource) "
+        "/\\ AdmitIngressPacket(recipient, packet.authenticatedSource) "
         "=> \\/ TimeoutPhysicalControlTerminal(item)' "
         "\\/ TimeoutPhysicalControlIngressOwner(item)' "
         "\\/ TimeoutPhysicalControlCandidateOwner(item)'"
@@ -1168,7 +1169,8 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "ExecuteExactCurrentViewTimeoutDeliveryRecordsExactReceipt",
     ): (
         "\\A vote \\in TimeoutVoteRecordSet, "
-        "recipient \\in AsyncCurrentResponsiveVoters, command: "
+        "recipient \\in AsyncCurrentResponsiveVoters, "
+        "command \\in AsyncCandidateSet: "
         "/\\ AsyncStrongTypeInvariant "
         "/\\ vote.signer \\in AsyncCurrentResponsiveVoters "
         "/\\ vote \\in timeoutIntents "
@@ -2322,8 +2324,9 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "/\\ AsyncServeIngressAdmissionOwned( "
         "archive, ExactDecisionServeLifecycleIdentity( "
         "archive, request))' "
-        "/\\ request \\in SequenceSet( "
-        "IngressLane( archive, IngressResourceSource(request)))' "
+        "/\\ \\E source \\in AsyncIngressSources: "
+        "request \\in SequenceSet( "
+        "IngressLane(archive, source))' "
         "/\\ ExactDecisionRequestFrozenServeBarrierIdentities( "
         "archive, request)' = {}"
     ),
@@ -2715,7 +2718,7 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "recipient \\in Responsive, source \\in AsyncIngressSources: "
         "/\\ AsyncStrongTypeInvariant "
         "/\\ packet.item.envelope.recipient = recipient "
-        "/\\ packet.item.source = source "
+        "/\\ packet.authenticatedSource = source "
         "/\\ PostGstAdmitHiddenPacket(recipient, source) "
         "=> ExactDecisionTargetNeutralPacketDependencyRank(packet)' "
         "\\in SetLessThan( "
@@ -4167,8 +4170,8 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedChainSpecProvidesHistoricalDueNodeModeFairness",
     ): (
-        "\\A initialContext \\in AdmissibleContextRecords, owner, mode \\in "
-        "IndexedHistoricalTransport(initialContext)! "
+        "\\A initialContext \\in AdmissibleContextRecords: \\A owner: "
+        "\\A mode \\in IndexedHistoricalTransport(initialContext)! "
         "HistoricalDiscoveryTimedOwnerModeCarrier: /\\ IndexedChainSpec /\\ "
         "owner \\in Responsive /\\ (mode = 2 => owner \\in "
         "IndexedHistoricalTransport(initialContext)! AsyncVotersAt("
@@ -4191,10 +4194,11 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedChainSpecHistoricalDueNodeModeMakesProgress",
     ): (
-        "\\A initialContext \\in AdmissibleContextRecords, node \\in "
-        "Responsive, clockValue \\in Nat, sourceRank \\in "
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "\\A node \\in Responsive, clockValue \\in Nat, sourceRank \\in "
         "IndexedHistoricalTransport(initialContext)! "
-        "HistoricalDiscoveryFixedClockBlockerCarrier, owner, mode \\in "
+        "HistoricalDiscoveryFixedClockBlockerCarrier: \\A owner: "
+        "\\A mode \\in "
         "IndexedHistoricalTransport(initialContext)! "
         "HistoricalDiscoveryTimedOwnerModeCarrier: IndexedChainSpec => "
         "(IndexedHistoricalDueNodeOwnerAtMode( initialContext, node, "
@@ -4206,10 +4210,11 @@ EXACT_FIXED_PROOF_SUPPORTING_THEOREM_STATEMENTS = {
         "SumeragiV2IndexedHistoricalRecoveryTransportClosureProofs",
         "IndexedChainSpecHistoricalDueIoModeMakesProgress",
     ): (
-        "\\A initialContext \\in AdmissibleContextRecords, node \\in "
-        "Responsive, clockValue \\in Nat, sourceRank \\in "
+        "\\A initialContext \\in AdmissibleContextRecords: "
+        "\\A node \\in Responsive, clockValue \\in Nat, sourceRank \\in "
         "IndexedHistoricalTransport(initialContext)! "
-        "HistoricalDiscoveryFixedClockBlockerCarrier, owner, mode \\in "
+        "HistoricalDiscoveryFixedClockBlockerCarrier: \\A owner: "
+        "\\A mode \\in "
         "IndexedHistoricalTransport(initialContext)! "
         "HistoricalDiscoveryTimedOwnerModeCarrier: IndexedChainSpec => "
         "(IndexedHistoricalDueIoOwnerAtMode( initialContext, node, "

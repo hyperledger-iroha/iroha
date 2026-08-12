@@ -166,7 +166,7 @@ fn routed_read_merge_tracks_only_canonical_keys_it_keeps() {
     let mut budget =
         ToriiRoutedReadMemoryBudget::new(routed_read_working_set_for_phase(phase), phase)
             .expect("working set admits app routed reads");
-    let value = norito::json::json!({"id": "alice"});
+    let value = norito::json!({"id": "alice"});
 
     let candidate = budget
         .canonical_json_candidate(&value)

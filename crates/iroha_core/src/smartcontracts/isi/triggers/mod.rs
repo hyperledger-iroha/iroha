@@ -1058,7 +1058,7 @@ pub mod query {
         trigger: &Trigger,
     ) -> Option<&'a Value> {
         if cache.is_none() {
-            *cache = super::query::ordinary_predicate_json_value(trigger);
+            *cache = crate::smartcontracts::isi::query::ordinary_predicate_json_value(trigger);
         }
         cache.as_ref()
     }
@@ -1068,7 +1068,7 @@ pub mod query {
         id: &TriggerId,
     ) -> Option<&'a Value> {
         if cache.is_none() {
-            *cache = super::query::ordinary_predicate_json_value(id);
+            *cache = crate::smartcontracts::isi::query::ordinary_predicate_json_value(id);
         }
         cache.as_ref()
     }
@@ -1218,9 +1218,9 @@ pub mod query {
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = TriggerId>, Error> {
             let triggers = state_ro.world().triggers();
-            let predicate_json = filter
-                .json_payload()
-                .and_then(iroha_data_model::query::json::predicate_json_candidate_plan_for_execution);
+            let predicate_json = filter.json_payload().and_then(
+                iroha_data_model::query::json::predicate_json_candidate_plan_for_execution,
+            );
             if let Some(candidate_ids) = predicate_json.as_ref().and_then(trigger_candidate_ids) {
                 let iter: Box<dyn Iterator<Item = TriggerId> + '_> =
                     Box::new(candidate_ids.into_iter().filter(move |id| {
@@ -1260,9 +1260,9 @@ pub mod query {
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = Self::Item>, Error> {
             let triggers = state_ro.world().triggers();
-            let predicate_json = filter
-                .json_payload()
-                .and_then(iroha_data_model::query::json::predicate_json_candidate_plan_for_execution);
+            let predicate_json = filter.json_payload().and_then(
+                iroha_data_model::query::json::predicate_json_candidate_plan_for_execution,
+            );
             if let Some(candidate_ids) = predicate_json.as_ref().and_then(trigger_candidate_ids) {
                 let iter: Box<dyn Iterator<Item = Trigger> + '_> =
                     Box::new(candidate_ids.into_iter().filter_map(move |id| {

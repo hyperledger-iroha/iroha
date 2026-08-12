@@ -210,6 +210,3 @@ pub(crate) use wal::{SAFETY_WAL_FILE_MAGIC, SAFETY_WAL_FORMAT_VERSION};
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod network_simulation;

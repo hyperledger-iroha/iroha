@@ -4,10 +4,11 @@
 //! exact canonical [`SignedBlock`] wire bytes.  This store is the durability
 //! boundary between reconstruction and the reducer's `BodyStored` input: a
 //! receipt can only be obtained after the bytes, their metadata, and the
-//! directory entry have been synchronised.
+//! directory entry have been synchronised. The first release has one V1 frame
+//! layout and no predecessor-format reader or migration path.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     mem::size_of,
@@ -23,16 +24,21 @@ use norito::codec::{Decode, DecodeAll as _, Encode};
 use thiserror::Error;
 
 use super::{
-    v2::RecoveredValidationAuthority,
+    v2::{RecoveredValidationAuthority, RecoveredWalVoteSign},
     v2_apply::VerifiedRecoveredFinalitySubject,
     v2_effects::{BodyStoreTask, BodyValidationTask, EffectWorkId},
+    v2_lifecycle_coordinator::{
+        AuthenticatedRecoveredWalValidateLedgerParent, LifecycleContext,
+        TerminalValidateNoSuccessorClaim,
+    },
     v2_transport::AuthenticatedCertifiedBodyResponse,
 };
 use crate::kura::KuraV2CommitReceipt;
 
 const STORE_MAGIC: &[u8; 8] = b"SUM2BODY";
 const VALIDATED_MAGIC: &[u8; 8] = b"SUM2VALD";
-const STORE_VERSION: u16 = 4;
+const STORE_VERSION: u16 = 1;
+const VALIDATION_OUTCOME_MARKER_VERSION: u16 = 1;
 const FRAME_HEADER_LEN: usize = STORE_MAGIC.len() + size_of::<u16>() + size_of::<u64>();
 const CHECKSUM_LEN: usize = 32;
 const FRAME_PAYLOAD_MAX_BYTES: u64 =
@@ -49,17 +55,30 @@ struct StoredBodyEnvelope {
     canonical_wire: Vec<u8>,
 }
 
-/// Durable proof that deterministic validation completed for one exact body
-/// frame before the reducer persisted a Prepare intent.
+/// Closed durable result of deterministic validation for one exact body frame.
+///
+/// A merge-sidecar deferral is deliberately absent: it is a retry dependency,
+/// not a terminal semantic outcome and therefore cannot become restart
+/// authority.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+enum ValidationOutcomeMarkerKind {
+    /// Deterministic execution succeeded with this exact commitment.
+    Validated(wire::ExecutionCommitment),
+    /// Deterministic execution rejected with this canonical closed code.
+    Rejected(u8),
+}
+
+/// Versioned durable validation outcome bound to one exact body-store frame.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-struct ValidatedBodyMarker {
+struct ValidationOutcomeMarker {
     version: u16,
     context_id: wire::HeightContextId,
     round: wire::ConsensusRound,
     subject: wire::BlockSubject,
     manifest_hash: HashOf<wire::PayloadManifest>,
     body_frame_hash: Hash,
-    execution_commitment: wire::ExecutionCommitment,
+    outcome: ValidationOutcomeMarkerKind,
 }
 
 /// Non-forgeable acknowledgement that one exact body is durable locally.
@@ -116,7 +135,7 @@ pub(crate) struct ValidatedBodyReceipt {
 }
 
 // DURABLE_BODY_VALIDATION_SURFACE_BEGIN
-/// Canonical volatile identity of a deterministic body rejection.
+/// Canonical closed identity of a deterministic body rejection.
 ///
 /// All non-sidecar validation failures currently drive the same
 /// `ValidationCompleted { valid: false }` reducer transition. Keeping one
@@ -129,10 +148,18 @@ pub(crate) enum BodyValidationRejectionIdentity {
 }
 
 impl BodyValidationRejectionIdentity {
-    /// Return the domain-local bounded code used by volatile lifecycle digests.
+    /// Return the bounded code shared by durable markers and lifecycle digests.
     pub(crate) const fn canonical_code(&self) -> u8 {
         match self {
             Self::Rejected => 0,
+        }
+    }
+
+    /// Decode the closed durable identity domain without accepting extensions.
+    const fn from_canonical_code(code: u8) -> Option<Self> {
+        match code {
+            0 => Some(Self::Rejected),
+            _ => None,
         }
     }
 }
@@ -146,6 +173,30 @@ impl BodyValidationRejectionIdentity {
 #[derive(Debug, PartialEq, Eq)]
 #[must_use]
 pub(crate) struct DurableBodyValidationOutcome(DurableBodyValidationOutcomeBody);
+
+/// Move-only ownership of one exact semantically revalidated restart marker.
+///
+/// The marker is removed from the process-local recovery catalog while this
+/// cut exists. Dropping the cut before the recovered lifecycle parent accepts
+/// it restores the exact marker; consuming it transfers the receipt directly
+/// into an opaque validation outcome. No receipt accessor is provided.
+#[must_use = "a detached recovered validation marker must be transferred or restored"]
+pub(super) struct RecoveredValidatedBodyCut<'store> {
+    store: &'store mut V2BodyStore,
+    key: (wire::ConsensusRound, wire::BlockSubject),
+    validated: Option<ValidatedBodyReceipt>,
+}
+
+/// Closed reason an authenticated WAL vote could not detach its body marker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RecoveredValidatedBodyCutError {
+    /// The body store belongs to another height context.
+    ForeignContext,
+    /// The exact proposal marker is absent or has not been revalidated.
+    MissingMarker,
+    /// The marker names another execution commitment.
+    CommitmentMismatch,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
@@ -191,7 +242,7 @@ impl DurableBodyValidationOutcome {
         }
     }
 
-    /// Canonical volatile identity of a deterministic rejection.
+    /// Canonical closed identity of a deterministic rejection.
     pub(crate) const fn rejection_identity(&self) -> Option<&BodyValidationRejectionIdentity> {
         match &self.0 {
             DurableBodyValidationOutcomeBody::Rejected { identity, .. } => Some(identity),
@@ -226,8 +277,219 @@ impl DurableBodyValidationOutcome {
     fn into_body(self) -> DurableBodyValidationOutcomeBody {
         self.0
     }
+
+    /// Construct a sealed successful outcome for lifecycle boundary tests.
+    #[cfg(test)]
+    pub(crate) const fn validated_for_test(receipt: ValidatedBodyReceipt) -> Self {
+        Self(DurableBodyValidationOutcomeBody::Validated(receipt))
+    }
+
+    /// Construct a sealed deterministic rejection for lifecycle boundary tests.
+    #[cfg(test)]
+    pub(crate) fn rejected_for_test(durable: DurableBodyReceipt) -> Self {
+        Self(DurableBodyValidationOutcomeBody::Rejected {
+            durable,
+            identity: BodyValidationRejectionIdentity::Rejected,
+            reason: "test-only deterministic rejection".to_owned(),
+        })
+    }
+}
+
+impl RecoveredValidatedBodyCut<'_> {
+    /// Revalidate this detached marker against the same authenticated WAL vote.
+    pub(super) fn exactly_matches_vote(&self, recovered: &RecoveredWalVoteSign) -> bool {
+        self.validated.as_ref().is_some_and(|validated| {
+            let vote = recovered.vote();
+            self.key == (vote.proposal_round, vote.subject)
+                && validated.durable().context_id() == vote.round.context_id
+                && validated.durable().round() == vote.proposal_round
+                && validated.durable().subject() == vote.subject
+                && validated.execution_commitment() == vote.execution_commitment
+        })
+    }
+
+    /// Match this one-shot marker to the exact BodyFrame retained by a durable
+    /// recovered-WAL Validate parent.
+    ///
+    /// The fixed boolean join keeps both the receipt and ledger payload opaque;
+    /// neither side can be detached or substituted after this comparison.
+    pub(super) fn exactly_matches_ledger_parent(
+        &self,
+        active_context: LifecycleContext,
+        parent: &AuthenticatedRecoveredWalValidateLedgerParent,
+    ) -> bool {
+        self.validated.as_ref().is_some_and(|validated| {
+            parent.matches_durable_receipt(active_context, validated.durable())
+        })
+    }
+
+    /// Transfer the exact marker into the sealed durable-validation outcome.
+    pub(super) fn into_validation_outcome(mut self) -> DurableBodyValidationOutcome {
+        let validated = self
+            .validated
+            .take()
+            .expect("a live recovered validation cut retains one marker");
+        DurableBodyValidationOutcome(DurableBodyValidationOutcomeBody::Validated(validated))
+    }
+}
+
+impl Drop for RecoveredValidatedBodyCut<'_> {
+    fn drop(&mut self) {
+        let Some(validated) = self.validated.take() else {
+            return;
+        };
+        let displaced = self.store.validated.insert(self.key, validated);
+        debug_assert!(displaced.is_none());
+    }
 }
 // DURABLE_BODY_VALIDATION_SURFACE_END
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct QuarantinedValidationOutcome {
+    durable: DurableBodyReceipt,
+    outcome: ValidationOutcomeMarkerKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RevalidatedRejectedBody {
+    durable: DurableBodyReceipt,
+    identity_code: u8,
+    /// Volatile diagnostic text reproduced by the current validator.
+    reason: String,
+}
+
+impl RevalidatedRejectedBody {
+    fn sealed_outcome(&self) -> DurableBodyValidationOutcome {
+        let identity = BodyValidationRejectionIdentity::from_canonical_code(self.identity_code)
+            .expect("revalidated rejection codes are closed and canonical");
+        DurableBodyValidationOutcome(DurableBodyValidationOutcomeBody::Rejected {
+            durable: self.durable.clone(),
+            identity,
+            reason: self.reason.clone(),
+        })
+    }
+}
+
+/// Move-only ownership of all semantically revalidated terminal Validate outcomes.
+///
+/// The cut remains borrowed from one body-store instance and exposes only an
+/// exact ledger-claim selector. Dropping it restores every detached outcome;
+/// committing it consumes selected outcomes and restores every unselected one.
+#[must_use = "a detached terminal Validate outcome catalog must be committed or restored"]
+pub(super) struct RecoveredTerminalValidateOutcomeCatalogCut<'store> {
+    store: &'store mut V2BodyStore,
+    validated: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
+    rejected: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), RevalidatedRejectedBody>,
+    selected_validated: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
+    selected_rejected:
+        BTreeMap<(wire::ConsensusRound, wire::BlockSubject), RevalidatedRejectedBody>,
+}
+
+/// Closed reason the terminal Validate outcome catalog cannot be detached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RecoveredTerminalValidateOutcomeCatalogError {
+    /// At least one durable marker still awaits semantic replay.
+    UnrevalidatedMarkers,
+    /// One proposal key names both a success and a deterministic rejection.
+    AmbiguousOutcome,
+}
+
+impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
+    /// Select exactly one unselected outcome authenticated by the ledger claim.
+    ///
+    /// Zero or multiple matches fail without consuming any candidate. Already
+    /// selected outcomes are not eligible for a second claim.
+    pub(super) fn select_exact_terminal_validate(
+        &mut self,
+        claim: &TerminalValidateNoSuccessorClaim,
+    ) -> bool {
+        enum ExactMatch {
+            Validated((wire::ConsensusRound, wire::BlockSubject)),
+            Rejected((wire::ConsensusRound, wire::BlockSubject)),
+        }
+
+        let mut exact_match = None;
+        for (key, validated) in &self.validated {
+            let outcome = DurableBodyValidationOutcome(
+                DurableBodyValidationOutcomeBody::Validated(validated.clone()),
+            );
+            if claim.matches_outcome(&outcome)
+                && exact_match.replace(ExactMatch::Validated(*key)).is_some()
+            {
+                return false;
+            }
+        }
+        for (key, rejected) in &self.rejected {
+            let outcome = rejected.sealed_outcome();
+            if claim.matches_outcome(&outcome)
+                && exact_match.replace(ExactMatch::Rejected(*key)).is_some()
+            {
+                return false;
+            }
+        }
+
+        match exact_match {
+            Some(ExactMatch::Validated(key)) => {
+                let validated = self
+                    .validated
+                    .remove(&key)
+                    .expect("an exact catalog match remains unselected");
+                let displaced = self.selected_validated.insert(key, validated);
+                debug_assert!(displaced.is_none());
+            }
+            Some(ExactMatch::Rejected(key)) => {
+                let rejected = self
+                    .rejected
+                    .remove(&key)
+                    .expect("an exact catalog match remains unselected");
+                let displaced = self.selected_rejected.insert(key, rejected);
+                debug_assert!(displaced.is_none());
+            }
+            None => return false,
+        }
+        true
+    }
+
+    /// Consume selected outcomes and restore every unselected catalog entry.
+    pub(super) fn commit_selected(mut self) {
+        self.restore_unselected();
+        self.selected_validated.clear();
+        self.selected_rejected.clear();
+    }
+
+    fn restore_unselected(&mut self) {
+        for (key, validated) in std::mem::take(&mut self.validated) {
+            let displaced = self.store.validated.insert(key, validated);
+            debug_assert!(displaced.is_none());
+        }
+        for (key, rejected) in std::mem::take(&mut self.rejected) {
+            let displaced = self.store.rejected.insert(key, rejected);
+            debug_assert!(displaced.is_none());
+        }
+    }
+}
+
+impl Drop for RecoveredTerminalValidateOutcomeCatalogCut<'_> {
+    fn drop(&mut self) {
+        self.restore_unselected();
+        for (key, validated) in std::mem::take(&mut self.selected_validated) {
+            let displaced = self.store.validated.insert(key, validated);
+            debug_assert!(displaced.is_none());
+        }
+        for (key, rejected) in std::mem::take(&mut self.selected_rejected) {
+            let displaced = self.store.rejected.insert(key, rejected);
+            debug_assert!(displaced.is_none());
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+enum SemanticReplayOutcome {
+    Validated(wire::ExecutionCommitment),
+    Rejected { identity_code: u8, reason: String },
+    DeferredMergeSidecar,
+}
 
 /// Completion minted only after an exact body task reaches durable storage.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -475,8 +737,19 @@ pub(crate) struct V2BodyStore {
     /// vote. Production preflight must promote every entry through
     /// [`Self::revalidate_recovered_markers`] before constructing the runtime.
     pending_revalidation:
-        BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
+        BTreeMap<(wire::ConsensusRound, wire::BlockSubject), QuarantinedValidationOutcome>,
+    /// Outcome seals retired from restart authority by a missing sidecar.
+    ///
+    /// These entries are comparison-only: an ordinary bounded retry must run
+    /// the validator again and reproduce the exact durable outcome before it
+    /// can promote one. They are never exposed by a recovery catalog.
+    retired_revalidation:
+        BTreeMap<(wire::ConsensusRound, wire::BlockSubject), QuarantinedValidationOutcome>,
     validated: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
+    /// Semantically revalidated deterministic rejections retained for the
+    /// body-store-instance-bound terminal Validate recovery join. The raw
+    /// diagnostic string remains non-authoritative.
+    rejected: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), RevalidatedRejectedBody>,
 }
 
 /// Immutable post-finality deletion authority for one exact body directory.
@@ -562,7 +835,9 @@ impl V2BodyStore {
             entries: BTreeMap::new(),
             manifests: BTreeMap::new(),
             pending_revalidation: BTreeMap::new(),
+            retired_revalidation: BTreeMap::new(),
             validated: BTreeMap::new(),
+            rejected: BTreeMap::new(),
         };
         let mut paths = fs::read_dir(&store.directory)
             .map_err(|source| V2BodyStoreError::Io {
@@ -597,7 +872,7 @@ impl V2BodyStore {
             .iter()
             .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("validated"))
         {
-            let marker = read_validated_marker(path)?;
+            let marker = read_validation_outcome_marker(path)?;
             let key = (marker.round, marker.subject);
             let receipt = store
                 .entries
@@ -605,14 +880,14 @@ impl V2BodyStore {
                 .cloned()
                 .ok_or(V2BodyStoreError::OrphanedValidationMarker)?;
             store.validate_marker(&marker, &receipt)?;
-            store.ensure_execution_commitment_consistent(&receipt, marker.execution_commitment)?;
+            store.ensure_validation_outcome_consistent(&receipt, marker.outcome)?;
             if store
                 .pending_revalidation
                 .insert(
                     key,
-                    ValidatedBodyReceipt {
+                    QuarantinedValidationOutcome {
                         durable: receipt,
-                        execution_commitment: marker.execution_commitment,
+                        outcome: marker.outcome,
                     },
                 )
                 .is_some()
@@ -701,14 +976,15 @@ impl V2BodyStore {
     ///
     /// Structurally valid marker bytes are deliberately quarantined while the
     /// store opens. This method promotes them atomically only after the exact
-    /// durable bodies reproduce the persisted execution commitments. A typed
-    /// missing-certified-sidecar result retires the affected marker authority
-    /// without promoting it; the exact durable body remains available to the
-    /// ordinary bounded validation and sidecar-fetch pipeline. Every other
-    /// validation failure remains terminal. Bodies shared by several proposal
-    /// rounds are executed once because validation consumes the signed body and
-    /// immutable height context, not the manifest round; every round-local
-    /// marker remains checked against that result.
+    /// durable bodies reproduce the exact persisted success commitment or
+    /// deterministic rejection code. A typed missing-certified-sidecar result
+    /// retires the affected marker authority without promoting it; the exact
+    /// durable body remains available to the ordinary bounded validation and
+    /// sidecar-fetch pipeline. Any success/rejection or commitment change fails
+    /// closed. Bodies shared by several proposal rounds are executed once
+    /// because validation consumes the signed body and immutable height
+    /// context, not the manifest round; every round-local marker remains
+    /// checked against that result.
     pub(crate) fn revalidate_recovered_markers<F, E>(
         &mut self,
         mut validator: F,
@@ -721,47 +997,82 @@ impl V2BodyStore {
             return Ok(());
         }
 
-        let mut commitments = BTreeMap::<wire::BlockSubject, wire::ExecutionCommitment>::new();
-        let mut retired_missing_sidecar_subjects = BTreeSet::new();
-        let mut promoted = BTreeMap::new();
+        let mut replayed = BTreeMap::<wire::BlockSubject, SemanticReplayOutcome>::new();
+        let mut promoted_validated = BTreeMap::new();
+        let mut promoted_rejected = BTreeMap::new();
+        let mut retired_missing_sidecar = BTreeMap::new();
         for (key, recovered) in &self.pending_revalidation {
             let receipt = self
                 .entries
                 .get(key)
                 .ok_or(V2BodyStoreError::OrphanedValidationMarker)?;
-            if recovered.durable() != receipt {
+            if &recovered.durable != receipt {
                 return Err(V2BodyStoreError::ValidationMarkerMismatch);
             }
-            if retired_missing_sidecar_subjects.contains(&key.1) {
-                continue;
-            }
-            let execution_commitment = if let Some(commitment) = commitments.get(&key.1) {
-                *commitment
+            let reproduced = if let Some(outcome) = replayed.get(&key.1) {
+                outcome.clone()
             } else {
                 let body = self.load(receipt)?;
-                let commitment = match validator(&body) {
-                    Ok(commitment) => commitment,
+                let outcome = match validator(&body) {
+                    Ok(commitment) => {
+                        commitment.validate()?;
+                        SemanticReplayOutcome::Validated(commitment)
+                    }
                     Err(error) if error.missing_certified_merge_sidecar().is_some() => {
-                        retired_missing_sidecar_subjects.insert(key.1);
-                        continue;
+                        SemanticReplayOutcome::DeferredMergeSidecar
                     }
-                    Err(error) => {
-                        return Err(V2BodyStoreError::RecoveredValidationRejected(
-                            error.to_string(),
-                        ));
-                    }
+                    Err(error) => SemanticReplayOutcome::Rejected {
+                        identity_code: error.rejection_identity().canonical_code(),
+                        reason: error.to_string(),
+                    },
                 };
-                commitment.validate()?;
-                commitments.insert(key.1, commitment);
-                commitment
+                replayed.insert(key.1, outcome.clone());
+                outcome
             };
-            if execution_commitment != recovered.execution_commitment() {
-                return Err(V2BodyStoreError::RecoveredValidationCommitmentMismatch);
+
+            match (recovered.outcome, reproduced) {
+                (_, SemanticReplayOutcome::DeferredMergeSidecar) => {
+                    retired_missing_sidecar.insert(*key, recovered.clone());
+                }
+                (
+                    ValidationOutcomeMarkerKind::Validated(expected),
+                    SemanticReplayOutcome::Validated(actual),
+                ) if expected == actual => {
+                    promoted_validated.insert(
+                        *key,
+                        ValidatedBodyReceipt {
+                            durable: receipt.clone(),
+                            execution_commitment: actual,
+                        },
+                    );
+                }
+                (
+                    ValidationOutcomeMarkerKind::Validated(_),
+                    SemanticReplayOutcome::Validated(_),
+                ) => return Err(V2BodyStoreError::RecoveredValidationCommitmentMismatch),
+                (
+                    ValidationOutcomeMarkerKind::Rejected(expected_code),
+                    SemanticReplayOutcome::Rejected {
+                        identity_code,
+                        reason,
+                    },
+                ) if expected_code == identity_code => {
+                    promoted_rejected.insert(
+                        *key,
+                        RevalidatedRejectedBody {
+                            durable: receipt.clone(),
+                            identity_code,
+                            reason,
+                        },
+                    );
+                }
+                _ => return Err(V2BodyStoreError::RecoveredValidationOutcomeMismatch),
             }
-            promoted.insert(*key, recovered.clone());
         }
 
-        self.validated.extend(promoted);
+        self.validated.extend(promoted_validated);
+        self.rejected.extend(promoted_rejected);
+        self.retired_revalidation.extend(retired_missing_sidecar);
         self.pending_revalidation.clear();
         Ok(())
     }
@@ -786,6 +1097,8 @@ impl V2BodyStore {
             .retain(|(_, candidate), _| *candidate == subject);
         self.validated
             .retain(|(_, candidate), _| *candidate == subject);
+        self.rejected
+            .retain(|(_, candidate), _| *candidate == subject);
         Ok(())
     }
 
@@ -807,6 +1120,8 @@ impl V2BodyStore {
             .retain(|(round, subject), _| authority.authorizes(*round, *subject));
         self.validated
             .retain(|(round, subject), _| authority.authorizes(*round, *subject));
+        self.rejected
+            .retain(|(round, subject), _| authority.authorizes(*round, *subject));
         Ok(())
     }
 
@@ -823,11 +1138,79 @@ impl V2BodyStore {
         }
     }
 
-    /// Snapshot semantically revalidated recovery receipts.
+    /// Snapshot semantically revalidated success receipts for WAL recovery.
+    ///
+    /// Deterministic rejections remain in a separate private map and cannot be
+    /// mistaken for vote-signing authority through this existing API.
     pub(crate) fn validated_recovery_catalog(
         &self,
     ) -> BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt> {
         self.validated.clone()
+    }
+
+    /// Detach the aggregate semantically revalidated terminal outcome catalog.
+    ///
+    /// Checks precede every move so a failed factory leaves the store intact.
+    /// Comparison-only retired sidecar seals are neither eligible nor detached.
+    pub(super) fn detach_terminal_validate_outcome_catalog(
+        &mut self,
+    ) -> Result<
+        RecoveredTerminalValidateOutcomeCatalogCut<'_>,
+        RecoveredTerminalValidateOutcomeCatalogError,
+    > {
+        if !self.pending_revalidation.is_empty() {
+            return Err(RecoveredTerminalValidateOutcomeCatalogError::UnrevalidatedMarkers);
+        }
+        if self
+            .validated
+            .keys()
+            .any(|key| self.rejected.contains_key(key))
+        {
+            return Err(RecoveredTerminalValidateOutcomeCatalogError::AmbiguousOutcome);
+        }
+
+        let validated = std::mem::take(&mut self.validated);
+        let rejected = std::mem::take(&mut self.rejected);
+        Ok(RecoveredTerminalValidateOutcomeCatalogCut {
+            store: self,
+            validated,
+            rejected,
+            selected_validated: BTreeMap::new(),
+            selected_rejected: BTreeMap::new(),
+        })
+    }
+
+    /// Detach the exact revalidated proposal marker named by one recovered WAL vote.
+    ///
+    /// This one-shot factory consults neither a scheduler lease nor a runtime
+    /// lifecycle ordinal. The returned cut restores the marker on every
+    /// pre-transfer failure and exposes no receipt or marker parts.
+    pub(super) fn detach_recovered_validated_parent(
+        &mut self,
+        recovered: &RecoveredWalVoteSign,
+    ) -> Result<RecoveredValidatedBodyCut<'_>, RecoveredValidatedBodyCutError> {
+        let vote = recovered.vote();
+        if self.context.id() != vote.round.context_id
+            || self.context.height != vote.round.height
+            || recovered.tag().height() != vote.round.height
+            || recovered.tag().view() != vote.round.view
+        {
+            return Err(RecoveredValidatedBodyCutError::ForeignContext);
+        }
+        let key = (vote.proposal_round, vote.subject);
+        let Some(validated) = self.validated.remove(&key) else {
+            return Err(RecoveredValidatedBodyCutError::MissingMarker);
+        };
+        if validated.execution_commitment() != vote.execution_commitment {
+            let displaced = self.validated.insert(key, validated);
+            debug_assert!(displaced.is_none());
+            return Err(RecoveredValidatedBodyCutError::CommitmentMismatch);
+        }
+        Ok(RecoveredValidatedBodyCut {
+            store: self,
+            key,
+            validated: Some(validated),
+        })
     }
 
     /// Execute one exact-body persistence task on a storage-service thread.
@@ -853,8 +1236,9 @@ impl V2BodyStore {
     /// The independently supplied manifest hash is checked against both the
     /// receipt and the store's canonical manifest before the callback can run.
     /// The complete checksummed frame is then reloaded, structurally validated,
-    /// and decoded.  A success result is minted only after its validation
-    /// marker has crossed the file-and-directory durability boundary.
+    /// and decoded. A success or deterministic rejection result is minted only
+    /// after its closed outcome marker has crossed the file-and-directory
+    /// durability boundary. Missing-sidecar deferrals are never persisted.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn execute_durable_validation<F, E>(
         &mut self,
@@ -903,6 +1287,12 @@ impl V2BodyStore {
                 DurableBodyValidationOutcomeBody::Validated(validated.clone()),
             ));
         }
+        if let Some(rejected) = self.rejected.get(&key) {
+            if rejected.durable != durable {
+                return Err(V2BodyStoreError::ReceiptMismatch);
+            }
+            return Ok(rejected.sealed_outcome());
+        }
 
         match validator(&block) {
             Ok(execution_commitment) => {
@@ -920,13 +1310,10 @@ impl V2BodyStore {
                         },
                     ));
                 }
-                Ok(DurableBodyValidationOutcome(
-                    DurableBodyValidationOutcomeBody::Rejected {
-                        durable,
-                        identity: error.rejection_identity(),
-                        reason: error.to_string(),
-                    },
-                ))
+                let identity_code = error.rejection_identity().canonical_code();
+                let rejected =
+                    self.persist_rejected_outcome(&durable, identity_code, error.to_string())?;
+                Ok(rejected.sealed_outcome())
             }
         }
     }
@@ -1136,42 +1523,84 @@ impl V2BodyStore {
         receipt: &DurableBodyReceipt,
         execution_commitment: wire::ExecutionCommitment,
     ) -> Result<ValidatedBodyReceipt, V2BodyStoreError> {
+        self.verify_receipt(receipt)?;
         execution_commitment.validate()?;
-        self.ensure_execution_commitment_consistent(receipt, execution_commitment)?;
         let key = (receipt.round, receipt.subject);
         if let Some(validated) = self.validated.get(&key) {
-            if validated.durable() != receipt
-                || validated.execution_commitment() != execution_commitment
-            {
+            if validated.durable() != receipt {
                 return Err(V2BodyStoreError::ReceiptMismatch);
+            }
+            if validated.execution_commitment() != execution_commitment {
+                return Err(V2BodyStoreError::ConflictingValidationCommitment);
             }
             return Ok(validated.clone());
         }
-        if let Some(recovered) = self.pending_revalidation.get(&key).cloned() {
-            if recovered.durable() != receipt {
+        if let Some(rejected) = self.rejected.get(&key) {
+            if &rejected.durable != receipt {
                 return Err(V2BodyStoreError::ReceiptMismatch);
             }
-            if recovered.execution_commitment() != execution_commitment {
-                return Err(V2BodyStoreError::RecoveredValidationCommitmentMismatch);
+            return Err(V2BodyStoreError::ConflictingValidationOutcome);
+        }
+        let outcome = ValidationOutcomeMarkerKind::Validated(execution_commitment);
+        if let Some(recovered) = self.pending_revalidation.get(&key).cloned() {
+            if &recovered.durable != receipt {
+                return Err(V2BodyStoreError::ReceiptMismatch);
+            }
+            match recovered.outcome {
+                ValidationOutcomeMarkerKind::Validated(expected)
+                    if expected == execution_commitment => {}
+                ValidationOutcomeMarkerKind::Validated(_) => {
+                    return Err(V2BodyStoreError::RecoveredValidationCommitmentMismatch);
+                }
+                ValidationOutcomeMarkerKind::Rejected(_) => {
+                    return Err(V2BodyStoreError::RecoveredValidationOutcomeMismatch);
+                }
             }
             self.pending_revalidation.remove(&key);
-            self.validated.insert(key, recovered.clone());
-            return Ok(recovered);
+            let validated = ValidatedBodyReceipt {
+                durable: recovered.durable,
+                execution_commitment,
+            };
+            self.validated.insert(key, validated.clone());
+            return Ok(validated);
         }
+        if let Some(retired) = self.retired_revalidation.get(&key).cloned() {
+            if &retired.durable != receipt {
+                return Err(V2BodyStoreError::ReceiptMismatch);
+            }
+            match retired.outcome {
+                ValidationOutcomeMarkerKind::Validated(expected)
+                    if expected == execution_commitment => {}
+                ValidationOutcomeMarkerKind::Validated(_) => {
+                    return Err(V2BodyStoreError::RecoveredValidationCommitmentMismatch);
+                }
+                ValidationOutcomeMarkerKind::Rejected(_) => {
+                    return Err(V2BodyStoreError::RecoveredValidationOutcomeMismatch);
+                }
+            }
+            self.retired_revalidation.remove(&key);
+            let validated = ValidatedBodyReceipt {
+                durable: retired.durable,
+                execution_commitment,
+            };
+            self.validated.insert(key, validated.clone());
+            return Ok(validated);
+        }
+        self.ensure_validation_outcome_consistent(receipt, outcome)?;
         let validated = ValidatedBodyReceipt {
             durable: receipt.clone(),
             execution_commitment,
         };
-        let marker = ValidatedBodyMarker {
-            version: STORE_VERSION,
+        let marker = ValidationOutcomeMarker {
+            version: VALIDATION_OUTCOME_MARKER_VERSION,
             context_id: receipt.context_id,
             round: receipt.round,
             subject: receipt.subject,
             manifest_hash: receipt.manifest_hash,
             body_frame_hash: receipt.frame_hash,
-            execution_commitment,
+            outcome,
         };
-        write_validated_marker(
+        write_validation_outcome_marker(
             &self.validated_path_for(receipt.round, receipt.subject),
             &marker,
         )?;
@@ -1179,26 +1608,149 @@ impl V2BodyStore {
         Ok(validated)
     }
 
-    fn ensure_execution_commitment_consistent(
+    fn persist_rejected_outcome(
+        &mut self,
+        receipt: &DurableBodyReceipt,
+        identity_code: u8,
+        reason: String,
+    ) -> Result<RevalidatedRejectedBody, V2BodyStoreError> {
+        self.verify_receipt(receipt)?;
+        if BodyValidationRejectionIdentity::from_canonical_code(identity_code).is_none() {
+            return Err(V2BodyStoreError::UnknownValidationRejectionIdentity(
+                identity_code,
+            ));
+        }
+        let key = (receipt.round, receipt.subject);
+        if let Some(rejected) = self.rejected.get(&key) {
+            if &rejected.durable != receipt {
+                return Err(V2BodyStoreError::ReceiptMismatch);
+            }
+            if rejected.identity_code != identity_code {
+                return Err(V2BodyStoreError::ConflictingValidationOutcome);
+            }
+            return Ok(rejected.clone());
+        }
+        if let Some(validated) = self.validated.get(&key) {
+            if validated.durable() != receipt {
+                return Err(V2BodyStoreError::ReceiptMismatch);
+            }
+            return Err(V2BodyStoreError::ConflictingValidationOutcome);
+        }
+        let outcome = ValidationOutcomeMarkerKind::Rejected(identity_code);
+        if let Some(recovered) = self.pending_revalidation.get(&key).cloned() {
+            if &recovered.durable != receipt {
+                return Err(V2BodyStoreError::ReceiptMismatch);
+            }
+            match recovered.outcome {
+                ValidationOutcomeMarkerKind::Rejected(expected_code)
+                    if expected_code == identity_code => {}
+                _ => {
+                    return Err(V2BodyStoreError::RecoveredValidationOutcomeMismatch);
+                }
+            }
+            self.pending_revalidation.remove(&key);
+            let rejected = RevalidatedRejectedBody {
+                durable: recovered.durable,
+                identity_code,
+                reason,
+            };
+            self.rejected.insert(key, rejected.clone());
+            return Ok(rejected);
+        }
+        if let Some(retired) = self.retired_revalidation.get(&key).cloned() {
+            if &retired.durable != receipt {
+                return Err(V2BodyStoreError::ReceiptMismatch);
+            }
+            match retired.outcome {
+                ValidationOutcomeMarkerKind::Rejected(expected_code)
+                    if expected_code == identity_code => {}
+                _ => return Err(V2BodyStoreError::RecoveredValidationOutcomeMismatch),
+            }
+            self.retired_revalidation.remove(&key);
+            let rejected = RevalidatedRejectedBody {
+                durable: retired.durable,
+                identity_code,
+                reason,
+            };
+            self.rejected.insert(key, rejected.clone());
+            return Ok(rejected);
+        }
+        self.ensure_validation_outcome_consistent(receipt, outcome)?;
+        let marker = ValidationOutcomeMarker {
+            version: VALIDATION_OUTCOME_MARKER_VERSION,
+            context_id: receipt.context_id,
+            round: receipt.round,
+            subject: receipt.subject,
+            manifest_hash: receipt.manifest_hash,
+            body_frame_hash: receipt.frame_hash,
+            outcome,
+        };
+        write_validation_outcome_marker(
+            &self.validated_path_for(receipt.round, receipt.subject),
+            &marker,
+        )?;
+        let rejected = RevalidatedRejectedBody {
+            durable: receipt.clone(),
+            identity_code,
+            reason,
+        };
+        self.rejected.insert(key, rejected.clone());
+        Ok(rejected)
+    }
+
+    fn ensure_validation_outcome_consistent(
         &self,
         receipt: &DurableBodyReceipt,
-        execution_commitment: wire::ExecutionCommitment,
+        proposed: ValidationOutcomeMarkerKind,
     ) -> Result<(), V2BodyStoreError> {
-        let conflicts = self.validated.iter().any(|((round, subject), validated)| {
+        let owns_same_body = |round: &wire::ConsensusRound, subject: &wire::BlockSubject| {
             *subject == receipt.subject
                 && round.context_id == receipt.round.context_id
                 && round.height == receipt.round.height
-                && validated.execution_commitment() != execution_commitment
-        }) || self.pending_revalidation.iter().any(
-            |((round, subject), validated)| {
-                *subject == receipt.subject
-                    && round.context_id == receipt.round.context_id
-                    && round.height == receipt.round.height
-                    && validated.execution_commitment() != execution_commitment
-            },
-        );
-        if conflicts {
-            return Err(V2BodyStoreError::ConflictingValidationCommitment);
+        };
+        let active_validated = self
+            .validated
+            .iter()
+            .filter_map(|((round, subject), validated)| {
+                owns_same_body(round, subject).then_some(ValidationOutcomeMarkerKind::Validated(
+                    validated.execution_commitment(),
+                ))
+            });
+        let active_rejected = self
+            .rejected
+            .iter()
+            .filter_map(|((round, subject), rejected)| {
+                owns_same_body(round, subject).then_some(ValidationOutcomeMarkerKind::Rejected(
+                    rejected.identity_code,
+                ))
+            });
+        let quarantined =
+            self.pending_revalidation
+                .iter()
+                .filter_map(|((round, subject), recovered)| {
+                    owns_same_body(round, subject).then_some(recovered.outcome)
+                });
+        let retired =
+            self.retired_revalidation
+                .iter()
+                .filter_map(|((round, subject), recovered)| {
+                    owns_same_body(round, subject).then_some(recovered.outcome)
+                });
+        for existing in active_validated
+            .chain(active_rejected)
+            .chain(quarantined)
+            .chain(retired)
+        {
+            if existing == proposed {
+                continue;
+            }
+            return Err(match (existing, proposed) {
+                (
+                    ValidationOutcomeMarkerKind::Validated(_),
+                    ValidationOutcomeMarkerKind::Validated(_),
+                ) => V2BodyStoreError::ConflictingValidationCommitment,
+                _ => V2BodyStoreError::ConflictingValidationOutcome,
+            });
         }
         Ok(())
     }
@@ -1358,11 +1910,13 @@ impl V2BodyStore {
 
     fn validate_marker(
         &self,
-        marker: &ValidatedBodyMarker,
+        marker: &ValidationOutcomeMarker,
         receipt: &DurableBodyReceipt,
     ) -> Result<(), V2BodyStoreError> {
-        if marker.version != STORE_VERSION {
-            return Err(V2BodyStoreError::UnsupportedVersion(marker.version));
+        if marker.version != VALIDATION_OUTCOME_MARKER_VERSION {
+            return Err(V2BodyStoreError::UnsupportedValidationOutcomeMarkerVersion(
+                marker.version,
+            ));
         }
         if marker.context_id != self.context.id()
             || marker.round.context_id != marker.context_id
@@ -1375,7 +1929,18 @@ impl V2BodyStore {
         {
             return Err(V2BodyStoreError::ValidationMarkerMismatch);
         }
-        marker.execution_commitment.validate()?;
+        match marker.outcome {
+            ValidationOutcomeMarkerKind::Validated(execution_commitment) => {
+                execution_commitment.validate()?;
+            }
+            ValidationOutcomeMarkerKind::Rejected(identity_code) => {
+                if BodyValidationRejectionIdentity::from_canonical_code(identity_code).is_none() {
+                    return Err(V2BodyStoreError::UnknownValidationRejectionIdentity(
+                        identity_code,
+                    ));
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1530,19 +2095,21 @@ fn read_frame_payload_with_hash(
     Ok((payload, frame_hash))
 }
 
-fn write_validated_marker(
+fn write_validation_outcome_marker(
     path: &Path,
-    marker: &ValidatedBodyMarker,
+    marker: &ValidationOutcomeMarker,
 ) -> Result<(), V2BodyStoreError> {
     let payload = marker.encode();
     let frame = frame_payload_with_magic(VALIDATED_MAGIC, &payload)?;
     write_atomic_synced(path, &frame)
 }
 
-fn read_validated_marker(path: &Path) -> Result<ValidatedBodyMarker, V2BodyStoreError> {
+fn read_validation_outcome_marker(
+    path: &Path,
+) -> Result<ValidationOutcomeMarker, V2BodyStoreError> {
     let payload = read_frame_payload(path, VALIDATED_MAGIC)?;
     let mut cursor = payload.as_slice();
-    ValidatedBodyMarker::decode_all(&mut cursor)
+    ValidationOutcomeMarker::decode_all(&mut cursor)
         .map_err(|error| V2BodyStoreError::ValidationMarkerDecode(error.to_string()))
 }
 
@@ -1615,6 +2182,12 @@ pub(crate) enum V2BodyStoreError {
     /// Durable validation marker could not be decoded exactly.
     #[error("invalid Sumeragi v2 validation marker: {0}")]
     ValidationMarkerDecode(String),
+    /// Validation outcome payload uses an unsupported schema version.
+    #[error("unsupported Sumeragi v2 validation outcome marker version {0}")]
+    UnsupportedValidationOutcomeMarkerVersion(u16),
+    /// Rejection marker names a code outside the closed canonical domain.
+    #[error("unknown Sumeragi v2 validation rejection identity {0}")]
+    UnknownValidationRejectionIdentity(u8),
     /// Stored metadata does not belong to the active context.
     #[error("Sumeragi v2 body-store context, round, subject, or manifest mismatch")]
     ContextMismatch,
@@ -1676,15 +2249,18 @@ pub(crate) enum V2BodyStoreError {
     /// Byte-identical bodies in one height context produced different execution commitments.
     #[error("conflicting Sumeragi v2 execution commitments for one exact body")]
     ConflictingValidationCommitment,
+    /// Byte-identical bodies produced different closed validation outcomes.
+    #[error("conflicting Sumeragi v2 validation outcomes for one exact body")]
+    ConflictingValidationOutcome,
     /// Validation marker is not bound to the matching exact body frame.
     #[error("Sumeragi v2 validation marker differs from its durable body")]
     ValidationMarkerMismatch,
-    /// Recovered marker was not accepted by current deterministic validation.
-    #[error("recovered Sumeragi v2 validation marker failed semantic replay: {0}")]
-    RecoveredValidationRejected(String),
     /// Recovered marker commitment differs from deterministic replay.
     #[error("recovered Sumeragi v2 validation commitment differs from semantic replay")]
     RecoveredValidationCommitmentMismatch,
+    /// Recovered success/rejection identity differs from deterministic replay.
+    #[error("recovered Sumeragi v2 validation outcome differs from semantic replay")]
+    RecoveredValidationOutcomeMismatch,
     /// Verified finality capability belongs to a different height context.
     #[error("verified Sumeragi v2 recovery finality belongs to a different height context")]
     RecoveredFinalityContextMismatch,
@@ -1729,9 +2305,12 @@ mod tests {
 
     use super::{
         BlockSignaturePolicy, BodyValidationCompletion, BodyValidationError,
-        BodyValidationRejectionIdentity, CHECKSUM_LEN, FRAME_PAYLOAD_MAX_BYTES, STORE_MAGIC,
-        STORE_VERSION, V2BodyStore, V2BodyStoreError, VALIDATED_MAGIC, ValidatedBodyMarker,
-        ValidatedBodyReceipt, read_frame_payload_with_hash, write_validated_marker,
+        BodyValidationRejectionIdentity, CHECKSUM_LEN, FRAME_PAYLOAD_MAX_BYTES,
+        QuarantinedValidationOutcome, RecoveredTerminalValidateOutcomeCatalogError,
+        RevalidatedRejectedBody, STORE_MAGIC, STORE_VERSION, V2BodyStore, V2BodyStoreError,
+        VALIDATED_MAGIC, VALIDATION_OUTCOME_MARKER_VERSION, ValidatedBodyReceipt,
+        ValidationOutcomeMarker, ValidationOutcomeMarkerKind, read_frame_payload_with_hash,
+        write_validation_outcome_marker,
     };
 
     use crate::sumeragi::{
@@ -1915,6 +2494,47 @@ mod tests {
         (canonical_wire, manifest)
     }
 
+    fn store_with_promoted_terminal_outcomes(
+        directory: &Path,
+        context: &wire::HeightContext,
+        keys: &[KeyPair],
+    ) -> V2BodyStore {
+        let (validated_body, validated_manifest) = body_and_manifest(context, keys, None);
+        let mut store =
+            V2BodyStore::open(directory, context.clone()).expect("open terminal outcome store");
+        let validated_receipt = store
+            .store(validated_manifest, validated_body)
+            .expect("persist terminal success body");
+        let commitment =
+            ValidatedBodyReceipt::for_test(validated_receipt.clone()).execution_commitment();
+        let _validated = store
+            .persist_validated_receipt(&validated_receipt, commitment)
+            .expect("promote terminal success");
+
+        let rejected_view = 1;
+        let rejected_leader = context.leader(rejected_view);
+        let rejected_leader_index =
+            usize::try_from(rejected_leader).expect("rejected leader index");
+        let (rejected_body, rejected_manifest) = body_and_manifest_with_signature_and_views(
+            context,
+            &keys[rejected_leader_index],
+            u64::from(rejected_leader),
+            rejected_view,
+            rejected_view,
+        );
+        let rejected_receipt = store
+            .store(rejected_manifest, rejected_body)
+            .expect("persist terminal rejection body");
+        let _rejected = store
+            .persist_rejected_outcome(
+                &rejected_receipt,
+                BodyValidationRejectionIdentity::Rejected.canonical_code(),
+                "volatile terminal rejection diagnostic".to_owned(),
+            )
+            .expect("promote terminal rejection");
+        store
+    }
+
     fn durable_files_snapshot(root: &Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
         fn visit(root: &Path, directory: &Path, files: &mut Vec<(std::path::PathBuf, Vec<u8>)>) {
             let mut entries = fs::read_dir(directory)
@@ -2044,16 +2664,16 @@ mod tests {
             Hash::new(b"forged executed block"),
         );
         assert_ne!(expected, forged);
-        let marker = ValidatedBodyMarker {
-            version: STORE_VERSION,
+        let marker = ValidationOutcomeMarker {
+            version: VALIDATION_OUTCOME_MARKER_VERSION,
             context_id: receipt.context_id,
             round: receipt.round,
             subject: receipt.subject,
             manifest_hash: receipt.manifest_hash,
             body_frame_hash: receipt.frame_hash,
-            execution_commitment: forged,
+            outcome: ValidationOutcomeMarkerKind::Validated(forged),
         };
-        write_validated_marker(
+        write_validation_outcome_marker(
             &store.validated_path_for(receipt.round(), receipt.subject()),
             &marker,
         )
@@ -2099,8 +2719,7 @@ mod tests {
                     "terminal recovered validation failure",
                 ))
             }),
-            Err(V2BodyStoreError::RecoveredValidationRejected(reason))
-                if reason == "terminal recovered validation failure"
+            Err(V2BodyStoreError::RecoveredValidationOutcomeMismatch)
         ));
         assert!(matches!(
             reopened.ensure_recovered_markers_revalidated(),
@@ -2119,6 +2738,7 @@ mod tests {
             .ensure_recovered_markers_revalidated()
             .expect("no untrusted marker authority survives startup");
         assert!(reopened.validated_recovery_catalog().is_empty());
+        assert_eq!(reopened.retired_revalidation.len(), 1);
         assert_eq!(
             reopened
                 .recovered(manifest.round, manifest.subject)
@@ -2154,6 +2774,7 @@ mod tests {
                 .map(ValidatedBodyReceipt::execution_commitment),
             Some(execution_commitment)
         );
+        assert!(reopened.retired_revalidation.is_empty());
     }
 
     #[test]
@@ -2398,8 +3019,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_v3_body_and_validation_frames_are_rejected() {
-        const LEGACY_VERSION: u16 = 3;
+    fn non_v1_body_and_validation_frames_are_rejected() {
+        const UNSUPPORTED_VERSION: u16 = 2;
 
         let body_directory = TempDir::new().expect("temporary body directory");
         let (body_context, body_keys) = context_and_keys();
@@ -2410,12 +3031,20 @@ mod tests {
         let body_path = body_store.path_for(body_receipt.round(), body_receipt.subject());
         drop(body_store);
         let mut body_frame = fs::read(&body_path).expect("read body frame");
+        assert_eq!(
+            u16::from_le_bytes(
+                body_frame[STORE_MAGIC.len()..STORE_MAGIC.len() + size_of::<u16>()]
+                    .try_into()
+                    .expect("body frame version has fixed width"),
+            ),
+            STORE_VERSION,
+        );
         body_frame[STORE_MAGIC.len()..STORE_MAGIC.len() + size_of::<u16>()]
-            .copy_from_slice(&LEGACY_VERSION.to_le_bytes());
-        fs::write(&body_path, body_frame).expect("write legacy body frame");
+            .copy_from_slice(&UNSUPPORTED_VERSION.to_le_bytes());
+        fs::write(&body_path, body_frame).expect("write unsupported body frame");
         assert!(matches!(
             V2BodyStore::open(body_directory.path(), body_context),
-            Err(V2BodyStoreError::UnsupportedVersion(LEGACY_VERSION))
+            Err(V2BodyStoreError::UnsupportedVersion(UNSUPPORTED_VERSION))
         ));
 
         let marker_directory = TempDir::new().expect("temporary marker directory");
@@ -2435,12 +3064,20 @@ mod tests {
             marker_store.validated_path_for(marker_receipt.round(), marker_receipt.subject());
         drop(marker_store);
         let mut marker_frame = fs::read(&marker_path).expect("read validation frame");
+        assert_eq!(
+            u16::from_le_bytes(
+                marker_frame[VALIDATED_MAGIC.len()..VALIDATED_MAGIC.len() + size_of::<u16>()]
+                    .try_into()
+                    .expect("validation frame version has fixed width"),
+            ),
+            VALIDATION_OUTCOME_MARKER_VERSION,
+        );
         marker_frame[VALIDATED_MAGIC.len()..VALIDATED_MAGIC.len() + size_of::<u16>()]
-            .copy_from_slice(&LEGACY_VERSION.to_le_bytes());
-        fs::write(&marker_path, marker_frame).expect("write legacy validation frame");
+            .copy_from_slice(&UNSUPPORTED_VERSION.to_le_bytes());
+        fs::write(&marker_path, marker_frame).expect("write unsupported validation frame");
         assert!(matches!(
             V2BodyStore::open(marker_directory.path(), marker_context),
-            Err(V2BodyStoreError::UnsupportedVersion(LEGACY_VERSION))
+            Err(V2BodyStoreError::UnsupportedVersion(UNSUPPORTED_VERSION))
         ));
     }
 
@@ -2525,6 +3162,69 @@ mod tests {
     }
 
     #[test]
+    fn locked_body_reproposal_cannot_change_rejection_into_success() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, origin_manifest) = body_and_manifest(&context, &keys, None);
+        let mut store = V2BodyStore::open(directory.path(), context.clone()).expect("open store");
+        let origin_receipt = store
+            .store(origin_manifest.clone(), body.clone())
+            .expect("store origin body");
+        let _rejected = store
+            .execute_durable_validation(
+                origin_receipt.clone(),
+                origin_receipt.manifest_hash(),
+                |_| {
+                    Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
+                        "origin body is invalid",
+                    ))
+                },
+            )
+            .expect("persist origin rejection");
+
+        let later_round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 7,
+        };
+        let later_manifest = encode_payload(&context, later_round, origin_manifest.subject, &body)
+            .expect("encode unchanged body for later proposal round")
+            .manifest()
+            .clone();
+        let later_receipt = store
+            .store(later_manifest, body)
+            .expect("store unchanged later-round body");
+        let later_manifest_hash = later_receipt.manifest_hash();
+        let success = ValidatedBodyReceipt::for_test(later_receipt.clone()).execution_commitment();
+        assert!(matches!(
+            store.execute_durable_validation(
+                later_receipt.clone(),
+                later_receipt.manifest_hash(),
+                |_| Ok::<_, FixtureValidationError>(success),
+            ),
+            Err(V2BodyStoreError::ConflictingValidationOutcome)
+        ));
+        assert!(
+            !store
+                .validated_path_for(later_round, origin_manifest.subject)
+                .exists(),
+            "a conflicting outcome must not become durable"
+        );
+
+        let later_rejection = store
+            .execute_durable_validation(later_receipt, later_manifest_hash, |_| {
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
+                    "later round reproduces rejection",
+                ))
+            })
+            .expect("same closed rejection is consistent across proposal rounds");
+        assert_eq!(
+            later_rejection.rejection_identity(),
+            Some(&BodyValidationRejectionIdentity::Rejected)
+        );
+    }
+
+    #[test]
     fn genesis_cross_view_validation_is_reexecuted_and_conflicts_fail_closed() {
         let directory = TempDir::new().expect("temporary directory");
         let (context, _keys) = context_and_keys();
@@ -2582,16 +3282,16 @@ mod tests {
         let marker_path = store.validated_path_for(later_round, origin_manifest.subject);
         assert!(!marker_path.exists());
 
-        let conflicting_marker = ValidatedBodyMarker {
-            version: STORE_VERSION,
+        let conflicting_marker = ValidationOutcomeMarker {
+            version: VALIDATION_OUTCOME_MARKER_VERSION,
             context_id: later_receipt.context_id,
             round: later_receipt.round,
             subject: later_receipt.subject,
             manifest_hash: later_receipt.manifest_hash,
             body_frame_hash: later_receipt.frame_hash,
-            execution_commitment: conflicting_commitment,
+            outcome: ValidationOutcomeMarkerKind::Validated(conflicting_commitment),
         };
-        write_validated_marker(&marker_path, &conflicting_marker)
+        write_validation_outcome_marker(&marker_path, &conflicting_marker)
             .expect("write a syntactically valid conflicting marker");
         drop(store);
 
@@ -2640,7 +3340,7 @@ mod tests {
     }
 
     #[test]
-    fn typed_validation_deferral_and_rejection_never_mint_success_receipts() {
+    fn typed_validation_deferral_and_durable_rejection_never_mint_success_receipts() {
         let directory = TempDir::new().expect("temporary directory");
         let (context, keys) = context_and_keys();
         let (body, manifest) = body_and_manifest(&context, &keys, None);
@@ -2682,27 +3382,33 @@ mod tests {
         assert_eq!(rejected.rejection_reason(), Some("invalid candidate"));
         assert!(store.validated_recovery_catalog().is_empty());
         assert!(
-            !store
-                .validated_path_for(receipt.round(), receipt.subject())
-                .exists()
-        );
-
-        let validated = store
-            .execute_validation_task(&task, |_| {
-                Ok::<_, FixtureValidationError>(execution_commitment)
-            })
-            .expect("persist validation only after success");
-        assert_eq!(
-            validated
-                .validated_receipt()
-                .map(ValidatedBodyReceipt::durable),
-            Some(&receipt)
-        );
-        assert!(
             store
                 .validated_path_for(receipt.round(), receipt.subject())
                 .exists()
         );
+        let marker_before_repeat =
+            fs::read(store.validated_path_for(receipt.round(), receipt.subject()))
+                .expect("rejection marker is durable before returning the outcome");
+
+        let callback_ran = Cell::new(false);
+        let repeated = store
+            .execute_validation_task(&task, |_| {
+                callback_ran.set(true);
+                Ok::<_, FixtureValidationError>(execution_commitment)
+            })
+            .expect("exact repeat reuses the durable rejection");
+        assert!(!callback_ran.get());
+        assert_eq!(repeated.rejection_reason(), Some("invalid candidate"));
+        assert_eq!(
+            fs::read(store.validated_path_for(receipt.round(), receipt.subject()))
+                .expect("read repeated rejection marker"),
+            marker_before_repeat,
+        );
+        assert!(matches!(
+            store.persist_validated_receipt(&receipt, execution_commitment),
+            Err(V2BodyStoreError::ConflictingValidationOutcome)
+        ));
+        assert!(store.validated_recovery_catalog().is_empty());
     }
 
     #[test]
@@ -2777,33 +3483,6 @@ mod tests {
         let marker_path = store.validated_path_for(receipt.round(), receipt.subject());
         let files_before = durable_files_snapshot(directory.path());
 
-        let rejected = store
-            .execute_durable_validation(receipt.clone(), expected_manifest_hash, |_| {
-                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
-                    "candidate is invalid",
-                ))
-            })
-            .expect("return a closed rejection outcome");
-        assert_eq!(rejected.durable_body(), &receipt);
-        assert_eq!(rejected.rejection_reason(), Some("candidate is invalid"));
-        assert_eq!(
-            rejected.rejection_identity(),
-            Some(&BodyValidationRejectionIdentity::Rejected)
-        );
-        assert!(rejected.validated_receipt().is_none());
-        assert!(rejected.missing_merge_sidecar().is_none());
-        assert!(!marker_path.exists());
-        assert_eq!(durable_files_snapshot(directory.path()), files_before);
-        let rejected = rejected
-            .into_validated_receipt()
-            .expect_err("rejection must remain intact on the success-only path");
-        assert_eq!(rejected.durable_body(), &receipt);
-        assert_eq!(rejected.rejection_reason(), Some("candidate is invalid"));
-        assert_eq!(
-            rejected.rejection_identity(),
-            Some(&BodyValidationRejectionIdentity::Rejected)
-        );
-
         let reference = missing_merge_reference(&receipt);
         let deferred = store
             .execute_durable_validation(receipt.clone(), expected_manifest_hash, |_| {
@@ -2820,6 +3499,181 @@ mod tests {
         assert!(!marker_path.exists());
         assert!(store.validated_recovery_catalog().is_empty());
         assert_eq!(durable_files_snapshot(directory.path()), files_before);
+
+        let rejected = store
+            .execute_durable_validation(receipt.clone(), expected_manifest_hash, |_| {
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
+                    "candidate is invalid",
+                ))
+            })
+            .expect("return a closed rejection outcome");
+        assert_eq!(rejected.durable_body(), &receipt);
+        assert_eq!(rejected.rejection_reason(), Some("candidate is invalid"));
+        assert_eq!(
+            rejected.rejection_identity(),
+            Some(&BodyValidationRejectionIdentity::Rejected)
+        );
+        assert!(rejected.validated_receipt().is_none());
+        assert!(rejected.missing_merge_sidecar().is_none());
+        assert!(marker_path.exists());
+        let marker = super::read_validation_outcome_marker(&marker_path)
+            .expect("decode durable rejection marker");
+        assert_eq!(marker.version, VALIDATION_OUTCOME_MARKER_VERSION);
+        assert_eq!(
+            marker.outcome,
+            ValidationOutcomeMarkerKind::Rejected(
+                BodyValidationRejectionIdentity::Rejected.canonical_code()
+            )
+        );
+        assert_ne!(durable_files_snapshot(directory.path()), files_before);
+        let rejected = rejected
+            .into_validated_receipt()
+            .expect_err("rejection must remain intact on the success-only path");
+        assert_eq!(rejected.durable_body(), &receipt);
+        assert_eq!(rejected.rejection_reason(), Some("candidate is invalid"));
+        assert_eq!(
+            rejected.rejection_identity(),
+            Some(&BodyValidationRejectionIdentity::Rejected)
+        );
+        assert!(store.validated_recovery_catalog().is_empty());
+    }
+
+    #[test]
+    fn durable_rejection_reopens_quarantined_and_promotes_only_after_exact_replay() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store =
+            V2BodyStore::open(directory.path(), context.clone()).expect("open exact store");
+        let receipt = store
+            .store(manifest, body)
+            .expect("persist exact candidate body");
+        let marker_path = store.validated_path_for(receipt.round(), receipt.subject());
+        let rejected = store
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
+                    "first volatile rejection diagnostic",
+                ))
+            })
+            .expect("persist deterministic rejection");
+        assert_eq!(
+            rejected.rejection_identity(),
+            Some(&BodyValidationRejectionIdentity::Rejected)
+        );
+        let marker_bytes = fs::read(&marker_path).expect("read durable rejection marker");
+        assert!(
+            !marker_bytes
+                .windows(b"first volatile rejection diagnostic".len())
+                .any(|window| window == b"first volatile rejection diagnostic"),
+            "raw diagnostics must not enter durable authority"
+        );
+        drop(store);
+
+        let mut reopened = V2BodyStore::open(directory.path(), context).expect("reopen store");
+        assert_eq!(reopened.pending_revalidation.len(), 1);
+        assert!(reopened.validated_recovery_catalog().is_empty());
+        assert!(reopened.rejected.is_empty());
+        assert!(matches!(
+            reopened.ensure_recovered_markers_revalidated(),
+            Err(V2BodyStoreError::UnrevalidatedValidationMarkers)
+        ));
+
+        let callback_count = Cell::new(0_usize);
+        reopened
+            .revalidate_recovered_markers(|_| {
+                callback_count.set(callback_count.get().saturating_add(1));
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
+                    "reproduced volatile rejection diagnostic",
+                ))
+            })
+            .expect("exact rejection code reproduces the durable outcome");
+        assert_eq!(callback_count.get(), 1);
+        reopened
+            .ensure_recovered_markers_revalidated()
+            .expect("rejection marker crossed semantic replay");
+        assert!(reopened.validated_recovery_catalog().is_empty());
+        assert_eq!(reopened.rejected.len(), 1);
+
+        let repeat_callback_ran = Cell::new(false);
+        let repeated = reopened
+            .execute_durable_validation(
+                receipt.clone(),
+                receipt.manifest_hash(),
+                |_| -> Result<wire::ExecutionCommitment, FixtureValidationError> {
+                    repeat_callback_ran.set(true);
+                    unreachable!("an exact durable rejection repeat must not rerun validation")
+                },
+            )
+            .expect("reuse semantically revalidated rejection");
+        assert!(!repeat_callback_ran.get());
+        assert_eq!(
+            repeated.rejection_reason(),
+            Some("reproduced volatile rejection diagnostic")
+        );
+        assert_eq!(
+            fs::read(marker_path).expect("read unchanged rejection marker"),
+            marker_bytes
+        );
+    }
+
+    #[test]
+    fn recovered_rejection_rejects_outcome_change_and_retires_on_missing_sidecar() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store =
+            V2BodyStore::open(directory.path(), context.clone()).expect("open exact store");
+        let receipt = store
+            .store(manifest.clone(), body)
+            .expect("persist exact candidate body");
+        let _rejected = store
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
+                    "durable deterministic rejection",
+                ))
+            })
+            .expect("persist rejection marker");
+        drop(store);
+
+        let mut reopened = V2BodyStore::open(directory.path(), context).expect("reopen store");
+        let success = ValidatedBodyReceipt::for_test(receipt.clone()).execution_commitment();
+        assert!(matches!(
+            reopened.revalidate_recovered_markers(|_| { Ok::<_, FixtureValidationError>(success) }),
+            Err(V2BodyStoreError::RecoveredValidationOutcomeMismatch)
+        ));
+        assert_eq!(reopened.pending_revalidation.len(), 1);
+        assert!(reopened.rejected.is_empty());
+        assert!(reopened.validated_recovery_catalog().is_empty());
+
+        let reference = missing_merge_reference(&receipt);
+        reopened
+            .revalidate_recovered_markers(|_| {
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::MissingMergeSidecar(
+                    reference.clone(),
+                ))
+            })
+            .expect("missing sidecar retires quarantined rejection authority");
+        reopened
+            .ensure_recovered_markers_revalidated()
+            .expect("no quarantined marker authority survives deferral");
+        assert!(reopened.rejected.is_empty());
+        assert!(reopened.validated_recovery_catalog().is_empty());
+        assert_eq!(reopened.retired_revalidation.len(), 1);
+        assert!(matches!(
+            reopened.execute_durable_validation(
+                receipt.clone(),
+                receipt.manifest_hash(),
+                |_| Ok::<_, FixtureValidationError>(success),
+            ),
+            Err(V2BodyStoreError::RecoveredValidationOutcomeMismatch)
+        ));
+        assert_eq!(reopened.retired_revalidation.len(), 1);
+        assert_eq!(
+            reopened
+                .recovered(manifest.round, manifest.subject)
+                .expect("body remains available after marker retirement"),
+            Some((manifest, receipt))
+        );
     }
 
     #[test]
@@ -2836,7 +3690,9 @@ mod tests {
         let entries_before = store.entries.clone();
         let manifests_before = store.manifests.clone();
         let pending_before = store.pending_revalidation.clone();
+        let retired_before = store.retired_revalidation.clone();
         let validated_before = store.validated.clone();
+        let rejected_before = store.rejected.clone();
         let files_before = durable_files_snapshot(directory.path());
         let callback_called = Cell::new(false);
         let wrong_expected = HashOf::<wire::PayloadManifest>::from_untyped_unchecked(Hash::new(
@@ -2858,7 +3714,9 @@ mod tests {
         assert_eq!(store.entries, entries_before);
         assert_eq!(store.manifests, manifests_before);
         assert_eq!(store.pending_revalidation, pending_before);
+        assert_eq!(store.retired_revalidation, retired_before);
         assert_eq!(store.validated, validated_before);
+        assert_eq!(store.rejected, rejected_before);
         assert_eq!(durable_files_snapshot(directory.path()), files_before);
 
         let foreign_directory = TempDir::new().expect("foreign temporary directory");
@@ -2887,8 +3745,177 @@ mod tests {
         assert_eq!(store.entries, entries_before);
         assert_eq!(store.manifests, manifests_before);
         assert_eq!(store.pending_revalidation, pending_before);
+        assert_eq!(store.retired_revalidation, retired_before);
         assert_eq!(store.validated, validated_before);
+        assert_eq!(store.rejected, rejected_before);
         assert_eq!(durable_files_snapshot(directory.path()), files_before);
+    }
+
+    #[test]
+    fn terminal_validate_outcome_catalog_drop_restores_both_maps_and_retired_seals() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let mut store = store_with_promoted_terminal_outcomes(directory.path(), &context, &keys);
+        let (retired_key, retired) = store
+            .validated
+            .iter()
+            .next()
+            .map(|(key, validated)| {
+                (
+                    *key,
+                    QuarantinedValidationOutcome {
+                        durable: validated.durable().clone(),
+                        outcome: ValidationOutcomeMarkerKind::Validated(
+                            validated.execution_commitment(),
+                        ),
+                    },
+                )
+            })
+            .expect("promoted success exists");
+        store.retired_revalidation.insert(retired_key, retired);
+
+        let validated_before = store.validated.clone();
+        let rejected_before = store.rejected.clone();
+        let retired_before = store.retired_revalidation.clone();
+        {
+            let _cut = store
+                .detach_terminal_validate_outcome_catalog()
+                .expect("detach aggregate terminal outcome catalog");
+        }
+
+        assert_eq!(store.validated, validated_before);
+        assert_eq!(store.rejected, rejected_before);
+        assert_eq!(store.retired_revalidation, retired_before);
+    }
+
+    #[test]
+    fn terminal_validate_outcome_catalog_commit_restores_all_unselected_entries() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let mut store = store_with_promoted_terminal_outcomes(directory.path(), &context, &keys);
+        let validated_before = store.validated.clone();
+        let rejected_before = store.rejected.clone();
+
+        store
+            .detach_terminal_validate_outcome_catalog()
+            .expect("detach aggregate terminal outcome catalog")
+            .commit_selected();
+
+        assert_eq!(store.validated, validated_before);
+        assert_eq!(store.rejected, rejected_before);
+    }
+
+    #[test]
+    fn terminal_validate_outcome_catalog_rejects_pending_markers_without_mutation() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let mut store = store_with_promoted_terminal_outcomes(directory.path(), &context, &keys);
+        let (pending_key, pending) = store
+            .validated
+            .iter()
+            .next()
+            .map(|(key, validated)| {
+                (
+                    *key,
+                    QuarantinedValidationOutcome {
+                        durable: validated.durable().clone(),
+                        outcome: ValidationOutcomeMarkerKind::Validated(
+                            validated.execution_commitment(),
+                        ),
+                    },
+                )
+            })
+            .expect("promoted success exists");
+        store.pending_revalidation.insert(pending_key, pending);
+        let pending_before = store.pending_revalidation.clone();
+        let validated_before = store.validated.clone();
+        let rejected_before = store.rejected.clone();
+
+        let error = match store.detach_terminal_validate_outcome_catalog() {
+            Ok(cut) => {
+                drop(cut);
+                panic!("pending semantic replay must prevent catalog detachment");
+            }
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            RecoveredTerminalValidateOutcomeCatalogError::UnrevalidatedMarkers
+        );
+        assert_eq!(store.pending_revalidation, pending_before);
+        assert_eq!(store.validated, validated_before);
+        assert_eq!(store.rejected, rejected_before);
+    }
+
+    #[test]
+    fn terminal_validate_outcome_catalog_rejects_ambiguous_key_without_mutation() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let mut store = store_with_promoted_terminal_outcomes(directory.path(), &context, &keys);
+        let (ambiguous_key, ambiguous_rejection) = store
+            .validated
+            .iter()
+            .next()
+            .map(|(key, validated)| {
+                (
+                    *key,
+                    RevalidatedRejectedBody {
+                        durable: validated.durable().clone(),
+                        identity_code: BodyValidationRejectionIdentity::Rejected.canonical_code(),
+                        reason: "volatile ambiguous diagnostic".to_owned(),
+                    },
+                )
+            })
+            .expect("promoted success exists");
+        store.rejected.insert(ambiguous_key, ambiguous_rejection);
+        let validated_before = store.validated.clone();
+        let rejected_before = store.rejected.clone();
+
+        let error = match store.detach_terminal_validate_outcome_catalog() {
+            Ok(cut) => {
+                drop(cut);
+                panic!("ambiguous outcome key must prevent catalog detachment");
+            }
+            Err(error) => error,
+        };
+        assert_eq!(
+            error,
+            RecoveredTerminalValidateOutcomeCatalogError::AmbiguousOutcome
+        );
+        assert_eq!(store.validated, validated_before);
+        assert_eq!(store.rejected, rejected_before);
+    }
+
+    #[test]
+    fn terminal_validate_outcome_catalog_cut_is_opaque_and_move_only() {
+        let source = include_str!("v2_body_store.rs");
+        let implementation = source
+            .split_once("impl RecoveredTerminalValidateOutcomeCatalogCut<'_>")
+            .expect("terminal outcome catalog implementation exists")
+            .1
+            .split_once("impl Drop for RecoveredTerminalValidateOutcomeCatalogCut<'_>")
+            .expect("drop restoration follows the catalog implementation")
+            .0;
+
+        assert_eq!(implementation.matches("pub(super) fn ").count(), 2);
+        assert!(implementation.contains("fn select_exact_terminal_validate("));
+        assert!(implementation.contains("fn commit_selected(mut self)"));
+        for forbidden in [
+            "pub(super) fn receipt",
+            "pub(super) fn outcome",
+            "pub(super) fn validated",
+            "pub(super) fn rejected",
+            "pub(super) fn into_",
+        ] {
+            assert!(
+                !implementation.contains(forbidden),
+                "catalog cut must not expose {forbidden}"
+            );
+        }
+        assert!(!source.contains("impl Clone for RecoveredTerminalValidateOutcomeCatalogCut"));
+        assert!(!source.contains(
+            "#[derive(Clone)]\npub(super) struct RecoveredTerminalValidateOutcomeCatalogCut"
+        ));
     }
 
     #[test]
@@ -2931,18 +3958,80 @@ mod tests {
                 "new durable validation surface must not contain {forbidden}"
             );
         }
-        assert!(!surface.contains("Clone"));
         assert!(
             surface
                 .contains("struct DurableBodyValidationOutcome(DurableBodyValidationOutcomeBody);")
         );
+        assert!(surface.contains(
+            "#[derive(Debug, PartialEq, Eq)]\n#[must_use]\npub(crate) struct DurableBodyValidationOutcome"
+        ));
+        assert!(!surface.contains("impl Clone for DurableBodyValidationOutcome"));
+        assert!(!surface.contains("impl Clone for RecoveredValidatedBodyCut"));
         assert!(surface.contains("enum DurableBodyValidationOutcomeBody"));
         assert!(surface.contains("enum BodyValidationRejectionIdentity"));
         assert!(surface.contains("identity: BodyValidationRejectionIdentity"));
         assert!(surface.contains("pub(crate) const fn rejection_identity"));
-        assert!(api.contains("identity: error.rejection_identity()"));
+        assert!(api.contains("error.rejection_identity().canonical_code()"));
+        assert!(api.contains("persist_rejected_outcome"));
         assert!(error_classification.contains("fn rejection_identity(&self)"));
         assert!(error_classification.contains("BodyValidationRejectionIdentity::Rejected"));
+    }
+
+    #[test]
+    fn rejection_marker_version_code_and_frame_binding_fail_closed() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (context, keys) = context_and_keys();
+        let (body, manifest) = body_and_manifest(&context, &keys, None);
+        let mut store =
+            V2BodyStore::open(directory.path(), context.clone()).expect("open exact store");
+        let receipt = store.store(manifest, body).expect("store exact body");
+        let _rejected = store
+            .execute_durable_validation(receipt.clone(), receipt.manifest_hash(), |_| {
+                Err::<wire::ExecutionCommitment, _>(FixtureValidationError::Invalid(
+                    "durable rejection",
+                ))
+            })
+            .expect("persist rejection marker");
+        let marker_path = store.validated_path_for(receipt.round(), receipt.subject());
+        let canonical_marker = super::read_validation_outcome_marker(&marker_path)
+            .expect("decode canonical rejection marker");
+        assert_eq!(
+            canonical_marker.outcome,
+            ValidationOutcomeMarkerKind::Rejected(
+                BodyValidationRejectionIdentity::Rejected.canonical_code()
+            )
+        );
+        drop(store);
+
+        let mut wrong_frame = canonical_marker.clone();
+        wrong_frame.body_frame_hash = Hash::new(b"foreign durable body frame");
+        write_validation_outcome_marker(&marker_path, &wrong_frame)
+            .expect("write checksum-valid foreign-frame marker");
+        assert!(matches!(
+            V2BodyStore::open(directory.path(), context.clone()),
+            Err(V2BodyStoreError::ValidationMarkerMismatch)
+        ));
+
+        let mut unknown_code = canonical_marker.clone();
+        unknown_code.outcome = ValidationOutcomeMarkerKind::Rejected(u8::MAX);
+        write_validation_outcome_marker(&marker_path, &unknown_code)
+            .expect("write checksum-valid unknown rejection code");
+        assert!(matches!(
+            V2BodyStore::open(directory.path(), context.clone()),
+            Err(V2BodyStoreError::UnknownValidationRejectionIdentity(
+                u8::MAX
+            ))
+        ));
+
+        let mut unsupported_version = canonical_marker;
+        unsupported_version.version = VALIDATION_OUTCOME_MARKER_VERSION.saturating_add(1);
+        write_validation_outcome_marker(&marker_path, &unsupported_version)
+            .expect("write checksum-valid unsupported marker version");
+        assert!(matches!(
+            V2BodyStore::open(directory.path(), context),
+            Err(V2BodyStoreError::UnsupportedValidationOutcomeMarkerVersion(version))
+                if version == VALIDATION_OUTCOME_MARKER_VERSION.saturating_add(1)
+        ));
     }
 
     #[test]
@@ -2969,8 +4058,8 @@ mod tests {
 
         fs::remove_file(&marker_path).expect("remove corrupt marker");
         let reopened = V2BodyStore::open(directory.path(), context.clone()).expect("reopen body");
-        let marker = ValidatedBodyMarker {
-            version: STORE_VERSION,
+        let marker = ValidationOutcomeMarker {
+            version: VALIDATION_OUTCOME_MARKER_VERSION,
             context_id: receipt.context_id(),
             round: wire::ConsensusRound {
                 view: receipt.round().view.saturating_add(1),
@@ -2979,10 +4068,10 @@ mod tests {
             subject: receipt.subject(),
             manifest_hash: receipt.manifest_hash(),
             body_frame_hash: receipt.frame_hash,
-            execution_commitment,
+            outcome: ValidationOutcomeMarkerKind::Validated(execution_commitment),
         };
         let orphan_path = reopened.validated_path_for(marker.round, marker.subject);
-        write_validated_marker(&orphan_path, &marker).expect("write orphan marker");
+        write_validation_outcome_marker(&orphan_path, &marker).expect("write orphan marker");
         drop(reopened);
         assert!(matches!(
             V2BodyStore::open(directory.path(), context),

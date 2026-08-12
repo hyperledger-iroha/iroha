@@ -1,5 +1,4 @@
 //! SoraFS provider-node services and durable protocol implementations.
-
 #![deny(missing_docs)]
 #![allow(
     clippy::clone_on_copy,
@@ -226,7 +225,6 @@ pub struct PorVerdictOutcome {
     /// Replay-stable terminal work retained for durable reputation admission.
     pub reputation_work: PorReputationTerminalWorkV1,
 }
-
 /// One step of durable PoR-to-reputation reconciliation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PorReputationReconcileOutcomeV1 {
@@ -242,7 +240,6 @@ pub enum PorReputationReconcileOutcomeV1 {
         acknowledgement: PorReputationTerminalAckOutcomeV1,
     },
 }
-
 /// Failure from one PoR-to-reputation reconciliation step.
 #[derive(Debug, Error)]
 pub enum PorReputationReconcileErrorV1 {
@@ -253,7 +250,6 @@ pub enum PorReputationReconcileErrorV1 {
     #[error(transparent)]
     Admission(#[from] reputation::runtime::ReputationRuntimeError),
 }
-
 /// Aggregated PoR ingestion status for a manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PorIngestionStatus {
@@ -262,7 +258,6 @@ pub struct PorIngestionStatus {
     /// Provider-specific status entries.
     pub providers: Vec<PorIngestionProviderStatus>,
 }
-
 /// Provider-level PoR ingestion state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PorIngestionProviderStatus {
@@ -285,7 +280,6 @@ pub struct PorIngestionProviderStatus {
     /// Consecutive failure streak length.
     pub consecutive_failures: u64,
 }
-
 /// Summary of an eviction action performed during GC.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GcEviction {
@@ -300,7 +294,6 @@ pub struct GcEviction {
     /// Reason label associated with the eviction.
     pub reason: String,
 }
-
 /// Summary of a manifest skipped during a GC sweep.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GcSkip {
@@ -309,7 +302,6 @@ pub struct GcSkip {
     /// Reason label describing why the manifest was skipped.
     pub reason: String,
 }
-
 /// Summary of a GC sweep execution.
 #[derive(Debug, Clone, Default)]
 pub struct GcSweepReport {
@@ -322,7 +314,6 @@ pub struct GcSweepReport {
     /// Number of errors encountered during the sweep.
     pub errors: u32,
 }
-
 /// Result of deriving and recording a payload-free evidence-viewer audit report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationEvidenceViewerAuditReportOutcome {
@@ -331,19 +322,16 @@ pub struct ModerationEvidenceViewerAuditReportOutcome {
     /// Transparency source entry recorded for later ledger/Governance DAG publication.
     pub source_entry: TransparencyLedgerSourceEntry,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GcIntentDisposition {
     DiscardedPreDomain,
     FinalizedCommitted,
 }
-
 #[derive(Debug)]
 struct GcEvictionTransactionOutcome {
     freed_bytes: u64,
     publish_error: Option<String>,
 }
-
 const MODERATION_MODEL_REGISTRY_DIR: &str = "moderation-model-registry";
 const MODERATION_MODEL_REGISTRY_SNAPSHOT_FILE: &str = "registry-snapshot.to";
 const MODERATION_SCREENING_DIR: &str = "moderation-screening";
@@ -570,7 +558,6 @@ fn privacy_aggregate_entry_id(
     entry_id.copy_from_slice(&digest.as_bytes()[..16]);
     entry_id
 }
-
 #[cfg(test)]
 fn validate_finalized_provider_payload(
     authorization: &FinalizedProviderIngestAuthorizationV1,
@@ -608,14 +595,12 @@ fn validate_finalized_provider_payload(
     }
     Ok(())
 }
-
 fn unix_now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
 }
-
 fn collect_due_evidence_viewer_audit_window(
     schedule: &PrivacyAggregateScheduleConfig,
     latest_window: PrivacyAggregateCycleWindow,
@@ -638,7 +623,6 @@ fn collect_due_evidence_viewer_audit_window(
     due_windows.insert(window);
     Ok(())
 }
-
 fn evidence_viewer_audit_cycle_id(window: PrivacyAggregateCycleWindow) -> [u8; 16] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(EVIDENCE_VIEWER_AUDIT_CYCLE_ID_DOMAIN_V1);
@@ -650,93 +634,77 @@ fn evidence_viewer_audit_cycle_id(window: PrivacyAggregateCycleWindow) -> [u8; 1
     cycle_id.copy_from_slice(&digest.as_bytes()[..16]);
     cycle_id
 }
-
 fn moderation_model_registry_checkpoint_path(data_dir: &Path) -> PathBuf {
     data_dir
         .join(MODERATION_MODEL_REGISTRY_DIR)
         .join(MODERATION_MODEL_REGISTRY_SNAPSHOT_FILE)
 }
-
 fn moderation_screening_checkpoint_path(data_dir: &Path) -> PathBuf {
     data_dir
         .join(MODERATION_SCREENING_DIR)
         .join(MODERATION_SCREENING_SNAPSHOT_FILE)
 }
-
 fn moderation_quarantine_object_store_root(data_dir: &Path) -> PathBuf {
     data_dir.join(MODERATION_QUARANTINE_OBJECT_STORE_DIR)
 }
-
 fn moderation_quarantine_object_index_path(data_dir: &Path) -> PathBuf {
     moderation_quarantine_object_store_root(data_dir).join(MODERATION_QUARANTINE_OBJECT_INDEX_FILE)
 }
-
 fn moderation_evidence_viewer_checkpoint_path(data_dir: &Path) -> PathBuf {
     data_dir
         .join(MODERATION_EVIDENCE_VIEWER_DIR)
         .join(MODERATION_EVIDENCE_VIEWER_SNAPSHOT_FILE)
 }
-
 fn auxiliary_runtime_checkpoint_path(data_dir: &Path) -> PathBuf {
     data_dir
         .join(AUX_RUNTIME_STATE_DIR)
         .join(AUX_RUNTIME_STATE_SNAPSHOT_FILE)
 }
-
 fn runtime_state_initialization_path(data_dir: &Path) -> PathBuf {
     data_dir
         .join(AUX_RUNTIME_STATE_DIR)
         .join(RUNTIME_STATE_INITIALIZATION_FILE)
 }
-
 fn retired_runtime_state_initialization_path_v1(data_dir: &Path) -> PathBuf {
     data_dir
         .join(AUX_RUNTIME_STATE_DIR)
         .join(RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V1)
 }
-
 fn retired_runtime_state_initialization_path_v2(data_dir: &Path) -> PathBuf {
     data_dir
         .join(AUX_RUNTIME_STATE_DIR)
         .join(RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V2)
 }
-
 fn retired_runtime_state_initialization_path_v3(data_dir: &Path) -> PathBuf {
     data_dir
         .join(AUX_RUNTIME_STATE_DIR)
         .join(RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V3)
 }
-
 fn retired_runtime_state_initialization_path_v4(data_dir: &Path) -> PathBuf {
     data_dir
         .join(AUX_RUNTIME_STATE_DIR)
         .join(RETIRED_RUNTIME_STATE_INITIALIZATION_FILE_V4)
 }
-
 fn retired_auxiliary_runtime_checkpoint_path_v1(data_dir: &Path) -> PathBuf {
     data_dir
         .join(AUX_RUNTIME_STATE_DIR)
         .join(RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V1)
 }
-
 fn retired_auxiliary_runtime_checkpoint_path_v2(data_dir: &Path) -> PathBuf {
     data_dir
         .join(AUX_RUNTIME_STATE_DIR)
         .join(RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V2)
 }
-
 fn retired_auxiliary_runtime_checkpoint_path_v3(data_dir: &Path) -> PathBuf {
     data_dir
         .join(AUX_RUNTIME_STATE_DIR)
         .join(RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V3)
 }
-
 fn retired_auxiliary_runtime_checkpoint_path_v4(data_dir: &Path) -> PathBuf {
     data_dir
         .join(AUX_RUNTIME_STATE_DIR)
         .join(RETIRED_AUX_RUNTIME_STATE_SNAPSHOT_FILE_V4)
 }
-
 fn required_runtime_checkpoint_paths(data_dir: &Path) -> [(&'static str, PathBuf); 5] {
     [
         (
@@ -761,13 +729,11 @@ fn required_runtime_checkpoint_paths(data_dir: &Path) -> [(&'static str, PathBuf
         ),
     ]
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeCheckpointInitialization {
     Fresh,
     Initialized,
 }
-
 fn inspect_runtime_checkpoint_initialization(
     data_dir: &Path,
     checkpoint_max_bytes: u64,
@@ -874,13 +840,11 @@ fn inspect_runtime_checkpoint_initialization(
         }
     }
 }
-
 #[derive(Debug)]
 struct LocalCheckpointWriteError {
     error: io::Error,
     committed: bool,
 }
-
 impl LocalCheckpointWriteError {
     fn precommit(error: io::Error) -> Self {
         Self {
@@ -888,7 +852,6 @@ impl LocalCheckpointWriteError {
             committed: false,
         }
     }
-
     fn committed(error: io::Error) -> Self {
         Self {
             error,
@@ -896,7 +859,6 @@ impl LocalCheckpointWriteError {
         }
     }
 }
-
 impl std::fmt::Display for LocalCheckpointWriteError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.committed {
@@ -910,26 +872,22 @@ impl std::fmt::Display for LocalCheckpointWriteError {
         }
     }
 }
-
 impl std::error::Error for LocalCheckpointWriteError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.error)
     }
 }
-
 impl From<io::Error> for LocalCheckpointWriteError {
     fn from(error: io::Error) -> Self {
         Self::precommit(error)
     }
 }
-
 #[derive(Debug, Error)]
 #[error("{message}")]
 struct RuntimeCheckpointPersistError {
     message: String,
     committed: bool,
 }
-
 impl RuntimeCheckpointPersistError {
     fn precommit(message: impl Into<String>) -> Self {
         Self {
@@ -938,14 +896,12 @@ impl RuntimeCheckpointPersistError {
         }
     }
 }
-
 fn write_local_checkpoint_atomic(
     path: &Path,
     bytes: &[u8],
 ) -> Result<(), LocalCheckpointWriteError> {
     write_local_checkpoint_atomic_with_mode(path, bytes, false)
 }
-
 fn write_local_checkpoint_atomic_bounded(
     path: &Path,
     bytes: &[u8],
@@ -962,14 +918,12 @@ fn write_local_checkpoint_atomic_bounded(
     }
     write_local_checkpoint_atomic(path, bytes)
 }
-
 fn write_local_private_checkpoint_atomic(
     path: &Path,
     bytes: &[u8],
 ) -> Result<(), LocalCheckpointWriteError> {
     write_local_checkpoint_atomic_with_mode(path, bytes, true)
 }
-
 fn write_local_checkpoint_atomic_with_mode(
     path: &Path,
     bytes: &[u8],
@@ -982,12 +936,10 @@ fn write_local_checkpoint_atomic_with_mode(
         sync_local_checkpoint_parent,
     )
 }
-
 fn sync_local_checkpoint_parent(parent: &Path) -> io::Result<()> {
     let directory = fs::File::open(parent)?;
     directory.sync_all()
 }
-
 fn remove_local_checkpoint_file_durably(path: &Path) -> io::Result<()> {
     let path = absolute_local_checkpoint_path(path)?;
     reject_unsafe_checkpoint_ancestors(&path)?;
@@ -999,7 +951,6 @@ fn remove_local_checkpoint_file_durably(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-
 fn write_local_checkpoint_atomic_with_mode_and_parent_sync(
     path: &Path,
     bytes: &[u8],
@@ -1043,7 +994,6 @@ fn write_local_checkpoint_atomic_with_mode_and_parent_sync(
     }
     result
 }
-
 fn reject_unsafe_checkpoint_target(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => validate_local_checkpoint_file_metadata(path, &metadata),
@@ -1051,7 +1001,6 @@ fn reject_unsafe_checkpoint_target(path: &Path) -> io::Result<()> {
         Err(err) => Err(err),
     }
 }
-
 fn absolute_local_checkpoint_path(path: &Path) -> io::Result<PathBuf> {
     if path.file_name().is_none() {
         return Err(io::Error::other("checkpoint path must name a file"));
@@ -1086,7 +1035,6 @@ fn absolute_local_checkpoint_path(path: &Path) -> io::Result<PathBuf> {
     }
     Ok(normalized)
 }
-
 fn validate_local_checkpoint_file_metadata(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(io::Error::other(format!(
@@ -1111,7 +1059,6 @@ fn validate_local_checkpoint_file_metadata(path: &Path, metadata: &fs::Metadata)
     }
     Ok(())
 }
-
 fn reject_unsafe_checkpoint_ancestors(path: &Path) -> io::Result<()> {
     if path
         .components()
@@ -1157,7 +1104,6 @@ fn reject_unsafe_checkpoint_ancestors(path: &Path) -> io::Result<()> {
     }
     Ok(())
 }
-
 fn read_local_checkpoint_bounded(path: &Path, max_bytes: u64) -> io::Result<Option<Vec<u8>>> {
     let path = absolute_local_checkpoint_path(path)?;
     let path = path.as_path();
@@ -1205,7 +1151,6 @@ fn read_local_checkpoint_bounded(path: &Path, max_bytes: u64) -> io::Result<Opti
     }
     Ok(Some(bytes))
 }
-
 pub(crate) fn decode_local_checkpoint_canonical<T>(
     bytes: &[u8],
     max_bytes: u64,
@@ -1232,7 +1177,6 @@ where
     }
     Ok(checkpoint)
 }
-
 fn local_checkpoint_decode_limits(
     encoded_len: usize,
     maximum_bytes: usize,
@@ -1244,7 +1188,6 @@ fn local_checkpoint_decode_limits(
     if maximum_bytes == 0 || encoded_len > maximum_bytes {
         return Err("checkpoint byte length exceeds its configured bound".to_owned());
     }
-
     let wire_limits = norito::canonical_decode_limits(encoded_len);
     Ok(norito::DecodeLimits::new(
         max_sequence_elements
@@ -1260,7 +1203,6 @@ fn local_checkpoint_decode_limits(
         64.min(wire_limits.max_nesting_depth()),
     ))
 }
-
 fn read_reputation_trust_policy_file(path: &Path) -> io::Result<Vec<u8>> {
     read_trust_policy_file(
         path,
@@ -1268,7 +1210,6 @@ fn read_reputation_trust_policy_file(path: &Path) -> io::Result<Vec<u8>> {
         "reputation trust policy",
     )
 }
-
 fn read_trust_policy_file(
     path: &Path,
     max_bytes: usize,
@@ -1334,7 +1275,6 @@ fn read_trust_policy_file(
     }
     Ok(bytes)
 }
-
 #[cfg(unix)]
 fn reputation_policy_metadata_stable(expected: &fs::Metadata, observed: &fs::Metadata) -> bool {
     expected.dev() == observed.dev()
@@ -1345,14 +1285,12 @@ fn reputation_policy_metadata_stable(expected: &fs::Metadata, observed: &fs::Met
         && expected.ctime() == observed.ctime()
         && expected.ctime_nsec() == observed.ctime_nsec()
 }
-
 #[cfg(not(unix))]
 fn reputation_policy_metadata_stable(expected: &fs::Metadata, observed: &fs::Metadata) -> bool {
     expected.len() == observed.len()
         && expected.modified().ok() == observed.modified().ok()
         && same_local_file_identity(expected, observed)
 }
-
 fn validate_trust_policy_file_metadata(
     path: &Path,
     metadata: &fs::Metadata,
@@ -1381,7 +1319,6 @@ fn validate_trust_policy_file_metadata(
     }
     Ok(())
 }
-
 fn collect_secure_object_store_files(
     root: &Path,
     current: &Path,
@@ -1442,32 +1379,26 @@ fn collect_secure_object_store_files(
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn same_local_file_identity(expected: &fs::Metadata, opened: &fs::Metadata) -> bool {
     expected.dev() == opened.dev() && expected.ino() == opened.ino()
 }
-
 #[cfg(not(unix))]
 fn same_local_file_identity(expected: &fs::Metadata, opened: &fs::Metadata) -> bool {
     expected.len() == opened.len()
         && expected.modified().ok() == opened.modified().ok()
         && expected.created().ok() == opened.created().ok()
 }
-
 #[cfg(unix)]
 fn set_local_no_follow_flag(options: &mut fs::OpenOptions) {
     options.custom_flags(local_no_follow_flag());
 }
-
 #[cfg(not(unix))]
 fn set_local_no_follow_flag(_options: &mut fs::OpenOptions) {}
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const fn local_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -1483,7 +1414,6 @@ const fn local_no_follow_flag() -> i32 {
 const fn local_no_follow_flag() -> i32 {
     0x0000_0100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -1500,17 +1430,14 @@ const fn local_no_follow_flag() -> i32 {
 const fn local_no_follow_flag() -> i32 {
     0
 }
-
 #[cfg(unix)]
 fn set_local_private_file_permissions(path: &Path) -> io::Result<()> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))
 }
-
 #[cfg(not(unix))]
 fn set_local_private_file_permissions(_path: &Path) -> io::Result<()> {
     Ok(())
 }
-
 fn local_checkpoint_tmp_path(path: &Path) -> io::Result<PathBuf> {
     let mut nonce = [0_u8; 16];
     OsRng.try_fill_bytes(&mut nonce).map_err(|err| {
@@ -1529,9 +1456,7 @@ fn local_checkpoint_tmp_path(path: &Path) -> io::Result<PathBuf> {
         None => candidate,
     })
 }
-
 const REPUTATION_EVENT_CHANNEL_CAPACITY: usize = 128;
-
 fn reconciliation_divergence_count(storage: &StorageBackend, manifests: &[StoredManifest]) -> u32 {
     let mut divergence_count = 0_u32;
     let manifest_count = storage.manifest_count();
@@ -1544,7 +1469,6 @@ fn reconciliation_divergence_count(storage: &StorageBackend, manifests: &[Stored
             "reconciliation mismatch: manifest count diverges from index"
         );
     }
-
     for manifest in manifests {
         if let Some(source) = manifest.retention_source() {
             if source.effective_epoch() != manifest.retention_epoch() {
@@ -1565,10 +1489,8 @@ fn reconciliation_divergence_count(storage: &StorageBackend, manifests: &[Stored
             );
         }
     }
-
     divergence_count
 }
-
 fn empty_appeal_finance_reconciliation_summary()
 -> Result<AppealFinanceReconciliationSummaryV1, ReconciliationError> {
     let snapshot = reconciliation::AppealFinanceRollupReconciliationSnapshot {
@@ -1584,7 +1506,6 @@ fn empty_appeal_finance_reconciliation_summary()
         total_rewards_forfeited_treasury_xor: XorQuantity::zero(),
     })
 }
-
 fn appeal_finance_rollup_reconciliation_entry(
     source: &governance::AuthoritativeAppealFinanceWeeklyRollup,
 ) -> reconciliation::AppealFinanceRollupReconciliationEntry {
@@ -1599,7 +1520,6 @@ fn appeal_finance_rollup_reconciliation_entry(
         generated_at_unix_ms: rollup.generated_at_unix_ms,
     }
 }
-
 /// Anchor-backed authorization for one privacy transparency publication.
 ///
 /// Values are constructed only after the qualified finalized release anchor
@@ -1614,7 +1534,6 @@ pub struct PrivacyPublicationAuthorizationV1 {
     release_record_digest: [u8; 32],
     payload_digest: [u8; 32],
 }
-
 impl PrivacyPublicationAuthorizationV1 {
     fn try_new(
         leader_lease: &TransparencyLeaderLeaseGrantV1,
@@ -1654,7 +1573,6 @@ impl PrivacyPublicationAuthorizationV1 {
             payload_digest,
         })
     }
-
     /// Reconstruct a checked authorization from its exact public runtime fields.
     ///
     /// This constructor exists for canonical process-boundary transports. It
@@ -1698,7 +1616,6 @@ impl PrivacyPublicationAuthorizationV1 {
             payload_digest,
         })
     }
-
     pub(crate) fn try_from_cached_parts(
         leader_lease: TransparencyLeaderLeaseGrantV1,
         finalized_anchor: PrivacyReleaseAnchorHeadV1,
@@ -1714,7 +1631,6 @@ impl PrivacyPublicationAuthorizationV1 {
             payload_digest,
         )
     }
-
     fn validate_publication(
         &self,
         publication: &ModerationLedgerCyclePublicationV1,
@@ -1743,37 +1659,31 @@ impl PrivacyPublicationAuthorizationV1 {
         }
         Ok(())
     }
-
     /// Return the exact live leader lease retained for publication metadata.
     #[must_use]
     pub const fn leader_lease(&self) -> &TransparencyLeaderLeaseGrantV1 {
         &self.leader_lease
     }
-
     /// Return the finalized release-chain head that authorized this payload.
     #[must_use]
     pub const fn finalized_anchor(&self) -> PrivacyReleaseAnchorHeadV1 {
         self.finalized_anchor
     }
-
     /// Return the canonical release sequence bound to the payload.
     #[must_use]
     pub const fn release_sequence(&self) -> u64 {
         self.release_sequence
     }
-
     /// Return the canonical release-record digest bound to the payload.
     #[must_use]
     pub const fn release_record_digest(&self) -> [u8; 32] {
         self.release_record_digest
     }
-
     /// Return the exact canonical publication payload digest.
     #[must_use]
     pub const fn payload_digest(&self) -> [u8; 32] {
         self.payload_digest
     }
-
     pub(crate) fn binding_digest(&self) -> [u8; 32] {
         let lease = self.leader_lease();
         let scope = lease.scope();
@@ -1815,7 +1725,6 @@ impl PrivacyPublicationAuthorizationV1 {
         hasher.update(&self.payload_digest);
         *hasher.finalize().as_bytes()
     }
-
     fn publication_idempotency_digest(&self) -> [u8; 32] {
         let scope = self.leader_lease().scope();
         let mut hasher = blake3::Hasher::new();
@@ -1828,7 +1737,6 @@ impl PrivacyPublicationAuthorizationV1 {
         *hasher.finalize().as_bytes()
     }
 }
-
 const FENCED_PRIVACY_AUTHORIZATION_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.fenced-privacy.authorization.v1\0";
 const FENCED_PRIVACY_PUBLICATION_IDEMPOTENCY_DIGEST_DOMAIN_V1: &[u8] =
@@ -1839,10 +1747,8 @@ const FENCED_PRIVACY_SUCCESSOR_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.fenced-privacy.successor.v1\0";
 const FENCED_PRIVACY_HEAD_INCLUSION_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.fenced-privacy.head-inclusion.v1\0";
-
 /// Wire version for the fused privacy Governance publication boundary.
 pub const FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1: u8 = 1;
-
 /// Stable, payload-free failures returned by a fused transparency publisher.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum FencedTransparencyPublishErrorV1 {
@@ -1871,7 +1777,6 @@ pub enum FencedTransparencyPublishErrorV1 {
     #[error("fenced transparency publication receipt is invalid")]
     InvalidReceipt,
 }
-
 /// Opaque authoritative Governance target head retained as a local cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct FencedTransparencyTargetHeadV1 {
@@ -1880,7 +1785,6 @@ pub struct FencedTransparencyTargetHeadV1 {
     head_digest: [u8; 32],
     fencing_floor: u64,
 }
-
 impl FencedTransparencyTargetHeadV1 {
     /// Construct one checked non-genesis authoritative target head.
     ///
@@ -1905,25 +1809,21 @@ impl FencedTransparencyTargetHeadV1 {
             Err(FencedTransparencyPublishErrorV1::InvalidRequest)
         }
     }
-
     /// Return the monotonic authoritative head generation.
     #[must_use]
     pub const fn generation(self) -> u64 {
         self.generation
     }
-
     /// Return the content-addressed authoritative head digest.
     #[must_use]
     pub const fn head_digest(self) -> [u8; 32] {
         self.head_digest
     }
-
     /// Return the greatest fencing token accepted at this head.
     #[must_use]
     pub const fn fencing_floor(self) -> u64 {
         self.fencing_floor
     }
-
     pub(crate) fn is_valid(self) -> bool {
         self.version == FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1
             && self.generation != 0
@@ -1931,7 +1831,6 @@ impl FencedTransparencyTargetHeadV1 {
             && self.fencing_floor != 0
     }
 }
-
 /// Stable publication identity and payload claimed at one authoritative head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FencedTransparencyPublicationInclusionV1 {
@@ -1939,7 +1838,6 @@ pub struct FencedTransparencyPublicationInclusionV1 {
     payload_digest: [u8; 32],
     included_head: FencedTransparencyTargetHeadV1,
 }
-
 impl FencedTransparencyPublicationInclusionV1 {
     /// Construct one exact publication-inclusion requirement.
     ///
@@ -1964,26 +1862,22 @@ impl FencedTransparencyPublicationInclusionV1 {
             included_head,
         })
     }
-
     /// Return the stable lease-independent publication identity.
     #[must_use]
     pub const fn publication_idempotency_digest(self) -> [u8; 32] {
         self.publication_idempotency_digest
     }
-
     /// Return the exact canonical payload digest.
     #[must_use]
     pub const fn payload_digest(self) -> [u8; 32] {
         self.payload_digest
     }
-
     /// Return the authoritative head claimed to include the identity and payload.
     #[must_use]
     pub const fn included_head(self) -> FencedTransparencyTargetHeadV1 {
         self.included_head
     }
 }
-
 /// Authenticated adapter proof that publications and retained heads reach one current head.
 ///
 /// The proof digest is public, payload-free evidence emitted only after the
@@ -1998,7 +1892,6 @@ pub struct FencedTransparencyHeadAncestryProofV1 {
     verified_publications: Vec<FencedTransparencyPublicationInclusionV1>,
     adapter_proof_digest: [u8; 32],
 }
-
 impl FencedTransparencyHeadAncestryProofV1 {
     /// Construct one adapter-verified ancestry proof.
     ///
@@ -2023,31 +1916,26 @@ impl FencedTransparencyHeadAncestryProofV1 {
         proof.validate_shape()?;
         Ok(proof)
     }
-
     /// Return the exact authenticated current target head.
     #[must_use]
     pub const fn authoritative_head(&self) -> Option<FencedTransparencyTargetHeadV1> {
         self.authoritative_head
     }
-
     /// Return the exact requested heads whose ancestry the adapter verified.
     #[must_use]
     pub fn verified_ancestors(&self) -> &[FencedTransparencyTargetHeadV1] {
         &self.verified_ancestors
     }
-
     /// Return every stable identity and payload proven at its inclusion head.
     #[must_use]
     pub fn verified_publications(&self) -> &[FencedTransparencyPublicationInclusionV1] {
         &self.verified_publications
     }
-
     /// Return the payload-free adapter evidence digest.
     #[must_use]
     pub const fn adapter_proof_digest(&self) -> [u8; 32] {
         self.adapter_proof_digest
     }
-
     fn validate_for_required_evidence(
         &self,
         required_ancestors: &[FencedTransparencyTargetHeadV1],
@@ -2061,7 +1949,6 @@ impl FencedTransparencyHeadAncestryProofV1 {
         }
         Ok(())
     }
-
     fn validate_shape(&self) -> Result<(), FencedTransparencyPublishErrorV1> {
         if self.version != FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1
             || self.adapter_proof_digest == [0; 32]
@@ -2101,7 +1988,6 @@ impl FencedTransparencyHeadAncestryProofV1 {
         Ok(())
     }
 }
-
 /// Exact input to one atomic privacy Governance compare-and-append.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FencedPrivacyPublicationRequestV1 {
@@ -2116,7 +2002,6 @@ pub struct FencedPrivacyPublicationRequestV1 {
     fencing_floor: u64,
     request_digest: [u8; 32],
 }
-
 impl FencedPrivacyPublicationRequestV1 {
     /// Construct an exact request from canonical privacy publication bytes.
     ///
@@ -2175,7 +2060,6 @@ impl FencedPrivacyPublicationRequestV1 {
         request.validate()?;
         Ok(request)
     }
-
     /// Revalidate the canonical payload and every deterministic request binding.
     ///
     /// # Errors
@@ -2227,68 +2111,57 @@ impl FencedPrivacyPublicationRequestV1 {
             .validate_publication(&publication, &self.canonical_payload)
             .map_err(|_| FencedTransparencyPublishErrorV1::InvalidRequest)
     }
-
     /// Return the anchor- and lease-bound publication authorization.
     #[must_use]
     pub const fn authorization(&self) -> &PrivacyPublicationAuthorizationV1 {
         &self.authorization
     }
-
     /// Return the canonical digest of every authorization field.
     #[must_use]
     pub const fn authorization_digest(&self) -> [u8; 32] {
         self.authorization_digest
     }
-
     /// Return the lease-independent identity used for atomic target deduplication.
     #[must_use]
     pub const fn publication_idempotency_digest(&self) -> [u8; 32] {
         self.publication_idempotency_digest
     }
-
     /// Return the governed query and release identity used to detect conflicts.
     #[must_use]
     pub const fn publication_scope(&self) -> ([u8; 32], [u8; 16]) {
         let scope = self.authorization.leader_lease.scope();
         (scope.query_id(), scope.cycle_id())
     }
-
     /// Return the exact canonical privacy publication bytes.
     #[must_use]
     pub fn canonical_payload(&self) -> &[u8] {
         &self.canonical_payload
     }
-
     /// Return the digest of the exact canonical payload.
     #[must_use]
     pub const fn payload_digest(&self) -> [u8; 32] {
         self.payload_digest
     }
-
     /// Return the expected authoritative predecessor, or `None` for genesis.
     #[must_use]
     pub const fn expected_authoritative_head(&self) -> Option<FencedTransparencyTargetHeadV1> {
         self.expected_authoritative_head
     }
-
     /// Return the leader-lease fencing token bound into the operation.
     #[must_use]
     pub const fn fencing_token(&self) -> u64 {
         self.fencing_token
     }
-
     /// Return the authoritative fencing floor expected by the caller.
     #[must_use]
     pub const fn fencing_floor(&self) -> u64 {
         self.fencing_floor
     }
-
     /// Return the stable idempotency digest of this exact request.
     #[must_use]
     pub const fn request_digest(&self) -> [u8; 32] {
         self.request_digest
     }
-
     /// Derive the only valid content-addressed successor for this request.
     ///
     /// # Errors
@@ -2310,7 +2183,6 @@ impl FencedPrivacyPublicationRequestV1 {
         FencedTransparencyTargetHeadV1::try_new(generation, head_digest, self.fencing_token)
     }
 }
-
 /// Target result for one stable privacy-publication identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum FencedPrivacyPublicationDispositionV1 {
@@ -2319,7 +2191,6 @@ pub enum FencedPrivacyPublicationDispositionV1 {
     /// The stable identity was already included and no new append occurred.
     AlreadyIncluded,
 }
-
 /// Exact success receipt returned after atomic append, readback, and inclusion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FencedPrivacyPublicationReceiptV1 {
@@ -2338,7 +2209,6 @@ pub struct FencedPrivacyPublicationReceiptV1 {
     readback_head: FencedTransparencyTargetHeadV1,
     head_inclusion_digest: [u8; 32],
 }
-
 impl FencedPrivacyPublicationReceiptV1 {
     /// Build a receipt after a provider has verified the exact append and readback.
     ///
@@ -2376,7 +2246,6 @@ impl FencedPrivacyPublicationReceiptV1 {
         };
         Ok(receipt)
     }
-
     /// Build a receipt for an identity already included by an earlier lease.
     ///
     /// The provider may call this constructor only after atomically finding the
@@ -2427,7 +2296,6 @@ impl FencedPrivacyPublicationReceiptV1 {
             ),
         })
     }
-
     /// Validate the exact request echo, successor, readback, and provider identity.
     ///
     /// # Errors
@@ -2479,55 +2347,46 @@ impl FencedPrivacyPublicationReceiptV1 {
         }
         Ok(())
     }
-
     /// Return the exact request idempotency digest acknowledged by the provider.
     #[must_use]
     pub const fn request_digest(&self) -> [u8; 32] {
         self.request_digest
     }
-
     /// Return the stable lease-independent publication identity.
     #[must_use]
     pub const fn publication_idempotency_digest(&self) -> [u8; 32] {
         self.publication_idempotency_digest
     }
-
     /// Return the exact canonical payload digest acknowledged by the target.
     #[must_use]
     pub const fn payload_digest(&self) -> [u8; 32] {
         self.payload_digest
     }
-
     /// Return whether this request appended or found an existing inclusion.
     #[must_use]
     pub const fn disposition(&self) -> FencedPrivacyPublicationDispositionV1 {
         self.disposition
     }
-
     /// Return the original authoritative head that includes this identity.
     #[must_use]
     pub const fn included_head(&self) -> FencedTransparencyTargetHeadV1 {
         self.successor_head
     }
-
     /// Return the authoritative head read back by the atomic target operation.
     #[must_use]
     pub const fn readback_head(&self) -> FencedTransparencyTargetHeadV1 {
         self.readback_head
     }
-
     /// Return the deterministic head-inclusion evidence digest.
     #[must_use]
     pub const fn head_inclusion_digest(&self) -> [u8; 32] {
         self.head_inclusion_digest
     }
 }
-
 /// Deployment-owned atomic boundary for privacy Governance publication.
 pub trait FencedTransparencyPublisherV1: Send + Sync + std::fmt::Debug {
     /// Return the stable opaque production adapter handle.
     fn handle(&self) -> &str;
-
     /// Qualify the active adapter and its public policy revision.
     ///
     /// # Errors
@@ -2535,7 +2394,6 @@ pub trait FencedTransparencyPublisherV1: Send + Sync + std::fmt::Debug {
     /// Returns a redacted diagnostic when the adapter is unavailable, stale,
     /// revoked, test-marked, or cannot prove its public qualification.
     fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String>;
-
     /// Atomically compare the target head, fence, append, read back, and prove inclusion.
     ///
     /// The provider must retain and return the original receipt when the exact
@@ -2567,12 +2425,10 @@ pub trait FencedTransparencyPublisherV1: Send + Sync + std::fmt::Debug {
         request: &FencedPrivacyPublicationRequestV1,
     ) -> Result<FencedPrivacyPublicationReceiptV1, FencedTransparencyPublishErrorV1>;
 }
-
 fn fenced_privacy_digest_bytes(hasher: &mut blake3::Hasher, bytes: &[u8]) {
     hasher.update(&u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
     hasher.update(bytes);
 }
-
 fn fenced_privacy_digest_head(
     hasher: &mut blake3::Hasher,
     head: Option<FencedTransparencyTargetHeadV1>,
@@ -2589,7 +2445,6 @@ fn fenced_privacy_digest_head(
         }
     }
 }
-
 fn fenced_privacy_request_digest(
     authorization_digest: [u8; 32],
     publication_idempotency_digest: [u8; 32],
@@ -2611,7 +2466,6 @@ fn fenced_privacy_request_digest(
     hasher.update(&fencing_floor.to_le_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn fenced_privacy_successor_digest(request: &FencedPrivacyPublicationRequestV1) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(FENCED_PRIVACY_SUCCESSOR_DIGEST_DOMAIN_V1);
@@ -2621,7 +2475,6 @@ fn fenced_privacy_successor_digest(request: &FencedPrivacyPublicationRequestV1) 
     hasher.update(&request.fencing_token.to_le_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn fenced_privacy_head_inclusion_digest(
     request: &FencedPrivacyPublicationRequestV1,
     disposition: FencedPrivacyPublicationDispositionV1,
@@ -2641,7 +2494,6 @@ fn fenced_privacy_head_inclusion_digest(
     fenced_privacy_digest_head(&mut hasher, Some(readback_head));
     *hasher.finalize().as_bytes()
 }
-
 /// Interface for emitting settlement artefacts to the governance DAG.
 ///
 /// Implementations must be idempotent for identical canonical payload bytes.
@@ -2660,7 +2512,6 @@ pub enum GovernanceSubmissionOriginV1 {
     /// Canonical Torii appeal-finance weekly-rollup ingress.
     AppealFinanceWeeklyRollup,
 }
-
 impl GovernanceSubmissionOriginV1 {
     pub(crate) const fn tag(self) -> u8 {
         match self {
@@ -2671,7 +2522,6 @@ impl GovernanceSubmissionOriginV1 {
             Self::AppealFinanceWeeklyRollup => 4,
         }
     }
-
     /// Return the stable publish-index label for this authenticated ingress.
     #[must_use]
     pub const fn label(self) -> &'static str {
@@ -2684,14 +2534,12 @@ impl GovernanceSubmissionOriginV1 {
         }
     }
 }
-
 /// Server-derived authenticated identity bound to a durable governance submission.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct GovernanceSubmissionProvenanceV1 {
     publisher_account: AccountId,
     origin: GovernanceSubmissionOriginV1,
 }
-
 impl GovernanceSubmissionProvenanceV1 {
     fn new(publisher_account: AccountId, origin: GovernanceSubmissionOriginV1) -> Self {
         Self {
@@ -2699,19 +2547,16 @@ impl GovernanceSubmissionProvenanceV1 {
             origin,
         }
     }
-
     /// Return the canonical account authenticated by Torii.
     #[must_use]
     pub fn publisher_account(&self) -> &AccountId {
         &self.publisher_account
     }
-
     /// Return the exact authenticated ingress that admitted the submission.
     #[must_use]
     pub const fn origin(&self) -> GovernanceSubmissionOriginV1 {
         self.origin
     }
-
     pub(crate) fn to_dag_provenance(&self) -> sorafs_manifest::GovernanceDagSubmissionProvenanceV1 {
         let origin = match self.origin {
             GovernanceSubmissionOriginV1::TransparencyTokenIssuance => {
@@ -2738,7 +2583,6 @@ impl GovernanceSubmissionProvenanceV1 {
         }
     }
 }
-
 /// Durable publication boundary for authenticated governance records.
 ///
 /// Implementations must make retries of the same canonical record idempotent,
@@ -2833,7 +2677,6 @@ pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
         encoded: &[u8],
     ) -> Result<(), GovernancePublishError>;
 }
-
 /// Errors surfaced when publishing governance artefacts fails.
 #[derive(Debug, Error)]
 pub enum GovernancePublishError {
@@ -2844,7 +2687,6 @@ pub enum GovernancePublishError {
     #[error("{0}")]
     Other(String),
 }
-
 /// One canonical publication-authority generation read through the retained
 /// Governance DAG root.
 #[derive(Debug, PartialEq, Eq)]
@@ -2853,21 +2695,18 @@ pub struct GovernanceDagPublicationSnapshotV1 {
     store_generation: u64,
     store_record_digest: [u8; 32],
 }
-
 impl GovernanceDagPublicationSnapshotV1 {
     /// Borrow the canonical publication-envelope JSON bytes.
     #[must_use]
     pub fn canonical_bytes(&self) -> &[u8] {
         &self.canonical_bytes
     }
-
     /// Return the typed two-slot store generation and complete record digest.
     #[must_use]
     pub const fn store_identity(&self) -> (u64, [u8; 32]) {
         (self.store_generation, self.store_record_digest)
     }
 }
-
 /// One canonical runtime-DAG generation authenticated by the exact sealed
 /// producer checkpoint retained by this node.
 #[derive(Debug, PartialEq, Eq)]
@@ -2879,33 +2718,28 @@ pub struct GovernanceDagRuntimeSnapshotV1 {
     checkpoint_generation: u64,
     checkpoint_revision: [u8; 32],
 }
-
 impl GovernanceDagRuntimeSnapshotV1 {
     /// Borrow the canonical signed-head bytes.
     #[must_use]
     pub fn head_bytes(&self) -> &[u8] {
         &self.head_bytes
     }
-
     /// Borrow the canonical runtime-index JSON bytes committed with the head.
     #[must_use]
     pub fn index_bytes(&self) -> &[u8] {
         &self.index_bytes
     }
-
     /// Return the typed two-slot store generation and complete record digest.
     #[must_use]
     pub const fn store_identity(&self) -> (u64, [u8; 32]) {
         (self.store_generation, self.store_record_digest)
     }
-
     /// Return the exact sealed producer-checkpoint generation and revision.
     #[must_use]
     pub const fn checkpoint_identity(&self) -> (u64, [u8; 32]) {
         (self.checkpoint_generation, self.checkpoint_revision)
     }
 }
-
 impl GovernancePublishError {
     /// Construct a generic publish failure.
     #[must_use]
@@ -2913,7 +2747,6 @@ impl GovernancePublishError {
         Self::Other(message.into())
     }
 }
-
 /// Result of one scheduled privacy aggregate publication attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrivacyAggregateScheduleOutcome {
@@ -2950,7 +2783,6 @@ pub enum PrivacyAggregateScheduleOutcome {
         publication: ModerationLedgerCyclePublicationV1,
     },
 }
-
 /// Complete input for publishing one test-built privacy aggregate source cycle.
 #[cfg(test)]
 struct PrivacyAggregateSourceCycleInput {
@@ -2967,7 +2799,6 @@ struct PrivacyAggregateSourceCycleInput {
     /// Optional request-bound threshold-PRF input for this cycle.
     cycle_prf_input: Option<PrivacyCyclePrfInputV1>,
 }
-
 struct PublishedPrivacyCycleCommitInput<'a> {
     window: PrivacyAggregateCycleWindow,
     publication: &'a ModerationLedgerCyclePublicationV1,
@@ -2977,7 +2808,6 @@ struct PublishedPrivacyCycleCommitInput<'a> {
     composition_budget: Option<PrivacyCompositionBudgetPolicyV1>,
     request_receipt: PrivacyPublishRequestReceiptV1,
 }
-
 struct SuppressedPrivacyCycleCommitInput<'a> {
     cycle_id: [u8; 16],
     window: PrivacyAggregateCycleWindow,
@@ -2986,16 +2816,13 @@ struct SuppressedPrivacyCycleCommitInput<'a> {
     previous_publication_block_hash: Option<[u8; 32]>,
     request_receipt: PrivacyPublishRequestReceiptV1,
 }
-
 const PRIVACY_PUBLISH_REQUEST_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_publish_request.v1";
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum PrivacyPublishRequestOutcomeV1 {
     Published { publication_bytes: Vec<u8> },
     AllBucketsSuppressed,
 }
-
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PrivacyPublishRequestReceiptV1 {
     idempotency_key: String,
@@ -3010,7 +2837,6 @@ struct PrivacyPublishRequestReceiptV1 {
     provenance: Option<GovernanceSubmissionProvenanceV1>,
     outcome: PrivacyPublishRequestOutcomeV1,
 }
-
 impl std::fmt::Debug for PrivacyPublishRequestReceiptV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -3037,7 +2863,6 @@ impl std::fmt::Debug for PrivacyPublishRequestReceiptV1 {
             .finish()
     }
 }
-
 impl PrivacyPublishRequestReceiptV1 {
     fn validate(&self) -> Result<(), GovernancePublishError> {
         validate_privacy_publish_idempotency_key(&self.idempotency_key)?;
@@ -3082,7 +2907,6 @@ impl PrivacyPublishRequestReceiptV1 {
         }
         Ok(())
     }
-
     fn outcome(&self) -> Result<PrivacyAggregateScheduleOutcome, GovernancePublishError> {
         self.validate()?;
         let window = PrivacyAggregateCycleWindow {
@@ -3109,7 +2933,6 @@ impl PrivacyPublishRequestReceiptV1 {
         }
     }
 }
-
 fn validate_privacy_publish_idempotency_key(
     idempotency_key: &str,
 ) -> Result<(), GovernancePublishError> {
@@ -3124,7 +2947,6 @@ fn validate_privacy_publish_idempotency_key(
     }
     Ok(())
 }
-
 fn privacy_publish_request_digest(
     query_id: [u8; 32],
     idempotency_key: &str,
@@ -3138,7 +2960,6 @@ fn privacy_publish_request_digest(
     hasher.update(idempotency_key.as_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn validate_privacy_release_lineage(
     release_ledger: &transparency::PrivacyReleaseLedgerV1,
     schedule: PrivacyAggregateScheduleConfig,
@@ -3158,7 +2979,6 @@ fn validate_privacy_release_lineage(
     }
     Ok(())
 }
-
 fn validate_privacy_publish_receipt_release(
     receipt: &PrivacyPublishRequestReceiptV1,
     record: &transparency::PrivacyReleaseRecordV1,
@@ -3215,7 +3035,6 @@ fn validate_privacy_publish_receipt_release(
     }
     Ok(())
 }
-
 /// Result of one scheduled evidence-viewer audit-report publication attempt.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModerationEvidenceViewerAuditScheduleOutcome {
@@ -3249,7 +3068,6 @@ pub enum ModerationEvidenceViewerAuditScheduleOutcome {
         publication: ModerationLedgerCyclePublicationV1,
     },
 }
-
 /// Payload returned by a repair orchestrator for a missing chunk.
 #[derive(Debug, Clone)]
 pub struct RepairChunkPayload {
@@ -3260,7 +3078,6 @@ pub struct RepairChunkPayload {
     /// Optional source label (provider id, URL, or orchestrator hint).
     pub source: Option<String>,
 }
-
 /// Bounded replay result for a monotonic local event stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EventReplay<T> {
@@ -3273,14 +3090,12 @@ pub struct EventReplay<T> {
     /// Retained events after the requested cursor.
     pub events: Vec<T>,
 }
-
 #[derive(Debug, Clone)]
 struct BoundedEventHistory<T> {
     events: VecDeque<T>,
     latest_sequence: u64,
     limit: usize,
 }
-
 impl<T> BoundedEventHistory<T> {
     fn new(limit: usize) -> Self {
         Self {
@@ -3289,7 +3104,6 @@ impl<T> BoundedEventHistory<T> {
             limit: limit.max(1),
         }
     }
-
     fn append(&mut self, build: impl FnOnce(u64) -> T) -> Result<T, GovernancePublishError>
     where
         T: Clone,
@@ -3306,7 +3120,6 @@ impl<T> BoundedEventHistory<T> {
         }
         Ok(event)
     }
-
     fn restore(
         &mut self,
         events: Vec<T>,
@@ -3331,7 +3144,6 @@ impl<T> BoundedEventHistory<T> {
         }
         Ok(())
     }
-
     fn replay(
         &self,
         since_sequence: Option<u64>,
@@ -3361,7 +3173,6 @@ impl<T> BoundedEventHistory<T> {
             events,
         }
     }
-
     fn retained(&self) -> Vec<T>
     where
         T: Clone,
@@ -3369,7 +3180,6 @@ impl<T> BoundedEventHistory<T> {
         self.events.iter().cloned().collect()
     }
 }
-
 /// Errors surfaced when the repair orchestrator cannot fetch missing chunks.
 #[derive(Debug, Error)]
 pub enum RepairOrchestratorError {
@@ -3377,7 +3187,6 @@ pub enum RepairOrchestratorError {
     #[error("{0}")]
     Other(String),
 }
-
 impl RepairOrchestratorError {
     /// Construct a generic orchestrator failure.
     #[must_use]
@@ -3385,7 +3194,6 @@ impl RepairOrchestratorError {
         Self::Other(message.into())
     }
 }
-
 /// Interface for orchestrator-backed repair rehydration.
 pub trait RepairOrchestrator: Send + Sync + std::fmt::Debug {
     /// Fetch invalid chunks from remote sources for the exact native lease.
@@ -3399,7 +3207,6 @@ pub trait RepairOrchestrator: Send + Sync + std::fmt::Debug {
         invalid_chunks: &[ChunkFileRecord],
     ) -> Result<Vec<RepairChunkPayload>, RepairOrchestratorError>;
 }
-
 /// Runtime-only dependencies supplied by the embedding daemon.
 ///
 /// Secret-bearing providers are deliberately absent from [`StorageConfig`].
@@ -3419,7 +3226,6 @@ pub struct NodeRuntimeDeps {
     provider_ingest_checkpoint_runtime: Option<Arc<dyn ProviderIngestCheckpointRuntimeV1>>,
     por_finalized_replay_archive: Option<Arc<dyn PorFinalizedReplayArchiveV1>>,
 }
-
 impl std::fmt::Debug for NodeRuntimeDeps {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -3467,7 +3273,6 @@ impl std::fmt::Debug for NodeRuntimeDeps {
             .finish()
     }
 }
-
 impl NodeRuntimeDeps {
     /// Attach the runtime-only PKCS#11/KMS quarantine-key wrapper.
     ///
@@ -3481,7 +3286,6 @@ impl NodeRuntimeDeps {
         self.moderation_quarantine_key_wrapper = Some(key_wrapper);
         self
     }
-
     /// Attach the runtime-only threshold-PRF provider used by DP aggregates.
     #[must_use]
     pub fn with_privacy_cycle_prf_provider(
@@ -3491,7 +3295,6 @@ impl NodeRuntimeDeps {
         self.privacy_cycle_prf_provider = Some(provider);
         self
     }
-
     /// Attach the independently administered finalized privacy-release head.
     #[must_use]
     pub fn with_privacy_release_anchor(
@@ -3501,7 +3304,6 @@ impl NodeRuntimeDeps {
         self.privacy_release_anchor = Some(anchor);
         self
     }
-
     /// Attach the external sealed-CAS leader-lease provider for privacy releases.
     #[must_use]
     pub fn with_transparency_leader_lease_provider(
@@ -3511,7 +3313,6 @@ impl NodeRuntimeDeps {
         self.transparency_leader_lease_provider = Some(provider);
         self
     }
-
     /// Attach the deployment-owned fused privacy Governance target writer.
     ///
     /// Startup also requires the exact public binding in [`StorageConfig`] and
@@ -3524,7 +3325,6 @@ impl NodeRuntimeDeps {
         self.fenced_transparency_publisher = Some(publisher);
         self
     }
-
     /// Attach the authenticated authoritative-head reader for fused publication.
     ///
     /// The reader and writer are independently qualified against the same
@@ -3537,7 +3337,6 @@ impl NodeRuntimeDeps {
         self.fenced_transparency_head_reader = Some(reader);
         self
     }
-
     /// Attach the production HSM/KMS signer for local Governance DAG blocks.
     #[must_use]
     pub fn with_governance_dag_signer(
@@ -3547,7 +3346,6 @@ impl NodeRuntimeDeps {
         self.governance_dag_signer = Some(signer);
         self
     }
-
     /// Attach the sealed monotonic checkpoint store for the local signed DAG producer.
     ///
     /// Its expected public handle and qualification come exclusively from
@@ -3560,7 +3358,6 @@ impl NodeRuntimeDeps {
         self.governance_dag_checkpoint_store = Some(store);
         self
     }
-
     /// Attach the production sealed monotonic provider-ingest checkpoint store.
     #[must_use]
     pub fn with_provider_ingest_checkpoint_runtime(
@@ -3570,7 +3367,6 @@ impl NodeRuntimeDeps {
         self.provider_ingest_checkpoint_runtime = Some(runtime);
         self
     }
-
     /// Attach the deployment-owned authenticated finalized-PoR replay archive.
     #[must_use]
     pub fn with_por_finalized_replay_archive(
@@ -3581,41 +3377,32 @@ impl NodeRuntimeDeps {
         self
     }
 }
-
 #[derive(Clone)]
 struct OpaqueModerationQuarantineKeyWrapper(Arc<dyn ModerationQuarantineKeyWrapper>);
-
 impl std::fmt::Debug for OpaqueModerationQuarantineKeyWrapper {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("ModerationQuarantineKeyWrapper(<runtime-only>)")
     }
 }
-
 impl std::ops::Deref for OpaqueModerationQuarantineKeyWrapper {
     type Target = dyn ModerationQuarantineKeyWrapper;
-
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
     }
 }
-
 #[derive(Clone)]
 struct OpaquePorFinalizedReplayArchive(Arc<dyn PorFinalizedReplayArchiveV1>);
-
 impl std::fmt::Debug for OpaquePorFinalizedReplayArchive {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("PorFinalizedReplayArchiveV1(<runtime-only>)")
     }
 }
-
 impl std::ops::Deref for OpaquePorFinalizedReplayArchive {
     type Target = dyn PorFinalizedReplayArchiveV1;
-
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
     }
 }
-
 fn verify_por_replay_archive_provider(
     policy: &config::PorReplayArchivePolicyV1,
     archive: &dyn PorFinalizedReplayArchiveV1,
@@ -3636,50 +3423,39 @@ fn verify_por_replay_archive_provider(
     }
     Ok(())
 }
-
 #[derive(Clone)]
 struct OpaquePrivacyCyclePrfProvider(Arc<QualifiedPrivacyCyclePrfProviderV1>);
-
 impl std::fmt::Debug for OpaquePrivacyCyclePrfProvider {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("PrivacyCyclePrfProviderV1(<runtime-only>)")
     }
 }
-
 impl std::ops::Deref for OpaquePrivacyCyclePrfProvider {
     type Target = dyn PrivacyCyclePrfProviderV1;
-
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
     }
 }
-
 #[derive(Clone)]
 struct OpaquePrivacyReleaseAnchor(Arc<QualifiedPrivacyReleaseAnchorV1>);
-
 impl std::fmt::Debug for OpaquePrivacyReleaseAnchor {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("PrivacyReleaseAnchorV1(<runtime-only>)")
     }
 }
-
 impl std::ops::Deref for OpaquePrivacyReleaseAnchor {
     type Target = dyn PrivacyReleaseAnchorV1;
-
     fn deref(&self) -> &Self::Target {
         self.0.as_ref()
     }
 }
-
 #[derive(Clone)]
 struct OpaqueTransparencyLeaderLeaseProvider(Arc<QualifiedTransparencyLeaderLeaseProviderV1>);
-
 impl std::fmt::Debug for OpaqueTransparencyLeaderLeaseProvider {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("TransparencyLeaderLeaseProviderV1(<runtime-only>)")
     }
 }
-
 /// Lightweight handle representing the embedded SoraFS storage worker.
 #[derive(Debug, Clone)]
 pub struct NodeHandle {
@@ -3757,9 +3533,7 @@ pub struct NodeHandle {
     fenced_transparency_head_reader: Option<QualifiedFencedTransparencyHeadReaderV1>,
     published_evidence_viewer_audit_cycles: Arc<RwLock<BTreeSet<[u8; 16]>>>,
 }
-
 type PorHistoryKey = ([u8; 32], [u8; 32]);
-
 #[derive(Debug, Default, Clone)]
 struct PorHistoryEntry {
     last_success_unix: Option<u64>,
@@ -3767,7 +3541,6 @@ struct PorHistoryEntry {
     failures_total: u64,
     consecutive_failures: u64,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct PorHistoryCheckpointEntryV1 {
     manifest_digest: [u8; 32],
@@ -3777,7 +3550,6 @@ struct PorHistoryCheckpointEntryV1 {
     failures_total: u64,
     consecutive_failures: u64,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum GovernanceOutboxKindV1 {
     DealSettlement,
@@ -3793,7 +3565,6 @@ enum GovernanceOutboxKindV1 {
     PorChallengePublication,
     PorWeeklyReport,
 }
-
 impl GovernanceOutboxKindV1 {
     const fn tag(self) -> u8 {
         match self {
@@ -3812,7 +3583,6 @@ impl GovernanceOutboxKindV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct GovernanceOutboxEntryV1 {
     version: u8,
@@ -3823,19 +3593,16 @@ struct GovernanceOutboxEntryV1 {
     binding_digest: [u8; 32],
     payload_bytes: Vec<u8>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GovernanceOutboxRuntime {
     next_sequence: u64,
     entries: BTreeMap<u64, GovernanceOutboxEntryV1>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GovernanceOutboxReservationUse {
     None,
     GcEviction,
 }
-
 impl Default for GovernanceOutboxRuntime {
     fn default() -> Self {
         Self {
@@ -3844,7 +3611,6 @@ impl Default for GovernanceOutboxRuntime {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct GcStorageIdentityV1 {
     total_bytes: u64,
@@ -3854,7 +3620,6 @@ struct GcStorageIdentityV1 {
     manifest_set_digest: [u8; 32],
     chunk_refcounts_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct GcEvictionIntentV1 {
     version: u8,
@@ -3871,13 +3636,11 @@ struct GcEvictionIntentV1 {
     reserved_outbox_slots: u8,
     binding_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct GcEvictionIntentRuntime {
     next_sequence: u64,
     entries: BTreeMap<u64, GcEvictionIntentV1>,
 }
-
 impl Default for GcEvictionIntentRuntime {
     fn default() -> Self {
         Self {
@@ -3886,7 +3649,6 @@ impl Default for GcEvictionIntentRuntime {
         }
     }
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct GcEvictionAuditLinkV1 {
     version: u8,
@@ -3903,14 +3665,12 @@ struct GcEvictionAuditLinkV1 {
     outbox_payload_digest: [u8; 32],
     binding_digest: [u8; 32],
 }
-
 #[derive(Debug)]
 struct GcStorageSnapshot {
     identity: GcStorageIdentityV1,
     manifests: Vec<StoredManifest>,
     chunk_refcounts: Vec<ChunkRefcountEntry>,
 }
-
 fn gc_manifest_identity_digest(manifest: &StoredManifest) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(GC_STORAGE_MANIFEST_IDENTITY_DOMAIN_V1);
@@ -3938,7 +3698,6 @@ fn gc_manifest_identity_digest(manifest: &StoredManifest) -> [u8; 32] {
     }
     *hasher.finalize().as_bytes()
 }
-
 fn gc_manifest_set_digest(manifests: &[StoredManifest]) -> [u8; 32] {
     let mut identities = manifests
         .iter()
@@ -3963,7 +3722,6 @@ fn gc_manifest_set_digest(manifests: &[StoredManifest]) -> [u8; 32] {
     }
     *hasher.finalize().as_bytes()
 }
-
 fn gc_chunk_refcounts_digest(refcounts: &[ChunkRefcountEntry]) -> [u8; 32] {
     let mut refcounts = refcounts.to_vec();
     refcounts.sort_by_key(|entry| entry.digest);
@@ -3980,7 +3738,6 @@ fn gc_chunk_refcounts_digest(refcounts: &[ChunkRefcountEntry]) -> [u8; 32] {
     }
     *hasher.finalize().as_bytes()
 }
-
 fn gc_storage_identity_from_parts(
     manifests: &[StoredManifest],
     chunk_refcounts: &[ChunkRefcountEntry],
@@ -3997,7 +3754,6 @@ fn gc_storage_identity_from_parts(
         chunk_refcounts_digest: gc_chunk_refcounts_digest(chunk_refcounts),
     })
 }
-
 fn gc_storage_snapshot_once_unchecked(
     storage: &StorageBackend,
 ) -> Result<GcStorageSnapshot, GovernancePublishError> {
@@ -4013,7 +3769,6 @@ fn gc_storage_snapshot_once_unchecked(
         chunk_refcounts,
     })
 }
-
 fn gc_storage_snapshot_once(
     storage: &StorageBackend,
 ) -> Result<GcStorageSnapshot, GovernancePublishError> {
@@ -4022,7 +3777,6 @@ fn gc_storage_snapshot_once(
         .map_err(|err| GovernancePublishError::other(err.to_string()))?;
     gc_storage_snapshot_once_unchecked(storage)
 }
-
 fn gc_storage_snapshot(
     storage: &StorageBackend,
 ) -> Result<GcStorageSnapshot, GovernancePublishError> {
@@ -4035,7 +3789,6 @@ fn gc_storage_snapshot(
     }
     Ok(second)
 }
-
 fn gc_storage_snapshot_unchecked(
     storage: &StorageBackend,
 ) -> Result<GcStorageSnapshot, GovernancePublishError> {
@@ -4048,7 +3801,6 @@ fn gc_storage_snapshot_unchecked(
     }
     Ok(second)
 }
-
 fn gc_expected_post_storage_identity(
     snapshot: &GcStorageSnapshot,
     target: &StoredManifest,
@@ -4116,7 +3868,6 @@ fn gc_expected_post_storage_identity(
         (freed_bytes_total, evictions_total),
     )
 }
-
 fn gc_eviction_payload(intent: &GcEvictionIntentV1) -> GcAuditPayloadV1 {
     GcAuditPayloadV1 {
         version: GC_AUDIT_PAYLOAD_VERSION_V1,
@@ -4128,7 +3879,6 @@ fn gc_eviction_payload(intent: &GcEvictionIntentV1) -> GcAuditPayloadV1 {
         blocked_reason: None,
     }
 }
-
 fn gc_eviction_intent_binding_digest(
     intent: &GcEvictionIntentV1,
 ) -> Result<[u8; 32], GovernancePublishError> {
@@ -4154,7 +3904,6 @@ fn gc_eviction_intent_binding_digest(
     hasher.update(&[intent.reserved_outbox_slots]);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn validate_gc_eviction_intent(intent: &GcEvictionIntentV1) -> Result<(), GovernancePublishError> {
     if intent.version != GC_EVICTION_INTENT_VERSION_V1
         || intent.sequence == 0
@@ -4210,7 +3959,6 @@ fn validate_gc_eviction_intent(intent: &GcEvictionIntentV1) -> Result<(), Govern
     }
     Ok(())
 }
-
 fn restore_gc_eviction_intents(
     next_sequence: u64,
     entries: Vec<GcEvictionIntentV1>,
@@ -4234,7 +3982,6 @@ fn restore_gc_eviction_intents(
         entries: restored,
     })
 }
-
 fn gc_eviction_reserved_outbox_slots(
     runtime: &GcEvictionIntentRuntime,
 ) -> Result<usize, GovernancePublishError> {
@@ -4245,7 +3992,6 @@ fn gc_eviction_reserved_outbox_slots(
             .ok_or_else(|| GovernancePublishError::other("GC outbox reservation count overflow"))
     })
 }
-
 fn gc_eviction_audit_link_binding_digest(link: &GcEvictionAuditLinkV1) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(GC_EVICTION_AUDIT_LINK_BINDING_DOMAIN_V1);
@@ -4263,7 +4009,6 @@ fn gc_eviction_audit_link_binding_digest(link: &GcEvictionAuditLinkV1) -> [u8; 3
     hasher.update(&link.outbox_payload_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn gc_eviction_audit_event_from_link(
     link: &GcEvictionAuditLinkV1,
 ) -> Result<GcAuditEventV1, GovernancePublishError> {
@@ -4292,7 +4037,6 @@ fn gc_eviction_audit_event_from_link(
         .map_err(|err| GovernancePublishError::other(err.to_string()))?;
     Ok(event)
 }
-
 fn validate_gc_eviction_audit_link(
     link: &GcEvictionAuditLinkV1,
 ) -> Result<(), GovernancePublishError> {
@@ -4321,12 +4065,10 @@ fn validate_gc_eviction_audit_link(
     }
     Ok(())
 }
-
 fn hash_length_prefixed(hasher: &mut blake3::Hasher, bytes: &[u8]) {
     hasher.update(&u64::try_from(bytes.len()).unwrap_or(u64::MAX).to_le_bytes());
     hasher.update(bytes);
 }
-
 fn governance_outbox_binding_digest(
     version: u8,
     sequence: u64,
@@ -4351,7 +4093,6 @@ fn governance_outbox_binding_digest(
     }
     *hasher.finalize().as_bytes()
 }
-
 fn governance_outbox_provenance_matches_kind(
     kind: GovernanceOutboxKindV1,
     provenance: &GovernanceSubmissionProvenanceV1,
@@ -4373,7 +4114,6 @@ fn governance_outbox_provenance_matches_kind(
         )
     )
 }
-
 fn governance_outbox_kind_requires_provenance(kind: GovernanceOutboxKindV1) -> bool {
     matches!(
         kind,
@@ -4381,7 +4121,6 @@ fn governance_outbox_kind_requires_provenance(kind: GovernanceOutboxKindV1) -> b
             | GovernanceOutboxKindV1::AppealFinanceWeeklyRollup
     )
 }
-
 fn decode_canonical_governance_payload<T>(bytes: &[u8]) -> Result<T, GovernancePublishError>
 where
     for<'de> T: norito::NoritoDeserialize<'de>,
@@ -4400,7 +4139,6 @@ where
     }
     Ok(value)
 }
-
 fn decode_canonical_signed_reputation_payload(
     bytes: &[u8],
 ) -> Result<SignedReputationSnapshotV1, GovernancePublishError> {
@@ -4410,7 +4148,6 @@ fn decode_canonical_signed_reputation_payload(
         ))
     })
 }
-
 fn decode_canonical_por_challenge_publication_payload(
     bytes: &[u8],
 ) -> Result<PorChallengePublicationV1, GovernancePublishError> {
@@ -4420,7 +4157,6 @@ fn decode_canonical_por_challenge_publication_payload(
         ))
     })
 }
-
 fn decode_canonical_por_weekly_report_payload(
     bytes: &[u8],
 ) -> Result<PorWeeklyReportV1, GovernancePublishError> {
@@ -4428,7 +4164,6 @@ fn decode_canonical_por_weekly_report_payload(
         GovernancePublishError::other(format!("decode weekly PoR governance payload: {err}"))
     })
 }
-
 fn validate_gc_audit_event(
     entry_sequence: u64,
     event: &GcAuditEventV1,
@@ -4443,7 +4178,6 @@ fn validate_gc_audit_event(
     }
     Ok(())
 }
-
 fn validate_governance_outbox_entry(
     entry: &GovernanceOutboxEntryV1,
 ) -> Result<(), GovernancePublishError> {
@@ -4560,7 +4294,6 @@ fn validate_governance_outbox_entry(
     }
     Ok(())
 }
-
 fn insert_governance_outbox_entry(
     outbox: &mut GovernanceOutboxRuntime,
     kind: GovernanceOutboxKindV1,
@@ -4617,7 +4350,6 @@ fn insert_governance_outbox_entry(
     outbox.next_sequence = next_sequence;
     Ok((sequence, true))
 }
-
 fn restore_governance_outbox(
     next_sequence: u64,
     entries: Vec<GovernanceOutboxEntryV1>,
@@ -4659,7 +4391,6 @@ fn restore_governance_outbox(
         entries: restored,
     })
 }
-
 fn validate_privacy_release_outbox(
     release_ledger: &transparency::PrivacyReleaseLedgerV1,
     published_cycles: &BTreeSet<[u8; 16]>,
@@ -4789,10 +4520,8 @@ fn validate_privacy_release_outbox(
     }
     Ok(())
 }
-
 const PRIVACY_PUBLISHED_AGGREGATE_INVENTORY_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_release.published_aggregate_inventory.v1";
-
 fn privacy_published_aggregate_inventory_digest(
     aggregates: &[ModerationPrivacyAggregateV1],
 ) -> Result<[u8; 32], GovernancePublishError> {
@@ -4823,7 +4552,6 @@ fn privacy_published_aggregate_inventory_digest(
     }
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn publish_governance_outbox_entry(
     publisher: &dyn GovernancePublisher,
     entry: &GovernanceOutboxEntryV1,
@@ -4919,7 +4647,6 @@ fn publish_governance_outbox_entry(
         }
     }
 }
-
 /// Signed reputation envelope plus the exact admission time used for freshness checks.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct AdmittedReputationSnapshotV1 {
@@ -4928,7 +4655,6 @@ struct AdmittedReputationSnapshotV1 {
     encoded_len: u64,
     envelope: SignedReputationSnapshotV1,
 }
-
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct AuxiliaryRuntimeCheckpointV5 {
     version: u8,
@@ -4953,7 +4679,6 @@ struct AuxiliaryRuntimeCheckpointV5 {
     governance_outbox_next_sequence: u64,
     governance_outbox_entries: Vec<GovernanceOutboxEntryV1>,
 }
-
 /// Unsigned deterministic reputation material intended for external governance signing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationSnapshotSigningMaterialV1 {
@@ -4962,7 +4687,6 @@ pub struct ReputationSnapshotSigningMaterialV1 {
     /// Complete provider inputs and trust edges required to replay the snapshot.
     pub scoring_evidence: ReputationScoringEvidenceV1,
 }
-
 /// Error type returned by storage-related operations on [`NodeHandle`].
 #[derive(Debug, Error)]
 pub enum NodeStorageError {
@@ -4976,7 +4700,6 @@ pub enum NodeStorageError {
     #[error(transparent)]
     Scheduler(#[from] SchedulerAdmissionError),
 }
-
 /// Redacted errors returned by admitted-payload verification lease acquisition.
 ///
 /// This boundary deliberately never returns backend errors because those diagnostics can contain
@@ -4993,7 +4716,6 @@ pub enum AdmittedPayloadReadLeaseErrorV1 {
     #[error("storage-admitted SoraFS payload verification is temporarily unavailable")]
     StorageUnavailable,
 }
-
 /// Errors raised by provider-internal finalized-ledger storage ingest.
 #[derive(Debug, Error)]
 pub enum FinalizedProviderIngestError {
@@ -5025,7 +4747,6 @@ pub enum FinalizedProviderIngestError {
     #[error(transparent)]
     Storage(#[from] NodeStorageError),
 }
-
 /// Result of constructing a supervised finalized-ledger provider-ingest runtime.
 pub type FinalizedProviderIngestRuntimeResultV1<
     Ledger,
@@ -5039,7 +4760,6 @@ pub type FinalizedProviderIngestRuntimeResultV1<
     ProviderIngestRuntimeV1<Ledger, Fetch, Storage, Builder, Resolver, Ingress, Clock>,
     FinalizedProviderIngestError,
 >;
-
 /// Errors returned by the embedded admission-bound PDP provider service.
 #[derive(Debug, Error)]
 pub enum NodePdpError {
@@ -5068,7 +4788,6 @@ pub enum NodePdpError {
     #[error("failed to load configured PDP provider signing key: {0}")]
     SigningKey(String),
 }
-
 /// Errors that prevent a SoraFS node handle from starting with trustworthy state.
 #[derive(Debug, Error)]
 pub enum NodeInitError {
@@ -5270,7 +4989,6 @@ pub enum NodeInitError {
         message: &'static str,
     },
 }
-
 impl NodeInitError {
     fn checkpoint(component: &'static str, path: &Path, error: impl std::fmt::Display) -> Self {
         Self::Checkpoint {
@@ -5280,7 +4998,6 @@ impl NodeInitError {
         }
     }
 }
-
 fn validate_native_repair_config(config: &RepairConfig) -> Result<(), NodeInitError> {
     let lease_duration_ms = config.claim_ttl_secs().checked_mul(1_000).ok_or_else(|| {
         NodeInitError::NativeRepairConfig {
@@ -5329,7 +5046,6 @@ fn validate_native_repair_config(config: &RepairConfig) -> Result<(), NodeInitEr
     }
     Ok(())
 }
-
 fn load_reputation_trust_policy(
     path: &Path,
 ) -> Result<ReputationSnapshotTrustPolicyV1, NodeInitError> {
@@ -5344,7 +5060,6 @@ fn load_reputation_trust_policy(
         message: error.to_string(),
     })
 }
-
 fn load_hedging_feed_trust_policy(path: &Path) -> Result<HedgingFeedTrustPolicyV1, NodeInitError> {
     let bytes = read_trust_policy_file(
         path,
@@ -5362,7 +5077,6 @@ fn load_hedging_feed_trust_policy(path: &Path) -> Result<HedgingFeedTrustPolicyV
         }
     })
 }
-
 /// Load and digest-pin one canonical public hedging/billing service policy.
 ///
 /// The file is required to be an absolute, ancestor-safe, regular single-link
@@ -5407,7 +5121,6 @@ pub fn load_hedging_billing_service_policy(
     }
     Ok(policy)
 }
-
 fn load_moderation_screening_authority_bundle(
     path: &Path,
     expected_digest: [u8; 32],
@@ -5454,7 +5167,6 @@ fn load_moderation_screening_authority_bundle(
         }
     })
 }
-
 /// Errors raised while computing reconciliation summaries.
 #[derive(Debug, Error)]
 pub enum ReconciliationError {
@@ -5477,7 +5189,6 @@ pub enum ReconciliationError {
     #[error(transparent)]
     Validation(#[from] ReconciliationValidationError),
 }
-
 impl PdpTerminalHandoff for NodeHandle {
     fn archive(
         &self,
@@ -5486,7 +5197,6 @@ impl PdpTerminalHandoff for NodeHandle {
     ) -> Result<[u8; 32], pdp_provider::PdpExternalHandoffError> {
         self.archive_pdp_terminal_outcome(idempotency_key, archive)
     }
-
     fn repair(
         &self,
         idempotency_key: [u8; 32],
@@ -5498,7 +5208,6 @@ impl PdpTerminalHandoff for NodeHandle {
         ))
     }
 }
-
 impl NodeHandle {
     /// Durably archive one terminal PDP outcome and enqueue its proof-ledger projection.
     pub fn archive_pdp_terminal_outcome(
@@ -5533,7 +5242,6 @@ impl NodeHandle {
             *blake3::hash(&bytes).as_bytes(),
         ))
     }
-
     /// Durably enqueue and publish one canonical PoR challenge envelope.
     pub fn publish_por_challenge_publication(
         &self,
@@ -5549,7 +5257,6 @@ impl NodeHandle {
         self.flush_governance_outbox()?;
         Ok(())
     }
-
     /// Durably enqueue and publish one validated PoR weekly report.
     pub fn publish_por_weekly_report(
         &self,
@@ -5566,7 +5273,6 @@ impl NodeHandle {
         Ok(())
     }
 }
-
 impl NodeHandle {
     /// Durably enqueue one final PoTR receipt for native proof-ledger submission.
     pub fn enqueue_potr_proof_outcome(
@@ -5586,7 +5292,6 @@ impl NodeHandle {
             .map_err(|error| potr::PotrRepairHandoffError(error.to_string()))
     }
 }
-
 fn pdp_handoff_receipt(
     kind: &[u8],
     idempotency_key: [u8; 32],
@@ -5600,7 +5305,6 @@ fn pdp_handoff_receipt(
     hasher.update(&payload_digest);
     *hasher.finalize().as_bytes()
 }
-
 impl NodeHandle {
     /// Construct a new handle for the embedded storage worker.
     ///
@@ -5613,7 +5317,6 @@ impl NodeHandle {
         Self::try_new(config)
             .unwrap_or_else(|err| panic!("failed to initialise SoraFS node: {err}"))
     }
-
     /// Construct a new handle and report storage/checkpoint startup failures.
     ///
     /// # Errors
@@ -5623,7 +5326,6 @@ impl NodeHandle {
     pub fn try_new(config: StorageConfig) -> Result<Self, NodeInitError> {
         Self::try_new_with_policies(config, RepairConfig::default(), GcConfig::default())
     }
-
     /// Construct a new handle with a runtime-only PKCS#11/KMS quarantine-key wrapper.
     ///
     /// # Errors
@@ -5639,7 +5341,6 @@ impl NodeHandle {
             NodeRuntimeDeps::default().with_moderation_quarantine_key_wrapper(key_wrapper),
         )
     }
-
     /// Construct a new handle with deployment-owned runtime dependencies.
     ///
     /// # Errors
@@ -5657,7 +5358,6 @@ impl NodeHandle {
             runtime_deps,
         )
     }
-
     /// Construct a new handle with explicit repair/GC policies.
     ///
     /// # Panics
@@ -5673,7 +5373,6 @@ impl NodeHandle {
         Self::try_new_with_policies(config, repair_config, gc_config)
             .unwrap_or_else(|err| panic!("failed to initialise SoraFS node: {err}"))
     }
-
     /// Construct a new handle with explicit policies and fallible durable startup.
     ///
     /// # Errors
@@ -5692,7 +5391,6 @@ impl NodeHandle {
             NodeRuntimeDeps::default(),
         )
     }
-
     /// Construct a new handle with explicit policies and a runtime-only
     /// PKCS#11/KMS quarantine-key wrapper.
     ///
@@ -5713,7 +5411,6 @@ impl NodeHandle {
             NodeRuntimeDeps::default().with_moderation_quarantine_key_wrapper(key_wrapper),
         )
     }
-
     /// Construct a new handle with explicit policies and deployment-owned
     /// runtime dependencies.
     ///
@@ -6139,7 +5836,6 @@ impl NodeHandle {
         let scheduler_config = StorageSchedulerConfig::from_storage_config(&config);
         let schedulers = StorageSchedulersRuntime::new(scheduler_config);
         let capacity_limit = config.max_capacity_bytes().0;
-
         let storage = if config.enabled() {
             match StorageBackend::new(config.clone()) {
                 Ok(backend) => {
@@ -6164,7 +5860,6 @@ impl NodeHandle {
                     })
             })
             .transpose()?;
-
         let smoothing = config.smoothing_config();
         let event_history_limit = config.runtime_retention().event_history_limit();
         let state_entry_limit = config.runtime_retention().state_entry_limit();
@@ -6445,7 +6140,6 @@ impl NodeHandle {
                 .map(|(_, reader)| reader.clone()),
             published_evidence_viewer_audit_cycles: Arc::new(RwLock::new(BTreeSet::new())),
         };
-
         if node.storage.is_some() {
             match runtime_checkpoint_initialization {
                 Some(RuntimeCheckpointInitialization::Fresh) => {
@@ -6618,19 +6312,16 @@ impl NodeHandle {
         }
         Ok(node)
     }
-
     /// Returns a reference to the storage configuration.
     #[must_use]
     pub fn config(&self) -> &StorageConfig {
         &self.config
     }
-
     /// Return the canonical Governance DAG root retained by the running node.
     #[must_use]
     pub fn governance_dag_root(&self) -> Option<&Path> {
         self.governance_runtime_root.as_deref()
     }
-
     /// Read one canonical typed publication-authority generation.
     ///
     /// This boundary never initializes, repairs, or reconciles mutable state.
@@ -6664,7 +6355,6 @@ impl NodeHandle {
             })
         })
     }
-
     /// Read one typed runtime-DAG generation authenticated by the exact sealed
     /// producer checkpoint retained by this node.
     ///
@@ -6724,7 +6414,6 @@ impl NodeHandle {
                 })
             })
     }
-
     /// Install the service-owned authenticated mirror-read capability exactly
     /// once across this node handle and every clone sharing its installation
     /// slot.
@@ -6778,7 +6467,6 @@ impl NodeHandle {
         root_guard.revalidate()?;
         signer.assert_qualification()?;
         checkpoint_store.assert_qualification()?;
-
         let expected_root_digest = governance::runtime_dag_producer_root_digest(root)?;
         let expected_root_identity_digest = root_guard.identity_digest()?;
         let expected_signer_handle =
@@ -6884,7 +6572,6 @@ impl NodeHandle {
             )
         })
     }
-
     /// Read the installed service-owned mirror snapshot.
     ///
     /// # Errors
@@ -6901,7 +6588,6 @@ impl NodeHandle {
         };
         reader.read()
     }
-
     /// Read one Governance DAG file through the node's retained filesystem root.
     ///
     /// Every path component is resolved relative to the descriptor-pinned
@@ -6948,13 +6634,11 @@ impl NodeHandle {
         )
         .map(governance_rooted_fs::FileSnapshot::into_bytes)
     }
-
     /// Return the durable PDP provider protocol when storage is enabled.
     #[must_use]
     pub fn pdp_provider_protocol(&self) -> Option<&PdpProviderProtocol> {
         self.pdp_provider.as_ref()
     }
-
     /// Resume durable PDP terminal handoffs through an explicit production adapter.
     pub fn resume_pdp_terminal_handoffs(
         &self,
@@ -6968,7 +6652,6 @@ impl NodeHandle {
             .resume_handoffs(handoff, limit)
             .map(|outcomes| outcomes.len())
     }
-
     /// Resume durable PoTR proof-ledger and repair handoffs through an explicit adapter.
     pub fn resume_potr_terminal_handoffs(
         &self,
@@ -6976,7 +6659,6 @@ impl NodeHandle {
     ) -> Result<usize, PotrTrackerError> {
         self.potr.resume_terminal_handoffs(handoff)
     }
-
     /// Return pending proof-outcome deliveries in stable sequence order.
     pub fn pending_proof_outcome_deliveries(
         &self,
@@ -6984,7 +6666,6 @@ impl NodeHandle {
     ) -> Result<Vec<ProofOutcomePendingDeliveryV1>, ProofOutcomeOutboxError> {
         self.proof_outcome_outbox.pending(limit)
     }
-
     /// Return a circular page of proof-outcome deliveries after a sequence cursor.
     pub fn pending_proof_outcome_deliveries_after(
         &self,
@@ -6994,7 +6675,6 @@ impl NodeHandle {
         self.proof_outcome_outbox
             .pending_after(after_sequence, limit)
     }
-
     /// Return payload-free terminal proof-outcome deliveries for operator reconciliation.
     pub fn proof_outcome_dead_letters(
         &self,
@@ -7002,7 +6682,6 @@ impl NodeHandle {
     ) -> Result<Vec<ProofOutcomeDeadLetterV1>, ProofOutcomeOutboxError> {
         self.proof_outcome_outbox.dead_letters(limit)
     }
-
     /// Restore one explicitly selected proof-outcome dead letter for governed replay.
     pub fn retry_proof_outcome_dead_letter(
         &self,
@@ -7012,7 +6691,6 @@ impl NodeHandle {
         self.proof_outcome_outbox
             .retry_dead_letter(operation_id, expected_outcome_digest)
     }
-
     /// Durably claim one proof outcome for isolated runtime signing.
     pub fn claim_proof_outcome_for_signing(
         &self,
@@ -7022,7 +6700,6 @@ impl NodeHandle {
         self.proof_outcome_outbox
             .claim_for_signing(operation_id, baseline_finalized_cursor)
     }
-
     /// Persist an exact signed proof-outcome transaction before queue exposure.
     pub fn store_signed_proof_outcome_transaction(
         &self,
@@ -7032,7 +6709,6 @@ impl NodeHandle {
         self.proof_outcome_outbox
             .store_signed_transaction(operation_id, transaction)
     }
-
     /// Release an isolated proof-outcome signing claim after signer failure.
     pub fn release_proof_outcome_signing_claim(
         &self,
@@ -7041,7 +6717,6 @@ impl NodeHandle {
         self.proof_outcome_outbox
             .release_signing_claim(operation_id)
     }
-
     /// Mark a durable signed proof-outcome transaction ambiguous before submission.
     pub fn begin_proof_outcome_submission(
         &self,
@@ -7049,7 +6724,6 @@ impl NodeHandle {
     ) -> Result<iroha_data_model::transaction::SignedTransaction, ProofOutcomeOutboxError> {
         self.proof_outcome_outbox.begin_submission(operation_id)
     }
-
     /// Record that an exact proof-outcome transaction is pending or applied.
     pub fn mark_proof_outcome_submitted(
         &self,
@@ -7057,7 +6731,6 @@ impl NodeHandle {
     ) -> Result<(), ProofOutcomeOutboxError> {
         self.proof_outcome_outbox.mark_submitted(operation_id)
     }
-
     /// Record a proof-outcome queue failure known to precede submission.
     pub fn mark_proof_outcome_not_submitted(
         &self,
@@ -7065,7 +6738,6 @@ impl NodeHandle {
     ) -> Result<(), ProofOutcomeOutboxError> {
         self.proof_outcome_outbox.mark_not_submitted(operation_id)
     }
-
     /// Permit retry after finalized absence of the exact proof outcome and transaction.
     pub fn mark_proof_outcome_finalized_absent(
         &self,
@@ -7075,7 +6747,6 @@ impl NodeHandle {
         self.proof_outcome_outbox
             .mark_finalized_absent(operation_id, observed_finalized_cursor)
     }
-
     /// Reconcile one exact finalized proof outcome.
     pub fn mark_proof_outcome_finalized(
         &self,
@@ -7085,7 +6756,6 @@ impl NodeHandle {
         self.proof_outcome_outbox
             .mark_finalized(operation_id, finalized)
     }
-
     /// Dead-letter one exact rejected or expired proof-outcome transaction.
     pub fn mark_proof_outcome_transaction_rejected(
         &self,
@@ -7095,7 +6765,6 @@ impl NodeHandle {
         self.proof_outcome_outbox
             .mark_transaction_rejected(operation_id, observed_finalized_cursor)
     }
-
     /// Durably enqueue one authority-bound native repair operation.
     pub fn enqueue_repair_transaction(
         &self,
@@ -7106,7 +6775,6 @@ impl NodeHandle {
         self.repair_transaction_forwarder
             .enqueue_unsigned_operation(authority, operation, context)
     }
-
     /// Return a fair circular page of pending native repair transactions.
     pub fn pending_repair_transactions_after(
         &self,
@@ -7116,7 +6784,6 @@ impl NodeHandle {
         self.repair_transaction_forwarder
             .pending_after(after_sequence, limit)
     }
-
     /// Return payload-free terminal repair-transaction dead letters.
     pub fn repair_transaction_dead_letters(
         &self,
@@ -7124,7 +6791,6 @@ impl NodeHandle {
     ) -> Result<Vec<RepairTransactionDeadLetterV1>, RepairTransactionForwarderError> {
         self.repair_transaction_forwarder.dead_letters(limit)
     }
-
     /// Claim one native repair operation for isolated runtime signing.
     pub fn claim_repair_transaction_for_signing(
         &self,
@@ -7133,7 +6799,6 @@ impl NodeHandle {
         self.repair_transaction_forwarder
             .claim_for_signing(operation_id)
     }
-
     /// Read exact repair semantics for finalized reconciliation without claiming a signer attempt.
     pub fn repair_transaction_operation_for_reconciliation(
         &self,
@@ -7142,7 +6807,6 @@ impl NodeHandle {
         self.repair_transaction_forwarder
             .operation_for_reconciliation(operation_id)
     }
-
     /// Persist exact signed native repair-transaction bytes before queue exposure.
     pub fn store_signed_repair_transaction(
         &self,
@@ -7152,7 +6816,6 @@ impl NodeHandle {
         self.repair_transaction_forwarder
             .store_signed_transaction(operation_id, signed_transaction_bytes)
     }
-
     /// Release an interrupted repair-transaction signing claim.
     pub fn release_repair_transaction_signing_claim(
         &self,
@@ -7161,7 +6824,6 @@ impl NodeHandle {
         self.repair_transaction_forwarder
             .release_signing_claim(operation_id)
     }
-
     /// Mark exact signed repair bytes ambiguous before transaction ingress.
     pub fn begin_repair_transaction_submission(
         &self,
@@ -7170,7 +6832,6 @@ impl NodeHandle {
         self.repair_transaction_forwarder
             .begin_submission(operation_id)
     }
-
     /// Record that an exact repair transaction is pending or applied.
     pub fn mark_repair_transaction_submitted(
         &self,
@@ -7179,7 +6840,6 @@ impl NodeHandle {
         self.repair_transaction_forwarder
             .mark_submitted(operation_id)
     }
-
     /// Reconcile exact finalized repair-transaction bytes.
     pub fn mark_repair_transaction_finalized(
         &self,
@@ -7193,7 +6853,6 @@ impl NodeHandle {
             finalized_cursor,
         )
     }
-
     /// Record a repair queue failure proven to precede submission.
     pub fn mark_repair_transaction_not_submitted(
         &self,
@@ -7202,7 +6861,6 @@ impl NodeHandle {
         self.repair_transaction_forwarder
             .mark_not_submitted(operation_id)
     }
-
     /// Permit retry after finalized absence of the exact repair operation.
     pub fn mark_repair_transaction_finalized_absent(
         &self,
@@ -7212,7 +6870,6 @@ impl NodeHandle {
         self.repair_transaction_forwarder
             .mark_finalized_absent(operation_id, observed_finalized_cursor)
     }
-
     /// Reconcile an exact semantic repair operation committed by any ingress.
     pub fn mark_repair_transaction_semantic_finalized(
         &self,
@@ -7222,7 +6879,6 @@ impl NodeHandle {
         self.repair_transaction_forwarder
             .mark_semantic_finalized(operation_id, finalized_cursor)
     }
-
     /// Dead-letter a repair operation that conflicts with finalized state.
     pub fn mark_repair_transaction_finalized_conflict(
         &self,
@@ -7232,7 +6888,6 @@ impl NodeHandle {
         self.repair_transaction_forwarder
             .mark_finalized_conflict(operation_id, observed_finalized_cursor)
     }
-
     /// Clear a rejected repair envelope for bounded replacement signing.
     pub fn mark_repair_transaction_rejected(
         &self,
@@ -7242,7 +6897,6 @@ impl NodeHandle {
         self.repair_transaction_forwarder
             .mark_transaction_rejected(operation_id, observed_finalized_cursor)
     }
-
     /// Durably enqueue one native orderbook operation bound to finalized governance state.
     pub fn enqueue_orderbook_transaction(
         &self,
@@ -7252,7 +6906,6 @@ impl NodeHandle {
         self.orderbook_transaction_forwarder
             .enqueue_unsigned_operation(operation, context)
     }
-
     /// Durably enqueue one canonical signed native orderbook transaction.
     ///
     /// The forwarder binds both the exact governed authority and active chain
@@ -7265,7 +6918,6 @@ impl NodeHandle {
         self.orderbook_transaction_forwarder
             .enqueue_signed_transaction(signed_transaction_bytes, context)
     }
-
     /// Return the oldest bounded page of pending native orderbook transactions.
     pub fn pending_orderbook_transactions(
         &self,
@@ -7273,7 +6925,6 @@ impl NodeHandle {
     ) -> Result<Vec<OrderbookTransactionPendingV1>, OrderbookTransactionForwarderError> {
         self.orderbook_transaction_forwarder.pending(limit)
     }
-
     /// Return a fair circular page of pending native orderbook transactions.
     pub fn pending_orderbook_transactions_after(
         &self,
@@ -7283,7 +6934,6 @@ impl NodeHandle {
         self.orderbook_transaction_forwarder
             .pending_after(after_sequence, limit)
     }
-
     /// Read exact orderbook semantics for finalized reconciliation without claiming an attempt.
     pub fn orderbook_transaction_operation_for_reconciliation(
         &self,
@@ -7292,7 +6942,6 @@ impl NodeHandle {
         self.orderbook_transaction_forwarder
             .operation_for_reconciliation(operation_id)
     }
-
     /// Return payload-free terminal orderbook-transaction dead letters.
     pub fn orderbook_transaction_dead_letters(
         &self,
@@ -7300,7 +6949,6 @@ impl NodeHandle {
     ) -> Result<Vec<OrderbookTransactionDeadLetterV1>, OrderbookTransactionForwarderError> {
         self.orderbook_transaction_forwarder.dead_letters(limit)
     }
-
     /// Claim one native orderbook operation for isolated runtime signing.
     pub fn claim_orderbook_transaction_for_signing(
         &self,
@@ -7309,7 +6957,6 @@ impl NodeHandle {
         self.orderbook_transaction_forwarder
             .claim_for_signing(operation_id)
     }
-
     /// Persist exact signed orderbook transaction bytes before submitter exposure.
     pub fn store_signed_orderbook_transaction(
         &self,
@@ -7319,7 +6966,6 @@ impl NodeHandle {
         self.orderbook_transaction_forwarder
             .store_signed_transaction(operation_id, signed_transaction_bytes)
     }
-
     /// Release an interrupted orderbook-transaction signing claim.
     pub fn release_orderbook_transaction_signing_claim(
         &self,
@@ -7328,7 +6974,6 @@ impl NodeHandle {
         self.orderbook_transaction_forwarder
             .release_signing_claim(operation_id)
     }
-
     /// Mark exact signed orderbook bytes ambiguous before transaction ingress.
     pub fn begin_orderbook_transaction_submission(
         &self,
@@ -7337,7 +6982,6 @@ impl NodeHandle {
         self.orderbook_transaction_forwarder
             .begin_submission(operation_id)
     }
-
     /// Record that an exact orderbook transaction is pending or applied.
     pub fn mark_orderbook_transaction_submitted(
         &self,
@@ -7346,7 +6990,6 @@ impl NodeHandle {
         self.orderbook_transaction_forwarder
             .mark_submitted(operation_id)
     }
-
     /// Record an orderbook queue failure proven to precede submission.
     pub fn mark_orderbook_transaction_not_submitted(
         &self,
@@ -7355,7 +6998,6 @@ impl NodeHandle {
         self.orderbook_transaction_forwarder
             .mark_not_submitted(operation_id)
     }
-
     /// Permit exact-byte retry after finalized absence of an orderbook transaction.
     pub fn mark_orderbook_transaction_finalized_absent(
         &self,
@@ -7365,7 +7007,6 @@ impl NodeHandle {
         self.orderbook_transaction_forwarder
             .mark_finalized_absent(operation_id, observed_finalized_cursor)
     }
-
     /// Reconcile exact finalized orderbook success by retained transaction digest.
     pub fn mark_orderbook_transaction_finalized(
         &self,
@@ -7379,7 +7020,6 @@ impl NodeHandle {
             finalized_cursor,
         )
     }
-
     /// Reconcile exact semantic orderbook success committed through another ingress.
     pub fn mark_orderbook_transaction_semantic_finalized(
         &self,
@@ -7389,7 +7029,6 @@ impl NodeHandle {
         self.orderbook_transaction_forwarder
             .mark_semantic_finalized(operation_id, finalized_cursor)
     }
-
     /// Dead-letter an orderbook operation that conflicts with finalized state.
     pub fn mark_orderbook_transaction_finalized_conflict(
         &self,
@@ -7399,7 +7038,6 @@ impl NodeHandle {
         self.orderbook_transaction_forwarder
             .mark_finalized_conflict(operation_id, observed_finalized_cursor)
     }
-
     /// Clear a rejected orderbook envelope for bounded replacement signing.
     pub fn mark_orderbook_transaction_rejected(
         &self,
@@ -7409,7 +7047,6 @@ impl NodeHandle {
         self.orderbook_transaction_forwarder
             .mark_transaction_rejected(operation_id, observed_finalized_cursor)
     }
-
     /// Durably enqueue one native reserve/rent operation bound to finalized governance state.
     pub fn enqueue_reserve_transaction(
         &self,
@@ -7419,7 +7056,6 @@ impl NodeHandle {
         self.reserve_transaction_forwarder
             .enqueue_unsigned_operation(operation, context)
     }
-
     /// Durably enqueue one canonical signed native reserve/rent transaction.
     ///
     /// The forwarder binds both the exact governed authority and active chain
@@ -7432,7 +7068,6 @@ impl NodeHandle {
         self.reserve_transaction_forwarder
             .enqueue_signed_transaction(signed_transaction_bytes, context)
     }
-
     /// Return the oldest bounded page of pending native reserve/rent transactions.
     pub fn pending_reserve_transactions(
         &self,
@@ -7440,7 +7075,6 @@ impl NodeHandle {
     ) -> Result<Vec<ReserveTransactionPendingV1>, ReserveTransactionForwarderError> {
         self.reserve_transaction_forwarder.pending(limit)
     }
-
     /// Return a fair circular page of pending native reserve/rent transactions.
     pub fn pending_reserve_transactions_after(
         &self,
@@ -7450,7 +7084,6 @@ impl NodeHandle {
         self.reserve_transaction_forwarder
             .pending_after(after_sequence, limit)
     }
-
     /// Read exact reserve/rent semantics for finalized reconciliation without claiming an attempt.
     pub fn reserve_transaction_operation_for_reconciliation(
         &self,
@@ -7459,7 +7092,6 @@ impl NodeHandle {
         self.reserve_transaction_forwarder
             .operation_for_reconciliation(operation_id)
     }
-
     /// Return payload-free terminal reserve-transaction dead letters.
     pub fn reserve_transaction_dead_letters(
         &self,
@@ -7467,7 +7099,6 @@ impl NodeHandle {
     ) -> Result<Vec<ReserveTransactionDeadLetterV1>, ReserveTransactionForwarderError> {
         self.reserve_transaction_forwarder.dead_letters(limit)
     }
-
     /// Claim one native reserve/rent operation for isolated runtime signing.
     pub fn claim_reserve_transaction_for_signing(
         &self,
@@ -7476,7 +7107,6 @@ impl NodeHandle {
         self.reserve_transaction_forwarder
             .claim_for_signing(operation_id)
     }
-
     /// Persist exact signed reserve/rent transaction bytes before submitter exposure.
     pub fn store_signed_reserve_transaction(
         &self,
@@ -7486,7 +7116,6 @@ impl NodeHandle {
         self.reserve_transaction_forwarder
             .store_signed_transaction(operation_id, signed_transaction_bytes)
     }
-
     /// Release an interrupted reserve-transaction signing claim.
     pub fn release_reserve_transaction_signing_claim(
         &self,
@@ -7495,7 +7124,6 @@ impl NodeHandle {
         self.reserve_transaction_forwarder
             .release_signing_claim(operation_id)
     }
-
     /// Mark exact signed reserve/rent bytes ambiguous before transaction ingress.
     pub fn begin_reserve_transaction_submission(
         &self,
@@ -7504,7 +7132,6 @@ impl NodeHandle {
         self.reserve_transaction_forwarder
             .begin_submission(operation_id)
     }
-
     /// Record that an exact reserve/rent transaction is pending or applied.
     pub fn mark_reserve_transaction_submitted(
         &self,
@@ -7513,7 +7140,6 @@ impl NodeHandle {
         self.reserve_transaction_forwarder
             .mark_submitted(operation_id)
     }
-
     /// Record a reserve/rent queue failure proven to precede submission.
     pub fn mark_reserve_transaction_not_submitted(
         &self,
@@ -7522,7 +7148,6 @@ impl NodeHandle {
         self.reserve_transaction_forwarder
             .mark_not_submitted(operation_id)
     }
-
     /// Permit exact-byte retry after finalized absence of a reserve/rent transaction.
     pub fn mark_reserve_transaction_finalized_absent(
         &self,
@@ -7532,7 +7157,6 @@ impl NodeHandle {
         self.reserve_transaction_forwarder
             .mark_finalized_absent(operation_id, observed_finalized_cursor)
     }
-
     /// Reconcile exact finalized reserve/rent success by retained transaction digest.
     pub fn mark_reserve_transaction_finalized(
         &self,
@@ -7546,7 +7170,6 @@ impl NodeHandle {
             finalized_cursor,
         )
     }
-
     /// Reconcile exact reserve/rent semantics committed through another ingress.
     pub fn mark_reserve_transaction_semantic_finalized(
         &self,
@@ -7556,7 +7179,6 @@ impl NodeHandle {
         self.reserve_transaction_forwarder
             .mark_semantic_finalized(operation_id, finalized_cursor)
     }
-
     /// Dead-letter a reserve/rent operation that conflicts with finalized state.
     pub fn mark_reserve_transaction_finalized_conflict(
         &self,
@@ -7566,7 +7188,6 @@ impl NodeHandle {
         self.reserve_transaction_forwarder
             .mark_finalized_conflict(operation_id, observed_finalized_cursor)
     }
-
     /// Clear a rejected reserve/rent envelope for bounded replacement signing.
     pub fn mark_reserve_transaction_rejected(
         &self,
@@ -7576,19 +7197,16 @@ impl NodeHandle {
         self.reserve_transaction_forwarder
             .mark_transaction_rejected(operation_id, observed_finalized_cursor)
     }
-
     /// Returns a reference to the repair scheduler configuration.
     #[must_use]
     pub fn repair_config(&self) -> &RepairConfig {
         &self.repair_config
     }
-
     /// Returns a reference to the GC scheduler configuration.
     #[must_use]
     pub fn gc_config(&self) -> &GcConfig {
         &self.gc_config
     }
-
     /// Return the first durability failure that forced this handle into fail-closed mode.
     ///
     /// Once set, durable mutation APIs reject new work because in-memory and
@@ -7603,7 +7221,6 @@ impl NodeHandle {
                 .or_else(|| Some("durability health lock poisoned".to_owned())),
         }
     }
-
     fn ensure_durability_healthy(&self) -> Result<(), String> {
         match self.durability_failure_reason() {
             Some(reason) => Err(format!(
@@ -7612,7 +7229,6 @@ impl NodeHandle {
             None => Ok(()),
         }
     }
-
     fn mark_durability_unhealthy(&self, reason: String) {
         match self.durability_failure.lock() {
             Ok(mut guard) => {
@@ -7628,7 +7244,6 @@ impl NodeHandle {
             }
         }
     }
-
     fn record_unrecoverable_rollback(
         &self,
         context: &str,
@@ -7638,7 +7253,6 @@ impl NodeHandle {
         self.mark_durability_unhealthy(reason.clone());
         reason
     }
-
     fn finish_local_checkpoint_write(
         &self,
         component: &'static str,
@@ -7657,7 +7271,6 @@ impl NodeHandle {
             }
         }
     }
-
     fn initialize_runtime_checkpoints(&self) -> Result<(), NodeInitError> {
         let model_path = self
             .moderation_model_registry_checkpoint_path
@@ -7667,7 +7280,6 @@ impl NodeHandle {
             .map_err(|err| {
                 NodeInitError::checkpoint("moderation model registry", model_path, err)
             })?;
-
         let screening_path = self
             .moderation_screening_checkpoint_path
             .as_ref()
@@ -7676,7 +7288,6 @@ impl NodeHandle {
             .map_err(|err| {
                 NodeInitError::checkpoint("moderation screening", screening_path, err)
             })?;
-
         let object_index_path = self
             .moderation_quarantine_object_index_path
             .as_ref()
@@ -7687,7 +7298,6 @@ impl NodeHandle {
         .map_err(|err| {
             NodeInitError::checkpoint("moderation quarantine object index", object_index_path, err)
         })?;
-
         let viewer_path = self
             .moderation_evidence_viewer_checkpoint_path
             .as_ref()
@@ -7696,14 +7306,12 @@ impl NodeHandle {
             &ModerationEvidenceViewerSnapshot::default(),
         )
         .map_err(|err| NodeInitError::checkpoint("moderation evidence viewer", viewer_path, err))?;
-
         let auxiliary_path = self
             .auxiliary_runtime_checkpoint_path
             .as_ref()
             .expect("storage-backed node has an auxiliary checkpoint path");
         self.persist_auxiliary_runtime_checkpoint_unlocked()
             .map_err(|err| NodeInitError::checkpoint("auxiliary runtime", auxiliary_path, err))?;
-
         let marker_path = runtime_state_initialization_path(self.config.data_dir());
         self.finish_local_checkpoint_write(
             "runtime initialization marker",
@@ -7714,28 +7322,24 @@ impl NodeHandle {
             NodeInitError::checkpoint("runtime initialization marker", &marker_path, err)
         })
     }
-
     /// Register a repair orchestrator used to rehydrate missing chunks remotely.
     pub fn set_repair_orchestrator(&self, orchestrator: Arc<dyn RepairOrchestrator>) {
         if let Ok(mut guard) = self.repair_orchestrator.write() {
             *guard = Some(orchestrator);
         }
     }
-
     /// Remove any configured repair orchestrator.
     pub fn clear_repair_orchestrator(&self) {
         if let Ok(mut guard) = self.repair_orchestrator.write() {
             *guard = None;
         }
     }
-
     fn repair_orchestrator(&self) -> Option<Arc<dyn RepairOrchestrator>> {
         self.repair_orchestrator
             .read()
             .ok()
             .and_then(|guard| guard.clone())
     }
-
     fn install_startup_governance_publisher(
         &mut self,
         publisher: Arc<dyn GovernancePublisher>,
@@ -7760,7 +7364,6 @@ impl NodeHandle {
         self.flush_governance_outbox()?;
         Ok(())
     }
-
     /// Register the governance publisher used to surface settlement artefacts.
     ///
     /// Nodes configured with a signed filesystem publisher pin that exact
@@ -7770,7 +7373,6 @@ impl NodeHandle {
             iroha_logger::error!(%err, "failed to register SoraFS governance publisher");
         }
     }
-
     /// Register a governance publisher and replay every durable pending artifact.
     ///
     /// # Errors
@@ -7808,7 +7410,6 @@ impl NodeHandle {
         self.flush_governance_outbox()?;
         Ok(())
     }
-
     /// Remove any unpinned governance publisher.
     ///
     /// Startup-installed signed publishers cannot be cleared; use
@@ -7819,7 +7420,6 @@ impl NodeHandle {
             iroha_logger::error!(%err, "failed to clear SoraFS governance publisher");
         }
     }
-
     /// Remove an unpinned governance publisher.
     ///
     /// # Errors
@@ -7839,7 +7439,6 @@ impl NodeHandle {
             None;
         Ok(())
     }
-
     /// Return whether this node currently has a governance publisher configured.
     #[must_use]
     pub fn has_governance_publisher(&self) -> bool {
@@ -7847,14 +7446,12 @@ impl NodeHandle {
             .read()
             .is_ok_and(|guard| guard.is_some())
     }
-
     fn governance_publisher(&self) -> Option<Arc<dyn GovernancePublisher>> {
         self.governance_publisher
             .read()
             .ok()
             .and_then(|guard| guard.clone())
     }
-
     fn enqueue_governance_outbox_unlocked(
         &self,
         kind: GovernanceOutboxKindV1,
@@ -7867,7 +7464,6 @@ impl NodeHandle {
             GovernanceOutboxReservationUse::None,
         )
     }
-
     fn enqueue_governance_outbox_unlocked_with_provenance(
         &self,
         kind: GovernanceOutboxKindV1,
@@ -7881,7 +7477,6 @@ impl NodeHandle {
             GovernanceOutboxReservationUse::None,
         )
     }
-
     fn enqueue_gc_eviction_governance_outbox_unlocked(
         &self,
         payload_bytes: Vec<u8>,
@@ -7893,7 +7488,6 @@ impl NodeHandle {
             GovernanceOutboxReservationUse::GcEviction,
         )
     }
-
     fn enqueue_governance_outbox_unlocked_with_reservation(
         &self,
         kind: GovernanceOutboxKindV1,
@@ -7932,7 +7526,6 @@ impl NodeHandle {
             reserved_slots,
         )
     }
-
     fn enqueue_governance_outbox(
         &self,
         kind: GovernanceOutboxKindV1,
@@ -7940,7 +7533,6 @@ impl NodeHandle {
     ) -> Result<u64, GovernancePublishError> {
         self.enqueue_governance_outbox_with_optional_provenance(kind, payload_bytes, None)
     }
-
     fn enqueue_governance_outbox_with_optional_provenance(
         &self,
         kind: GovernanceOutboxKindV1,
@@ -7977,7 +7569,6 @@ impl NodeHandle {
         drop(checkpoint_guard);
         Ok(sequence)
     }
-
     fn reconcile_gc_eviction_intents_on_startup(&self) -> Result<(), GovernancePublishError> {
         let storage = self.storage.as_ref().ok_or_else(|| {
             GovernancePublishError::other("GC eviction reconciliation requires the storage backend")
@@ -8009,7 +7600,6 @@ impl NodeHandle {
         }
         self.validate_gc_eviction_links_against_storage(storage)
     }
-
     fn enqueue_sequenced_governance_outbox(
         &self,
         kind: GovernanceOutboxKindV1,
@@ -8048,7 +7638,6 @@ impl NodeHandle {
         drop(checkpoint_guard);
         Ok(sequence)
     }
-
     /// Return the number of durably pending governance publications.
     #[must_use]
     pub fn pending_governance_publication_count(&self) -> usize {
@@ -8056,7 +7645,6 @@ impl NodeHandle {
             .read()
             .map_or(0, |outbox| outbox.entries.len())
     }
-
     fn privacy_leader_lease_scope(
         &self,
         query_id: [u8; 32],
@@ -8073,7 +7661,6 @@ impl NodeHandle {
             },
         )
     }
-
     fn acquire_privacy_leader_lease(
         &self,
         query_id: [u8; 32],
@@ -8106,7 +7693,6 @@ impl NodeHandle {
             .map_err(|error| {
                 GovernancePublishError::other(format!("acquire transparency leader lease: {error}"))
             })?;
-
         let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
         })?;
@@ -8134,7 +7720,6 @@ impl NodeHandle {
         }
         Ok(grant)
     }
-
     fn validate_privacy_leader_lease_for_use(
         &self,
         scope: TransparencyLeaderLeaseScopeV1,
@@ -8164,7 +7749,6 @@ impl NodeHandle {
         }
         Ok(())
     }
-
     fn release_privacy_leader_lease(
         &self,
         grant: &TransparencyLeaderLeaseGrantV1,
@@ -8184,7 +7768,6 @@ impl NodeHandle {
                 GovernancePublishError::other(format!("release transparency leader lease: {error}"))
             })
     }
-
     fn with_privacy_leader_lease<T>(
         &self,
         query_id: [u8; 32],
@@ -8204,7 +7787,6 @@ impl NodeHandle {
             ))),
         }
     }
-
     fn privacy_leader_lease_scope_for_outbox_entry(
         &self,
         entry: &GovernanceOutboxEntryV1,
@@ -8252,7 +7834,6 @@ impl NodeHandle {
         )
         .map(Some)
     }
-
     fn privacy_publication_authorization_for_outbox_entry(
         &self,
         entry: &GovernanceOutboxEntryV1,
@@ -8313,7 +7894,6 @@ impl NodeHandle {
         authorization.validate_publication(&publication, &entry.payload_bytes)?;
         Ok(authorization)
     }
-
     /// Publish and durably acknowledge all queued governance artifacts.
     ///
     /// Publication is at-least-once. Publishers must therefore treat identical
@@ -8326,7 +7906,6 @@ impl NodeHandle {
     pub fn flush_governance_outbox(&self) -> Result<usize, GovernancePublishError> {
         self.flush_governance_outbox_at(unix_now_secs(), None)
     }
-
     fn flush_governance_outbox_at(
         &self,
         observed_at_unix: u64,
@@ -8384,7 +7963,6 @@ impl NodeHandle {
             } else {
                 publish_governance_outbox_entry(publisher.as_ref(), &entry, None)?;
             }
-
             let _checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
                 GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
             })?;
@@ -8419,7 +7997,6 @@ impl NodeHandle {
             published = published.saturating_add(1);
         }
     }
-
     /// Admit, persist, and publish an externally authorized reputation snapshot.
     ///
     /// The local snapshot, head linkage, replay event, and publication intent
@@ -8678,7 +8255,6 @@ impl NodeHandle {
         self.flush_governance_outbox()?;
         Ok(())
     }
-
     /// Publish an appeal-finance report with server-verified Torii provenance.
     pub fn publish_authenticated_appeal_finance_report(
         &self,
@@ -8693,7 +8269,6 @@ impl NodeHandle {
             ),
         )
     }
-
     fn publish_appeal_finance_report_with_provenance(
         &self,
         report: SoraFsAppealFinanceReportV1,
@@ -8713,7 +8288,6 @@ impl NodeHandle {
         self.flush_governance_outbox()?;
         Ok(())
     }
-
     /// Publish a typed non-privacy SoraFS transparency ledger cycle.
     ///
     /// Privacy aggregate cycles must use the finalized release scheduler so
@@ -8741,7 +8315,6 @@ impl NodeHandle {
         self.flush_governance_outbox()?;
         Ok(())
     }
-
     /// Publish a typed proof-token issuance summary to the governance pipeline.
     pub fn publish_proof_token_issuance(
         &self,
@@ -8749,7 +8322,6 @@ impl NodeHandle {
     ) -> Result<(), GovernancePublishError> {
         self.publish_proof_token_issuance_with_provenance(issuance, None)
     }
-
     fn publish_proof_token_issuance_with_provenance(
         &self,
         issuance: ProofTokenIssuanceV1,
@@ -8769,7 +8341,6 @@ impl NodeHandle {
         self.flush_governance_outbox()?;
         Ok(())
     }
-
     /// Derive and publish a proof-token issuance summary from an issued `SFGT` frame.
     ///
     /// The frame signature is verified with `signer_key` before publication.
@@ -8795,7 +8366,6 @@ impl NodeHandle {
         self.publish_proof_token_issuance(issuance.clone())?;
         Ok(issuance)
     }
-
     /// Derive and publish a proof-token issuance summary from URL-safe base64.
     ///
     /// This is the transport-friendly counterpart to
@@ -8821,7 +8391,6 @@ impl NodeHandle {
         self.publish_proof_token_issuance(issuance.clone())?;
         Ok(issuance)
     }
-
     /// Derive and publish a proof-token issuance with verified Torii provenance.
     pub fn publish_authenticated_proof_token_base64_issuance(
         &self,
@@ -8851,7 +8420,6 @@ impl NodeHandle {
         )?;
         Ok(issuance)
     }
-
     /// Record one privacy-safe source entry for later transparency ledger publication.
     pub fn record_transparency_ledger_source_entry(
         &self,
@@ -8907,7 +8475,6 @@ impl NodeHandle {
         }
         Ok(())
     }
-
     /// Derive and record a transparency source entry from a GAR enforcement receipt.
     pub fn record_gar_enforcement_receipt_transparency_entry(
         &self,
@@ -8920,7 +8487,6 @@ impl NodeHandle {
         })?;
         self.record_transparency_ledger_source_entry(entry)
     }
-
     /// Derive and record a transparency source entry from a moderation governance event.
     #[cfg(test)]
     pub fn record_moderation_ballot_governance_transparency_entry(
@@ -8936,7 +8502,6 @@ impl NodeHandle {
         )?;
         self.record_transparency_ledger_source_entry(entry)
     }
-
     /// Derive and record a transparency source entry from an appeal finance report.
     pub fn record_appeal_finance_report_transparency_entry(
         &self,
@@ -8949,7 +8514,6 @@ impl NodeHandle {
         })?;
         self.record_transparency_ledger_source_entry(entry)
     }
-
     /// Derive and record a transparency source entry from an appeal finance settlement receipt.
     pub fn record_appeal_finance_settlement_receipt_transparency_entry(
         &self,
@@ -8964,7 +8528,6 @@ impl NodeHandle {
         )?;
         self.record_transparency_ledger_source_entry(entry)
     }
-
     /// Return the number of source entries currently retained by the transparency worker.
     #[must_use]
     pub fn transparency_ledger_source_entry_count(&self) -> usize {
@@ -8973,7 +8536,6 @@ impl NodeHandle {
             .map(|guard| guard.len())
             .unwrap_or_default()
     }
-
     /// Build and publish a transparency cycle from locally recorded source entries.
     ///
     /// The worker selects retained source entries whose occurrence timestamps
@@ -9060,7 +8622,6 @@ impl NodeHandle {
         }
         Ok(publication)
     }
-
     /// Record one source event for later SFM-4c privacy aggregate publication.
     #[cfg(test)]
     pub(crate) fn record_privacy_aggregate_source_event(
@@ -9074,7 +8635,6 @@ impl NodeHandle {
         }
         self.record_privacy_aggregate_source_event_inner(event)
     }
-
     /// Record a privacy aggregate source event with server-verified Torii provenance.
     pub fn record_authenticated_privacy_aggregate_source_event(
         &self,
@@ -9087,7 +8647,6 @@ impl NodeHandle {
         ));
         self.record_privacy_aggregate_source_event_inner(event)
     }
-
     fn record_privacy_aggregate_source_event_inner(
         &self,
         event: PrivacyAggregateSourceEvent,
@@ -9238,7 +8797,6 @@ impl NodeHandle {
         }
         Ok(PrivacySourceEventRecordOutcomeV1::Recorded)
     }
-
     /// Return the number of source events currently retained by the aggregate worker.
     #[must_use]
     pub fn privacy_aggregate_source_event_count(&self) -> usize {
@@ -9247,7 +8805,6 @@ impl NodeHandle {
             .map(|guard| guard.len())
             .unwrap_or_default()
     }
-
     /// Return a consistent copy of the durable privacy composition-budget ledger.
     ///
     /// # Errors
@@ -9261,11 +8818,9 @@ impl NodeHandle {
             .map_err(|_| GovernancePublishError::other("privacy composition budget poisoned"))
             .map(|budget| budget.clone())
     }
-
     fn reconcile_privacy_release_anchor(&self) -> Result<(), GovernancePublishError> {
         self.reconcile_privacy_release_anchor_at(unix_now_secs(), None)
     }
-
     fn reconcile_privacy_release_anchor_at(
         &self,
         observed_at_unix: u64,
@@ -9341,7 +8896,6 @@ impl NodeHandle {
         if finalized == local_head {
             return Ok(());
         }
-
         let published_cycles = self
             .published_privacy_aggregate_cycles
             .read()
@@ -9423,13 +8977,11 @@ impl NodeHandle {
         }
         Ok(())
     }
-
     /// Return the config-backed privacy aggregate scheduler, when enabled.
     #[must_use]
     pub fn configured_privacy_aggregate_schedule(&self) -> Option<PrivacyAggregateScheduleConfig> {
         self.config.privacy_aggregate_schedule()
     }
-
     fn derive_privacy_cycle_prf_input(
         &self,
         config: &PrivacyAggregateCycleConfig,
@@ -9473,7 +9025,6 @@ impl NodeHandle {
             })?;
         Ok(Some(PrivacyCyclePrfInputV1::new(request, output)))
     }
-
     /// Return the config-backed evidence-viewer audit scheduler, when enabled.
     #[must_use]
     pub fn configured_evidence_viewer_audit_schedule(
@@ -9481,7 +9032,6 @@ impl NodeHandle {
     ) -> Option<PrivacyAggregateScheduleConfig> {
         self.config.evidence_viewer_audit_schedule()
     }
-
     /// Build and publish a transparency cycle from privacy-safe moderation aggregates.
     ///
     /// Aggregates are validated, required to fit inside the supplied cycle
@@ -9518,7 +9068,6 @@ impl NodeHandle {
         self.flush_governance_outbox()?;
         Ok(publication)
     }
-
     fn build_privacy_aggregate_publication(
         cycle_id: [u8; 16],
         cycle_start_unix: u64,
@@ -9537,7 +9086,6 @@ impl NodeHandle {
                 "privacy aggregate publication timestamp must equal the exact cycle end",
             ));
         }
-
         let mut seen_aggregate_ids = BTreeSet::new();
         let mut cycle_policy_digest = None;
         let mut cycle_noise_source = None;
@@ -9602,7 +9150,6 @@ impl NodeHandle {
                 .then_with(|| left.2.cmp(&right.2))
                 .then_with(|| left.3.cmp(&right.3))
         });
-
         let mut entries = Vec::with_capacity(keyed.len());
         for (index, (_, _, _, aggregate_hash, aggregate)) in keyed.iter().enumerate() {
             let sequence = u64::try_from(index)
@@ -9624,7 +9171,6 @@ impl NodeHandle {
             .iter()
             .map(|(_, _, _, _, aggregate)| aggregate.clone())
             .collect::<Vec<_>>();
-
         let publication = ModerationLedgerCyclePublicationV1::from_entries_with_privacy_aggregates(
             cycle_id,
             cycle_start_unix,
@@ -9641,7 +9187,6 @@ impl NodeHandle {
         })?;
         Ok(publication)
     }
-
     /// Build and publish a privacy aggregate cycle from locally recorded source events.
     ///
     /// The worker filters recorded events to the requested cycle window, applies
@@ -9691,7 +9236,6 @@ impl NodeHandle {
             aggregates,
         )
     }
-
     /// Publish exactly one direct-successor privacy aggregate cycle.
     ///
     /// Window selection depends only on the governed activation/cadence and the
@@ -9717,7 +9261,6 @@ impl NodeHandle {
             None,
         )
     }
-
     fn publish_due_privacy_aggregate_cycle_from_source_events_with_provenance(
         &self,
         now_unix: u64,
@@ -9978,7 +9521,6 @@ impl NodeHandle {
             })
         })
     }
-
     fn commit_published_privacy_cycle(
         &self,
         input: PublishedPrivacyCycleCommitInput<'_>,
@@ -10040,7 +9582,6 @@ impl NodeHandle {
         })?;
         self.ensure_durability_healthy()
             .map_err(GovernancePublishError::other)?;
-
         let previous_budget = self
             .privacy_composition_budget
             .read()
@@ -10075,7 +9616,6 @@ impl NodeHandle {
             .read()
             .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
             .clone();
-
         let mut next_budget = previous_budget.clone();
         let budget_charge = match (
             config.privacy.epsilon_numerator,
@@ -10114,7 +9654,6 @@ impl NodeHandle {
                 "privacy release PRF evidence does not match the governed mode",
             ));
         }
-
         let publication_payload_digest = *blake3::hash(&encoded).as_bytes();
         let published_aggregate_inventory_digest =
             privacy_published_aggregate_inventory_digest(&publication.privacy_aggregates)?;
@@ -10167,7 +9706,6 @@ impl NodeHandle {
                     "append durable privacy release record: {error}"
                 ))
             })?;
-
         let mut next_published = previous_published.clone();
         if !next_published.insert(cycle_id) {
             return Err(GovernancePublishError::other(
@@ -10240,7 +9778,6 @@ impl NodeHandle {
         self.flush_governance_outbox_at(observed_at_unix, Some(leader_lease))?;
         Ok(())
     }
-
     fn install_privacy_publication_state(
         &self,
         budget: PrivacyCompositionBudgetLedgerV1,
@@ -10286,7 +9823,6 @@ impl NodeHandle {
         *outbox_guard = outbox;
         Ok(())
     }
-
     fn commit_processed_privacy_cycle(
         &self,
         input: SuppressedPrivacyCycleCommitInput<'_>,
@@ -10367,7 +9903,6 @@ impl NodeHandle {
             .read()
             .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
             .clone();
-
         let mut next_release_ledger = previous_release_ledger.clone();
         next_release_ledger
             .append(transparency::PrivacyReleaseRecordV1 {
@@ -10457,7 +9992,6 @@ impl NodeHandle {
         self.reconcile_privacy_release_anchor_at(observed_at_unix, Some(leader_lease))?;
         Ok(())
     }
-
     /// Publish the next due privacy aggregate cycle using storage configuration.
     ///
     /// The complete public policy and composition budget come from
@@ -10476,7 +10010,6 @@ impl NodeHandle {
             None,
         )
     }
-
     /// Publish the next due privacy cycle with server-verified Torii provenance.
     pub fn publish_due_configured_privacy_aggregate_cycle_from_authenticated_request(
         &self,
@@ -10493,7 +10026,6 @@ impl NodeHandle {
             )),
         )
     }
-
     fn publish_due_configured_privacy_aggregate_cycle(
         &self,
         expected_cycle_id: [u8; 16],
@@ -10521,7 +10053,6 @@ impl NodeHandle {
             provenance,
         )
     }
-
     /// Publish an appeal-finance weekly rollup with verified Torii provenance.
     pub fn publish_authenticated_appeal_finance_weekly_rollup(
         &self,
@@ -10536,7 +10067,6 @@ impl NodeHandle {
             ),
         )
     }
-
     fn publish_appeal_finance_weekly_rollup_with_provenance(
         &self,
         rollup: SoraFsAppealFinanceWeeklyRollupV1,
@@ -10556,7 +10086,6 @@ impl NodeHandle {
         self.flush_governance_outbox()?;
         Ok(())
     }
-
     /// Publish a typed SoraFS appeal finance settlement receipt to the governance pipeline.
     pub fn publish_appeal_finance_settlement_receipt(
         &self,
@@ -10579,7 +10108,6 @@ impl NodeHandle {
         self.flush_governance_outbox()?;
         Ok(())
     }
-
     /// Return the immutable public trust policy loaded for reputation admission.
     ///
     /// The policy contains no signing material. Exposing the same `Arc` lets a
@@ -10590,7 +10118,6 @@ impl NodeHandle {
     pub fn reputation_trust_policy(&self) -> Option<Arc<ReputationSnapshotTrustPolicyV1>> {
         self.reputation_trust_policy.clone()
     }
-
     /// Return the immutable public trust policy loaded for signed hedging-feed
     /// admission.
     ///
@@ -10601,7 +10128,6 @@ impl NodeHandle {
     pub fn hedging_feed_trust_policy(&self) -> Option<Arc<HedgingFeedTrustPolicyV1>> {
         self.hedging_feed_trust_policy.clone()
     }
-
     /// Return the latest reputation snapshot accepted by this node.
     #[must_use]
     pub fn latest_reputation_snapshot(&self) -> Option<ReputationSnapshotV1> {
@@ -10610,7 +10136,6 @@ impl NodeHandle {
             .ok()
             .and_then(|guard| guard.clone())
     }
-
     /// Return a published reputation snapshot by snapshot identifier.
     #[must_use]
     pub fn reputation_snapshot(&self, snapshot_id: [u8; 16]) -> Option<ReputationSnapshotV1> {
@@ -10620,7 +10145,6 @@ impl NodeHandle {
                 .map(|admitted| admitted.envelope.snapshot.clone())
         })
     }
-
     /// Return the latest full signed reputation envelope and scoring evidence.
     #[must_use]
     pub fn latest_signed_reputation_snapshot(&self) -> Option<SignedReputationSnapshotV1> {
@@ -10631,7 +10155,6 @@ impl NodeHandle {
             .and_then(|guard| guard.as_ref().map(|snapshot| snapshot.snapshot_id))?;
         self.signed_reputation_snapshot(snapshot_id)
     }
-
     /// Return a retained full signed reputation envelope by snapshot identifier.
     #[must_use]
     pub fn signed_reputation_snapshot(
@@ -10644,7 +10167,6 @@ impl NodeHandle {
                 .map(|admitted| admitted.envelope.clone())
         })
     }
-
     /// Return reputation snapshot events after `since_sequence`, capped by `limit`.
     #[must_use]
     pub fn reputation_events_since(
@@ -10654,7 +10176,6 @@ impl NodeHandle {
     ) -> Vec<ReputationSnapshotEventV1> {
         self.reputation_events_replay(since_sequence, limit).events
     }
-
     /// Return a gap-aware bounded replay of reputation snapshot events.
     #[must_use]
     pub fn reputation_events_replay(
@@ -10672,7 +10193,6 @@ impl NodeHandle {
             |guard| guard.replay(since_sequence, limit, |event| event.sequence),
         )
     }
-
     /// Return the latest reputation snapshot event sequence accepted by this node.
     #[must_use]
     pub fn latest_reputation_event_sequence(&self) -> Option<u64> {
@@ -10681,13 +10201,11 @@ impl NodeHandle {
             .ok()
             .and_then(|guard| (guard.latest_sequence != 0).then_some(guard.latest_sequence))
     }
-
     /// Subscribe to live reputation snapshot publication events.
     #[must_use]
     pub fn subscribe_reputation_events(&self) -> broadcast::Receiver<ReputationSnapshotEventV1> {
         self.reputation_event_sender.subscribe()
     }
-
     /// Admit a governance-signed moderation reproducibility manifest into the local registry.
     ///
     /// The manifest is validated with the canonical data-model validator before
@@ -10734,7 +10252,6 @@ impl NodeHandle {
         }
         Ok(record)
     }
-
     /// Admit an adversarial corpus manifest into the local moderation registry.
     ///
     /// The corpus is validated and keyed by the BLAKE3 digest of its canonical
@@ -10779,7 +10296,6 @@ impl NodeHandle {
         }
         Ok(record)
     }
-
     /// Export a deterministic snapshot of the local moderation model registry.
     ///
     /// Lock poisoning is reported so callers cannot mistake an unavailable
@@ -10797,7 +10313,6 @@ impl NodeHandle {
             .map_err(|_| ModerationModelRegistryError::StateLockPoisoned)?
             .snapshot())
     }
-
     /// Return a bounded deterministic read view of the local moderation model registry.
     ///
     /// Unlike snapshot export, this clones at most `limit` records from each
@@ -10816,7 +10331,6 @@ impl NodeHandle {
             .map_err(|_| ModerationModelRegistryError::StateLockPoisoned)?
             .read_view(limit))
     }
-
     /// Replace the local moderation model registry from a validated snapshot.
     ///
     /// The snapshot is duplicate-checked before it replaces local state, then it
@@ -10862,7 +10376,6 @@ impl NodeHandle {
         }
         Ok(())
     }
-
     /// Install or rotate the active externally anchored screening authority.
     ///
     /// Reinstalling the byte-identical authority is idempotent. Policies with
@@ -10905,7 +10418,6 @@ impl NodeHandle {
         *active = Some(authority);
         Ok(())
     }
-
     /// Return whether a validated config-authoritative screening bundle is active.
     #[must_use]
     pub fn has_moderation_screening_authority(&self) -> bool {
@@ -10913,20 +10425,17 @@ impl NodeHandle {
             .read()
             .is_ok_and(|authority| authority.is_some())
     }
-
     /// Return whether authenticated moderation screening was enabled by the
     /// immutable node configuration used at startup.
     #[must_use]
     pub fn moderation_screening_enabled(&self) -> bool {
         self.config.moderation_screening_enabled()
     }
-
     /// Return the reviewed digest of the authority bundle loaded at startup.
     #[must_use]
     pub fn moderation_screening_authority_bundle_digest(&self) -> Option<[u8; 32]> {
         self.config.moderation_screening_authority_bundle_digest()
     }
-
     /// Return the active non-secret PKCS#11/KMS quarantine key handle.
     ///
     /// The wrapping provider and its credentials remain runtime-only.
@@ -10936,7 +10445,6 @@ impl NodeHandle {
             .as_deref()
             .map(ModerationQuarantineKeyWrapper::active_key_id)
     }
-
     /// Return whether the retained quarantine-key provider binding exactly
     /// matches the independently resolved storage configuration.
     ///
@@ -10965,7 +10473,6 @@ impl NodeHandle {
             (None, Some(_)) | (Some(_), None) => false,
         }
     }
-
     /// Return whether `candidate` is the exact runtime wrapper retained by this
     /// node handle.
     #[must_use]
@@ -10977,7 +10484,6 @@ impl NodeHandle {
             .as_ref()
             .is_some_and(|active| Arc::ptr_eq(&active.0, candidate))
     }
-
     /// Return whether the configured privacy policy requires threshold-PRF
     /// cycle outputs.
     #[must_use]
@@ -10988,7 +10494,6 @@ impl NodeHandle {
                 .privacy_aggregate_policy()
                 .is_some_and(config::PrivacyAggregatePolicyConfig::requires_cycle_prf)
     }
-
     /// Return the exact threshold-PRF provider binding retained by this node.
     #[must_use]
     pub fn privacy_cycle_prf_provider_binding(
@@ -10998,7 +10503,6 @@ impl NodeHandle {
             .as_ref()
             .map(|active| active.0.binding())
     }
-
     /// Return the exact finalized release-anchor binding retained by this node.
     #[must_use]
     pub fn privacy_release_anchor_provider_binding(
@@ -11008,7 +10512,6 @@ impl NodeHandle {
             .as_ref()
             .map(|active| active.0.binding())
     }
-
     /// Return the exact external leader-lease binding retained by this node.
     #[must_use]
     pub fn transparency_leader_lease_provider_binding(
@@ -11018,7 +10521,6 @@ impl NodeHandle {
             .as_ref()
             .map(|active| active.0.binding())
     }
-
     /// Return the exact sealed signed-producer checkpoint-store binding.
     #[must_use]
     pub fn governance_dag_checkpoint_store_binding(
@@ -11028,7 +10530,6 @@ impl NodeHandle {
             .as_ref()
             .map(|store| (store.handle(), store.qualification()))
     }
-
     /// Revalidate the pinned signed Governance publisher and fused privacy target.
     ///
     /// Torii and other prebuilt-node launchers call this before starting any
@@ -11181,7 +10682,6 @@ impl NodeHandle {
             }
         }
     }
-
     /// Return the highest external fencing token durably accepted in memory.
     ///
     /// # Errors
@@ -11195,7 +10695,6 @@ impl NodeHandle {
             .map(|active| active.0.fencing_floor())
             .transpose()
     }
-
     /// Authenticate and durably record one governed moderation screening result.
     ///
     /// The result must be either a canonical runner-signed result under a
@@ -11236,7 +10735,6 @@ impl NodeHandle {
         let verified = authority.verify(request, now_unix)?;
         self.commit_authenticated_moderation_screening(verified)
     }
-
     fn commit_authenticated_moderation_screening(
         &self,
         verified: moderation::ModerationVerifiedScreeningAdmissionV1,
@@ -11278,7 +10776,6 @@ impl NodeHandle {
         }
         Ok(outcome)
     }
-
     /// Record one deterministic local moderation screening projection.
     ///
     /// This unsigned projection hook exists for tests and development tooling.
@@ -11330,7 +10827,6 @@ impl NodeHandle {
         }
         Ok(outcome)
     }
-
     /// Mark a pending local quarantine record as reviewed.
     ///
     /// Successful updates are persisted to the local checkpoint when SoraFS
@@ -11376,7 +10872,6 @@ impl NodeHandle {
         }
         Ok(record)
     }
-
     /// Release a reviewed local quarantine record.
     ///
     /// Successful updates are persisted to the local checkpoint when SoraFS
@@ -11423,7 +10918,6 @@ impl NodeHandle {
         }
         Ok(record)
     }
-
     /// Export local screening and quarantine state, reporting lock failures.
     ///
     /// # Errors
@@ -11438,7 +10932,6 @@ impl NodeHandle {
             .map_err(|_| ModerationScreeningError::StateLockPoisoned)?
             .snapshot())
     }
-
     /// Return a bounded deterministic read view of local screening state.
     ///
     /// # Errors
@@ -11454,7 +10947,6 @@ impl NodeHandle {
             .map_err(|_| ModerationScreeningError::StateLockPoisoned)?
             .read_view(limit))
     }
-
     /// Return a bounded deterministic read view of the local quarantine queue.
     ///
     /// # Errors
@@ -11470,7 +10962,6 @@ impl NodeHandle {
             .map_err(|_| ModerationScreeningError::StateLockPoisoned)?
             .quarantine_read_view(limit))
     }
-
     /// Look up one local quarantine record without cloning the full screening snapshot.
     ///
     /// # Errors
@@ -11486,7 +10977,6 @@ impl NodeHandle {
             .map_err(|_| ModerationScreeningError::StateLockPoisoned)?
             .quarantine_record(quarantine_id))
     }
-
     /// Replace local screening/quarantine state from a validated snapshot.
     ///
     /// # Errors
@@ -11530,7 +11020,6 @@ impl NodeHandle {
         }
         Ok(())
     }
-
     /// Seal and store quarantined payload bytes in the local encrypted object store.
     ///
     /// The plaintext BLAKE3 digest must match the referenced quarantine record
@@ -11578,7 +11067,6 @@ impl NodeHandle {
             .moderation_quarantine_key_provider_binding
             .as_ref()
             .ok_or(ModerationQuarantineObjectError::KeyWrapperUnqualified)?;
-
         let mut objects = self
             .moderation_quarantine_objects
             .write()
@@ -11623,7 +11111,6 @@ impl NodeHandle {
                 });
             }
         }
-
         self.finish_local_checkpoint_write(
             "moderation quarantine object envelope",
             &envelope_path,
@@ -11637,7 +11124,6 @@ impl NodeHandle {
             path: envelope_path.display().to_string(),
             message: err.to_string(),
         })?;
-
         let stored = match objects.insert(record) {
             Ok(stored) => stored,
             Err(err) => {
@@ -11689,7 +11175,6 @@ impl NodeHandle {
         }
         Ok(stored)
     }
-
     /// Read and decrypt a local quarantine payload object.
     ///
     /// # Errors
@@ -11736,7 +11221,6 @@ impl NodeHandle {
         }
         Ok(ModerationQuarantineObjectPayload { record, payload })
     }
-
     /// Read and authenticate an inclusive-exclusive plaintext byte range.
     ///
     /// Only ciphertext chunks intersecting `start..end` are decrypted. Each
@@ -11790,7 +11274,6 @@ impl NodeHandle {
             payload,
         })
     }
-
     /// Rewrap one object's DEK under the wrapper's current active key.
     ///
     /// The injected wrapper must remain able to unwrap the historical key
@@ -11883,7 +11366,6 @@ impl NodeHandle {
         })?;
         Ok(record)
     }
-
     /// Export local quarantine object index state, reporting lock failures.
     ///
     /// # Errors
@@ -11898,7 +11380,6 @@ impl NodeHandle {
             .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?
             .snapshot())
     }
-
     /// Look up one quarantine object index record without cloning the full index.
     ///
     /// # Errors
@@ -11914,7 +11395,6 @@ impl NodeHandle {
             .map_err(|_| ModerationQuarantineObjectError::StateLockPoisoned)?
             .get(quarantine_id))
     }
-
     /// Replace the local quarantine object index from a validated snapshot.
     ///
     /// # Errors
@@ -11972,7 +11452,6 @@ impl NodeHandle {
         }
         Ok(())
     }
-
     /// Create or return a payload-free local evidence viewer session record.
     ///
     /// The session is bound to an existing encrypted quarantine object by
@@ -12030,7 +11509,6 @@ impl NodeHandle {
         }
         Ok(record)
     }
-
     /// Append a payload-free local evidence viewer access-log event.
     ///
     /// # Errors
@@ -12082,7 +11560,6 @@ impl NodeHandle {
         }
         Ok(record)
     }
-
     /// Export local evidence viewer audit state, reporting lock failures.
     ///
     /// # Errors
@@ -12097,7 +11574,6 @@ impl NodeHandle {
             .map_err(|_| ModerationEvidenceViewerError::StateLockPoisoned)?
             .snapshot())
     }
-
     /// Replace local evidence viewer audit state from a validated snapshot.
     ///
     /// # Errors
@@ -12150,7 +11626,6 @@ impl NodeHandle {
         }
         Ok(())
     }
-
     /// Build a payload-free local evidence-viewer audit report for one closed window.
     ///
     /// # Errors
@@ -12164,7 +11639,6 @@ impl NodeHandle {
         let snapshot = self.export_moderation_evidence_viewer_snapshot()?;
         moderation::moderation_evidence_viewer_audit_report_from_snapshot(input, &snapshot)
     }
-
     /// Build and record a payload-free evidence-viewer audit report as a transparency source entry.
     ///
     /// The report is recorded into the local transparency source-entry worker
@@ -12196,7 +11670,6 @@ impl NodeHandle {
             source_entry,
         })
     }
-
     /// Publish the oldest due payload-free evidence-viewer audit report cycle.
     ///
     /// The scheduler derives report windows from local viewer sessions and
@@ -12245,7 +11718,6 @@ impl NodeHandle {
                     "export evidence viewer audit snapshot: {err}"
                 ))
             })?;
-
         let mut due_windows = BTreeSet::new();
         for session in &snapshot.sessions {
             collect_due_evidence_viewer_audit_window(
@@ -12272,7 +11744,6 @@ impl NodeHandle {
                 &mut due_windows,
             )?;
         }
-
         if due_windows.is_empty() {
             let cycle_id = evidence_viewer_audit_cycle_id(latest_window);
             if published_cycles.contains(&cycle_id) {
@@ -12290,7 +11761,6 @@ impl NodeHandle {
                 },
             );
         }
-
         for window in due_windows {
             let cycle_id = evidence_viewer_audit_cycle_id(window);
             {
@@ -12377,7 +11847,6 @@ impl NodeHandle {
                 publication,
             });
         }
-
         let cycle_id = evidence_viewer_audit_cycle_id(latest_window);
         Ok(
             ModerationEvidenceViewerAuditScheduleOutcome::NoSourceEvents {
@@ -12386,7 +11855,6 @@ impl NodeHandle {
             },
         )
     }
-
     /// Publish the next due evidence-viewer audit-report cycle using storage configuration.
     ///
     /// Report scope, policy digest, and previous block hash remain explicit
@@ -12410,7 +11878,6 @@ impl NodeHandle {
             previous_block_hash,
         )
     }
-
     fn load_moderation_model_registry_checkpoint(&self) -> Result<(), NodeInitError> {
         let Some(path) = self.moderation_model_registry_checkpoint_path.as_ref() else {
             return Ok(());
@@ -12447,7 +11914,6 @@ impl NodeHandle {
         );
         Ok(())
     }
-
     fn persist_moderation_model_registry_snapshot(
         &self,
         snapshot: &ModerationModelRegistrySnapshot,
@@ -12471,7 +11937,6 @@ impl NodeHandle {
             ),
         )
     }
-
     fn load_moderation_screening_checkpoint(&self) -> Result<(), NodeInitError> {
         let Some(path) = self.moderation_screening_checkpoint_path.as_ref() else {
             return Ok(());
@@ -12508,7 +11973,6 @@ impl NodeHandle {
         );
         Ok(())
     }
-
     fn persist_moderation_screening_snapshot(
         &self,
         snapshot: &ModerationScreeningSnapshot,
@@ -12532,7 +11996,6 @@ impl NodeHandle {
             ),
         )
     }
-
     fn load_moderation_quarantine_object_index_checkpoint(&self) -> Result<(), NodeInitError> {
         let Some(path) = self.moderation_quarantine_object_index_path.as_ref() else {
             return Ok(());
@@ -12584,7 +12047,6 @@ impl NodeHandle {
         );
         Ok(())
     }
-
     fn audit_moderation_quarantine_object_store(&self) -> Result<(), NodeInitError> {
         let root = self
             .moderation_quarantine_object_root
@@ -12696,7 +12158,6 @@ impl NodeHandle {
             }
             expected_files.insert(envelope_path);
         }
-
         let file_limit = self
             .config
             .runtime_retention()
@@ -12744,7 +12205,6 @@ impl NodeHandle {
         }
         Ok(())
     }
-
     fn persist_moderation_quarantine_object_index_snapshot(
         &self,
         snapshot: &ModerationQuarantineObjectSnapshot,
@@ -12768,7 +12228,6 @@ impl NodeHandle {
             ),
         )
     }
-
     fn load_moderation_evidence_viewer_checkpoint(&self) -> Result<(), NodeInitError> {
         let Some(path) = self.moderation_evidence_viewer_checkpoint_path.as_ref() else {
             return Ok(());
@@ -12807,7 +12266,6 @@ impl NodeHandle {
         );
         Ok(())
     }
-
     fn persist_moderation_evidence_viewer_snapshot(
         &self,
         snapshot: &ModerationEvidenceViewerSnapshot,
@@ -12831,7 +12289,6 @@ impl NodeHandle {
             ),
         )
     }
-
     fn export_auxiliary_runtime_checkpoint(
         &self,
     ) -> Result<AuxiliaryRuntimeCheckpointV5, GovernancePublishError> {
@@ -12986,7 +12443,6 @@ impl NodeHandle {
             governance_outbox_entries,
         })
     }
-
     fn persist_auxiliary_runtime_checkpoint_unlocked(
         &self,
     ) -> Result<(), RuntimeCheckpointPersistError> {
@@ -13022,7 +12478,6 @@ impl NodeHandle {
         };
         self.finish_local_checkpoint_write("auxiliary runtime", path, write_result)
     }
-
     fn mutate_capacity_durably<T>(
         &self,
         mutate: impl FnOnce(&CapacityManager) -> Result<(T, bool), CapacityError>,
@@ -13065,7 +12520,6 @@ impl NodeHandle {
         }
         Ok(outcome)
     }
-
     fn load_auxiliary_runtime_checkpoint(&self) -> Result<(), NodeInitError> {
         let Some(path) = self.auxiliary_runtime_checkpoint_path.as_ref() else {
             return Ok(());
@@ -13099,7 +12553,6 @@ impl NodeHandle {
             .map_err(|err| NodeInitError::checkpoint("auxiliary runtime", path, err))?;
         Ok(())
     }
-
     fn restore_auxiliary_runtime_checkpoint(
         &self,
         checkpoint: AuxiliaryRuntimeCheckpointV5,
@@ -13198,7 +12651,6 @@ impl NodeHandle {
                 )));
             }
         }
-
         let mut por_history = HashMap::with_capacity(checkpoint.por_history.len());
         for entry in checkpoint.por_history {
             if entry.manifest_digest == [0; 32]
@@ -13651,7 +13103,6 @@ impl NodeHandle {
                 "auxiliary checkpoint intents reserve {reserved_gc_slots} outbox slots beyond retention limit {state_limit}"
             )));
         }
-
         let mut pending_linked_gc_sequences = BTreeSet::new();
         for link in gc_eviction_audit_links.values() {
             if let Some(entry) = governance_outbox.entries.get(&link.outbox_sequence) {
@@ -13694,7 +13145,6 @@ impl NodeHandle {
                 )));
             }
         }
-
         self.por
             .restore_checkpoint(checkpoint.por_tracker)
             .map_err(|err| {
@@ -13702,7 +13152,6 @@ impl NodeHandle {
                     "invalid PoR tracker auxiliary checkpoint: {err}"
                 ))
             })?;
-
         *self
             .por_history
             .write()
@@ -13799,7 +13248,6 @@ impl NodeHandle {
         self.reconcile_privacy_release_anchor()?;
         Ok(())
     }
-
     fn moderation_quarantine_record_for_object(
         &self,
         quarantine_id: &[u8; 16],
@@ -13812,7 +13260,6 @@ impl NodeHandle {
                 quarantine_id_hex: hex::encode(quarantine_id),
             })
     }
-
     fn moderation_quarantine_object_record_for_viewer(
         &self,
         quarantine_id: &[u8; 16],
@@ -13827,7 +13274,6 @@ impl NodeHandle {
                 quarantine_id_hex: hex::encode(quarantine_id),
             })
     }
-
     fn validate_moderation_quarantine_object_snapshot_refs(
         &self,
         snapshot: &ModerationQuarantineObjectSnapshot,
@@ -13852,7 +13298,6 @@ impl NodeHandle {
         }
         Ok(())
     }
-
     fn validate_moderation_screening_snapshot_downstream_refs(
         &self,
         snapshot: &ModerationScreeningSnapshot,
@@ -13896,7 +13341,6 @@ impl NodeHandle {
         }
         Ok(())
     }
-
     fn validate_moderation_quarantine_snapshot_viewer_refs(
         &self,
         snapshot: &ModerationQuarantineObjectSnapshot,
@@ -13934,7 +13378,6 @@ impl NodeHandle {
         }
         Ok(())
     }
-
     fn validate_moderation_evidence_viewer_snapshot_refs(
         &self,
         snapshot: &ModerationEvidenceViewerSnapshot,
@@ -13955,7 +13398,6 @@ impl NodeHandle {
         }
         Ok(())
     }
-
     fn resolve_moderation_quarantine_object_path(
         &self,
         root: &Path,
@@ -13965,7 +13407,6 @@ impl NodeHandle {
             .map_err(|message| ModerationQuarantineObjectError::InvalidSnapshot { message })?;
         Ok(root.join(&record.envelope_path))
     }
-
     fn read_moderation_quarantine_object_envelope(
         &self,
         root: &Path,
@@ -14003,7 +13444,6 @@ impl NodeHandle {
         }
         Ok((envelope_path, envelope, envelope_bytes))
     }
-
     fn recover_unindexed_moderation_quarantine_envelope(
         &self,
         root: &Path,
@@ -14057,7 +13497,6 @@ impl NodeHandle {
         );
         Ok(true)
     }
-
     fn prepare_gc_eviction_intent(
         &self,
         _lock_guards: (
@@ -14107,7 +13546,6 @@ impl NodeHandle {
             }
         }
         let storage_after = gc_expected_post_storage_identity(&snapshot, authoritative_target)?;
-
         let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
         })?;
@@ -14144,7 +13582,6 @@ impl NodeHandle {
         };
         intent.binding_digest = gc_eviction_intent_binding_digest(&intent)?;
         validate_gc_eviction_intent(&intent)?;
-
         let pending_outbox_entries = self
             .governance_outbox
             .read()
@@ -14160,7 +13597,6 @@ impl NodeHandle {
                 "GC eviction requires one reserved governance outbox slot, but {pending_outbox_entries} entries already consume limit {limit}"
             )));
         }
-
         let previous_links = self
             .gc_eviction_audit_links
             .read()
@@ -14188,7 +13624,6 @@ impl NodeHandle {
                 })?;
             links.remove(&candidate);
         }
-
         let mut runtime = previous_intents.clone();
         runtime.next_sequence = next_sequence;
         runtime.entries.insert(sequence, intent.clone());
@@ -14221,7 +13656,6 @@ impl NodeHandle {
         drop(checkpoint_guard);
         Ok(intent)
     }
-
     fn append_gc_eviction_audit_unlocked(
         &self,
         intent: &GcEvictionIntentV1,
@@ -14299,7 +13733,6 @@ impl NodeHandle {
         }
         Ok(())
     }
-
     fn restore_gc_publication_runtime(
         &self,
         intents: GcEvictionIntentRuntime,
@@ -14320,7 +13753,6 @@ impl NodeHandle {
         *governance_outbox = outbox;
         Ok(())
     }
-
     fn settle_gc_eviction_intent_against_storage(
         &self,
         _gc_guard: &std::sync::MutexGuard<'_, ()>,
@@ -14380,7 +13812,6 @@ impl NodeHandle {
                 intent.sequence
             )));
         };
-
         let previous_intents = self
             .gc_eviction_intents
             .read()
@@ -14402,7 +13833,6 @@ impl NodeHandle {
             .read()
             .map_err(|_| GovernancePublishError::other("governance outbox lock poisoned"))?
             .clone();
-
         let mutation = (|| {
             if disposition == GcIntentDisposition::FinalizedCommitted {
                 self.append_gc_eviction_audit_unlocked(intent)?;
@@ -14463,7 +13893,6 @@ impl NodeHandle {
         drop(checkpoint_guard);
         Ok(disposition)
     }
-
     fn evict_manifest_with_gc_audit(
         &self,
         gc_guard: &std::sync::MutexGuard<'_, ()>,
@@ -14509,7 +13938,6 @@ impl NodeHandle {
             self.mark_durability_unhealthy(message.clone());
             return Err(GovernancePublishError::other(message));
         }
-
         let freed_bytes = match storage.evict_manifest(&intent.manifest_id) {
             Ok(freed_bytes) => freed_bytes,
             Err(storage_error) => {
@@ -14574,7 +14002,6 @@ impl NodeHandle {
             publish_error,
         })
     }
-
     fn validate_gc_eviction_links_against_storage(
         &self,
         storage: &StorageBackend,
@@ -14599,7 +14026,6 @@ impl NodeHandle {
         }
         Ok(())
     }
-
     fn publish_gc_audit_event(
         &self,
         payload: GcAuditPayloadV1,
@@ -14639,7 +14065,6 @@ impl NodeHandle {
         })?;
         Ok(())
     }
-
     fn publish_reconciliation_report(&self, report: &SorafsReconciliationReportV1) {
         let encoded = match norito::to_bytes(report) {
             Ok(encoded) => encoded,
@@ -14664,7 +14089,6 @@ impl NodeHandle {
             );
         }
     }
-
     /// Run a GC sweep against expired manifests using one complete finalized
     /// native repair-ledger projection.
     ///
@@ -14679,7 +14103,6 @@ impl NodeHandle {
         const REASON_LIMIT_REACHED: &str = "limit_reached";
         const RESULT_SUCCESS: &str = "success";
         const RESULT_ERROR: &str = "error";
-
         let mut report = GcSweepReport::default();
         if !self.gc_config.enabled() || now_unix == 0 {
             return report;
@@ -14715,7 +14138,6 @@ impl NodeHandle {
             global_sorafs_gc_otel().record_run(RESULT_SUCCESS);
             return report;
         }
-
         let Some(provider_id) = self.capacity_usage().provider_id else {
             report.errors = report.errors.saturating_add(1);
             iroha_logger::error!(
@@ -14728,11 +14150,9 @@ impl NodeHandle {
         let active_repair_tasks = repair_projection
             .active_tasks_for_provider(provider_id)
             .collect::<Vec<_>>();
-
         let mut expired = Vec::new();
         let mut expired_count = 0u64;
         let mut oldest_expired_age: Option<u64> = None;
-
         for manifest in storage.manifests() {
             let retention_epoch = manifest.retention_epoch();
             if retention_epoch == 0 {
@@ -14748,15 +14168,12 @@ impl NodeHandle {
                 Some(oldest_expired_age.map_or(age_secs, |prev| prev.max(age_secs)));
             expired.push(manifest);
         }
-
         expired.sort_by(|left, right| {
             left.retention_epoch()
                 .cmp(&right.retention_epoch())
                 .then(left.manifest_id().cmp(right.manifest_id()))
         });
-
         let mut evicted_count = 0usize;
-
         for manifest in expired {
             if evicted_count >= max_deletions {
                 report.skipped.push(GcSkip {
@@ -14765,7 +14182,6 @@ impl NodeHandle {
                 });
                 break;
             }
-
             let digest = *manifest.manifest_digest();
             if active_repair_tasks
                 .iter()
@@ -14801,7 +14217,6 @@ impl NodeHandle {
                 }
                 continue;
             }
-
             if manifest
                 .retention_source()
                 .and_then(|source| source.deal_end_epoch)
@@ -14837,7 +14252,6 @@ impl NodeHandle {
                 }
                 continue;
             }
-
             match storage.manifest_has_shared_chunks(manifest.manifest_id()) {
                 Ok(true) => {
                     report.skipped.push(GcSkip {
@@ -14881,7 +14295,6 @@ impl NodeHandle {
                     continue;
                 }
             }
-
             let reason = GC_AUDIT_REASON_RETENTION_EXPIRED_V1;
             let transaction = match self.evict_manifest_with_gc_audit(
                 &gc_guard,
@@ -14911,7 +14324,6 @@ impl NodeHandle {
                     "GC eviction audit remains durably pending"
                 );
             }
-
             evicted_count += 1;
             report.freed_bytes = report.freed_bytes.saturating_add(freed_bytes);
             report.evictions.push(GcEviction {
@@ -14921,15 +14333,12 @@ impl NodeHandle {
                 freed_bytes,
                 reason: reason.to_string(),
             });
-
             global_or_default().inc_sorafs_gc_evictions(reason);
             global_or_default().add_sorafs_gc_freed_bytes(reason, freed_bytes);
             global_sorafs_gc_otel().record_eviction(reason, freed_bytes);
         }
-
         global_or_default()
             .set_sorafs_gc_expired_snapshot(expired_count, oldest_expired_age.unwrap_or(0));
-
         let result = if report.errors == 0 {
             RESULT_SUCCESS
         } else {
@@ -14939,10 +14348,8 @@ impl NodeHandle {
         global_sorafs_gc_otel().record_run(result);
         self.schedulers
             .update_storage_bytes(storage.total_bytes(), self.config.max_capacity_bytes().0);
-
         report
     }
-
     /// Run a reconciliation snapshot across repair and GC state.
     pub fn run_reconciliation_once(
         &self,
@@ -14967,7 +14374,6 @@ impl NodeHandle {
         }
         result
     }
-
     fn compute_reconciliation_report(
         &self,
         now_unix: u64,
@@ -14979,19 +14385,16 @@ impl NodeHandle {
         let Some(storage) = self.storage.as_ref() else {
             return Err(ReconciliationError::StorageDisabled);
         };
-
         let provider_id = self
             .capacity_usage()
             .provider_id
             .ok_or(ReconciliationError::ProviderBindingUnavailable)?;
-
         let repair_snapshot = reconciliation::RepairReconciliationSnapshot {
             version: reconciliation::RECONCILIATION_SNAPSHOT_VERSION_V1,
             finalized_cursor: repair_projection.finalized_cursor(),
             tasks: repair_projection.tasks().to_vec(),
         };
         let repair_snapshot_hash = reconciliation::hash_snapshot(&repair_snapshot)?;
-
         let manifests = storage.manifests();
         let mut retention_entries = manifests
             .iter()
@@ -15012,7 +14415,6 @@ impl NodeHandle {
             manifests: retention_entries,
         };
         let retention_snapshot_hash = reconciliation::hash_snapshot(&retention_snapshot)?;
-
         let (gc_freed_bytes_total, gc_evictions_total) = storage.gc_counters();
         let mut chunk_refcounts = storage.chunk_refcount_snapshot();
         chunk_refcounts.sort_by(|left, right| left.digest.cmp(&right.digest));
@@ -15023,10 +14425,8 @@ impl NodeHandle {
             chunk_refcounts,
         };
         let gc_snapshot_hash = reconciliation::hash_snapshot(&gc_snapshot)?;
-
         let divergence_count = reconciliation_divergence_count(storage, &manifests);
         let appeal_finance = self.appeal_finance_reconciliation_summary()?;
-
         let report = SorafsReconciliationReportV1 {
             version: SORAFS_RECONCILIATION_REPORT_VERSION_V1,
             provider_id,
@@ -15044,7 +14444,6 @@ impl NodeHandle {
         report.validate()?;
         Ok(report)
     }
-
     fn appeal_finance_reconciliation_summary(
         &self,
     ) -> Result<Option<AppealFinanceReconciliationSummaryV1>, ReconciliationError> {
@@ -15137,7 +14536,6 @@ impl NodeHandle {
                 .cmp(&right.cycle)
                 .then(left.encoded_blake3.cmp(&right.encoded_blake3))
         });
-
         let snapshot = reconciliation::AppealFinanceRollupReconciliationSnapshot {
             version: reconciliation::RECONCILIATION_SNAPSHOT_VERSION_V1,
             rollups: entries.clone(),
@@ -15171,7 +14569,6 @@ impl NodeHandle {
                     ))
                 })?;
         }
-
         Ok(Some(AppealFinanceReconciliationSummaryV1 {
             rollup_snapshot_hash,
             rollup_count: u32::try_from(entries.len()).unwrap_or(u32::MAX),
@@ -15181,26 +14578,22 @@ impl NodeHandle {
             total_rewards_forfeited_treasury_xor,
         }))
     }
-
     /// Whether the storage worker is currently enabled.
     #[must_use]
     pub fn is_enabled(&self) -> bool {
         self.storage.is_some()
     }
-
     /// Configured on-chain provider identity for finalized capacity reconciliation.
     #[must_use]
     pub fn capacity_provider_id(&self) -> Option<ProviderId> {
         self.config.provider_id()
     }
-
     /// Return the finalized ledger identity backing the durable capacity projection.
     pub fn capacity_finalized_cursor(
         &self,
     ) -> Result<Option<CapacityFinalizedCursorV1>, CapacityError> {
         self.capacity.finalized_cursor()
     }
-
     /// Record a capacity declaration captured by Torii.
     #[cfg(test)]
     pub(crate) fn record_capacity_declaration(
@@ -15220,7 +14613,6 @@ impl NodeHandle {
         self.seed_telemetry_accumulator(record);
         Ok(())
     }
-
     /// Rebuild the local provider scheduler from one complete finalized ledger snapshot.
     ///
     /// The configured provider identity is supplied by Torii. The capacity manager validates all
@@ -15248,7 +14640,6 @@ impl NodeHandle {
         if !outcome.changed {
             return Ok(outcome);
         }
-
         let usage = self.capacity.usage_snapshot();
         if let Some(record) = self.capacity.active_declaration_record()? {
             self.meter.restore_capacity_runtime(
@@ -15266,13 +14657,11 @@ impl NodeHandle {
         }
         Ok(outcome)
     }
-
     /// Return a snapshot describing the currently tracked capacity usage.
     #[must_use]
     pub fn capacity_usage(&self) -> CapacityUsageSnapshot {
         self.capacity.usage_snapshot()
     }
-
     /// Schedule a replication order if the active declaration matches the provider.
     #[cfg(test)]
     pub(crate) fn schedule_replication_order(
@@ -15290,7 +14679,6 @@ impl NodeHandle {
         }
         Ok(maybe_plan)
     }
-
     /// Mark a replication order as completed and release its reserved capacity.
     #[cfg(test)]
     pub(crate) fn complete_replication_order(
@@ -15306,31 +14694,26 @@ impl NodeHandle {
         self.record_replication_success(order_id, usage_sample);
         Ok(release)
     }
-
     /// Expose the underlying capacity manager for advanced integrations.
     #[must_use]
     pub fn capacity_manager(&self) -> Arc<CapacityManager> {
         self.capacity.clone()
     }
-
     /// Expose the capacity meter so callers can populate telemetry windows.
     #[must_use]
     pub fn capacity_meter(&self) -> CapacityMeter {
         self.meter.clone()
     }
-
     /// Access the telemetry accumulator backing the current declaration.
     #[must_use]
     pub fn telemetry_handle(&self) -> Arc<RwLock<Option<TelemetryAccumulator>>> {
         self.telemetry.clone()
     }
-
     /// Expose the scheduler runtime for telemetry and queue inspection.
     #[must_use]
     pub fn schedulers(&self) -> StorageSchedulersRuntime {
         self.schedulers.clone()
     }
-
     /// Test helper that discards the authority delta.
     #[cfg(test)]
     pub(crate) fn record_por_challenge(
@@ -15341,7 +14724,6 @@ impl NodeHandle {
             .map(drop)
             .map_err(PorMutationFailureV1::into_tracker_error)
     }
-
     /// Durably record a challenge and return its exact bounded status update.
     pub fn record_por_challenge_with_authority_update(
         &self,
@@ -15353,7 +14735,6 @@ impl NodeHandle {
             .map(|archive| archive.0.as_ref());
         self.record_por_challenge_with_optional_replay_archive(challenge, replay_archive)
     }
-
     fn record_por_challenge_with_optional_replay_archive(
         &self,
         challenge: &PorChallengeV1,
@@ -15479,7 +14860,6 @@ impl NodeHandle {
         }
         Ok(authority_update)
     }
-
     /// Record a provider PoR proof response bound to its admitted provider key.
     #[cfg(test)]
     pub(crate) fn record_por_proof(
@@ -15491,7 +14871,6 @@ impl NodeHandle {
             .map(drop)
             .map_err(PorMutationFailureV1::into_tracker_error)
     }
-
     /// Durably record a proof and return its exact bounded status update.
     pub fn record_por_proof_with_authority_update(
         &self,
@@ -15626,27 +15005,23 @@ impl NodeHandle {
         }
         Ok(authority_update)
     }
-
     /// Return process-local PoR latency, VRF, and seed-binding metrics.
     #[must_use]
     pub fn por_protocol_metrics(&self) -> PorProtocolMetricsSnapshot {
         self.por.protocol_metrics()
     }
-
     /// Export the complete bounded PoR status history from the authoritative checkpoint state.
     pub fn por_status_authority_snapshot(
         &self,
     ) -> Result<PorStatusAuthoritySnapshotV1, PorTrackerError> {
         self.por.status_authority_snapshot()
     }
-
     /// Return the oldest failed-verdict repair intent awaiting durable handoff.
     pub fn next_pending_por_repair_work(
         &self,
     ) -> Result<Option<PorPendingRepairWorkV1>, PorTrackerError> {
         self.por.next_pending_repair_work()
     }
-
     /// Durably acknowledge one exact failed-verdict repair handoff.
     pub fn acknowledge_por_repair_handoff(
         &self,
@@ -15682,7 +15057,6 @@ impl NodeHandle {
         }
         Ok(outcome)
     }
-
     /// Reconcile one exact durable failed-verdict repair outbox entry.
     ///
     /// The external admission boundary runs before the node acknowledgement.
@@ -15709,20 +15083,17 @@ impl NodeHandle {
             acknowledgement,
         })
     }
-
     /// Return the exact next retained PoR terminal awaiting reputation admission.
     pub fn next_por_reputation_terminal_work(
         &self,
     ) -> Result<Option<PorReputationTerminalWorkV1>, PorTrackerError> {
         self.por.next_reputation_terminal_work()
     }
-
     /// Return the number of retained PoR terminals awaiting acknowledgement.
     #[must_use]
     pub fn pending_por_reputation_terminal_count(&self) -> u64 {
         self.por.pending_reputation_terminal_count()
     }
-
     /// Durably acknowledge the exact next retained PoR reputation terminal.
     ///
     /// The cursor advances in the same auxiliary checkpoint family as PoR
@@ -15768,7 +15139,6 @@ impl NodeHandle {
         }
         Ok(outcome)
     }
-
     /// Durably compact an acknowledged finalized prefix into an authenticated archive.
     ///
     /// External appends happen before the auxiliary checkpoint advances. A
@@ -15834,7 +15204,6 @@ impl NodeHandle {
         }
         Ok(compacted)
     }
-
     /// Reconcile the configured bounded acknowledged prefix into the exact
     /// deployment-owned replay archive.
     pub fn compact_configured_por_replay_archive(&self) -> Result<u32, PorTrackerError> {
@@ -15851,7 +15220,6 @@ impl NodeHandle {
             policy.max_records_per_tick(),
         )
     }
-
     /// Reconcile one retained PoR terminal into the durable reputation outbox.
     ///
     /// Admission happens before acknowledgement. If the process crashes or the
@@ -15875,7 +15243,6 @@ impl NodeHandle {
             acknowledgement,
         })
     }
-
     /// Record an audit verdict and update telemetry counters accordingly.
     #[cfg(test)]
     pub(crate) fn record_por_verdict(
@@ -15892,7 +15259,6 @@ impl NodeHandle {
         .map(|(outcome, _update)| outcome)
         .map_err(PorMutationFailureV1::into_tracker_error)
     }
-
     /// Durably record a verdict and return its exact bounded status update.
     pub fn record_por_verdict_with_authority_update(
         &self,
@@ -15911,7 +15277,6 @@ impl NodeHandle {
             replay_archive,
         )
     }
-
     fn record_por_verdict_with_optional_replay_archive(
         &self,
         verdict: &AuditVerdictV1,
@@ -16113,7 +15478,6 @@ impl NodeHandle {
         };
         Ok((outcome, authority_update))
     }
-
     /// Attach stripe layout and chunk-role metadata to a stored manifest.
     pub fn attach_stripe_layout(
         &self,
@@ -16125,7 +15489,6 @@ impl NodeHandle {
         storage.attach_stripe_layout(manifest_id, stripe_layout, chunk_roles)?;
         Ok(())
     }
-
     /// Generate PoR challenges for all stored manifests using the supplied randomness inputs.
     pub fn plan_por_challenges(
         &self,
@@ -16134,7 +15497,6 @@ impl NodeHandle {
     ) -> Result<Vec<PlannedChallenge>, PorChallengePlannerError> {
         self.plan_por_challenges_with_forced_policy(randomness, vrf_records, true)
     }
-
     /// Generate PoR challenges while explicitly controlling whether missing
     /// provider VRFs may enter the forced-challenge path.
     pub fn plan_por_challenges_with_forced_policy(
@@ -16154,10 +15516,8 @@ impl NodeHandle {
         let sample_policy = por::PorSamplePolicy::from_metadata(provider_id, &usage.metadata)?;
         let grace_secs = self.gc_config.retention_grace_secs();
         let issued_at = randomness.issued_at_unix;
-
         let manifests = storage.manifests();
         let mut challenges = Vec::with_capacity(manifests.len());
-
         for manifest in manifests {
             let retention_epoch = manifest.retention_epoch();
             if retention_epoch != 0 {
@@ -16181,12 +15541,9 @@ impl NodeHandle {
             )?;
             challenges.push(planned);
         }
-
         challenges.sort_by_key(|planned| planned.challenge.challenge_id);
-
         Ok(challenges)
     }
-
     /// Record a PoTR receipt using an explicit chain-authoritative repair handoff.
     pub fn record_potr_receipt_with_handoff(
         &self,
@@ -16204,7 +15561,6 @@ impl NodeHandle {
             repair_handoff,
         )
     }
-
     /// Return the exact durable PoTR admission-policy floor for a provider.
     pub fn potr_admission_policy_floor(
         &self,
@@ -16212,7 +15568,6 @@ impl NodeHandle {
     ) -> Result<Option<PotrAdmissionPolicyBindingV1>, PotrTrackerError> {
         self.potr.admission_policy_floor(provider_id)
     }
-
     /// Retrieve PoTR receipts matching the manifest/provider filters.
     pub fn potr_receipts(
         &self,
@@ -16222,7 +15577,6 @@ impl NodeHandle {
     ) -> Result<Vec<PotrReceiptV1>, PotrTrackerError> {
         self.potr.receipts_for(manifest_digest, provider_id, tier)
     }
-
     /// Return status for one exact final signed PoTR receipt.
     pub fn potr_receipt_status(
         &self,
@@ -16230,7 +15584,6 @@ impl NodeHandle {
     ) -> Result<Option<PotrReceiptStatusV1>, PotrTrackerError> {
         self.potr.status(receipt_digest)
     }
-
     /// Export a bounded sequence-ordered page of PoTR receipt statuses.
     pub fn export_potr_receipt_statuses(
         &self,
@@ -16239,7 +15592,6 @@ impl NodeHandle {
     ) -> Result<Vec<PotrReceiptStatusV1>, PotrTrackerError> {
         self.potr.export_statuses(after_sequence, limit)
     }
-
     /// Export a bounded sequence-ordered page of exact final signed receipts.
     pub fn export_potr_receipts(
         &self,
@@ -16248,13 +15600,11 @@ impl NodeHandle {
     ) -> Result<Vec<PotrReceiptV1>, PotrTrackerError> {
         self.potr.export_receipts(after_sequence, limit)
     }
-
     /// Returns a clone of the persistent storage backend when enabled.
     #[must_use]
     pub fn storage(&self) -> Option<Arc<StorageBackend>> {
         self.storage.clone()
     }
-
     #[cfg(test)]
     fn enqueue_finalized_provider_ingest(
         &self,
@@ -16269,7 +15619,6 @@ impl NodeHandle {
             self.finalized_provider_ingest_authorization(finalized_pin, order_id)?;
         outbox.enqueue(authorization).map_err(Into::into)
     }
-
     #[cfg(test)]
     fn claim_finalized_provider_ingest_source(
         &self,
@@ -16284,7 +15633,6 @@ impl NodeHandle {
             .claim_source(job_id, owner, now_ms, observed_finalized_cursor)
             .map_err(Into::into)
     }
-
     #[cfg(test)]
     fn ingest_finalized_provider_payload<R: Read>(
         &self,
@@ -16313,7 +15661,6 @@ impl NodeHandle {
                 }
             };
         }
-
         let manifest_id = match self.ingest_manifest(manifest, plan, reader) {
             Ok(manifest_id) => manifest_id,
             Err(NodeStorageError::Storage(StorageError::ManifestExists { .. })) => {
@@ -16348,7 +15695,6 @@ impl NodeHandle {
         outbox.mark_local_stored(claim, completed_at_ms, manifest_id.clone())?;
         Ok(manifest_id)
     }
-
     /// Export one deterministic bounded page of payload-free ingest status.
     pub fn finalized_provider_ingest_status_page(
         &self,
@@ -16361,7 +15707,6 @@ impl NodeHandle {
             .statuses_page(after_job_id, limit)
             .map_err(Into::into)
     }
-
     /// Return exact payload-free provider-ingest outbox counts from one bounded
     /// cached snapshot.
     pub fn finalized_provider_ingest_counts(
@@ -16373,7 +15718,6 @@ impl NodeHandle {
             .aggregate_counts()
             .map_err(Into::into)
     }
-
     /// Reserve this store incarnation's completed-Musubi capture coordinator.
     ///
     /// The reservation is shared by every clone of this handle and is never
@@ -16426,7 +15770,6 @@ impl NodeHandle {
         )
         .map_err(Into::into)
     }
-
     /// Construct the supervised finalized-ledger provider-ingest runtime.
     ///
     /// The configured provider identity and node-owned durable outbox cannot be
@@ -16498,7 +15841,6 @@ impl NodeHandle {
         )
         .map_err(Into::into)
     }
-
     #[cfg(test)]
     fn finalized_provider_ingest_authorization(
         &self,
@@ -16567,7 +15909,6 @@ impl NodeHandle {
         )
         .map_err(Into::into)
     }
-
     #[cfg(test)]
     fn verify_existing_finalized_provider_manifest(
         &self,
@@ -16592,7 +15933,6 @@ impl NodeHandle {
         }
         Ok(stored.manifest_id().to_owned())
     }
-
     /// Ingest a manifest payload into the local storage backend.
     ///
     /// This raw primitive exists for tests, bootstrap fixtures, and non-provider
@@ -16612,7 +15952,6 @@ impl NodeHandle {
         };
         self.ingest_manifest_with_layout(manifest, plan, reader, stripe_layout, chunk_roles)
     }
-
     /// Ingest a manifest payload with optional stripe layout and chunk-role annotations.
     pub fn ingest_manifest_with_layout<R: Read>(
         &self,
@@ -16637,7 +15976,6 @@ impl NodeHandle {
             Err(err) => Err(NodeStorageError::from(err)),
         }
     }
-
     /// Reverify one completed-Musubi capture under this handle's exact storage instance.
     ///
     /// Generic finalized-ledger claims carry no capture-store authority and
@@ -16690,7 +16028,6 @@ impl NodeHandle {
             ) => Err(ProviderIngestLocalStorageErrorV1::Retryable),
         }
     }
-
     /// Run trusted local verification against opaque fresh readers for one admitted payload.
     ///
     /// `manifest_digest` is resolved only through the authoritative storage index. While `work`
@@ -16733,7 +16070,6 @@ impl NodeHandle {
             }
         }
     }
-
     /// Read a byte range from a stored manifest payload.
     pub fn read_payload_range(
         &self,
@@ -16750,9 +16086,7 @@ impl NodeHandle {
             .map_err(NodeStorageError::from)
     }
 }
-
 include!("lib/manifest_metadata_access.rs");
-
 impl NodeHandle {
     fn derive_layout_and_roles(
         plan: &CarBuildPlan,
@@ -16776,7 +16110,6 @@ impl NodeHandle {
             .collect();
         Some((layout, roles))
     }
-
     /// Retrieve chunk metadata identified by its digest.
     pub fn chunk_by_digest(
         &self,
@@ -16788,7 +16121,6 @@ impl NodeHandle {
             .chunk_by_digest(manifest_id, digest)
             .map_err(NodeStorageError::from)
     }
-
     /// Read chunk bytes identified by digest, returning metadata alongside the payload.
     pub fn read_chunk_by_digest(
         &self,
@@ -16808,7 +16140,6 @@ impl NodeHandle {
             .map_err(NodeStorageError::from)?;
         Ok((record, bytes))
     }
-
     /// Sample Proof-of-Retrievability leaves for a stored manifest.
     pub fn sample_por(
         &self,
@@ -16831,13 +16162,11 @@ impl NodeHandle {
             }
         }
     }
-
     /// Produce a snapshot of the current metering counters.
     #[must_use]
     pub fn metering_snapshot(&self) -> MeteringSnapshot {
         self.meter.snapshot()
     }
-
     /// Return the PoR ingestion status for the supplied manifest digest.
     pub fn por_ingestion_status(
         &self,
@@ -16856,7 +16185,6 @@ impl NodeHandle {
             providers,
         })
     }
-
     /// Return the PoR ingestion status for all manifests tracked by the node.
     #[must_use]
     pub fn por_ingestion_overview(&self) -> Vec<PorIngestionProviderStatus> {
@@ -16874,13 +16202,11 @@ impl NodeHandle {
         });
         entries
     }
-
     /// Build the current Norito telemetry payload, if the accumulator is initialised.
     pub fn build_capacity_telemetry(&self) -> Option<Result<CapacityTelemetryV1, TelemetryError>> {
         let guard = self.telemetry.read().ok()?;
         guard.as_ref().map(TelemetryAccumulator::build_payload)
     }
-
     /// Mutate the telemetry accumulator if it has been initialised.
     pub fn update_telemetry<F, R>(&self, f: F) -> Option<R>
     where
@@ -16890,7 +16216,6 @@ impl NodeHandle {
         let acc = guard.as_mut()?;
         Some(f(acc))
     }
-
     fn update_por_history_entry(&self, verdict: &AuditVerdictV1) -> Result<u64, PorTrackerError> {
         let key = (verdict.manifest_digest, verdict.provider_id);
         let limit = self.config.runtime_retention().state_entry_limit();
@@ -16929,7 +16254,6 @@ impl NodeHandle {
         }
         Ok(entry.consecutive_failures)
     }
-
     fn rollback_por_verdict_state(
         &self,
         previous_tracker: por::PorTrackerCheckpointV1,
@@ -16953,7 +16277,6 @@ impl NodeHandle {
             (Err(history), Err(tracker)) => Err(format!("{history}; {tracker}")),
         }
     }
-
     fn build_ingestion_status_map(
         backlog: Vec<por::PorBacklogEntry>,
     ) -> HashMap<PorHistoryKey, PorIngestionProviderStatus> {
@@ -16970,7 +16293,6 @@ impl NodeHandle {
         }
         statuses
     }
-
     fn apply_por_history(
         &self,
         statuses: &mut HashMap<PorHistoryKey, PorIngestionProviderStatus>,
@@ -16993,7 +16315,6 @@ impl NodeHandle {
             slot.consecutive_failures = entry.consecutive_failures;
         }
     }
-
     fn ensure_ingestion_entry(
         statuses: &mut HashMap<PorHistoryKey, PorIngestionProviderStatus>,
         manifest_digest: [u8; 32],
@@ -17013,7 +16334,6 @@ impl NodeHandle {
                 consecutive_failures: 0,
             })
     }
-
     fn storage_backend(&self) -> Result<&StorageBackend, NodeStorageError> {
         let storage = self
             .storage
@@ -17023,7 +16343,6 @@ impl NodeHandle {
         storage.ensure_durability_healthy()?;
         Ok(storage)
     }
-
     fn seed_telemetry_accumulator(&self, record: &CapacityDeclarationRecord) {
         let mut provider_bytes = [0_u8; 32];
         provider_bytes.copy_from_slice(record.provider_id.as_bytes());
@@ -17032,19 +16351,16 @@ impl NodeHandle {
             record.committed_capacity_gib,
             record.valid_from_epoch,
         );
-
         let window_end = if record.valid_until_epoch <= record.valid_from_epoch {
             record.valid_from_epoch.saturating_add(1)
         } else {
             record.valid_until_epoch
         };
         let _ = accumulator.set_window_end_epoch(window_end);
-
         if let Ok(mut guard) = self.telemetry.write() {
             *guard = Some(accumulator);
         }
     }
-
     #[cfg(test)]
     fn record_replication_success(&self, _order_id: [u8; 32], usage: ReplicationUsageSample) {
         if let Ok(mut guard) = self.telemetry.write()
@@ -17057,7 +16373,6 @@ impl NodeHandle {
         }
     }
 }
-
 fn moderation_evidence_viewer_error_from_object_error(
     err: ModerationQuarantineObjectError,
 ) -> ModerationEvidenceViewerError {
@@ -17242,7 +16557,6 @@ mod tests {
         )
         .expect("valid archive binding")
     }
-
     fn storage_config_with_por_archive(
         binding: PorFinalizedReplayArchiveBindingV1,
     ) -> (StorageConfig, TempDir) {
@@ -17264,7 +16578,6 @@ mod tests {
             .build();
         (config, temp_dir)
     }
-
     #[derive(Debug)]
     struct StartupPorReplayArchive {
         handle: &'static str,
@@ -17276,7 +16589,6 @@ mod tests {
         binding_calls: AtomicUsize,
         lookup_calls: AtomicUsize,
     }
-
     impl StartupPorReplayArchive {
         fn exact(binding: PorFinalizedReplayArchiveBindingV1) -> Self {
             Self {
@@ -17291,12 +16603,10 @@ mod tests {
             }
         }
     }
-
     impl PorFinalizedReplayArchiveV1 for StartupPorReplayArchive {
         fn runtime_handle(&self) -> &str {
             self.handle
         }
-
         fn binding(
             &self,
         ) -> Result<PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1>
@@ -17308,11 +16618,9 @@ mod tests {
                 self.later_binding.unwrap_or(self.first_binding)
             })
         }
-
         fn check_readiness(&self) -> Result<(), PorFinalizedReplayArchiveExternalErrorV1> {
             self.readiness_error.map_or(Ok(()), Err)
         }
-
         fn current_head(
             &self,
         ) -> Result<
@@ -17321,7 +16629,6 @@ mod tests {
         > {
             Ok(self.current_head)
         }
-
         fn append(
             &self,
             _record: &PorFinalizedReplayArchiveRecordV1,
@@ -17330,7 +16637,6 @@ mod tests {
         {
             Err(PorFinalizedReplayArchiveExternalErrorV1::Rejected)
         }
-
         fn lookup(
             &self,
             challenge_id: [u8; 32],
@@ -17357,13 +16663,11 @@ mod tests {
             }
         }
     }
-
     #[derive(Debug, Clone, Copy)]
     enum PostQualificationDrift {
         Handle,
         Readiness,
     }
-
     #[derive(Debug)]
     struct PostQualificationDriftArchive {
         inner: StartupPorReplayArchive,
@@ -17371,7 +16675,6 @@ mod tests {
         armed: AtomicBool,
         calls_after_arm: AtomicUsize,
     }
-
     impl PostQualificationDriftArchive {
         fn new(binding: PorFinalizedReplayArchiveBindingV1, drift: PostQualificationDrift) -> Self {
             Self {
@@ -17381,12 +16684,10 @@ mod tests {
                 calls_after_arm: AtomicUsize::new(0),
             }
         }
-
         fn arm(&self) {
             self.calls_after_arm.store(0, Ordering::Relaxed);
             self.armed.store(true, Ordering::Relaxed);
         }
-
         fn drifted_on_second_call(&self, operation: PostQualificationDrift) -> bool {
             matches!(
                 (self.drift, operation),
@@ -17401,7 +16702,6 @@ mod tests {
                 && self.calls_after_arm.fetch_add(1, Ordering::Relaxed) != 0
         }
     }
-
     impl PorFinalizedReplayArchiveV1 for PostQualificationDriftArchive {
         fn runtime_handle(&self) -> &str {
             if self.drifted_on_second_call(PostQualificationDrift::Handle) {
@@ -17410,14 +16710,12 @@ mod tests {
                 self.inner.runtime_handle()
             }
         }
-
         fn binding(
             &self,
         ) -> Result<PorFinalizedReplayArchiveBindingV1, PorFinalizedReplayArchiveExternalErrorV1>
         {
             self.inner.binding()
         }
-
         fn check_readiness(&self) -> Result<(), PorFinalizedReplayArchiveExternalErrorV1> {
             if self.drifted_on_second_call(PostQualificationDrift::Readiness) {
                 Err(PorFinalizedReplayArchiveExternalErrorV1::Unavailable)
@@ -17425,7 +16723,6 @@ mod tests {
                 self.inner.check_readiness()
             }
         }
-
         fn current_head(
             &self,
         ) -> Result<
@@ -17434,7 +16731,6 @@ mod tests {
         > {
             self.inner.current_head()
         }
-
         fn append(
             &self,
             record: &PorFinalizedReplayArchiveRecordV1,
@@ -17443,7 +16739,6 @@ mod tests {
         {
             self.inner.append(record, expected_previous_head)
         }
-
         fn lookup(
             &self,
             challenge_id: [u8; 32],
@@ -17455,7 +16750,6 @@ mod tests {
                 .lookup(challenge_id, expected_checkpoint_head, proof_bounds)
         }
     }
-
     #[test]
     fn node_archive_injection_is_exact_and_standard_challenge_path_uses_it() {
         let binding = startup_por_archive_binding(0xD1);
@@ -17468,7 +16762,6 @@ mod tests {
             NodeRuntimeDeps::default().with_por_finalized_replay_archive(archive.clone()),
         )
         .expect("exact replay archive starts");
-
         handle
             .record_por_challenge(&por_sample_challenge())
             .expect("standard challenge path records fresh local state");
@@ -17482,7 +16775,6 @@ mod tests {
             "startup and route admission must each observe a stable binding twice"
         );
     }
-
     #[test]
     fn node_archive_operation_rolls_back_on_post_handle_or_readiness_drift() {
         for (seed, drift) in [
@@ -17512,7 +16804,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn node_archive_startup_rejects_nonempty_head_without_a_restored_local_head() {
         let (binding, current_head) = por_sample_replay_archive_head(0xD3);
@@ -17529,7 +16820,6 @@ mod tests {
             Err(NodeInitError::PorReplayArchive { .. })
         ));
     }
-
     #[test]
     fn node_archive_startup_reconciles_and_persists_an_exact_first_append_prefix() {
         let (binding, record, current_head) = por_sample_replay_archive_record_and_head(0xD4);
@@ -17559,7 +16849,6 @@ mod tests {
             .expect("checkpoint acknowledgement before external append");
         assert!(node.por.checkpoint().replay_archive_receipt().is_none());
         drop(node);
-
         let mut live_ahead = StartupPorReplayArchive::exact(binding);
         live_ahead.current_head = Some(current_head);
         live_ahead.lookup_result = Some(PorFinalizedReplayArchiveLookupV1::Found(Box::new(
@@ -17580,7 +16869,6 @@ mod tests {
         assert!(reconciled.has_no_finalized_challenges());
         assert_eq!(reconciled.replay_archive_receipt(), Some(current_head));
         drop(reopened);
-
         let mut persisted = StartupPorReplayArchive::exact(binding);
         persisted.current_head = Some(current_head);
         let reopened_again = NodeHandle::try_new_with_policies_and_runtime_deps(
@@ -17595,7 +16883,6 @@ mod tests {
             Some(current_head)
         );
     }
-
     #[test]
     fn node_archive_injection_rejects_missing_unrequested_substituted_and_stale_adapters() {
         let binding = startup_por_archive_binding(0xD2);
@@ -17609,7 +16896,6 @@ mod tests {
             ),
             Err(NodeInitError::PorReplayArchive { .. })
         ));
-
         let (unrequested_config, _unrequested_dir) = storage_config_with_temp_dir();
         assert!(matches!(
             NodeHandle::try_new_with_policies_and_runtime_deps(
@@ -17622,7 +16908,6 @@ mod tests {
             ),
             Err(NodeInitError::PorReplayArchive { .. })
         ));
-
         let (substituted_config, _substituted_dir) = storage_config_with_por_archive(binding);
         let mut substituted = StartupPorReplayArchive::exact(binding);
         substituted.handle = "hsm://sorafs/por-replay-archive/substituted";
@@ -17635,7 +16920,6 @@ mod tests {
             ),
             Err(NodeInitError::PorReplayArchive { .. })
         ));
-
         let (stale_config, _stale_dir) = storage_config_with_por_archive(binding);
         let mut stale = StartupPorReplayArchive::exact(binding);
         stale.readiness_error = Some(PorFinalizedReplayArchiveExternalErrorV1::Rejected);
@@ -17649,11 +16933,9 @@ mod tests {
             Err(NodeInitError::PorReplayArchive { .. })
         ));
     }
-
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
     }
-
     fn manifest_builder_for_plan(payload: &[u8], plan: &CarBuildPlan) -> ManifestBuilder {
         let car_stats = CarWriter::new(plan, payload)
             .expect("prepare canonical fixture CAR")
@@ -17681,7 +16963,6 @@ mod tests {
             .car_digest(*car_stats.car_archive_digest.as_bytes())
             .car_size(car_stats.car_size)
     }
-
     fn storage_config_with_temp_dir() -> (StorageConfig, TempDir) {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let root = temp_dir.path().canonicalize().expect("canonical temp dir");
@@ -17691,12 +16972,10 @@ mod tests {
             .build();
         (cfg, temp_dir)
     }
-
     fn test_quarantine_key_provider_config()
     -> iroha_config::parameters::actual::SorafsModerationQuarantineKeyProviderBinding {
         test_quarantine_key_provider_config_for(TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION)
     }
-
     fn test_quarantine_key_provider_config_for(
         qualification: ModerationQuarantineKeyProviderQualificationV1,
     ) -> iroha_config::parameters::actual::SorafsModerationQuarantineKeyProviderBinding {
@@ -17706,7 +16985,6 @@ mod tests {
             policy_digest: qualification.policy_digest(),
         }
     }
-
     fn storage_config_with_temp_dir_and_quarantine_key_provider() -> (StorageConfig, TempDir) {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let root = temp_dir.path().canonicalize().expect("canonical temp dir");
@@ -17717,14 +16995,12 @@ mod tests {
             .build();
         (cfg, temp_dir)
     }
-
     #[derive(Debug)]
     struct StartupProviderIngestCheckpointRuntime {
         handle: String,
         qualification: ProviderIngestCheckpointProviderQualificationV1,
         latest: Mutex<Option<ProviderIngestSealedCheckpointRecordV1>>,
     }
-
     impl StartupProviderIngestCheckpointRuntime {
         fn new(handle: &str, seed: u8) -> Self {
             Self {
@@ -17734,12 +17010,10 @@ mod tests {
             }
         }
     }
-
     impl ProviderIngestCheckpointRuntimeV1 for StartupProviderIngestCheckpointRuntime {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -17748,7 +17022,6 @@ mod tests {
         > {
             Ok(self.qualification)
         }
-
         fn load_latest(
             &self,
         ) -> Result<
@@ -17760,7 +17033,6 @@ mod tests {
                 .map(|latest| latest.clone())
                 .map_err(|_| ProviderIngestCheckpointExternalErrorV1::Unavailable)
         }
-
         fn compare_and_swap_latest(
             &self,
             expected_revision: Option<[u8; 32]>,
@@ -17777,7 +17049,6 @@ mod tests {
             Ok(())
         }
     }
-
     fn provider_ingest_checkpoint_binding(
         handle: &str,
         seed: u8,
@@ -17788,7 +17059,6 @@ mod tests {
             policy_digest: [seed; 32],
         }
     }
-
     fn storage_config_with_provider_ingest_checkpoint(
         handle: &str,
         seed: u8,
@@ -17806,7 +17076,6 @@ mod tests {
             .build();
         (config, temp_dir)
     }
-
     struct FinalizedProviderIngestFixture {
         config: StorageConfig,
         provider_id: ProviderId,
@@ -17819,7 +17088,6 @@ mod tests {
         capacity_cursor: CapacityFinalizedCursorV1,
         ingest_cursor: ProviderIngestFinalizedCursorV1,
     }
-
     fn finalized_provider_ingest_fixture(seed: u8) -> (FinalizedProviderIngestFixture, TempDir) {
         let temp_dir = tempfile::tempdir().expect("create provider-ingest temp dir");
         let root = temp_dir.path().canonicalize().expect("canonical temp dir");
@@ -17834,7 +17102,6 @@ mod tests {
             KeyPair::try_from_seed(vec![seed.wrapping_add(1); 32], Algorithm::Ed25519)
                 .expect("provider-ingest fixture authority key");
         let authority = AccountId::new(authority_key.public_key().clone());
-
         let declaration_body = CapacityDeclarationV1 {
             version: CAPACITY_DECLARATION_VERSION_V1,
             provider_id: *provider_id.as_bytes(),
@@ -17867,7 +17134,6 @@ mod tests {
             declaration_body.valid_until,
             Metadata::default(),
         );
-
         let payload = format!("finalized-provider-ingest-{seed}").into_bytes();
         let plan = CarBuildPlan::single_file(&payload).expect("provider-ingest CAR plan");
         let manifest = manifest_builder_for_plan(&payload, &plan)
@@ -17970,11 +17236,9 @@ mod tests {
             temp_dir,
         )
     }
-
     #[test]
     fn provider_ingest_outbox_is_not_opened_when_runtime_policy_is_absent() {
         struct DisabledCaptureLedger;
-
         impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for DisabledCaptureLedger {
             fn capture_verifier_binding(
                 &self,
@@ -17984,7 +17248,6 @@ mod tests {
             > {
                 Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable)
             }
-
             fn read_signed_completed_musubi_capture_page(
                 &self,
                 _request: ProviderIngestCompletedMusubiCaptureRequestV1,
@@ -17998,7 +17261,6 @@ mod tests {
                 Box::pin(async { Err(ProviderIngestFinalizedLedgerErrorV1::Unavailable) })
             }
         }
-
         let (config, _temp_dir) = storage_config_with_temp_dir();
         assert!(config.provider_ingest_outbox_policy().is_none());
         let handle = NodeHandle::try_new(config).expect("open storage without provider ingest");
@@ -18017,7 +17279,6 @@ mod tests {
             Err(FinalizedProviderIngestError::Disabled)
         ));
     }
-
     #[test]
     fn provider_ingest_startup_requires_exact_sealed_checkpoint_injection() {
         const HANDLE: &str = "sealed.sorafs.provider-ingest.startup";
@@ -18026,7 +17287,6 @@ mod tests {
             NodeHandle::try_new(config.clone()),
             Err(NodeInitError::ProviderIngestOutbox { .. })
         ));
-
         let substituted = Arc::new(StartupProviderIngestCheckpointRuntime::new(
             "sealed.sorafs.provider-ingest.substituted",
             0x61,
@@ -18039,7 +17299,6 @@ mod tests {
             Err(NodeInitError::ProviderIngestOutbox { .. })
         ));
     }
-
     #[test]
     fn provider_ingest_startup_rejects_unexpected_and_test_marked_checkpoint_providers() {
         const HANDLE: &str = "sealed.sorafs.provider-ingest.unexpected";
@@ -18052,7 +17311,6 @@ mod tests {
             ),
             Err(NodeInitError::ProviderIngestOutbox { .. })
         ));
-
         let (test_marked_config, _test_marked_temp_dir) =
             storage_config_with_provider_ingest_checkpoint(
                 "sealed.sorafs.provider-ingest.test",
@@ -18070,7 +17328,6 @@ mod tests {
             Err(NodeInitError::ProviderIngestOutbox { .. })
         ));
     }
-
     fn install_finalized_provider_ingest_projection(
         handle: &NodeHandle,
         fixture: &FinalizedProviderIngestFixture,
@@ -18086,13 +17343,11 @@ mod tests {
             .expect("install finalized provider-ingest projection");
         assert_eq!(outcome.pending_order_count, 1);
     }
-
     #[test]
     fn finalized_provider_ingest_local_storage_awaits_signing_and_survives_restart() {
         let (fixture, _temp_dir) = finalized_provider_ingest_fixture(0x71);
         let handle = NodeHandle::new(fixture.config.clone());
         install_finalized_provider_ingest_projection(&handle, &fixture);
-
         let inserted = handle
             .enqueue_finalized_provider_ingest(
                 &fixture.finalized_pin,
@@ -18114,7 +17369,6 @@ mod tests {
             ProviderIngestEnqueueResultV1::ExistingActive { .. }
         ));
         assert_eq!(replay.job_id(), inserted.job_id());
-
         let claim = handle
             .claim_finalized_provider_ingest_source(
                 inserted.job_id(),
@@ -18144,7 +17398,6 @@ mod tests {
                     .as_bytes()
             )
         );
-
         let completion_epoch = 4;
         let completion_signer_policy = ProviderIngestCompletionSignerPolicyV1 {
             policy_id: [0xA1; 32],
@@ -18234,7 +17487,6 @@ mod tests {
             } => next_attempt_at_ms,
             other => panic!("unexpected signing retry outcome: {other:?}"),
         };
-
         let page = handle
             .finalized_provider_ingest_status_page(None, 1)
             .expect("provider ingest status page");
@@ -18263,7 +17515,6 @@ mod tests {
             ),
             "LocalStored must never imply finalized ledger completion"
         );
-
         drop(handle);
         let restored = NodeHandle::new(fixture.config);
         let restored_page = restored
@@ -18271,7 +17522,6 @@ mod tests {
             .expect("restored provider ingest status page");
         assert_eq!(restored_page, page);
     }
-
     #[test]
     fn finalized_provider_ingest_source_mismatch_is_retryable_and_payload_free() {
         let (fixture, _temp_dir) = finalized_provider_ingest_fixture(0x81);
@@ -18311,7 +17561,6 @@ mod tests {
             )
         ));
         assert!(handle.storage().expect("storage").manifests().is_empty());
-
         let page = handle
             .finalized_provider_ingest_status_page(None, 1)
             .expect("provider ingest status page");
@@ -18338,7 +17587,6 @@ mod tests {
             "provider-ingest checkpoint must remain payload-free"
         );
     }
-
     #[test]
     fn finalized_provider_ingest_uses_typed_cancellation_evidence() {
         let (fixture, _temp_dir) = finalized_provider_ingest_fixture(0x91);
@@ -18384,7 +17632,6 @@ mod tests {
             } if *observed_finalized_cursor == cancellation_cursor
         ));
     }
-
     #[test]
     fn orderbook_forwarder_survives_restart_when_worker_and_provider_are_disabled() {
         use iroha_data_model::{
@@ -18395,7 +17642,6 @@ mod tests {
                 OrderbookAdmissionPolicyV1, OrderbookFinalizedCursorV1,
             },
         };
-
         let temp_dir = tempfile::tempdir().expect("create orderbook forwarder temp dir");
         let data_dir = temp_dir.path().join("validator-state");
         let config = StorageConfig::builder()
@@ -18403,7 +17649,6 @@ mod tests {
             .data_dir(data_dir.clone())
             .build();
         assert!(!config.orderbook_worker_policy().enabled());
-
         let matcher =
             KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519).expect("matcher key");
         let settlement =
@@ -18448,7 +17693,6 @@ mod tests {
             context.book_revision,
             8,
         ));
-
         let operation_id = {
             let node = NodeHandle::try_new(config.clone()).expect("start validator-only node");
             assert!(node.storage.is_none());
@@ -18475,7 +17719,6 @@ mod tests {
             );
             operation_id
         };
-
         assert!(
             data_dir
                 .join("orderbook-transaction-forwarder")
@@ -18502,7 +17745,6 @@ mod tests {
             "restart recovery must not refund the consumed signing attempt"
         );
     }
-
     #[test]
     fn reserve_forwarder_survives_restart_when_worker_and_provider_are_disabled() {
         use iroha_data_model::{
@@ -18515,7 +17757,6 @@ mod tests {
                 ReserveAuthorityPolicyV1, ReserveFinalizedCursorV1, ReserveProviderTermsV1,
             },
         };
-
         let temp_dir = tempfile::tempdir().expect("create reserve forwarder temp dir");
         let data_dir = temp_dir.path().join("validator-state");
         let config = StorageConfig::builder()
@@ -18523,7 +17764,6 @@ mod tests {
             .data_dir(data_dir.clone())
             .build();
         assert!(!config.reserve_worker_policy().enabled());
-
         let operations =
             KeyPair::try_from_seed(vec![0x71; 32], Algorithm::Ed25519).expect("operations key");
         let decision =
@@ -18592,7 +17832,6 @@ mod tests {
             },
             policy_digest,
         ));
-
         let operation_id = {
             let node = NodeHandle::try_new(config.clone()).expect("start validator-only node");
             assert!(node.storage.is_none());
@@ -18619,7 +17858,6 @@ mod tests {
             );
             operation_id
         };
-
         assert!(
             data_dir
                 .join("reserve-transaction-forwarder")
@@ -18645,7 +17883,6 @@ mod tests {
             "restart recovery must not refund the consumed signing attempt"
         );
     }
-
     #[test]
     fn validator_only_startup_opens_all_proof_and_repair_checkpoints() {
         fn startup_with_corrupt_checkpoint(
@@ -18665,11 +17902,9 @@ mod tests {
                 .enabled(false)
                 .data_dir(data_dir)
                 .build();
-
             NodeHandle::try_new(config)
                 .expect_err("validator-only startup must validate the durable checkpoint")
         }
-
         let temp_dir = tempfile::tempdir().expect("create validator-only state root");
         let potr_error = startup_with_corrupt_checkpoint(
             temp_dir.path(),
@@ -18677,7 +17912,6 @@ mod tests {
             crate::potr::POTR_TRACKER_CHECKPOINT_FILE_NAME_V1,
         );
         assert!(matches!(potr_error, NodeInitError::Potr { .. }));
-
         let proof_error = startup_with_corrupt_checkpoint(
             temp_dir.path(),
             "proof-outcome-forwarder",
@@ -18687,7 +17921,6 @@ mod tests {
             proof_error,
             NodeInitError::ProofOutcomeOutbox { .. }
         ));
-
         let repair_error = startup_with_corrupt_checkpoint(
             temp_dir.path(),
             "repair-transaction-forwarder",
@@ -18698,7 +17931,6 @@ mod tests {
             NodeInitError::RepairTransactionForwarder { .. }
         ));
     }
-
     #[test]
     fn node_startup_rejects_unsafe_programmatic_reserve_worker_policy() {
         let temp_dir = tempfile::tempdir().expect("create invalid reserve policy temp dir");
@@ -18706,12 +17938,10 @@ mod tests {
         actual.enabled = false;
         actual.data_dir = temp_dir.path().join("validator-state");
         actual.reserve_worker.scan_batch_limit = 0;
-
         let error = NodeHandle::try_new(StorageConfig::from(actual))
             .expect_err("unsafe programmatic reserve worker policy must fail closed");
         assert!(matches!(error, NodeInitError::ReserveWorkerConfig { .. }));
     }
-
     const TEST_QUARANTINE_KEY_PROVIDER_HANDLE: &str = "kms://moderation/quarantine/primary";
     const TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION:
         ModerationQuarantineKeyProviderQualificationV1 =
@@ -18719,14 +17949,12 @@ mod tests {
     const TEST_ROTATED_QUARANTINE_KEY_PROVIDER_QUALIFICATION:
         ModerationQuarantineKeyProviderQualificationV1 =
         ModerationQuarantineKeyProviderQualificationV1::new(2, [0x52; 32]);
-
     #[derive(Debug)]
     struct TestQuarantineKeyWrapper {
         qualification: ModerationQuarantineKeyProviderQualificationV1,
         active_key_id: String,
         keys: BTreeMap<String, [u8; 32]>,
     }
-
     impl TestQuarantineKeyWrapper {
         fn single(key_id: &str, seed: u8) -> Self {
             Self::single_with_qualification(
@@ -18735,7 +17963,6 @@ mod tests {
                 TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION,
             )
         }
-
         fn single_with_qualification(
             key_id: &str,
             seed: u8,
@@ -18747,7 +17974,6 @@ mod tests {
                 keys: BTreeMap::from([(key_id.to_owned(), [seed; 32])]),
             }
         }
-
         fn rotated(old_key_id: &str, old_seed: u8, new_key_id: &str, new_seed: u8) -> Self {
             Self {
                 qualification: TEST_ROTATED_QUARANTINE_KEY_PROVIDER_QUALIFICATION,
@@ -18758,7 +17984,6 @@ mod tests {
                 ]),
             }
         }
-
         fn wrapping_key(
             &self,
             key_id: &str,
@@ -18768,7 +17993,6 @@ mod tests {
                 .copied()
                 .ok_or(ModerationQuarantineKeyOperationErrorV1::StaleOrRevoked)
         }
-
         fn nonce(key_id: &str, context_digest: [u8; 32], key: [u8; 32]) -> [u8; 12] {
             let mut hasher = blake3::Hasher::new_keyed(&key);
             hasher.update(b"sorafs.node.test-quarantine-wrapper.nonce.v1");
@@ -18779,12 +18003,10 @@ mod tests {
             nonce
         }
     }
-
     impl ModerationQuarantineKeyWrapper for TestQuarantineKeyWrapper {
         fn provider_handle(&self) -> &str {
             TEST_QUARANTINE_KEY_PROVIDER_HANDLE
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -18793,11 +18015,9 @@ mod tests {
         > {
             Ok(self.qualification)
         }
-
         fn active_key_id(&self) -> &str {
             &self.active_key_id
         }
-
         fn wrap_dek(
             &self,
             context_digest: [u8; 32],
@@ -18818,7 +18038,6 @@ mod tests {
                         .after_scrubbing_provider_diagnostic(error.to_string())
                 })
         }
-
         fn unwrap_dek(
             &self,
             key_id: &str,
@@ -18843,19 +18062,16 @@ mod tests {
                 .map_err(|_| ModerationQuarantineKeyOperationErrorV1::Rejected)
         }
     }
-
     fn test_quarantine_key_wrapper() -> Arc<dyn ModerationQuarantineKeyWrapper> {
         Arc::new(TestQuarantineKeyWrapper::single(
             "kms:test/quarantine-v1",
             0xA5,
         ))
     }
-
     fn node_with_test_quarantine_key_wrapper(config: StorageConfig) -> NodeHandle {
         NodeHandle::try_new_with_quarantine_key_wrapper(config, test_quarantine_key_wrapper())
             .expect("initialise node with test-only quarantine key wrapper")
     }
-
     #[test]
     fn node_startup_rejects_quarantine_key_wrapper_without_configured_binding() {
         let temp_dir = tempfile::tempdir().expect("create unbound-wrapper temp dir");
@@ -18871,19 +18087,16 @@ mod tests {
             NodeInitError::ModerationQuarantineKeyWrapperInvalid { .. }
         ));
     }
-
     #[derive(Debug, Clone, Copy)]
     enum TestPrivacyCyclePrfMode {
         Bound,
         Failure(PrivacyCyclePrfProviderErrorV1),
     }
-
     const TEST_PRIVACY_CYCLE_PRF_PROVIDER_HANDLE: &str = "threshold-prf:transparency:primary";
     const TEST_PRIVACY_RELEASE_ANCHOR_HANDLE: &str = "governance-dag:transparency:primary";
     const TEST_TRANSPARENCY_LEADER_LEASE_HANDLE: &str = "sealed-cas:transparency:leader-primary";
     const TEST_FENCED_TRANSPARENCY_PROVIDER_HANDLE: &str =
         "governance-cas:transparency:privacy-primary";
-
     fn test_privacy_cycle_prf_provider_binding() -> TransparencyRuntimeProviderBindingV1 {
         TransparencyRuntimeProviderBindingV1::try_new(
             TEST_PRIVACY_CYCLE_PRF_PROVIDER_HANDLE,
@@ -18892,7 +18105,6 @@ mod tests {
         )
         .expect("valid test threshold-PRF provider binding")
     }
-
     fn test_privacy_release_anchor_binding() -> TransparencyRuntimeProviderBindingV1 {
         TransparencyRuntimeProviderBindingV1::try_new(
             TEST_PRIVACY_RELEASE_ANCHOR_HANDLE,
@@ -18901,7 +18113,6 @@ mod tests {
         )
         .expect("valid test release-anchor provider binding")
     }
-
     fn test_transparency_leader_lease_binding() -> TransparencyRuntimeProviderBindingV1 {
         TransparencyRuntimeProviderBindingV1::try_new(
             TEST_TRANSPARENCY_LEADER_LEASE_HANDLE,
@@ -18910,7 +18121,6 @@ mod tests {
         )
         .expect("valid test transparency leader-lease binding")
     }
-
     fn test_fenced_transparency_provider_binding() -> TransparencyRuntimeProviderBindingV1 {
         TransparencyRuntimeProviderBindingV1::try_new(
             TEST_FENCED_TRANSPARENCY_PROVIDER_HANDLE,
@@ -18919,7 +18129,6 @@ mod tests {
         )
         .expect("valid test fused transparency provider binding")
     }
-
     fn with_test_signed_governance_config(
         builder: config::StorageConfigBuilder,
         root: &Path,
@@ -18943,7 +18152,6 @@ mod tests {
             ))
             .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
     }
-
     struct TestPrivacyCyclePrfProvider {
         mode: TestPrivacyCyclePrfMode,
         handle: &'static str,
@@ -18952,13 +18160,11 @@ mod tests {
         qualification_error: bool,
         requests: Mutex<Vec<PrivacyCyclePrfRequestV1>>,
     }
-
     impl std::fmt::Debug for TestPrivacyCyclePrfProvider {
         fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             formatter.write_str("TEST-PRF-VENDOR-DIAGNOSTIC-MUST-NOT-LEAK")
         }
     }
-
     impl TestPrivacyCyclePrfProvider {
         fn bound() -> Self {
             Self {
@@ -18970,7 +18176,6 @@ mod tests {
                 requests: Mutex::new(Vec::new()),
             }
         }
-
         fn failing(error: PrivacyCyclePrfProviderErrorV1) -> Self {
             Self {
                 mode: TestPrivacyCyclePrfMode::Failure(error),
@@ -18981,7 +18186,6 @@ mod tests {
                 requests: Mutex::new(Vec::new()),
             }
         }
-
         fn with_qualification(
             handle: &'static str,
             revision: u64,
@@ -18997,12 +18201,10 @@ mod tests {
                 requests: Mutex::new(Vec::new()),
             }
         }
-
         fn requests(&self) -> Vec<PrivacyCyclePrfRequestV1> {
             self.requests.lock().expect("test PRF requests").clone()
         }
     }
-
     impl PrivacyCyclePrfProviderV1 for TestPrivacyCyclePrfProvider {
         fn derive_cycle_output(
             &self,
@@ -19026,12 +18228,10 @@ mod tests {
             }
         }
     }
-
     impl ProductionTransparencyRuntimeProviderV1 for TestPrivacyCyclePrfProvider {
         fn handle(&self) -> &str {
             self.handle
         }
-
         fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
             if self.qualification_error {
                 return Err("provider_secret=must-never-escape".to_owned());
@@ -19042,12 +18242,10 @@ mod tests {
             ))
         }
     }
-
     #[derive(Default)]
     struct TestPrivacyReleaseAnchor {
         heads: Mutex<BTreeMap<[u8; 32], PrivacyReleaseAnchorHeadV1>>,
     }
-
     impl PrivacyReleaseAnchorV1 for TestPrivacyReleaseAnchor {
         fn finalized_head(
             &self,
@@ -19061,7 +18259,6 @@ mod tests {
                 .copied()
                 .unwrap_or_else(|| PrivacyReleaseAnchorHeadV1::genesis(query_id)))
         }
-
         fn compare_and_set_finalized_head(
             &self,
             expected: PrivacyReleaseAnchorHeadV1,
@@ -19088,45 +18285,37 @@ mod tests {
             Ok(())
         }
     }
-
     impl ProductionTransparencyRuntimeProviderV1 for TestPrivacyReleaseAnchor {
         fn handle(&self) -> &str {
             TEST_PRIVACY_RELEASE_ANCHOR_HANDLE
         }
-
         fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
             Ok(TransparencyRuntimeProviderQualificationV1::new(
                 1, [0xD7; 32],
             ))
         }
     }
-
     fn test_privacy_cycle_prf_provider() -> Arc<dyn ProductionPrivacyCyclePrfProviderV1> {
         Arc::new(TestPrivacyCyclePrfProvider::bound())
     }
-
     fn test_privacy_release_anchor() -> Arc<dyn ProductionPrivacyReleaseAnchorV1> {
         Arc::new(TestPrivacyReleaseAnchor::default())
     }
-
     #[derive(Default)]
     struct TestTransparencyLeaderLeaseProvider {
         state: Mutex<Option<TransparencyLeaderLeaseGrantV1>>,
         fencing_token: AtomicU64,
     }
-
     impl ProductionTransparencyRuntimeProviderV1 for TestTransparencyLeaderLeaseProvider {
         fn handle(&self) -> &str {
             TEST_TRANSPARENCY_LEADER_LEASE_HANDLE
         }
-
         fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
             Ok(TransparencyRuntimeProviderQualificationV1::new(
                 1, [0xE7; 32],
             ))
         }
     }
-
     impl TransparencyLeaderLeaseProviderV1 for TestTransparencyLeaderLeaseProvider {
         fn acquire(
             &self,
@@ -19164,7 +18353,6 @@ mod tests {
             *state = Some(grant.clone());
             Ok(grant)
         }
-
         fn renew(
             &self,
             request: &TransparencyLeaderLeaseRenewRequestV1,
@@ -19196,7 +18384,6 @@ mod tests {
             *state = Some(grant.clone());
             Ok(grant)
         }
-
         fn release(
             &self,
             request: &TransparencyLeaderLeaseReleaseRequestV1,
@@ -19222,15 +18409,12 @@ mod tests {
             .map_err(|_| TransparencyLeaderLeaseProviderErrorV1::Internal)
         }
     }
-
     fn test_transparency_leader_lease_provider()
     -> Arc<dyn ProductionTransparencyLeaderLeaseProviderV1> {
         Arc::new(TestTransparencyLeaderLeaseProvider::default())
     }
-
     type TestFencedTransparencyPublications =
         BTreeMap<([u8; 32], [u8; 16]), ([u8; 32], [u8; 32], FencedTransparencyTargetHeadV1)>;
-
     #[derive(Debug, Default)]
     struct TestFencedTransparencyState {
         head: Option<FencedTransparencyTargetHeadV1>,
@@ -19244,7 +18428,6 @@ mod tests {
         >,
         history: Vec<FencedTransparencyTargetHeadV1>,
     }
-
     struct TestFencedTransparencyProvider {
         handle: &'static str,
         qualification: GovernanceDagRuntimeProviderQualificationV1,
@@ -19253,13 +18436,11 @@ mod tests {
         head_override: Mutex<Option<Option<FencedTransparencyTargetHeadV1>>>,
         governance_checkpoint_store: Arc<TestGovernanceDagCheckpointStore>,
     }
-
     impl std::fmt::Debug for TestFencedTransparencyProvider {
         fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             formatter.write_str("TestFencedTransparencyProvider(<runtime-only>)")
         }
     }
-
     impl TestFencedTransparencyProvider {
         fn bound() -> Self {
             Self::with_qualification(
@@ -19268,7 +18449,6 @@ mod tests {
                 false,
             )
         }
-
         fn with_qualification(
             handle: &'static str,
             qualification: GovernanceDagRuntimeProviderQualificationV1,
@@ -19283,7 +18463,6 @@ mod tests {
                 governance_checkpoint_store: Arc::new(TestGovernanceDagCheckpointStore::default()),
             }
         }
-
         fn override_authoritative_head(
             &self,
             head: Option<Option<FencedTransparencyTargetHeadV1>>,
@@ -19294,19 +18473,16 @@ mod tests {
                 .expect("test authoritative-head override") = head;
         }
     }
-
     impl FencedTransparencyPublisherV1 for TestFencedTransparencyProvider {
         fn handle(&self) -> &str {
             self.handle
         }
-
         fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
             if self.qualification_error {
                 return Err("target_credential=must-never-escape".to_owned());
             }
             Ok(self.qualification)
         }
-
         fn compare_and_append_privacy(
             &self,
             request: &FencedPrivacyPublicationRequestV1,
@@ -19380,19 +18556,16 @@ mod tests {
             Ok(receipt)
         }
     }
-
     impl FencedTransparencyAuthoritativeHeadReaderV1 for TestFencedTransparencyProvider {
         fn handle(&self) -> &str {
             self.handle
         }
-
         fn qualification(&self) -> Result<GovernanceDagRuntimeProviderQualificationV1, String> {
             if self.qualification_error {
                 return Err("target_credential=must-never-escape".to_owned());
             }
             Ok(self.qualification)
         }
-
         fn read_authoritative_head_with_ancestry(
             &self,
             required_ancestors: &[FencedTransparencyTargetHeadV1],
@@ -19461,7 +18634,6 @@ mod tests {
             .map_err(|_| "target ancestry proof malformed".to_owned())
         }
     }
-
     fn with_test_fenced_privacy_runtime(
         deps: NodeRuntimeDeps,
         provider: Arc<TestFencedTransparencyProvider>,
@@ -19473,11 +18645,9 @@ mod tests {
             .with_fenced_transparency_publisher(publisher)
             .with_fenced_transparency_head_reader(head_reader)
     }
-
     fn with_fresh_test_fenced_privacy_runtime(deps: NodeRuntimeDeps) -> NodeRuntimeDeps {
         with_test_fenced_privacy_runtime(deps, Arc::new(TestFencedTransparencyProvider::bound()))
     }
-
     fn test_privacy_runtime_deps_without_fenced_target() -> NodeRuntimeDeps {
         NodeRuntimeDeps::default()
             .with_privacy_cycle_prf_provider(test_privacy_cycle_prf_provider())
@@ -19488,7 +18658,6 @@ mod tests {
                 TestGovernanceDagCheckpointStore::default(),
             ))
     }
-
     fn node_with_test_privacy_cycle_prf_provider(config: StorageConfig) -> NodeHandle {
         NodeHandle::try_new_with_runtime_deps(
             config,
@@ -19498,12 +18667,10 @@ mod tests {
         )
         .expect("initialise node with test-only privacy cycle PRF provider")
     }
-
     fn reputation_signing_key() -> iroha_crypto::KeyPair {
         iroha_crypto::KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::Ed25519)
             .expect("derive reputation signing key")
     }
-
     fn reputation_trust_policy_fixture() -> ReputationSnapshotTrustPolicyV1 {
         ReputationSnapshotTrustPolicyV1 {
             version: REPUTATION_SNAPSHOT_TRUST_POLICY_VERSION_V1,
@@ -19527,11 +18694,9 @@ mod tests {
             revoked_signer_ids: Vec::new(),
         }
     }
-
     fn storage_config_with_reputation_policy() -> (StorageConfig, TempDir) {
         storage_config_with_reputation_policy_fixture(&reputation_trust_policy_fixture())
     }
-
     fn storage_config_with_reputation_policy_fixture(
         policy: &ReputationSnapshotTrustPolicyV1,
     ) -> (StorageConfig, TempDir) {
@@ -19550,7 +18715,6 @@ mod tests {
             .build();
         (cfg, temp_dir)
     }
-
     fn enabled_repair_config(max_attempts: u32) -> RepairConfig {
         RepairConfig::from(&iroha_config::parameters::actual::SorafsRepair {
             enabled: true,
@@ -19558,7 +18722,6 @@ mod tests {
             ..Default::default()
         })
     }
-
     fn enabled_gc_config(max_deletions_per_run: u32) -> GcConfig {
         GcConfig::from(&iroha_config::parameters::actual::SorafsGc {
             enabled: true,
@@ -19567,7 +18730,6 @@ mod tests {
             ..Default::default()
         })
     }
-
     fn ensure_test_capacity_provider(handle: &NodeHandle) -> [u8; 32] {
         if let Some(provider_id) = handle.capacity_usage().provider_id {
             return provider_id;
@@ -19610,7 +18772,6 @@ mod tests {
             .expect("record test capacity declaration");
         provider_id
     }
-
     fn run_test_gc(
         handle: &NodeHandle,
         now_unix: u64,
@@ -19619,7 +18780,6 @@ mod tests {
         ensure_test_capacity_provider(handle);
         handle.run_gc_once(now_unix, repair_projection)
     }
-
     fn finalized_repair_projection(tasks: Vec<RepairLedgerTaskV1>) -> RepairLedgerTaskProjectionV1 {
         let finalized_cursor = RepairFinalizedCursorV1 {
             height: 42,
@@ -19659,11 +18819,9 @@ mod tests {
             .expect("append finalized repair projection page");
         builder.finish().expect("finish repair projection")
     }
-
     fn empty_finalized_repair_projection() -> RepairLedgerTaskProjectionV1 {
         finalized_repair_projection(Vec::new())
     }
-
     fn active_native_repair_task(
         manifest_digest: [u8; 32],
         provider_id: [u8; 32],
@@ -19712,14 +18870,12 @@ mod tests {
             updated_at_unix_ms: report.submitted_at_unix * 1_000,
         }
     }
-
     #[test]
     fn bounded_event_history_preserves_monotonic_sequences_and_reports_gaps() {
         let mut history = BoundedEventHistory::new(2);
         assert_eq!(history.append(|sequence| sequence).unwrap(), 1);
         assert_eq!(history.append(|sequence| sequence).unwrap(), 2);
         assert_eq!(history.append(|sequence| sequence).unwrap(), 3);
-
         let replay = history.replay(Some(0), 10, |sequence| *sequence);
         assert_eq!(replay.oldest_available_sequence, Some(2));
         assert_eq!(replay.latest_sequence, Some(3));
@@ -19728,7 +18884,6 @@ mod tests {
         assert_eq!(history.append(|sequence| sequence).unwrap(), 4);
         assert_eq!(history.retained(), vec![3, 4]);
     }
-
     #[test]
     fn bounded_event_history_rejects_non_monotonic_restore() {
         let mut history = BoundedEventHistory::new(4);
@@ -19738,7 +18893,6 @@ mod tests {
         assert!(error.to_string().contains("strictly consecutive"));
         assert!(history.retained().is_empty());
     }
-
     #[test]
     fn local_checkpoint_roundtrip_is_bounded_and_atomic() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -19753,7 +18907,6 @@ mod tests {
         assert!(write_local_checkpoint_atomic_bounded(&path, b"too-large", 4).is_err());
         assert!(read_local_checkpoint_bounded(&path, 4).is_err());
     }
-
     #[test]
     fn local_checkpoint_decoder_rejects_trailing_bytes_and_sequence_bombs() {
         let value = vec![1_u64, 2];
@@ -19763,14 +18916,12 @@ mod tests {
                 .expect("decode canonical checkpoint fixture"),
             value
         );
-
         let mut trailing = canonical;
         trailing.push(0);
         assert!(
             decode_local_checkpoint_canonical::<Vec<u64>>(&trailing, 4_096, 2).is_err(),
             "trailing bytes must not be accepted as an equivalent checkpoint"
         );
-
         let oversized_sequence =
             norito::to_bytes(&vec![1_u64, 2, 3]).expect("encode sequence bomb fixture");
         assert!(
@@ -19778,7 +18929,6 @@ mod tests {
             "declared sequence length must fail before allocation beyond the configured bound"
         );
     }
-
     #[test]
     fn local_checkpoint_decode_limits_follow_actual_wire_size() {
         let limits = local_checkpoint_decode_limits(64, 4_096, usize::MAX)
@@ -19788,17 +18938,14 @@ mod tests {
         assert_eq!(limits.max_total_elements(), 64 * 8);
         assert_eq!(limits.max_total_allocated_bytes(), 4_096 * 4);
         assert_eq!(limits.max_nesting_depth(), 64);
-
         assert!(local_checkpoint_decode_limits(0, 4_096, 1).is_err());
         assert!(local_checkpoint_decode_limits(4_097, 4_096, 1).is_err());
     }
-
     #[test]
     fn local_checkpoint_distinguishes_precommit_and_visible_uncertain_failures() {
         fn fail_parent_sync(_: &Path) -> io::Result<()> {
             Err(io::Error::other("injected parent sync failure"))
         }
-
         let temp = tempfile::tempdir().expect("temp dir");
         let root = temp.path().canonicalize().expect("canonical temp dir");
         let path = root.join("checkpoint.to");
@@ -19806,7 +18953,6 @@ mod tests {
             .expect_err("size limit fails before commit");
         assert!(!precommit.committed);
         assert!(!path.exists());
-
         let uncertain = write_local_checkpoint_atomic_with_mode_and_parent_sync(
             &path,
             b"visible-state",
@@ -19820,7 +18966,6 @@ mod tests {
             b"visible-state"
         );
     }
-
     #[test]
     fn concurrent_local_checkpoint_writers_never_publish_partial_bytes() {
         let temp = tempfile::tempdir().expect("temp dir");
@@ -19858,7 +19003,6 @@ mod tests {
             .count();
         assert_eq!(leftovers, 0);
     }
-
     #[cfg(unix)]
     #[test]
     fn local_checkpoint_rejects_symlink_targets_and_parents() {
@@ -19873,25 +19017,21 @@ mod tests {
         assert!(write_local_checkpoint_atomic(&target, b"replacement").is_err());
         assert!(read_local_checkpoint_bounded(&target, 128).is_err());
         assert_eq!(fs::read(&victim).unwrap(), b"unchanged");
-
         let real_parent = root.join("real-parent");
         fs::create_dir(&real_parent).expect("create real parent");
         let linked_parent = root.join("linked-parent");
         symlink(&real_parent, &linked_parent).expect("symlink parent");
         assert!(write_local_checkpoint_atomic(&linked_parent.join("state.to"), b"state").is_err());
         assert!(!real_parent.join("state.to").exists());
-
         let nested_target = linked_parent.join("nested").join("state.to");
         assert!(write_local_checkpoint_atomic(&nested_target, b"state").is_err());
         assert!(!real_parent.join("nested").exists());
-
         let hardlink_target = root.join("hardlink-target.to");
         write_local_checkpoint_atomic(&hardlink_target, b"state").expect("write hardlink target");
         let hardlink_alias = root.join("hardlink-alias.to");
         fs::hard_link(&hardlink_target, &hardlink_alias).expect("create hardlink alias");
         assert!(read_local_checkpoint_bounded(&hardlink_target, 128).is_err());
         assert!(write_local_checkpoint_atomic(&hardlink_target, b"replacement").is_err());
-
         let permissive_parent = root.join("permissive-parent");
         fs::create_dir(&permissive_parent).expect("create permissive parent");
         fs::set_permissions(&permissive_parent, fs::Permissions::from_mode(0o777))
@@ -19902,14 +19042,12 @@ mod tests {
         fs::set_permissions(&permissive_parent, fs::Permissions::from_mode(0o700))
             .expect("restore parent permissions");
     }
-
     #[test]
     fn local_checkpoint_rejects_parent_traversal_and_randomizes_temporary_names() {
         let temp = tempfile::tempdir().expect("temp dir");
         let traversal = temp.path().join("runtime").join("..").join("escaped.to");
         assert!(write_local_checkpoint_atomic(&traversal, b"state").is_err());
         assert!(!temp.path().join("escaped.to").exists());
-
         let path = temp.path().join("checkpoint.to");
         let first = local_checkpoint_tmp_path(&path).expect("first randomized temp path");
         let second = local_checkpoint_tmp_path(&path).expect("second randomized temp path");
@@ -19929,7 +19067,6 @@ mod tests {
                 .starts_with('.')
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn local_checkpoint_identity_rejects_same_length_file_swap() {
@@ -19943,13 +19080,11 @@ mod tests {
         assert!(same_local_file_identity(&first_meta, &first_meta));
         assert!(!same_local_file_identity(&first_meta, &second_meta));
     }
-
     #[test]
     fn runtime_initialization_requires_every_checkpoint_after_first_start() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::try_new(cfg.clone()).expect("initialize runtime checkpoints");
         drop(handle);
-
         let marker = runtime_state_initialization_path(cfg.data_dir());
         assert_eq!(
             fs::read(&marker).expect("read initialization marker"),
@@ -19969,7 +19104,6 @@ mod tests {
             ));
             write_local_checkpoint_atomic(&path, &bytes).expect("restore checkpoint for next case");
         }
-
         fs::remove_file(&marker).expect("remove initialization marker");
         assert!(matches!(
             NodeHandle::try_new(cfg),
@@ -19979,7 +19113,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn runtime_initialization_rejects_retired_markers_and_checkpoints() {
         for (retired_path, component) in [
@@ -20021,7 +19154,6 @@ mod tests {
             let path = retired_path(cfg.data_dir());
             write_local_checkpoint_atomic(&path, b"retired-runtime-state")
                 .expect("write retired runtime-state artifact");
-
             let error =
                 NodeHandle::try_new(cfg).expect_err("retired runtime-state artifact must fail");
             assert!(
@@ -20036,7 +19168,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn runtime_initialization_rejects_noncanonical_v5_marker() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -20047,7 +19178,6 @@ mod tests {
             b"sorafs.node.runtime-state.initialized.v4\n",
         )
         .expect("replace runtime-state marker");
-
         let error = NodeHandle::try_new(cfg)
             .expect_err("noncanonical runtime-state v5 marker must fail startup");
         assert!(
@@ -20062,7 +19192,6 @@ mod tests {
             "unexpected startup error: {error}"
         );
     }
-
     #[test]
     fn auxiliary_runtime_checkpoint_rejects_retired_version() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -20076,7 +19205,6 @@ mod tests {
             let retired = norito::to_bytes(&checkpoint).expect("encode retired checkpoint version");
             write_local_checkpoint_atomic(&path, &retired)
                 .expect("replace auxiliary checkpoint with retired version");
-
             let error = NodeHandle::try_new(cfg.clone())
                 .expect_err("retired auxiliary version must fail startup");
             assert!(
@@ -20094,7 +19222,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn governance_outbox_rejects_retired_entry_version_before_kind_dispatch() {
         let payload_bytes = b"retired-governance-outbox-entry".to_vec();
@@ -20114,7 +19241,6 @@ mod tests {
             ),
             payload_bytes,
         };
-
         let error =
             validate_governance_outbox_entry(&entry).expect_err("retired outbox version must fail");
         assert!(
@@ -20124,7 +19250,6 @@ mod tests {
             "unexpected validation error: {error}"
         );
     }
-
     #[test]
     fn governance_outbox_rejects_finance_submission_without_provenance() {
         let cases = [
@@ -20138,7 +19263,6 @@ mod tests {
                     .expect("encode finance rollup"),
             ),
         ];
-
         for (kind, payload_bytes) in cases {
             let payload_digest = *blake3::hash(&payload_bytes).as_bytes();
             let entry = GovernanceOutboxEntryV1 {
@@ -20156,7 +19280,6 @@ mod tests {
                 ),
                 payload_bytes,
             };
-
             let error = validate_governance_outbox_entry(&entry)
                 .expect_err("unauthenticated finance entry must fail closed");
             assert!(
@@ -20167,7 +19290,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn governance_outbox_allows_trusted_internal_proof_and_transparency_producers() {
         let cases = [
@@ -20182,7 +19304,6 @@ mod tests {
                     .expect("encode transparency publication"),
             ),
         ];
-
         for (kind, payload_bytes) in cases {
             let payload_digest = *blake3::hash(&payload_bytes).as_bytes();
             let entry = GovernanceOutboxEntryV1 {
@@ -20200,12 +19321,10 @@ mod tests {
                 ),
                 payload_bytes,
             };
-
             validate_governance_outbox_entry(&entry)
                 .unwrap_or_else(|error| panic!("trusted internal {kind:?} rejected: {error}"));
         }
     }
-
     #[test]
     fn auxiliary_runtime_checkpoint_restores_privacy_source_state() {
         let (base, _dir) = storage_config_with_temp_dir();
@@ -20226,7 +19345,6 @@ mod tests {
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         assert!(path.exists());
         drop(source);
-
         let restored = NodeHandle::new(cfg);
         assert_eq!(restored.privacy_aggregate_source_event_count(), 1);
         assert_eq!(
@@ -20241,7 +19359,6 @@ mod tests {
             PrivacySourceEventRecordOutcomeV1::AlreadyRecorded
         );
     }
-
     #[test]
     fn concurrent_auxiliary_runtime_updates_survive_restart() {
         let (base, _dir) = storage_config_with_temp_dir();
@@ -20272,11 +19389,9 @@ mod tests {
         }
         assert_eq!(source.privacy_aggregate_source_event_count(), 16);
         drop(source);
-
         let restored = NodeHandle::new(cfg);
         assert_eq!(restored.privacy_aggregate_source_event_count(), 16);
     }
-
     #[test]
     fn auxiliary_runtime_checkpoint_corruption_and_oversize_fail_startup() {
         let (base, _dir) = storage_config_with_temp_dir();
@@ -20302,7 +19417,6 @@ mod tests {
             ),
             "unexpected startup error: {corrupt_error}"
         );
-
         let oversized_len = usize::try_from(checkpoint_max_bytes)
             .expect("test checkpoint limit fits usize")
             .checked_add(1)
@@ -20319,7 +19433,6 @@ mod tests {
             "oversized auxiliary checkpoint must fail its own startup boundary"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn auxiliary_runtime_checkpoint_symlink_fails_startup() {
@@ -20344,7 +19457,6 @@ mod tests {
             "symlinked auxiliary checkpoint must fail its own startup boundary"
         );
     }
-
     fn moderation_repro_manifest_fixture(
         manifest_id_byte: u8,
         runner_hash_byte: u8,
@@ -20398,7 +19510,6 @@ mod tests {
             }],
         }
     }
-
     fn moderation_screening_authority_bundle_fixture(
         now_unix: u64,
         policy_issued_at_unix: u64,
@@ -20496,7 +19607,6 @@ mod tests {
             minimum_governance_quorum: 1,
         }
     }
-
     fn write_moderation_screening_authority_bundle(
         root: &Path,
         bundle: &ModerationScreeningAuthorityBundleV1,
@@ -20510,7 +19620,6 @@ mod tests {
             .expect("secure authority bundle permissions");
         (path, *blake3::hash(&bytes).as_bytes())
     }
-
     #[test]
     fn moderation_screening_authority_loads_from_digest_pinned_config_and_rejects_rotation_attacks()
     {
@@ -20546,7 +19655,6 @@ mod tests {
             node.moderation_quarantine_key_id(),
             Some("kms:test/quarantine-v1")
         );
-
         let older = moderation_screening_authority_bundle_fixture(
             now_unix,
             policy_issued_at_unix.saturating_sub(1),
@@ -20558,7 +19666,6 @@ mod tests {
             node.install_moderation_screening_authority(older),
             Err(ModerationScreeningAuthenticationError::PolicyRollback { .. })
         ));
-
         let equivocation =
             moderation_screening_authority_bundle_fixture(now_unix, policy_issued_at_unix, 0xE2)
                 .into_authority(now_unix)
@@ -20568,7 +19675,6 @@ mod tests {
             Err(ModerationScreeningAuthenticationError::PolicyEquivocation { .. })
         ));
     }
-
     #[test]
     fn moderation_screening_authority_startup_rejects_missing_mismatched_and_noncanonical_bundles()
     {
@@ -20582,7 +19688,6 @@ mod tests {
             NodeHandle::try_new(missing),
             Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
         ));
-
         let relative_path = StorageConfig::builder()
             .enabled(true)
             .data_dir(temp_dir.path().join("relative-path-storage"))
@@ -20596,7 +19701,6 @@ mod tests {
             NodeHandle::try_new(relative_path),
             Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
         ));
-
         let now_unix = unix_now_secs();
         let bundle = moderation_screening_authority_bundle_fixture(
             now_unix,
@@ -20614,7 +19718,6 @@ mod tests {
             NodeHandle::try_new(missing_digest),
             Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
         ));
-
         let mismatched_digest = StorageConfig::builder()
             .enabled(true)
             .data_dir(temp_dir.path().join("mismatch-storage"))
@@ -20626,7 +19729,6 @@ mod tests {
             NodeHandle::try_new(mismatched_digest),
             Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
         ));
-
         let mut noncanonical = fs::read(&path).expect("read canonical bundle");
         noncanonical.push(0);
         fs::write(&path, &noncanonical).expect("write noncanonical bundle");
@@ -20648,7 +19750,6 @@ mod tests {
         ));
         assert_ne!(digest, [0; 32]);
     }
-
     #[test]
     fn moderation_screening_authority_startup_bounds_oversized_and_sequence_bomb_inputs() {
         let temp_dir = tempfile::tempdir().expect("temp dir");
@@ -20673,7 +19774,6 @@ mod tests {
             NodeHandle::try_new(oversized_config),
             Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
         ));
-
         let now_unix = unix_now_secs();
         let mut sequence_bomb = moderation_screening_authority_bundle_fixture(
             now_unix,
@@ -20705,7 +19805,6 @@ mod tests {
             NodeHandle::try_new(sequence_bomb_config),
             Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
         ));
-
         let mut duplicate_anchors = moderation_screening_authority_bundle_fixture(
             now_unix,
             now_unix.saturating_sub(50),
@@ -20736,7 +19835,6 @@ mod tests {
             Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn moderation_screening_authority_startup_rejects_symlink_and_hardlink_replacement_paths() {
@@ -20752,7 +19850,6 @@ mod tests {
         let temp_root = source_path
             .parent()
             .expect("authority fixture must have a parent");
-
         let symlink_path = temp_root.join("symlink-authority.to");
         std::os::unix::fs::symlink(&source_path, &symlink_path).expect("create authority symlink");
         let symlink_config = StorageConfig::builder()
@@ -20766,7 +19863,6 @@ mod tests {
             NodeHandle::try_new(symlink_config),
             Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
         ));
-
         let hardlink_path = temp_root.join("hardlink-authority.to");
         fs::hard_link(&source_path, &hardlink_path).expect("create authority hard link");
         let hardlink_config = StorageConfig::builder()
@@ -20780,7 +19876,6 @@ mod tests {
             NodeHandle::try_new(hardlink_config),
             Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
         ));
-
         let directory_path = temp_root.join("directory-authority");
         fs::create_dir(&directory_path).expect("create non-regular authority path");
         let directory_config = StorageConfig::builder()
@@ -20795,7 +19890,6 @@ mod tests {
             Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
         ));
     }
-
     fn adversarial_corpus_manifest_fixture() -> AdversarialCorpusManifestV1 {
         AdversarialCorpusManifestV1 {
             schema_version: ADVERSARIAL_CORPUS_VERSION_V1,
@@ -20827,7 +19921,6 @@ mod tests {
             }],
         }
     }
-
     fn moderation_screening_input_fixture(
         subject: &str,
         verdict: ModerationScreeningVerdict,
@@ -20851,7 +19944,6 @@ mod tests {
             notes: Some("local screening fixture".to_string()),
         }
     }
-
     fn moderation_quarantine_review_input(
         quarantine_id: [u8; 16],
     ) -> ModerationQuarantineReviewInput {
@@ -20862,7 +19954,6 @@ mod tests {
             notes: Some("reviewed locally".to_string()),
         }
     }
-
     fn moderation_quarantine_release_input(
         quarantine_id: [u8; 16],
     ) -> ModerationQuarantineReleaseInput {
@@ -20873,7 +19964,6 @@ mod tests {
             notes: Some("released locally".to_string()),
         }
     }
-
     fn moderation_evidence_viewer_session_input(
         quarantine_id: [u8; 16],
         issued_at_unix_ms: u64,
@@ -20898,7 +19988,6 @@ mod tests {
             watermark_secret_included: false,
         }
     }
-
     fn moderation_evidence_viewer_access_input(
         session_id: [u8; 16],
         kind: ModerationEvidenceViewerAccessKind,
@@ -20918,7 +20007,6 @@ mod tests {
             response_body_included: false,
         }
     }
-
     fn moderation_evidence_viewer_audit_report_input(
         window_start_unix: u64,
         window_end_unix: u64,
@@ -20938,7 +20026,6 @@ mod tests {
             response_bodies_included: false,
         }
     }
-
     fn seed_moderation_evidence_viewer_activity(
         handle: &NodeHandle,
         subject: &str,
@@ -20981,7 +20068,6 @@ mod tests {
         }
         session
     }
-
     fn reputation_provider_input_fixture() -> ReputationProviderInputV1 {
         let metrics = ReputationProviderMetricsV1 {
             version: REPUTATION_PROVIDER_METRICS_VERSION_V1,
@@ -21003,7 +20089,6 @@ mod tests {
             slashing_event: false,
         }
     }
-
     fn signed_reputation_snapshot_fixture_with(
         snapshot_id: [u8; 16],
         generated_at_unix: u64,
@@ -21016,7 +20101,6 @@ mod tests {
             previous_snapshot_id,
         )
     }
-
     fn signed_reputation_snapshot_fixture_for_policy(
         policy: &ReputationSnapshotTrustPolicyV1,
         snapshot_id: [u8; 16],
@@ -21064,7 +20148,6 @@ mod tests {
         });
         envelope
     }
-
     fn signed_reputation_snapshot_fixture() -> SignedReputationSnapshotV1 {
         signed_reputation_snapshot_fixture_with([0x42; 16], unix_now_secs(), None)
     }
@@ -21074,7 +20157,6 @@ mod tests {
             MODERATION_LEDGER_ENTRY_VERSION_V1, ModerationLedgerEntryKindV1,
             ModerationLedgerEntryV1, ModerationLedgerMetadataV1,
         };
-
         let cycle_id = *b"cycle-2026-wk-02";
         let entries = [
             ModerationLedgerEntryV1 {
@@ -21132,7 +20214,6 @@ mod tests {
             ModerationPrivacyModeV1, ModerationPrivacyNoiseSourceV1, ModerationPrivacyParametersV1,
             ModerationPrivacyThresholdPrfCommitmentV1,
         };
-
         ModerationPrivacyAggregateV1 {
             version: MODERATION_PRIVACY_AGGREGATE_VERSION_V1,
             aggregate_id: aggregate_id.to_string(),
@@ -21175,7 +20256,6 @@ mod tests {
             }],
         }
     }
-
     fn privacy_source_event(
         event_id: &str,
         population_label: &str,
@@ -21204,7 +20284,6 @@ mod tests {
             provenance: None,
         }
     }
-
     fn transparency_ledger_source_entry(
         event_id: &str,
         occurred_at_unix: u64,
@@ -21234,7 +20313,6 @@ mod tests {
             ],
         }
     }
-
     fn gar_enforcement_receipt_fixture(
         action: iroha_data_model::sorafs::gar::GarEnforcementActionV1,
     ) -> GarEnforcementReceiptV1 {
@@ -21264,7 +20342,6 @@ mod tests {
             MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationLedgerMetadataV1,
             ModerationPrivacyModeV1, ModerationPrivacyParametersV1,
         };
-
         PrivacyAggregateCycleConfig {
             query_id: [0xB0; 32],
             first_cycle_start_unix: 100,
@@ -21306,7 +20383,6 @@ mod tests {
             }],
         }
     }
-
     fn privacy_aggregate_schedule_config() -> PrivacyAggregateScheduleConfig {
         PrivacyAggregateScheduleConfig {
             first_cycle_start_unix: 100,
@@ -21314,7 +20390,6 @@ mod tests {
             publish_delay_seconds: 10,
         }
     }
-
     fn privacy_cycle_prf_input(
         config: &PrivacyAggregateCycleConfig,
         cycle_start_unix: u64,
@@ -21339,7 +20414,6 @@ mod tests {
             PrivacyCyclePrfOutputV1::new(output).expect("test privacy PRF input"),
         )
     }
-
     fn privacy_composition_budget_policy() -> PrivacyCompositionBudgetPolicyV1 {
         PrivacyCompositionBudgetPolicyV1 {
             budget_id: [0xB0; 32],
@@ -21348,11 +20422,9 @@ mod tests {
             max_publications: 100,
         }
     }
-
     fn privacy_aggregate_policy_config() -> config::PrivacyAggregatePolicyConfig {
         privacy_aggregate_policy_config_for_cycle(privacy_aggregate_cycle_config())
     }
-
     fn privacy_aggregate_policy_config_for_cycle(
         mut cycle: PrivacyAggregateCycleConfig,
     ) -> config::PrivacyAggregatePolicyConfig {
@@ -21362,7 +20434,6 @@ mod tests {
         config::PrivacyAggregatePolicyConfig::new(cycle, privacy_composition_budget_policy())
             .expect("test privacy aggregate policy")
     }
-
     fn privacy_aggregate_storage_config(root: &Path) -> StorageConfig {
         with_test_signed_governance_config(
             StorageConfig::builder()
@@ -21385,7 +20456,6 @@ mod tests {
         )
         .build()
     }
-
     fn privacy_aggregate_storage_config_with_temp_dir() -> (StorageConfig, TempDir) {
         let temp_dir = tempfile::tempdir().expect("create privacy aggregate temp dir");
         let root = temp_dir
@@ -21394,13 +20464,11 @@ mod tests {
             .expect("canonical privacy aggregate temp dir");
         (privacy_aggregate_storage_config(&root), temp_dir)
     }
-
     fn governance_submission_account(seed: u8) -> AccountId {
         let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("derive authenticated governance publisher key");
         AccountId::new(key.public_key().clone())
     }
-
     fn appeal_finance_report_fixture() -> SoraFsAppealFinanceReportV1 {
         SoraFsAppealFinanceReportV1 {
             version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
@@ -21445,7 +20513,6 @@ mod tests {
             no_show_juror_ids: vec!["juror-c".to_string()],
         }
     }
-
     fn proof_token_issuance_fixture() -> ProofTokenIssuanceV1 {
         ProofTokenIssuanceV1 {
             version: iroha_data_model::sorafs::transparency::PROOF_TOKEN_ISSUANCE_VERSION_V1,
@@ -21467,18 +20534,15 @@ mod tests {
             ],
         }
     }
-
     const VALID_PROOF_TOKEN_SIGNER_HEX: &str =
         "f4bfda67d38a409557e4a910dbdf0a862ee5aa6cf6c2284aa38b0b82c4f16532";
     const VALID_PROOF_TOKEN_B64: &str = "U0ZHVAEBAgAAAABrSdIeAAAAAGtLI55hYWFhYWFhYWFhYWFhYWFhAAIAD2RlbnlsaXN0L2dsb2JhbAANZ2FyL3BvbGljeS80MmRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkAEDHmshANx2cvkpmh1mCkrE94PJ6hL0A0qX4vQ-T3rWyTUKZG6uGoYM2sXbL36cYTahpsgcQ35z4R9bb1owinokB";
-
     fn proof_token_signer_key_fixture() -> [u8; 32] {
         hex::decode(VALID_PROOF_TOKEN_SIGNER_HEX)
             .expect("valid proof-token signer hex")
             .try_into()
             .expect("proof-token signer key length")
     }
-
     fn appeal_finance_weekly_rollup_fixture() -> SoraFsAppealFinanceWeeklyRollupV1 {
         let report = appeal_finance_report_fixture();
         SoraFsAppealFinanceWeeklyRollupV1::from_reports(
@@ -21491,12 +20555,10 @@ mod tests {
         )
         .expect("appeal finance weekly rollup fixture")
     }
-
     fn por_challenge_publication_fixture() -> PorChallengePublicationV1 {
         PorChallengePublicationV1::try_new(por_sample_challenge(), 0)
             .expect("PoR challenge publication fixture")
     }
-
     fn por_weekly_report_fixture() -> PorWeeklyReportV1 {
         let report = PorWeeklyReportV1 {
             version: sorafs_manifest::por::POR_WEEKLY_REPORT_VERSION_V1,
@@ -21521,7 +20583,6 @@ mod tests {
         report.validate().expect("PoR weekly report fixture");
         report
     }
-
     fn appeal_finance_settlement_receipt_fixture() -> SoraFsAppealFinanceSettlementReceiptV1 {
         SoraFsAppealFinanceSettlementReceiptV1 {
             version: SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
@@ -21554,14 +20615,12 @@ mod tests {
             configured_signer_count: 1,
         }
     }
-
     #[test]
     fn moderation_model_registry_admits_repro_manifest_and_rejects_conflict() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
         let manifest = moderation_repro_manifest_fixture(0x10, 0x30);
         let expected_manifest_digest = manifest.body.manifest_digest;
-
         let record = handle
             .admit_moderation_repro_manifest(manifest.clone())
             .expect("admit repro manifest");
@@ -21570,12 +20629,10 @@ mod tests {
         assert_eq!(record.runner_hash, [0x30; 32]);
         assert_eq!(record.model_count, 1);
         assert_eq!(record.signer_count, 1);
-
         let repeated = handle
             .admit_moderation_repro_manifest(manifest)
             .expect("re-admit matching repro manifest");
         assert_eq!(repeated, record);
-
         let err = handle
             .admit_moderation_repro_manifest(moderation_repro_manifest_fixture(0x10, 0x31))
             .expect_err("conflicting manifest id rejected");
@@ -21583,14 +20640,12 @@ mod tests {
             err,
             ModerationModelRegistryError::ConflictingReproManifest { .. }
         ));
-
         let snapshot = handle
             .export_moderation_model_registry_snapshot()
             .expect("export moderation model registry snapshot");
         assert_eq!(snapshot.reproducibility_manifests, vec![record]);
         assert!(snapshot.adversarial_corpora.is_empty());
     }
-
     #[test]
     fn moderation_model_registry_admits_corpus_manifest_snapshot() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -21598,7 +20653,6 @@ mod tests {
         let manifest = adversarial_corpus_manifest_fixture();
         let expected_digest =
             *blake3::hash(&to_bytes(&manifest).expect("encode corpus fixture")).as_bytes();
-
         let record = handle
             .admit_moderation_corpus_manifest(manifest.clone())
             .expect("admit corpus manifest");
@@ -21606,19 +20660,16 @@ mod tests {
         assert_eq!(record.cohort_label.as_deref(), Some("sfm4a-2026-q1"));
         assert_eq!(record.family_count, 1);
         assert_eq!(record.variant_count, 2);
-
         let repeated = handle
             .admit_moderation_corpus_manifest(manifest)
             .expect("re-admit matching corpus manifest");
         assert_eq!(repeated, record);
-
         let snapshot = handle
             .export_moderation_model_registry_snapshot()
             .expect("export moderation model registry snapshot");
         assert!(snapshot.reproducibility_manifests.is_empty());
         assert_eq!(snapshot.adversarial_corpora, vec![record]);
     }
-
     #[test]
     fn moderation_model_registry_checkpoint_persists_and_reloads_snapshot() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -21629,7 +20680,6 @@ mod tests {
         let corpus_record = source
             .admit_moderation_corpus_manifest(adversarial_corpus_manifest_fixture())
             .expect("admit corpus manifest");
-
         let checkpoint_path = moderation_model_registry_checkpoint_path(cfg.data_dir());
         let checkpoint_bytes = fs::read(&checkpoint_path).expect("read registry checkpoint");
         let checkpoint: ModerationModelRegistrySnapshot =
@@ -21639,7 +20689,6 @@ mod tests {
             vec![repro_record.clone()]
         );
         assert_eq!(checkpoint.adversarial_corpora, vec![corpus_record.clone()]);
-
         drop(source);
         let restored = NodeHandle::new(cfg);
         let restored_snapshot = restored
@@ -21653,7 +20702,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn moderation_model_registry_restore_rejects_duplicate_records() {
         let cfg = StorageConfig::builder().enabled(false).build();
@@ -21684,7 +20732,6 @@ mod tests {
             ModerationModelRegistrySnapshot::default()
         );
     }
-
     #[test]
     fn moderation_screening_records_deterministic_quarantine_queue() {
         let cfg = StorageConfig::builder().enabled(false).build();
@@ -21693,7 +20740,6 @@ mod tests {
             "cid:bafy-screening",
             ModerationScreeningVerdict::Quarantine,
         );
-
         let outcome = handle
             .record_moderation_screening_result(input.clone())
             .expect("record screening result");
@@ -21714,25 +20760,21 @@ mod tests {
         assert_eq!(quarantine.state, ModerationQuarantineState::PendingReview);
         assert!(quarantine.reviewed_at_unix.is_none());
         assert!(quarantine.released_at_unix.is_none());
-
         let repeated = handle
             .record_moderation_screening_result(input)
             .expect("idempotent screening result");
         assert_eq!(repeated.record, outcome.record);
         assert_eq!(repeated.quarantine, Some(quarantine.clone()));
-
         let snapshot = handle
             .export_moderation_screening_snapshot()
             .expect("export moderation screening snapshot");
         assert_eq!(snapshot.screening_records, vec![outcome.record]);
         assert_eq!(snapshot.quarantine_records, vec![quarantine]);
     }
-
     #[test]
     fn moderation_screening_pass_does_not_create_quarantine_record() {
         let cfg = StorageConfig::builder().enabled(false).build();
         let handle = NodeHandle::new(cfg);
-
         let outcome = handle
             .record_moderation_screening_result(moderation_screening_input_fixture(
                 "cid:bafy-pass",
@@ -21746,7 +20788,6 @@ mod tests {
         assert_eq!(snapshot.screening_records, vec![outcome.record]);
         assert!(snapshot.quarantine_records.is_empty());
     }
-
     #[test]
     fn moderation_screening_checkpoint_persists_and_reloads_snapshot() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -21763,14 +20804,12 @@ mod tests {
                 ModerationScreeningVerdict::Pass,
             ))
             .expect("record pass result");
-
         let checkpoint_path = moderation_screening_checkpoint_path(cfg.data_dir());
         let checkpoint_bytes = fs::read(&checkpoint_path).expect("read screening checkpoint");
         let checkpoint: ModerationScreeningSnapshot =
             norito::decode_from_bytes(&checkpoint_bytes).expect("decode screening checkpoint");
         assert_eq!(checkpoint.screening_records.len(), 2);
         assert_eq!(checkpoint.quarantine_records.len(), 1);
-
         drop(source);
         let restored = NodeHandle::new(cfg);
         let restored_snapshot = restored
@@ -21787,7 +20826,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn moderation_quarantine_review_and_release_updates_checkpoint() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -21803,7 +20841,6 @@ mod tests {
             .as_ref()
             .expect("quarantine record")
             .quarantine_id;
-
         let reviewed = source
             .review_moderation_quarantine_record(moderation_quarantine_review_input(quarantine_id))
             .expect("review quarantine record");
@@ -21811,7 +20848,6 @@ mod tests {
         assert_eq!(reviewed.reviewed_at_unix, Some(1_800_000_060));
         assert_eq!(reviewed.reviewed_by.as_deref(), Some("operator@moderation"));
         assert!(reviewed.released_at_unix.is_none());
-
         let released = source
             .release_moderation_quarantine_record(moderation_quarantine_release_input(
                 quarantine_id,
@@ -21824,7 +20860,6 @@ mod tests {
             released.release_authority.as_deref(),
             Some("release-authority@moderation")
         );
-
         drop(source);
         let restored = NodeHandle::new(cfg);
         let snapshot = restored
@@ -21833,7 +20868,6 @@ mod tests {
         assert_eq!(snapshot.screening_records, vec![outcome.record]);
         assert_eq!(snapshot.quarantine_records, vec![released]);
     }
-
     #[test]
     fn moderation_quarantine_object_store_persists_encrypted_payload_and_reloads() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
@@ -21848,7 +20882,6 @@ mod tests {
             .record_moderation_screening_result(screening)
             .expect("record quarantine result");
         let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
-
         let record = source
             .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
                 quarantine_id,
@@ -21861,7 +20894,6 @@ mod tests {
         assert_eq!(record.payload_digest, *blake3::hash(&payload).as_bytes());
         assert_eq!(record.payload_len, payload.len() as u64);
         assert_eq!(record.notes, None);
-
         let envelope_path =
             moderation_quarantine_object_store_root(cfg.data_dir()).join(&record.envelope_path);
         let envelope_bytes = fs::read(&envelope_path).expect("read encrypted envelope");
@@ -21882,7 +20914,6 @@ mod tests {
                 .any(|window| window == payload.as_slice()),
             "encrypted object envelope must not contain plaintext payload bytes"
         );
-
         let decrypted = source
             .read_moderation_quarantine_object(quarantine_id)
             .expect("read quarantine object");
@@ -21898,13 +20929,11 @@ mod tests {
             })
             .expect("idempotently replay quarantine object store");
         assert_eq!(replay, record);
-
         let index_path = moderation_quarantine_object_index_path(cfg.data_dir());
         let index_bytes = fs::read(&index_path).expect("read object index");
         let index: ModerationQuarantineObjectSnapshot =
             norito::decode_from_bytes(&index_bytes).expect("decode object index");
         assert_eq!(index.objects, vec![record.clone()]);
-
         drop(source);
         let restored = node_with_test_quarantine_key_wrapper(cfg);
         assert_eq!(
@@ -21920,7 +20949,6 @@ mod tests {
         assert_eq!(restored_payload.record, record);
         assert_eq!(restored_payload.payload, payload);
     }
-
     #[test]
     fn moderation_quarantine_range_and_dek_rewrap_survive_restart() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
@@ -21978,7 +21006,6 @@ mod tests {
             ModerationQuarantineObjectError::InvalidRange { .. }
         ));
         drop(source);
-
         let rotated_cfg = StorageConfig::builder()
             .enabled(true)
             .data_dir(cfg.data_dir().clone())
@@ -22033,7 +21060,6 @@ mod tests {
             payload
         );
         drop(rotated);
-
         let new_only_wrapper: Arc<dyn ModerationQuarantineKeyWrapper> =
             Arc::new(TestQuarantineKeyWrapper::single_with_qualification(
                 "kms:test/quarantine-new",
@@ -22051,7 +21077,6 @@ mod tests {
             payload
         );
     }
-
     #[test]
     fn moderation_quarantine_startup_recovers_canonical_unindexed_envelope() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
@@ -22085,7 +21110,6 @@ mod tests {
             )
             .expect("simulate index state before interrupted insertion");
         drop(source);
-
         let restored = node_with_test_quarantine_key_wrapper(cfg);
         assert!(
             restored
@@ -22099,7 +21123,6 @@ mod tests {
             "startup recovery must durably remove a canonical unindexed envelope"
         );
     }
-
     #[test]
     fn moderation_quarantine_object_store_rejects_digest_mismatch() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
@@ -22114,7 +21137,6 @@ mod tests {
             .record_moderation_screening_result(screening)
             .expect("record quarantine result");
         let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
-
         let err = handle
             .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
                 quarantine_id,
@@ -22136,7 +21158,6 @@ mod tests {
                 .is_empty()
         );
     }
-
     #[test]
     fn moderation_quarantine_object_read_rejects_tampered_envelope() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
@@ -22168,7 +21189,6 @@ mod tests {
         envelope.chunks[0].ciphertext[0] ^= 0x01;
         let tampered_bytes = norito::to_bytes(&envelope).expect("encode tampered envelope");
         fs::write(&envelope_path, tampered_bytes).expect("write tampered envelope");
-
         let err = handle
             .read_moderation_quarantine_object(quarantine_id)
             .expect_err("tampered envelope rejected");
@@ -22177,7 +21197,6 @@ mod tests {
             ModerationQuarantineObjectError::AuthenticationFailed { .. }
         ));
     }
-
     #[test]
     fn moderation_quarantine_store_rejects_authenticated_envelope_tampering_on_restart() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
@@ -22204,7 +21223,6 @@ mod tests {
             })
             .expect("store quarantine object");
         drop(handle);
-
         let envelope_path =
             moderation_quarantine_object_store_root(cfg.data_dir()).join(&record.envelope_path);
         let bytes = fs::read(&envelope_path).expect("read envelope");
@@ -22216,7 +21234,6 @@ mod tests {
             norito::to_bytes(&envelope).expect("encode canonical tampered envelope"),
         )
         .expect("write tampered envelope");
-
         assert!(matches!(
             NodeHandle::try_new_with_quarantine_key_wrapper(cfg, test_quarantine_key_wrapper()),
             Err(NodeInitError::Checkpoint {
@@ -22225,7 +21242,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn moderation_quarantine_store_requires_runtime_wrapper_and_rejects_unknown_orphans() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
@@ -22252,12 +21268,10 @@ mod tests {
             })
             .expect("store quarantine object");
         drop(handle);
-
         assert!(matches!(
             NodeHandle::try_new(cfg.clone()),
             Err(NodeInitError::ModerationQuarantineKeyWrapperUnavailable)
         ));
-
         let orphan = moderation_quarantine_object_store_root(cfg.data_dir()).join("orphan.to");
         fs::write(&orphan, b"not indexed").expect("write orphan object");
         assert!(matches!(
@@ -22268,7 +21282,6 @@ mod tests {
             })
         ));
     }
-
     #[cfg(unix)]
     #[test]
     fn moderation_quarantine_store_rejects_symlink_entries_on_restart() {
@@ -22280,7 +21293,6 @@ mod tests {
         fs::write(&victim, b"victim").expect("write symlink victim");
         let link = moderation_quarantine_object_store_root(cfg.data_dir()).join("orphan-link.to");
         symlink(&victim, &link).expect("create object-store symlink");
-
         assert!(matches!(
             NodeHandle::try_new(cfg),
             Err(NodeInitError::Checkpoint {
@@ -22290,7 +21302,6 @@ mod tests {
         ));
         assert_eq!(fs::read(victim).expect("victim remains intact"), b"victim");
     }
-
     #[test]
     fn moderation_snapshot_restore_rejects_dangling_cross_checkpoint_references() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
@@ -22309,7 +21320,6 @@ mod tests {
         let objects_before = handle
             .export_moderation_quarantine_object_snapshot()
             .expect("export moderation quarantine object snapshot");
-
         let screening_error = handle
             .restore_moderation_screening_snapshot(ModerationScreeningSnapshot::default())
             .expect_err("referenced quarantine cannot be removed");
@@ -22323,7 +21333,6 @@ mod tests {
                 .expect("export moderation screening snapshot"),
             screening_before
         );
-
         let object_error = handle
             .restore_moderation_quarantine_object_snapshot(
                 ModerationQuarantineObjectSnapshot::default(),
@@ -22340,7 +21349,6 @@ mod tests {
             objects_before
         );
     }
-
     #[test]
     fn moderation_evidence_viewer_session_access_persists_and_reloads() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
@@ -22364,7 +21372,6 @@ mod tests {
                 notes: None,
             })
             .expect("store quarantine object");
-
         let session = source
             .create_moderation_evidence_viewer_session(moderation_evidence_viewer_session_input(
                 quarantine_id,
@@ -22380,7 +21387,6 @@ mod tests {
             session.session_id.as_slice(),
             &session.session_manifest_digest[..16]
         );
-
         let access = source
             .record_moderation_evidence_viewer_access(moderation_evidence_viewer_access_input(
                 session.session_id,
@@ -22392,7 +21398,6 @@ mod tests {
         assert_eq!(access.session_id, session.session_id);
         assert_eq!(access.quarantine_id, quarantine_id);
         assert_eq!(access.kind, ModerationEvidenceViewerAccessKind::Viewed);
-
         let checkpoint_path = moderation_evidence_viewer_checkpoint_path(cfg.data_dir());
         assert!(
             checkpoint_path.exists(),
@@ -22406,7 +21411,6 @@ mod tests {
         assert_eq!(snapshot.sessions, vec![session]);
         assert_eq!(snapshot.access_events, vec![access]);
     }
-
     #[test]
     fn moderation_evidence_viewer_session_rejects_missing_object_and_payload_material() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
@@ -22421,7 +21425,6 @@ mod tests {
             .record_moderation_screening_result(screening)
             .expect("record quarantine result");
         let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
-
         let err = handle
             .create_moderation_evidence_viewer_session(moderation_evidence_viewer_session_input(
                 quarantine_id,
@@ -22433,7 +21436,6 @@ mod tests {
             err,
             ModerationEvidenceViewerError::MissingObject { .. }
         ));
-
         handle
             .store_moderation_quarantine_object(ModerationQuarantineObjectInput {
                 quarantine_id,
@@ -22457,7 +21459,6 @@ mod tests {
             ModerationEvidenceViewerError::PayloadSafetyViolation { .. }
         ));
     }
-
     #[test]
     fn moderation_evidence_viewer_access_rejects_expiry_and_tampered_snapshot() {
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
@@ -22488,7 +21489,6 @@ mod tests {
                 1_800_000_300_000,
             ))
             .expect("create viewer session");
-
         let err = handle
             .record_moderation_evidence_viewer_access(moderation_evidence_viewer_access_input(
                 session.session_id,
@@ -22500,7 +21500,6 @@ mod tests {
             err,
             ModerationEvidenceViewerError::ExpiredSession { .. }
         ));
-
         let expiry_event = handle
             .record_moderation_evidence_viewer_access(moderation_evidence_viewer_access_input(
                 session.session_id,
@@ -22512,7 +21511,6 @@ mod tests {
             expiry_event.kind,
             ModerationEvidenceViewerAccessKind::SessionExpired
         );
-
         let mut tampered = handle
             .export_moderation_evidence_viewer_snapshot()
             .expect("export moderation evidence viewer snapshot");
@@ -22525,7 +21523,6 @@ mod tests {
             ModerationEvidenceViewerError::InvalidSnapshot { .. }
         ));
     }
-
     #[test]
     fn moderation_evidence_viewer_audit_report_records_transparency_source_entry() {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
@@ -22577,7 +21574,6 @@ mod tests {
         handle
             .record_moderation_evidence_viewer_access(seeked)
             .expect("record seek access");
-
         let result = handle
             .record_moderation_evidence_viewer_audit_report(
                 moderation_evidence_viewer_audit_report_input(
@@ -22619,7 +21615,6 @@ mod tests {
                 .iter()
                 .all(|item| !item.value.contains("juror-1@moderation"))
         );
-
         handle
             .record_moderation_evidence_viewer_audit_report(
                 moderation_evidence_viewer_audit_report_input(
@@ -22630,7 +21625,6 @@ mod tests {
             )
             .expect("duplicate report export is idempotent");
         assert_eq!(handle.transparency_ledger_source_entry_count(), 1);
-
         let publication = handle
             .publish_transparency_ledger_cycle_from_source_entries(
                 *b"cycle-evrpt00001",
@@ -22648,7 +21642,6 @@ mod tests {
         let published = publisher.take();
         assert_eq!(published.len(), 1);
     }
-
     #[test]
     fn moderation_evidence_viewer_audit_report_publish_due_publishes_and_is_idempotent() {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
@@ -22675,7 +21668,6 @@ mod tests {
                 ),
             ],
         );
-
         let schedule = PrivacyAggregateScheduleConfig {
             first_cycle_start_unix: 1_800_000_000,
             cycle_seconds: 100,
@@ -22718,7 +21710,6 @@ mod tests {
         );
         assert_eq!(handle.transparency_ledger_source_entry_count(), 0);
         assert_eq!(publisher.take().len(), 1);
-
         let repeat = handle
             .publish_due_moderation_evidence_viewer_audit_report(
                 1_800_000_110,
@@ -22735,7 +21726,6 @@ mod tests {
         assert_eq!(handle.transparency_ledger_source_entry_count(), 0);
         assert_eq!(publisher.take().len(), 0);
     }
-
     #[test]
     fn moderation_evidence_viewer_audit_report_publish_due_configured_uses_storage_config() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -22770,7 +21760,6 @@ mod tests {
                 1_800_000_010_000,
             )],
         );
-
         let outcome = handle
             .publish_due_configured_moderation_evidence_viewer_audit_report(
                 1_800_000_110,
@@ -22795,7 +21784,6 @@ mod tests {
         assert_eq!(publication.block.entry_count, 1);
         assert_eq!(publisher.take().len(), 1);
     }
-
     #[test]
     fn moderation_evidence_viewer_audit_report_publish_due_configured_skips_when_disabled() {
         let cfg = StorageConfig::builder()
@@ -22804,7 +21792,6 @@ mod tests {
             .build();
         let handle = NodeHandle::new(cfg);
         assert_eq!(handle.configured_evidence_viewer_audit_schedule(), None);
-
         let outcome = handle
             .publish_due_configured_moderation_evidence_viewer_audit_report(
                 1_800_000_110,
@@ -22818,7 +21805,6 @@ mod tests {
             ModerationEvidenceViewerAuditScheduleOutcome::Disabled
         );
     }
-
     #[test]
     fn moderation_evidence_viewer_audit_report_publish_due_reports_empty_and_bad_schedules() {
         let cfg = StorageConfig::builder().enabled(false).build();
@@ -22841,7 +21827,6 @@ mod tests {
             outcome,
             ModerationEvidenceViewerAuditScheduleOutcome::NoSourceEvents { .. }
         ));
-
         let err = empty
             .publish_due_moderation_evidence_viewer_audit_report(
                 1_800_000_110,
@@ -22856,7 +21841,6 @@ mod tests {
             )
             .expect_err("zero cycle rejected");
         assert!(err.to_string().contains("evidence viewer audit schedule"));
-
         let (cfg, _dir) = storage_config_with_temp_dir_and_quarantine_key_provider();
         let handle = node_with_test_quarantine_key_wrapper(cfg);
         seed_moderation_evidence_viewer_activity(
@@ -22893,7 +21877,6 @@ mod tests {
                 .contains("record evidence viewer audit report")
         );
     }
-
     #[test]
     fn moderation_evidence_viewer_audit_report_rejects_unsafe_and_tampered_inputs() {
         let cfg = StorageConfig::builder().enabled(false).build();
@@ -22911,7 +21894,6 @@ mod tests {
             err,
             ModerationEvidenceViewerError::PayloadSafetyViolation { .. }
         ));
-
         let err = handle
             .build_moderation_evidence_viewer_audit_report(
                 moderation_evidence_viewer_audit_report_input(
@@ -22925,7 +21907,6 @@ mod tests {
             err,
             ModerationEvidenceViewerError::InvalidInput { .. }
         ));
-
         let mut report = handle
             .build_moderation_evidence_viewer_audit_report(
                 moderation_evidence_viewer_audit_report_input(
@@ -22943,7 +21924,6 @@ mod tests {
                 .contains("access-kind counts do not sum")
         );
     }
-
     #[test]
     fn moderation_quarantine_release_requires_review() {
         let cfg = StorageConfig::builder().enabled(false).build();
@@ -22955,7 +21935,6 @@ mod tests {
             ))
             .expect("record quarantine result");
         let quarantine_id = outcome.quarantine.expect("quarantine record").quarantine_id;
-
         let err = handle
             .release_moderation_quarantine_record(moderation_quarantine_release_input(
                 quarantine_id,
@@ -22975,7 +21954,6 @@ mod tests {
             Some(ModerationQuarantineState::PendingReview)
         );
     }
-
     #[test]
     fn moderation_screening_restore_rejects_tampered_digest() {
         let cfg = StorageConfig::builder().enabled(false).build();
@@ -23000,37 +21978,31 @@ mod tests {
             ModerationScreeningError::InvalidSnapshot { .. }
         ));
     }
-
     #[test]
     fn manifest_metadata_resolves_by_digest() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
-
         let payload = b"digest-lookup-fixture";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let manifest = manifest_builder_for_plan(payload, &plan)
             .pin_policy(PinPolicy::default())
             .build()
             .expect("manifest");
-
         let mut reader = payload.as_slice();
         let manifest_id = handle
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest manifest");
         let manifest_digest: [u8; 32] = manifest.digest().expect("manifest digest").into();
-
         let by_id = handle
             .manifest_metadata(&manifest_id)
             .expect("lookup by id");
         let by_digest = handle
             .manifest_metadata_by_digest(&manifest_digest)
             .expect("lookup by digest");
-
         assert_eq!(by_digest.manifest_id(), manifest_id);
         assert_eq!(by_digest.manifest_digest(), &manifest_digest);
         assert_eq!(by_id.manifest_digest(), by_digest.manifest_digest());
     }
-
     #[test]
     fn moderation_state_limit_allows_boundary_replays_and_existing_updates() {
         let cfg = StorageConfig::builder()
@@ -23038,7 +22010,6 @@ mod tests {
             .runtime_retention(RuntimeRetentionPolicy::new(1, 1, 1024 * 1024))
             .build();
         let handle = NodeHandle::new(cfg);
-
         let repro = moderation_repro_manifest_fixture(0x11, 0x31);
         let admitted = handle
             .admit_moderation_repro_manifest(repro.clone())
@@ -23058,7 +22029,6 @@ mod tests {
                 limit: 1
             }
         ));
-
         let corpus = adversarial_corpus_manifest_fixture();
         let admitted = handle
             .admit_moderation_corpus_manifest(corpus.clone())
@@ -23080,7 +22050,6 @@ mod tests {
                 limit: 1
             }
         ));
-
         let screening = moderation_screening_input_fixture(
             "limit-subject",
             ModerationScreeningVerdict::Quarantine,
@@ -23120,7 +22089,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn moderation_object_viewer_limits_and_checkpoints_survive_restart() {
         let (base, _dir) = storage_config_with_temp_dir();
@@ -23176,7 +22144,6 @@ mod tests {
             sessions.push(session);
             session_inputs.push(input);
         }
-
         assert_eq!(
             handle
                 .create_moderation_evidence_viewer_session(session_inputs[0].clone())
@@ -23217,7 +22184,6 @@ mod tests {
         assert_eq!(viewer.sessions.len(), 2);
         assert_eq!(viewer.access_events.len(), 2);
         drop(handle);
-
         let restored = node_with_test_quarantine_key_wrapper(cfg);
         let screening = restored
             .export_moderation_screening_snapshot()
@@ -23239,7 +22205,6 @@ mod tests {
             sessions[0]
         );
     }
-
     #[test]
     fn publish_reputation_snapshot_updates_cache_and_governance_publisher() {
         let (cfg, _dir) = storage_config_with_reputation_policy();
@@ -23253,11 +22218,9 @@ mod tests {
             .canonical_bytes()
             .expect("encode signed reputation snapshot");
         let mut event_receiver = handle.subscribe_reputation_events();
-
         handle
             .publish_signed_reputation_snapshot(envelope.clone())
             .expect("publish signed reputation snapshot");
-
         let published = publisher.take();
         assert_eq!(published, vec![expected]);
         let cached = handle
@@ -23291,7 +22254,6 @@ mod tests {
         assert_eq!(live_event.snapshot_id, snapshot.snapshot_id);
         assert!(handle.reputation_events_since(Some(1), 10).is_empty());
     }
-
     #[test]
     fn signed_reputation_admission_fails_closed_without_policy_and_on_adversarial_envelopes() {
         let (unconfigured, _dir) = storage_config_with_temp_dir();
@@ -23305,20 +22267,16 @@ mod tests {
                 .latest_signed_reputation_snapshot()
                 .is_none()
         );
-
         let (configured, _dir) = storage_config_with_reputation_policy();
         let handle = NodeHandle::new(configured);
         let now = unix_now_secs();
         let mut adversarial = Vec::new();
-
         let mut bad_signature = signed_reputation_snapshot_fixture_with([0x51; 16], now, None);
         bad_signature.signatures[0].signature[0] ^= 0x80;
         adversarial.push(bad_signature);
-
         let mut wrong_policy = signed_reputation_snapshot_fixture_with([0x52; 16], now, None);
         wrong_policy.policy_digest[0] ^= 0x40;
         adversarial.push(wrong_policy);
-
         adversarial.push(signed_reputation_snapshot_fixture_with(
             [0x53; 16],
             now.saturating_sub(601),
@@ -23329,21 +22287,17 @@ mod tests {
             now.saturating_add(60),
             None,
         ));
-
         let mut tampered_evidence = signed_reputation_snapshot_fixture_with([0x55; 16], now, None);
         tampered_evidence.scoring_evidence.provider_inputs[0]
             .metrics
             .por_success_bps -= 1;
         adversarial.push(tampered_evidence);
-
         let mut untrusted_signer = signed_reputation_snapshot_fixture_with([0x56; 16], now, None);
         untrusted_signer.signatures[0].signer_id = "attacker".to_owned();
         adversarial.push(untrusted_signer);
-
         let mut no_quorum = signed_reputation_snapshot_fixture_with([0x57; 16], now, None);
         no_quorum.signatures.clear();
         adversarial.push(no_quorum);
-
         for envelope in adversarial {
             handle
                 .publish_signed_reputation_snapshot(envelope)
@@ -23352,7 +22306,6 @@ mod tests {
             assert_eq!(handle.pending_governance_publication_count(), 0);
         }
     }
-
     #[test]
     fn reputation_trust_policy_loading_rejects_missing_noncanonical_and_unsafe_files() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -23366,7 +22319,6 @@ mod tests {
             NodeHandle::try_new(missing_config),
             Err(NodeInitError::ReputationTrustPolicy { .. })
         ));
-
         let malformed = root.join("malformed-policy.to");
         write_local_checkpoint_atomic(&malformed, b"not canonical Norito")
             .expect("write malformed policy");
@@ -23378,7 +22330,6 @@ mod tests {
             NodeHandle::try_new(malformed_config),
             Err(NodeInitError::ReputationTrustPolicy { .. })
         ));
-
         let oversized = root.join("oversized-policy.to");
         let oversized_bytes = vec![0_u8; MAX_REPUTATION_TRUST_POLICY_ENCODED_BYTES + 1];
         write_local_checkpoint_atomic(&oversized, &oversized_bytes)
@@ -23391,7 +22342,6 @@ mod tests {
             NodeHandle::try_new(oversized_config),
             Err(NodeInitError::ReputationTrustPolicy { .. })
         ));
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
@@ -23404,7 +22354,6 @@ mod tests {
                     .expect("encode valid policy"),
             )
             .expect("write valid policy");
-
             let symlink_path = root.join("policy-symlink.to");
             symlink(&target, &symlink_path).expect("create policy symlink");
             let symlink_config = StorageConfig::builder()
@@ -23415,7 +22364,6 @@ mod tests {
                 NodeHandle::try_new(symlink_config),
                 Err(NodeInitError::ReputationTrustPolicy { .. })
             ));
-
             let writable_path = root.join("writable-policy.to");
             write_local_checkpoint_atomic(
                 &writable_path,
@@ -23434,7 +22382,6 @@ mod tests {
                 NodeHandle::try_new(writable_config),
                 Err(NodeInitError::ReputationTrustPolicy { .. })
             ));
-
             let hardlink_path = root.join("policy-hardlink.to");
             fs::hard_link(&target, &hardlink_path).expect("create policy hard link");
             let hardlink_config = StorageConfig::builder()
@@ -23447,7 +22394,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn reputation_snapshot_rejects_conflicting_ids_and_evicts_only_unreferenced_history() {
         let (base, _dir) = storage_config_with_reputation_policy();
@@ -23463,7 +22409,6 @@ mod tests {
         handle
             .publish_signed_reputation_snapshot(first.clone())
             .expect("publish first snapshot");
-
         let conflicting = signed_reputation_snapshot_fixture_with(
             first.snapshot.snapshot_id,
             first.snapshot.generated_at_unix + 1,
@@ -23473,7 +22418,6 @@ mod tests {
             .publish_signed_reputation_snapshot(conflicting)
             .expect_err("conflicting canonical bytes under one id must fail");
         assert!(conflict_error.to_string().contains("conflicts"));
-
         let broken_head = signed_reputation_snapshot_fixture_with(
             [0x43; 16],
             first.snapshot.generated_at_unix + 1,
@@ -23483,7 +22427,6 @@ mod tests {
             .publish_signed_reputation_snapshot(broken_head)
             .expect_err("snapshot must extend current head");
         assert!(head_error.to_string().contains("exact retained head"));
-
         let next = signed_reputation_snapshot_fixture_with(
             [0x44; 16],
             first.snapshot.generated_at_unix + 1,
@@ -23509,7 +22452,6 @@ mod tests {
             [0x44; 16]
         );
     }
-
     #[test]
     fn reputation_snapshot_publish_failure_keeps_durable_state_for_exact_retry() {
         let (cfg, _dir) = storage_config_with_reputation_policy();
@@ -23518,7 +22460,6 @@ mod tests {
         handle.set_governance_publisher(failing.clone());
         let envelope = signed_reputation_snapshot_fixture();
         let snapshot = envelope.snapshot.clone();
-
         handle
             .publish_signed_reputation_snapshot(envelope.clone())
             .expect_err("external publisher failure is surfaced");
@@ -23531,7 +22472,6 @@ mod tests {
         );
         assert_eq!(handle.reputation_events_since(None, 10).len(), 1);
         drop(handle);
-
         let restored = NodeHandle::new(cfg);
         assert_eq!(
             restored.latest_reputation_snapshot(),
@@ -23554,7 +22494,6 @@ mod tests {
         assert_eq!(restored.pending_governance_publication_count(), 0);
         assert_eq!(restored.reputation_events_since(None, 10).len(), 1);
     }
-
     #[test]
     fn reputation_restart_rejects_missing_or_changed_external_policy() {
         let (cfg, _dir) = storage_config_with_reputation_policy();
@@ -23564,7 +22503,6 @@ mod tests {
             .publish_signed_reputation_snapshot(envelope)
             .expect("persist signed reputation envelope");
         drop(handle);
-
         let no_policy_config = StorageConfig::builder()
             .enabled(true)
             .data_dir(cfg.data_dir().clone())
@@ -23576,7 +22514,6 @@ mod tests {
                 ..
             })
         ));
-
         let policy_path = cfg
             .reputation_trust_policy_path()
             .expect("configured reputation policy");
@@ -23597,7 +22534,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn reputation_restart_reuses_original_admission_time_for_freshness() {
         let mut short_policy = reputation_trust_policy_fixture();
@@ -23614,26 +22550,22 @@ mod tests {
             .publish_signed_reputation_snapshot(envelope.clone())
             .expect("admit fresh signed envelope");
         drop(handle);
-
         std::thread::sleep(Duration::from_secs(2));
         let restored = NodeHandle::try_new(cfg)
             .expect("restart replays the persisted original admission time");
         assert_eq!(restored.latest_signed_reputation_snapshot(), Some(envelope));
     }
-
     #[test]
     fn governance_outbox_survives_restart_without_a_publisher_and_replays_on_registration() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let issuance = proof_token_issuance_fixture();
         let expected = to_bytes(&issuance).expect("encode proof-token issuance");
         let handle = NodeHandle::new(cfg.clone());
-
         handle
             .publish_proof_token_issuance(issuance)
             .expect("durably queue without a publisher");
         assert_eq!(handle.pending_governance_publication_count(), 1);
         drop(handle);
-
         let restored = NodeHandle::new(cfg.clone());
         assert_eq!(restored.pending_governance_publication_count(), 1);
         let recording = Arc::new(RecordingPublisher::default());
@@ -23643,11 +22575,9 @@ mod tests {
         assert_eq!(recording.take(), vec![expected]);
         assert_eq!(restored.pending_governance_publication_count(), 0);
         drop(restored);
-
         let acknowledged = NodeHandle::new(cfg);
         assert_eq!(acknowledged.pending_governance_publication_count(), 0);
     }
-
     #[test]
     fn governance_outbox_deduplicates_pending_payloads_and_fails_closed_at_retention_limit() {
         let (base, _dir) = storage_config_with_temp_dir();
@@ -23658,7 +22588,6 @@ mod tests {
             .build();
         let handle = NodeHandle::new(cfg);
         let first = proof_token_issuance_fixture();
-
         handle
             .publish_proof_token_issuance(first.clone())
             .expect("queue first issuance");
@@ -23666,7 +22595,6 @@ mod tests {
             .publish_proof_token_issuance(first)
             .expect("exact pending retry is idempotent");
         assert_eq!(handle.pending_governance_publication_count(), 1);
-
         let mut second = proof_token_issuance_fixture();
         second.token_id = [0x71; 16];
         second.token_blake3 = [0x72; 32];
@@ -23676,7 +22604,6 @@ mod tests {
         assert!(err.to_string().contains("retention exhausted"));
         assert_eq!(handle.pending_governance_publication_count(), 1);
     }
-
     #[test]
     fn governance_outbox_replays_at_least_once_after_publish_before_ack_crash() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -23688,13 +22615,11 @@ mod tests {
             .expect("queue issuance");
         let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let before_ack = fs::read(&checkpoint_path).expect("read pending checkpoint");
-
         let recording = Arc::new(RecordingPublisher::default());
         handle
             .try_set_governance_publisher(recording.clone())
             .expect("publish and acknowledge issuance");
         assert_eq!(handle.pending_governance_publication_count(), 0);
-
         write_local_checkpoint_atomic(&checkpoint_path, &before_ack)
             .expect("simulate crash before acknowledgement became durable");
         drop(handle);
@@ -23705,7 +22630,6 @@ mod tests {
         assert_eq!(recording.take(), vec![expected.clone(), expected]);
         assert_eq!(restored.pending_governance_publication_count(), 0);
     }
-
     #[test]
     fn governance_outbox_checkpoint_rejects_digest_kind_and_sequence_tampering() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -23714,7 +22638,6 @@ mod tests {
             .publish_proof_token_issuance(proof_token_issuance_fixture())
             .expect("queue issuance");
         drop(handle);
-
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let original = fs::read(&path).expect("read auxiliary checkpoint");
         for tamper in 0..3 {
@@ -23746,7 +22669,6 @@ mod tests {
         write_local_checkpoint_atomic(&path, &original).expect("restore original checkpoint");
         assert!(NodeHandle::try_new(cfg).is_ok());
     }
-
     #[test]
     fn governance_outbox_checkpoint_rejects_semantically_tampered_audit_header() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -23764,7 +22686,6 @@ mod tests {
             .expect("queue blocked GC audit");
         assert_eq!(handle.pending_governance_publication_count(), 1);
         drop(handle);
-
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read auxiliary checkpoint");
         let mut checkpoint: AuxiliaryRuntimeCheckpointV5 =
@@ -23790,7 +22711,6 @@ mod tests {
             &norito::to_bytes(&checkpoint).expect("encode tampered checkpoint"),
         )
         .expect("write tampered checkpoint");
-
         assert!(matches!(
             NodeHandle::try_new(cfg),
             Err(NodeInitError::Checkpoint {
@@ -23799,7 +22719,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn reputation_checkpoint_rejects_event_snapshot_metadata_tampering() {
         let (cfg, _dir) = storage_config_with_reputation_policy();
@@ -23808,7 +22727,6 @@ mod tests {
             .publish_signed_reputation_snapshot(signed_reputation_snapshot_fixture())
             .expect("publish signed snapshot");
         drop(handle);
-
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let bytes = fs::read(&path).expect("read auxiliary checkpoint");
         let mut checkpoint: AuxiliaryRuntimeCheckpointV5 =
@@ -23819,7 +22737,6 @@ mod tests {
             &norito::to_bytes(&checkpoint).expect("encode tampered checkpoint"),
         )
         .expect("write tampered checkpoint");
-
         assert!(matches!(
             NodeHandle::try_new(cfg),
             Err(NodeInitError::Checkpoint {
@@ -23828,7 +22745,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn reputation_checkpoint_rejects_envelope_admission_and_outbox_tampering() {
         let (cfg, _dir) = storage_config_with_reputation_policy();
@@ -23837,7 +22753,6 @@ mod tests {
             .publish_signed_reputation_snapshot(signed_reputation_snapshot_fixture())
             .expect("persist signed reputation envelope");
         drop(handle);
-
         let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let original = fs::read(&path).expect("read auxiliary checkpoint");
         for case in 0..7_u8 {
@@ -23893,7 +22808,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn publish_appeal_finance_report_writes_governance_publisher() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -23903,19 +22817,16 @@ mod tests {
         handle.set_governance_publisher(trait_publisher);
         let report = appeal_finance_report_fixture();
         let expected = to_bytes(&report).expect("encode appeal finance report");
-
         handle
             .publish_authenticated_appeal_finance_report(
                 report.clone(),
                 governance_submission_account(0xB3),
             )
             .expect("publish appeal finance report");
-
         let published = publisher.take();
         assert_eq!(published, vec![expected]);
         assert_eq!(handle.transparency_ledger_source_entry_count(), 0);
     }
-
     #[test]
     fn authenticated_governance_outbox_binds_publisher_and_rejects_reattribution() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -23927,7 +22838,6 @@ mod tests {
             .expect("derive alternate finance publisher key");
         let other = AccountId::new(other_key.public_key().clone());
         let report = appeal_finance_report_fixture();
-
         handle
             .publish_authenticated_appeal_finance_report(report.clone(), publisher.clone())
             .expect("enqueue authenticated finance report");
@@ -23945,7 +22855,6 @@ mod tests {
         );
         assert_eq!(handle.pending_governance_publication_count(), 1);
         assert_eq!(handle.transparency_ledger_source_entry_count(), 0);
-
         let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let checkpoint_bytes = fs::read(&checkpoint_path).expect("read governance checkpoint");
         let mut checkpoint: AuxiliaryRuntimeCheckpointV5 =
@@ -23978,7 +22887,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn publish_transparency_ledger_publication_writes_governance_publisher() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -23988,11 +22896,9 @@ mod tests {
         handle.set_governance_publisher(trait_publisher);
         let publication = transparency_ledger_publication_fixture();
         let expected = to_bytes(&publication).expect("encode transparency ledger publication");
-
         handle
             .publish_transparency_ledger_publication(publication.clone())
             .expect("publish transparency ledger publication");
-
         let published = publisher.take();
         assert_eq!(published, vec![expected]);
         let decoded: ModerationLedgerCyclePublicationV1 = norito::decode_from_bytes(&published[0])
@@ -24000,7 +22906,6 @@ mod tests {
         assert_eq!(decoded.block.entry_count, 2);
         decoded.validate().expect("publication validates");
     }
-
     #[test]
     fn direct_privacy_publication_rejects_unfenced_outbox_mutation() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -24017,7 +22922,6 @@ mod tests {
             vec![privacy_aggregate_fixture("sfm4c-jurisdiction-a", 0xA0)],
         )
         .expect("build privacy aggregate publication");
-
         let error = handle
             .publish_transparency_ledger_publication(publication)
             .expect_err("direct privacy publication must not bypass leader fencing");
@@ -24029,7 +22933,6 @@ mod tests {
         assert_eq!(handle.pending_governance_publication_count(), 0);
         assert!(publisher.take().is_empty());
     }
-
     #[test]
     fn publish_proof_token_issuance_writes_governance_publisher() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -24039,11 +22942,9 @@ mod tests {
         handle.set_governance_publisher(trait_publisher);
         let issuance = proof_token_issuance_fixture();
         let expected = to_bytes(&issuance).expect("encode proof-token issuance");
-
         handle
             .publish_proof_token_issuance(issuance.clone())
             .expect("publish proof-token issuance");
-
         let published = publisher.take();
         assert_eq!(published, vec![expected]);
         let decoded: ProofTokenIssuanceV1 =
@@ -24051,7 +22952,6 @@ mod tests {
         assert_eq!(decoded, issuance);
         decoded.validate().expect("issuance validates");
     }
-
     #[test]
     fn publish_proof_token_base64_issuance_derives_and_writes_governance_publisher() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -24059,7 +22959,6 @@ mod tests {
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
         handle.set_governance_publisher(trait_publisher);
-
         let issuance = handle
             .publish_proof_token_base64_issuance(
                 VALID_PROOF_TOKEN_B64,
@@ -24074,7 +22973,6 @@ mod tests {
                 ],
             )
             .expect("publish proof-token issuance from base64");
-
         assert_eq!(issuance.token_id, [0x61; 16]);
         assert_eq!(issuance.issued_at_unix, 1_800_000_030);
         assert_eq!(issuance.expires_at_unix, Some(1_800_086_430));
@@ -24085,14 +22983,12 @@ mod tests {
             issuance.entry_ids,
             vec!["denylist/global".to_string(), "gar/policy/42".to_string()]
         );
-
         let published = publisher.take();
         assert_eq!(published.len(), 1);
         let decoded: ProofTokenIssuanceV1 =
             norito::decode_from_bytes(&published[0]).expect("decode proof-token issuance");
         assert_eq!(decoded, issuance);
     }
-
     #[test]
     fn record_transparency_ledger_source_entry_is_idempotent_and_rejects_conflicts() {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
@@ -24106,27 +23002,23 @@ mod tests {
             "gar-receipt-1",
             0x50,
         );
-
         handle
             .record_transparency_ledger_source_entry(entry.clone())
             .expect("record source entry");
         handle
             .record_transparency_ledger_source_entry(entry.clone())
             .expect("exact duplicate is idempotent");
-
         let mut conflicting = entry;
         conflicting.payload_digest = [0xA5; 32];
         let err = handle
             .record_transparency_ledger_source_entry(conflicting)
             .expect_err("conflicting source entry rejected");
-
         assert!(
             err.to_string()
                 .contains("conflicts with retained canonical data")
         );
         assert_eq!(handle.transparency_ledger_source_entry_count(), 1);
     }
-
     #[test]
     fn publish_transparency_ledger_source_entries_builds_and_publishes_publication() {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
@@ -24177,7 +23069,6 @@ mod tests {
                 .record_transparency_ledger_source_entry(entry)
                 .expect("record source entry");
         }
-
         let publication = handle
             .publish_transparency_ledger_cycle_from_source_entries(
                 *b"cycle-src-pub001",
@@ -24187,7 +23078,6 @@ mod tests {
                 Some([0x44; 32]),
             )
             .expect("publish transparency source cycle");
-
         publication.validate().expect("publication validates");
         assert_eq!(publication.block.entry_count, 4);
         assert_eq!(publication.block.previous_block_hash, Some([0x44; 32]));
@@ -24210,14 +23100,12 @@ mod tests {
             assert_eq!(proof.entry.cycle_id, publication.block.cycle_id);
             assert_ne!(proof.entry.entry_id, [0; 16]);
         }
-
         let published = publisher.take();
         assert_eq!(published.len(), 1);
         let decoded: ModerationLedgerCyclePublicationV1 = norito::decode_from_bytes(&published[0])
             .expect("decode transparency source publication");
         assert_eq!(decoded, publication);
     }
-
     #[test]
     fn publish_transparency_ledger_source_entries_rejects_empty_window() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -24225,7 +23113,6 @@ mod tests {
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
         handle.set_governance_publisher(trait_publisher);
-
         let err = handle
             .publish_transparency_ledger_cycle_from_source_entries(
                 *b"cycle-src-pub001",
@@ -24235,17 +23122,14 @@ mod tests {
                 None,
             )
             .expect_err("empty source window rejected");
-
         assert!(err.to_string().contains("no source entries"));
         assert!(publisher.take().is_empty());
     }
-
     #[test]
     fn record_concrete_transparency_source_entries_builds_publication() {
         use iroha_data_model::sorafs::{
             gar::GarEnforcementActionV1, transparency::ModerationLedgerEntryKindV1,
         };
-
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
         handle
@@ -24292,7 +23176,6 @@ mod tests {
         handle
             .record_appeal_finance_settlement_receipt_transparency_entry(&receipt)
             .expect("record appeal settlement source entry");
-
         assert_eq!(handle.transparency_ledger_source_entry_count(), 4);
         let publication = handle
             .publish_transparency_ledger_cycle_from_source_entries(
@@ -24303,7 +23186,6 @@ mod tests {
                 None,
             )
             .expect("publish concrete source cycle");
-
         publication.validate().expect("publication validates");
         assert_eq!(publication.block.entry_count, 4);
         let kinds = publication
@@ -24333,7 +23215,6 @@ mod tests {
                 .any(|proof| proof.entry.subject == "case-42:drawdown_non_refund")
         );
     }
-
     #[test]
     fn publish_privacy_aggregate_cycle_builds_and_publishes_publication() {
         use iroha_data_model::sorafs::transparency::ModerationLedgerEntryKindV1;
@@ -24346,7 +23227,6 @@ mod tests {
         let cycle_id = *b"cycle-2026-wk-03";
         let aggregate_b = privacy_aggregate_fixture("sfm4c-jurisdiction-b", 0xB0);
         let aggregate_a = privacy_aggregate_fixture("sfm4c-jurisdiction-a", 0xA0);
-
         let publication = handle
             .publish_privacy_aggregate_cycle(
                 cycle_id,
@@ -24357,7 +23237,6 @@ mod tests {
                 vec![aggregate_b, aggregate_a],
             )
             .expect("publish privacy aggregate cycle");
-
         publication.validate().expect("publication validates");
         assert_eq!(publication.block.entry_count, 2);
         let subjects = publication
@@ -24375,20 +23254,17 @@ mod tests {
                 .iter()
                 .all(|proof| proof.entry.kind == ModerationLedgerEntryKindV1::PrivacyAggregate)
         );
-
         let published = publisher.take();
         assert_eq!(published.len(), 1);
         let decoded: ModerationLedgerCyclePublicationV1 =
             norito::decode_from_bytes(&published[0]).expect("decode privacy aggregate publication");
         assert_eq!(decoded, publication);
     }
-
     #[test]
     fn privacy_aggregate_publication_rejects_mixed_cycle_policy_or_randomness() {
         use iroha_data_model::sorafs::transparency::{
             ModerationPrivacyNoiseSourceV1, ModerationPrivacyThresholdPrfCommitmentV1,
         };
-
         let aggregate_a = privacy_aggregate_fixture("sfm4c-jurisdiction-a", 0xA0);
         let mut aggregate_b = privacy_aggregate_fixture("sfm4c-jurisdiction-b", 0xB0);
         aggregate_b.policy_digest = [0xD0; 32];
@@ -24402,7 +23278,6 @@ mod tests {
         )
         .expect_err("mixed policy digests are rejected");
         assert!(err.to_string().contains("mixed policy digests"));
-
         aggregate_b.policy_digest = aggregate_a.policy_digest;
         aggregate_b.noise_source = ModerationPrivacyNoiseSourceV1::ThresholdPrf(
             ModerationPrivacyThresholdPrfCommitmentV1 {
@@ -24420,7 +23295,6 @@ mod tests {
         .expect_err("mixed privacy randomness commitments are rejected");
         assert!(err.to_string().contains("mixed privacy noise sources"));
     }
-
     #[test]
     fn publish_privacy_aggregate_cycle_rejects_out_of_window_without_publishing() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -24430,7 +23304,6 @@ mod tests {
         handle.set_governance_publisher(trait_publisher);
         let mut aggregate = privacy_aggregate_fixture("sfm4c-jurisdiction-a", 0xA0);
         aggregate.window_start_unix = 1_799_999_999;
-
         let err = handle
             .publish_privacy_aggregate_cycle(
                 *b"cycle-2026-wk-03",
@@ -24441,20 +23314,17 @@ mod tests {
                 vec![aggregate],
             )
             .expect_err("out-of-window aggregate is rejected");
-
         assert!(
             err.to_string()
                 .contains("window must equal the publication cycle")
         );
         assert!(publisher.take().is_empty());
     }
-
     #[test]
     fn record_privacy_aggregate_source_event_is_idempotent_and_rejects_equivocation() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
         let event = privacy_source_event("event-a", "jurisdiction-a", 0xA0, 1_800_000_010);
-
         assert_eq!(
             handle
                 .record_privacy_aggregate_source_event(event.clone())
@@ -24472,11 +23342,9 @@ mod tests {
         let err = handle
             .record_privacy_aggregate_source_event(equivocation)
             .expect_err("changed bytes under one event id are rejected");
-
         assert!(err.to_string().contains("idempotency key equivocation"));
         assert_eq!(handle.privacy_aggregate_source_event_count(), 1);
     }
-
     #[test]
     fn authenticated_privacy_source_event_binds_durable_publisher_provenance() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -24493,7 +23361,6 @@ mod tests {
             0xA0,
             1_800_000_010,
         );
-
         assert_eq!(
             handle
                 .record_authenticated_privacy_aggregate_source_event(
@@ -24516,7 +23383,6 @@ mod tests {
             provenance.origin(),
             GovernanceSubmissionOriginV1::PrivacyAggregateSourceEvent
         );
-
         drop(handle);
         let restored = NodeHandle::new(cfg);
         assert_eq!(
@@ -24530,13 +23396,11 @@ mod tests {
             .expect_err("same event id from another publisher must conflict");
         assert!(error.to_string().contains("idempotency key equivocation"));
     }
-
     #[test]
     fn publish_privacy_aggregate_cycle_from_source_events_suppresses_and_publishes() {
         use iroha_data_model::sorafs::transparency::{
             MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1, ModerationLedgerEntryKindV1,
         };
-
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
         let publisher = Arc::new(RecordingPublisher::default());
@@ -24552,7 +23416,6 @@ mod tests {
                 .record_privacy_aggregate_source_event(event)
                 .expect("record source event");
         }
-
         let config = privacy_aggregate_cycle_config();
         let cycle_prf_input = privacy_cycle_prf_input(
             &config,
@@ -24571,7 +23434,6 @@ mod tests {
                 cycle_prf_input: Some(cycle_prf_input),
             })
             .expect("publish aggregate cycle from source events");
-
         publication.validate().expect("publication validates");
         assert_eq!(publication.block.entry_count, 2);
         let entry = &publication.proofs[0].entry;
@@ -24590,14 +23452,12 @@ mod tests {
             )),
             "public ledger metadata must not disclose exact private counts"
         );
-
         let published = publisher.take();
         assert_eq!(published.len(), 1);
         let decoded: ModerationLedgerCyclePublicationV1 =
             norito::decode_from_bytes(&published[0]).expect("decode aggregate publication");
         assert_eq!(decoded, publication);
     }
-
     #[test]
     fn publish_privacy_aggregate_cycle_from_source_events_requires_cycle_prf_output() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -24621,7 +23481,6 @@ mod tests {
                 1_800_000_020,
             ))
             .expect("record source event");
-
         let err = handle
             .publish_privacy_aggregate_cycle_from_source_events(PrivacyAggregateSourceCycleInput {
                 cycle_id: *b"cycle-2026-wk-04",
@@ -24632,11 +23491,9 @@ mod tests {
                 cycle_prf_input: None,
             })
             .expect_err("missing cycle PRF output rejected");
-
         assert!(err.to_string().contains("hidden cycle PRF output"));
         assert!(publisher.take().is_empty());
     }
-
     #[test]
     fn publish_due_privacy_aggregate_cycle_from_source_events_publishes_once() {
         let (cfg, _dir) = privacy_aggregate_storage_config_with_temp_dir();
@@ -24650,7 +23507,6 @@ mod tests {
                 .record_privacy_aggregate_source_event(event)
                 .expect("record source event");
         }
-
         let outcome = handle
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 211,
@@ -24676,7 +23532,6 @@ mod tests {
         assert_eq!(publication.block.cycle_end_unix, 200);
         assert_eq!(publication.block.generated_at_unix, 200);
         assert_eq!(publication.block.entry_count, 2);
-
         let repeated = handle
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 211,
@@ -24702,7 +23557,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn publish_due_privacy_aggregate_cycle_from_source_events_catches_up_stale_windows() {
         let (cfg, _dir) = privacy_aggregate_storage_config_with_temp_dir();
@@ -24717,7 +23571,6 @@ mod tests {
                 .record_privacy_aggregate_source_event(event)
                 .expect("record source event");
         }
-
         let first = handle
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 311,
@@ -24742,7 +23595,6 @@ mod tests {
             }
             other => panic!("expected stale published outcome, got {other:?}"),
         };
-
         let second = handle
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 311,
@@ -24766,7 +23618,6 @@ mod tests {
             }
             other => panic!("expected latest published outcome, got {other:?}"),
         }
-
         let replayed = handle
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 311,
@@ -24785,7 +23636,6 @@ mod tests {
             norito::to_bytes(&replayed_publication).expect("encode replayed publication"),
             norito::to_bytes(&first_publication).expect("encode original publication")
         );
-
         let mut rotated_delay = privacy_aggregate_schedule_config();
         rotated_delay.publish_delay_seconds = rotated_delay.publish_delay_seconds.saturating_add(1);
         let rotated_replay = handle
@@ -24803,7 +23653,6 @@ mod tests {
                 .to_string()
                 .contains("cadence does not match the configured query lineage")
         );
-
         let stale_fresh = handle
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 411,
@@ -24819,7 +23668,6 @@ mod tests {
                 .to_string()
                 .contains("does not match the direct successor")
         );
-
         let mismatched_old_key = handle
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 411,
@@ -24846,7 +23694,6 @@ mod tests {
             2
         );
     }
-
     #[test]
     fn privacy_cycle_prf_derives_distinct_requests_for_catch_up_windows() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -24875,7 +23722,6 @@ mod tests {
                 .record_privacy_aggregate_source_event(event)
                 .expect("record source event");
         }
-
         let first = handle
             .publish_due_privacy_aggregate_cycle_from_source_events(
                 311,
@@ -24934,7 +23780,6 @@ mod tests {
         assert_ne!(requests[0].cycle_id(), requests[1].cycle_id());
         assert_ne!(requests[0].binding_digest(), requests[1].binding_digest());
     }
-
     #[test]
     fn privacy_cycle_prf_startup_requires_runtime_provider() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -24947,7 +23792,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn privacy_cycle_prf_qualification_fails_before_persistence() {
         let cases: [(
@@ -25000,7 +23844,6 @@ mod tests {
                 TransparencyRuntimeProviderQualificationErrorV1::UnavailableOrStale,
             ),
         ];
-
         for (provider, expected) in cases {
             let temp_dir = tempfile::tempdir().expect("create temp dir");
             let root = temp_dir.path().canonicalize().expect("canonical temp dir");
@@ -25030,7 +23873,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn differential_privacy_startup_requires_finalized_release_anchor() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -25047,7 +23889,6 @@ mod tests {
             })
         ));
     }
-
     #[test]
     fn differential_privacy_startup_requires_transparency_leader_lease_provider() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -25069,7 +23910,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn differential_privacy_startup_requires_fused_target_binding_and_both_runtime_roles() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -25103,7 +23943,6 @@ mod tests {
                 .contains("requires an exact configured fused target binding")
         );
         assert!(!data_dir.exists());
-
         for (label, inject_writer, inject_reader, expected) in [
             (
                 "missing writer",
@@ -25140,7 +23979,6 @@ mod tests {
             assert!(!data_dir.exists(), "{label} opened durable state");
         }
     }
-
     #[test]
     fn fused_privacy_target_qualification_fails_before_persistence() {
         for (label, provider, expected) in [
@@ -25212,7 +24050,6 @@ mod tests {
             assert!(!data_dir.exists(), "{label} opened durable state");
         }
     }
-
     #[test]
     fn fused_privacy_head_reader_must_match_the_writer_binding() {
         let temp_dir = tempfile::tempdir().expect("create reader mismatch temp dir");
@@ -25241,7 +24078,6 @@ mod tests {
         );
         assert!(!data_dir.exists());
     }
-
     #[test]
     fn disabled_privacy_publication_rejects_unrequested_fused_target_inputs() {
         for (label, config_binding, writer, reader, expected) in [
@@ -25281,7 +24117,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn privacy_startup_without_explicit_signed_governance_root_fails_before_state() {
         let temp_dir = tempfile::tempdir().expect("create privacy publisher temp dir");
@@ -25322,7 +24157,6 @@ mod tests {
         assert!(state.publications.is_empty());
         assert!(state.receipts.is_empty());
     }
-
     #[test]
     fn disabled_privacy_publication_rejects_unrequested_leader_lease_provider() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -25346,7 +24180,6 @@ mod tests {
             )
         ));
     }
-
     #[test]
     fn privacy_cycle_prf_rejects_zero_output_before_provider_boundary() {
         assert_eq!(
@@ -25354,7 +24187,6 @@ mod tests {
             PrivacyCyclePrfInputErrorV1::ZeroOutput
         );
     }
-
     #[test]
     fn privacy_cycle_prf_redacts_failed_provider_diagnostics() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -25399,7 +24231,6 @@ mod tests {
                 .contains("TEST-PRF-VENDOR-DIAGNOSTIC-MUST-NOT-LEAK")
         );
     }
-
     #[test]
     fn privacy_cycle_prf_debug_redacts_runtime_crypto_provider_implementations() {
         let temp_dir = tempfile::tempdir().expect("create debug-provider temp dir");
@@ -25452,7 +24283,6 @@ mod tests {
         assert!(!debug.contains("kms:test/quarantine-v1"));
         assert!(!debug.contains("TEST-PRF-VENDOR-DIAGNOSTIC-MUST-NOT-LEAK"));
     }
-
     #[test]
     fn publish_due_configured_privacy_aggregate_cycle_uses_storage_config() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -25492,7 +24322,6 @@ mod tests {
                 .record_privacy_aggregate_source_event(event)
                 .expect("record source event");
         }
-
         let outcome = handle
             .publish_due_configured_privacy_aggregate_cycle_from_source_events(
                 privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
@@ -25548,7 +24377,6 @@ mod tests {
         );
         assert_eq!(handle.privacy_aggregate_source_event_count(), 0);
     }
-
     #[test]
     fn privacy_publication_budget_state_and_fused_head_restore_atomically() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -25597,7 +24425,6 @@ mod tests {
                 .record_privacy_aggregate_source_event(event)
                 .expect("record source event");
         }
-
         let published = source
             .publish_due_configured_privacy_aggregate_cycle_from_source_events(
                 privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
@@ -25635,7 +24462,6 @@ mod tests {
             .revalidate_fenced_privacy_runtime()
             .expect("restored authoritative target revalidates");
         drop(source);
-
         let restored = NodeHandle::try_new_with_runtime_deps(
             cfg,
             with_test_fenced_privacy_runtime(
@@ -25663,7 +24489,6 @@ mod tests {
         assert_eq!(budget.chains.len(), 1);
         assert_eq!(budget.chains[0].charges.len(), 1);
         assert_eq!(budget.chains[0].charges[0].cycle_id, cycle_id);
-
         let repeated = restored
             .publish_due_configured_privacy_aggregate_cycle_from_source_events(
                 privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
@@ -25683,10 +24508,8 @@ mod tests {
                 .len(),
             1
         );
-
         assert_eq!(restored.pending_governance_publication_count(), 0);
     }
-
     #[test]
     fn privacy_publish_receipt_checkpoint_rejects_pre_due_observation_and_delay_tampering() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -25718,7 +24541,6 @@ mod tests {
             PrivacyAggregateScheduleOutcome::Published { .. }
         ));
         drop(source);
-
         let original = fs::read(&checkpoint_path).expect("read privacy receipt checkpoint");
         for tamper in 0..2 {
             let mut checkpoint: AuxiliaryRuntimeCheckpointV5 =
@@ -25776,7 +24598,6 @@ mod tests {
         )
         .expect("canonical privacy receipt checkpoint restores");
     }
-
     #[test]
     fn privacy_source_receipt_only_checkpoint_rejects_oversized_event_id() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -25815,7 +24636,6 @@ mod tests {
         ));
         assert_eq!(source.privacy_aggregate_source_event_count(), 0);
         drop(source);
-
         let bytes = fs::read(&checkpoint_path).expect("read receipt-only checkpoint");
         let mut checkpoint: AuxiliaryRuntimeCheckpointV5 =
             norito::decode_from_bytes(&bytes).expect("decode receipt-only checkpoint");
@@ -25830,7 +24650,6 @@ mod tests {
             &norito::to_bytes(&checkpoint).expect("encode oversized receipt-only checkpoint"),
         )
         .expect("write oversized receipt-only checkpoint");
-
         let error = NodeHandle::try_new_with_runtime_deps(
             cfg,
             with_fresh_test_fenced_privacy_runtime(
@@ -25851,7 +24670,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn privacy_release_restart_rejects_cadence_and_delay_rotation() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -25880,7 +24698,6 @@ mod tests {
             PrivacyAggregateScheduleOutcome::Published { .. }
         ));
         drop(source);
-
         let mut delay_schedule = privacy_aggregate_schedule_config();
         delay_schedule.publish_delay_seconds =
             delay_schedule.publish_delay_seconds.saturating_add(1);
@@ -25894,7 +24711,6 @@ mod tests {
         width_schedule.cycle_seconds /= 2;
         let mut width_cycle = privacy_aggregate_cycle_config();
         width_cycle.cycle_seconds = width_schedule.cycle_seconds;
-
         for (case, schedule, policy) in [
             (
                 "publish delay",
@@ -25964,7 +24780,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn privacy_checkpoint_rollback_behind_finalized_release_anchor_fails_closed() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -26011,7 +24826,6 @@ mod tests {
             1
         );
         drop(source);
-
         fs::write(&checkpoint_path, rolled_back_checkpoint)
             .expect("simulate checkpoint rollback behind finalized head");
         let error = NodeHandle::try_new_with_runtime_deps(
@@ -26032,7 +24846,6 @@ mod tests {
                 .contains("behind or equivocates with the finalized anchor")
         );
     }
-
     #[test]
     fn publish_due_configured_privacy_aggregate_cycle_skips_when_disabled() {
         let cfg = StorageConfig::builder()
@@ -26041,7 +24854,6 @@ mod tests {
             .build();
         let handle = NodeHandle::new(cfg);
         assert_eq!(handle.configured_privacy_aggregate_schedule(), None);
-
         let outcome = handle
             .publish_due_configured_privacy_aggregate_cycle_from_source_events(
                 privacy_aggregate_cycle_id([0xB0; 32], 100, 200),
@@ -26050,7 +24862,6 @@ mod tests {
             .expect("disabled configured aggregate cycle");
         assert_eq!(outcome, PrivacyAggregateScheduleOutcome::Disabled);
     }
-
     #[test]
     fn publish_due_privacy_aggregate_cycle_from_source_events_emits_fixed_empty_population_set() {
         let (cfg, _dir) = privacy_aggregate_storage_config_with_temp_dir();
@@ -26080,22 +24891,18 @@ mod tests {
         assert_eq!(publication.block.entry_count, 2);
         assert_eq!(handle.pending_governance_publication_count(), 0);
     }
-
     #[test]
     fn governance_publisher_presence_tracks_set_and_clear() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
         assert!(!handle.has_governance_publisher());
-
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher;
         handle.set_governance_publisher(trait_publisher);
         assert!(handle.has_governance_publisher());
-
         handle.clear_governance_publisher();
         assert!(!handle.has_governance_publisher());
     }
-
     #[test]
     fn node_handle_exposes_only_typed_governance_authority_snapshots() {
         let temp = tempfile::tempdir().expect("typed authority temp dir");
@@ -26124,7 +24931,6 @@ mod tests {
             ),
             "clones created before service preparation must share the exact installation slot"
         );
-
         let empty_publication = node
             .governance_dag_publication_snapshot()
             .expect("read empty typed publication authority")
@@ -26157,13 +24963,11 @@ mod tests {
                 .expect("a clone observes the same absent capability")
                 .is_none()
         );
-
         node.publish_authenticated_appeal_finance_weekly_rollup(
             appeal_finance_weekly_rollup_fixture(),
             governance_submission_account(0xB6),
         )
         .expect("publish one typed Governance DAG entry");
-
         let publication = node
             .governance_dag_publication_snapshot()
             .expect("read typed publication authority")
@@ -26180,7 +24984,6 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some(".")
         );
-
         let runtime = node
             .governance_dag_runtime_snapshot()
             .expect("read authenticated runtime authority")
@@ -26192,7 +24995,6 @@ mod tests {
         assert!(runtime.checkpoint_identity().0 > 0);
         assert_ne!(runtime.checkpoint_identity().1, [0; 32]);
     }
-
     #[test]
     fn configured_governance_dir_requires_complete_runtime_signing_identity() {
         let missing_identity_dir = tempfile::tempdir().expect("missing identity temp dir");
@@ -26216,7 +25018,6 @@ mod tests {
         ));
         assert!(!missing_identity_root.join("storage").exists());
         assert!(!missing_identity_root.join("governance").exists());
-
         let signer = Arc::new(TestGovernanceDagSigner::new());
         let signed_dir = tempfile::tempdir().expect("signed publisher temp dir");
         let signed_root = signed_dir
@@ -26250,7 +25051,6 @@ mod tests {
             NodeInitError::GovernancePublisher(message)
                 if message.contains("injected runtime signer")
         ));
-
         let handle = NodeHandle::try_new_with_runtime_deps(
             signed_config,
             NodeRuntimeDeps::default()
@@ -26264,7 +25064,6 @@ mod tests {
         handle
             .revalidate_fenced_privacy_runtime()
             .expect("startup-pinned signed publisher revalidates");
-
         let replacement: Arc<dyn GovernancePublisher> = Arc::new(RecordingPublisher::default());
         let error = handle
             .try_set_governance_publisher(replacement)
@@ -26278,7 +25077,6 @@ mod tests {
         handle
             .revalidate_fenced_privacy_runtime()
             .expect("rejected publisher mutation leaves the exact instance active");
-
         signer.qualification_refuse.store(true, Ordering::SeqCst);
         let error = handle
             .revalidate_fenced_privacy_runtime()
@@ -26290,7 +25088,6 @@ mod tests {
             .revalidate_fenced_privacy_runtime()
             .expect("restored signer qualification revalidates");
     }
-
     #[test]
     fn node_restart_recovers_checkpoint_cas_applied_response_error() {
         let temp = tempfile::tempdir().expect("producer recovery temp dir");
@@ -26327,7 +25124,6 @@ mod tests {
                 .is_some()
         );
         drop(node);
-
         let restored = NodeHandle::try_new_with_runtime_deps(
             config,
             NodeRuntimeDeps::default()
@@ -26345,7 +25141,6 @@ mod tests {
             .revalidate_fenced_privacy_runtime()
             .expect("restored signed producer root revalidates");
     }
-
     #[test]
     fn governance_signer_qualification_precedes_durable_node_state() {
         let temp = tempfile::tempdir().expect("signer qualification temp dir");
@@ -26374,7 +25169,6 @@ mod tests {
             .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
             .build();
         signer.qualification_refuse.store(true, Ordering::SeqCst);
-
         let error = NodeHandle::try_new_with_runtime_deps(
             config,
             NodeRuntimeDeps::default()
@@ -26396,7 +25190,6 @@ mod tests {
             "publisher root must not open before Governance DAG signer qualification"
         );
     }
-
     #[test]
     fn governance_signer_rejects_test_marked_binding_before_durable_state() {
         let temp = tempfile::tempdir().expect("test-marked signer temp dir");
@@ -26424,7 +25217,6 @@ mod tests {
             ))
             .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
             .build();
-
         let error = NodeHandle::try_new_with_runtime_deps(
             config,
             NodeRuntimeDeps::default()
@@ -26438,7 +25230,6 @@ mod tests {
         assert!(!data_dir.exists());
         assert!(!governance_dir.exists());
     }
-
     #[test]
     fn governance_signer_rejects_substituted_qualification_and_startup_drift_before_state() {
         for (
@@ -26503,7 +25294,6 @@ mod tests {
                 ))
                 .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
                 .build();
-
             let error = NodeHandle::try_new_with_runtime_deps(
                 config,
                 NodeRuntimeDeps::default()
@@ -26524,7 +25314,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn governance_signer_binding_without_publisher_directory_precedes_durable_state() {
         for complete_binding in [false, true] {
@@ -26566,7 +25355,6 @@ mod tests {
                 NodeRuntimeDeps::default().with_governance_dag_signer(signer),
             )
             .expect_err(label);
-
             assert!(
                 error
                     .to_string()
@@ -26577,7 +25365,6 @@ mod tests {
             assert!(!governance_dir.exists(), "{label} opened publisher state");
         }
     }
-
     #[test]
     fn governance_publisher_rejects_disabled_storage_before_durable_state() {
         let temp = tempfile::tempdir().expect("disabled publisher temp dir");
@@ -26605,7 +25392,6 @@ mod tests {
             ))
             .governance_dag_publisher_public_key_hex(Some(hex::encode(signer.public_key())))
             .build();
-
         let error = NodeHandle::try_new_with_runtime_deps(
             config,
             NodeRuntimeDeps::default().with_governance_dag_signer(signer),
@@ -26618,7 +25404,6 @@ mod tests {
         assert!(!data_dir.exists());
         assert!(!governance_dir.exists());
     }
-
     #[test]
     fn publish_appeal_finance_weekly_rollup_writes_governance_publisher() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -26628,19 +25413,16 @@ mod tests {
         handle.set_governance_publisher(trait_publisher);
         let rollup = appeal_finance_weekly_rollup_fixture();
         let expected = to_bytes(&rollup).expect("encode appeal finance weekly rollup");
-
         handle
             .publish_authenticated_appeal_finance_weekly_rollup(
                 rollup,
                 governance_submission_account(0xB7),
             )
             .expect("publish appeal finance weekly rollup");
-
         let published = publisher.take();
         assert_eq!(published, vec![expected]);
         assert_eq!(handle.transparency_ledger_source_entry_count(), 0);
     }
-
     #[test]
     fn publish_appeal_finance_settlement_receipt_writes_governance_publisher() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -26650,15 +25432,12 @@ mod tests {
         handle.set_governance_publisher(trait_publisher);
         let receipt = appeal_finance_settlement_receipt_fixture();
         let expected = to_bytes(&receipt).expect("encode appeal finance settlement receipt");
-
         handle
             .publish_appeal_finance_settlement_receipt(receipt)
             .expect("publish appeal finance settlement receipt");
-
         let published = publisher.take();
         assert_eq!(published, vec![expected]);
     }
-
     #[test]
     fn publish_por_governance_payloads_use_canonical_outbox_dispatch() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -26672,21 +25451,18 @@ mod tests {
         let expected_publication =
             to_bytes(&publication).expect("encode PoR challenge publication");
         let expected_report = to_bytes(&report).expect("encode PoR weekly report");
-
         handle
             .publish_por_challenge_publication(publication)
             .expect("publish PoR challenge publication");
         handle
             .publish_por_weekly_report(report)
             .expect("publish PoR weekly report");
-
         assert_eq!(
             publisher.take(),
             vec![expected_publication, expected_report]
         );
         assert_eq!(handle.pending_governance_publication_count(), 0);
     }
-
     #[test]
     fn por_governance_payloads_remain_ordered_and_retryable_after_publish_failure() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -26700,7 +25476,6 @@ mod tests {
         let expected_publication =
             to_bytes(&publication).expect("encode PoR challenge publication");
         let expected_report = to_bytes(&report).expect("encode PoR weekly report");
-
         handle
             .publish_por_challenge_publication(publication)
             .expect_err("challenge publish failure remains durable");
@@ -26709,7 +25484,6 @@ mod tests {
             .expect_err("report publish failure remains durable");
         assert_eq!(failing.attempts(), 2);
         assert_eq!(handle.pending_governance_publication_count(), 2);
-
         let recording = Arc::new(RecordingPublisher::default());
         handle
             .try_set_governance_publisher(recording.clone())
@@ -26720,24 +25494,20 @@ mod tests {
         );
         assert_eq!(handle.pending_governance_publication_count(), 0);
     }
-
     #[test]
     fn por_ingestion_status_tracks_backlog_and_history() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle = NodeHandle::new(cfg);
         let challenge = por_sample_challenge();
-
         handle
             .record_por_challenge(&challenge)
             .expect("record challenge");
-
         let initial = handle
             .por_ingestion_status(&challenge.manifest_digest)
             .expect("status before verdict");
         assert_eq!(initial.providers.len(), 1);
         assert_eq!(initial.providers[0].pending_challenges, 1);
         assert_eq!(initial.providers[0].last_success_unix, None);
-
         let proof = por_sample_proof(&challenge);
         handle
             .record_por_proof(&proof, &por_sample_provider_key())
@@ -26746,7 +25516,6 @@ mod tests {
         handle
             .record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
             .expect("record verdict succeeds");
-
         let after = handle
             .por_ingestion_status(&challenge.manifest_digest)
             .expect("status after verdict");
@@ -26757,7 +25526,6 @@ mod tests {
         assert_eq!(provider.failures_total, 0);
         assert_eq!(provider.consecutive_failures, 0);
     }
-
     #[test]
     fn por_authority_updates_advance_one_durable_record_and_survive_restart() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -26768,7 +25536,6 @@ mod tests {
             .expect("initial authoritative projection");
         assert_eq!(initial.generation, 1);
         assert!(initial.statuses.is_empty());
-
         let challenge_update = handle
             .record_por_challenge_with_authority_update(&challenge)
             .expect("durably record challenge with bounded authority update");
@@ -26784,7 +25551,6 @@ mod tests {
                 .expect("exact challenge replay returns the same authority record"),
             challenge_update
         );
-
         let proof = por_sample_proof(&challenge);
         let proof_update = handle
             .record_por_proof_with_authority_update(&proof, &por_sample_provider_key())
@@ -26792,7 +25558,6 @@ mod tests {
         assert_eq!(proof_update.generation, 3);
         assert_eq!(proof_update.status.proof_digest, Some(proof.proof_digest()));
         assert_eq!(proof_update.status.responded_at, Some(proof.submitted_at));
-
         let verdict = por_sample_verdict(&challenge, proof.proof_digest());
         let (_outcome, verdict_update) = handle
             .record_por_verdict_with_authority_update(&verdict, &por_sample_auditor_keys(), 1)
@@ -26808,7 +25573,6 @@ mod tests {
         assert_eq!(visible.generation, verdict_update.generation);
         assert_eq!(visible.statuses, vec![verdict_update.status.clone()]);
         drop(handle);
-
         assert_eq!(
             NodeHandle::new(cfg)
                 .por_status_authority_snapshot()
@@ -26816,7 +25580,6 @@ mod tests {
             visible
         );
     }
-
     #[test]
     fn por_validation_failures_report_no_mutation_for_projection_preservation() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -26826,7 +25589,6 @@ mod tests {
             .record_por_challenge_with_authority_update(&challenge)
             .expect("record authority challenge");
         let before = handle.por_status_authority_snapshot().unwrap();
-
         let mut unknown = por_sample_proof(&challenge);
         unknown.challenge_id = [0xE1; 32];
         resign_por_sample_proof(&mut unknown);
@@ -26836,7 +25598,6 @@ mod tests {
         assert_eq!(error.disposition(), PorMutationDispositionV1::NoMutation);
         assert!(!error.disposition().invalidates_projection());
         assert_eq!(handle.por_status_authority_snapshot().unwrap(), before);
-
         let mut mismatched = por_sample_proof(&challenge);
         mismatched.manifest_digest = [0xE2; 32];
         resign_por_sample_proof(&mut mismatched);
@@ -26847,7 +25608,6 @@ mod tests {
         assert!(!error.disposition().invalidates_projection());
         assert_eq!(handle.por_status_authority_snapshot().unwrap(), before);
     }
-
     #[test]
     fn por_reputation_admission_replays_without_duplicate_after_ack_checkpoint_failure() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -26865,7 +25625,6 @@ mod tests {
             .record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
             .expect("finalize PoR terminal and durable work");
         assert_eq!(handle.pending_por_reputation_terminal_count(), 1);
-
         let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let before_ack = fs::read(&checkpoint_path).expect("read pre-ack checkpoint");
         fs::remove_file(&checkpoint_path).expect("remove checkpoint to inject target failure");
@@ -26887,12 +25646,10 @@ mod tests {
             1,
             "failed acknowledgement checkpoint must roll the cursor back"
         );
-
         fs::remove_dir(&checkpoint_path).expect("remove injected checkpoint directory");
         write_local_checkpoint_atomic(&checkpoint_path, &before_ack)
             .expect("restore exact pre-ack checkpoint");
         drop(handle);
-
         let restored = NodeHandle::new(cfg.clone());
         let outcome = restored
             .reconcile_next_por_reputation_terminal(&admission)
@@ -26908,7 +25665,6 @@ mod tests {
         assert_eq!(admission.calls.load(Ordering::Relaxed), 2);
         assert_eq!(restored.pending_por_reputation_terminal_count(), 0);
         drop(restored);
-
         let replay = NodeHandle::new(cfg);
         assert_eq!(replay.pending_por_reputation_terminal_count(), 0);
         assert_eq!(
@@ -26923,13 +25679,11 @@ mod tests {
             "durable acknowledgement prevents a duplicate native admission"
         );
     }
-
     #[test]
     fn por_authority_checkpoint_prepublication_and_commit_uncertain_matrix() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let checkpoint_path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
         let challenge = por_sample_challenge();
-
         let handle = NodeHandle::new(cfg.clone());
         let initial_checkpoint = fs::read(&checkpoint_path).expect("read initial checkpoint");
         fs::remove_file(&checkpoint_path).expect("remove checkpoint for prepublication fault");
@@ -26947,7 +25701,6 @@ mod tests {
         write_local_checkpoint_atomic(&checkpoint_path, &initial_checkpoint)
             .expect("restore initial checkpoint");
         drop(handle);
-
         let uncertain = NodeHandle::new(cfg.clone());
         uncertain
             .fail_after_next_auxiliary_checkpoint_publication
@@ -26963,7 +25716,6 @@ mod tests {
         assert_eq!(visible.statuses.len(), 1);
         assert_eq!(visible.statuses[0].challenge_id, challenge.challenge_id);
         drop(uncertain);
-
         let restored = NodeHandle::new(cfg);
         assert_eq!(
             restored
@@ -26975,7 +25727,6 @@ mod tests {
             .record_por_challenge(&challenge)
             .expect("exact replay after commit uncertainty is side-effect free");
     }
-
     #[test]
     fn por_repair_outbox_replays_enqueue_and_acknowledgement_faults() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -26994,13 +25745,11 @@ mod tests {
         handle
             .record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
             .expect("commit failed verdict and repair outbox entry");
-
         assert!(matches!(
             handle.reconcile_next_por_repair_handoff(&FailingPorRepairHandoff),
             Err(PorRepairReconcileErrorV1::Handoff(_))
         ));
         assert!(handle.next_pending_por_repair_work().unwrap().is_some());
-
         let before_ack = fs::read(&checkpoint_path).expect("read pending-repair checkpoint");
         fs::remove_file(&checkpoint_path).expect("remove checkpoint for ack failure");
         fs::create_dir(&checkpoint_path).expect("install invalid checkpoint target");
@@ -27015,7 +25764,6 @@ mod tests {
         write_local_checkpoint_atomic(&checkpoint_path, &before_ack)
             .expect("restore pending-repair checkpoint");
         drop(handle);
-
         let restored = NodeHandle::new(cfg.clone());
         assert!(matches!(
             restored
@@ -27028,7 +25776,6 @@ mod tests {
         ));
         assert!(restored.next_pending_por_repair_work().unwrap().is_none());
         drop(restored);
-
         let replay = NodeHandle::new(cfg);
         assert_eq!(
             replay
@@ -27037,7 +25784,6 @@ mod tests {
             PorRepairReconcileOutcomeV1::Idle
         );
     }
-
     #[test]
     fn por_ingestion_status_tracks_failures() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -27046,7 +25792,6 @@ mod tests {
         handle
             .record_por_challenge(&challenge)
             .expect("record challenge");
-
         let mut verdict = por_sample_verdict(&challenge, [0; 32]);
         verdict.outcome = AuditOutcomeV1::Failed;
         verdict.failure_reason = Some("timeout".to_string());
@@ -27056,7 +25801,6 @@ mod tests {
         handle
             .record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
             .expect("record failure verdict");
-
         let status = handle
             .por_ingestion_status(&challenge.manifest_digest)
             .expect("status after failure");
@@ -27068,7 +25812,6 @@ mod tests {
         assert_eq!(provider.last_failure_unix, Some(verdict.decided_at));
         assert!(provider.last_success_unix.is_none());
     }
-
     #[test]
     fn por_history_rolls_oldest_unprotected_entry_and_preserves_live_lifecycle_keys() {
         let (base, _dir) = storage_config_with_temp_dir();
@@ -27083,7 +25826,6 @@ mod tests {
         handle
             .update_por_history_entry(&first)
             .expect("first history key fits");
-
         let mut replacement = first.clone();
         replacement.manifest_digest = [0x91; 32];
         replacement.provider_id = [0x92; 32];
@@ -27095,7 +25837,6 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert!(history.contains_key(&(replacement.manifest_digest, replacement.provider_id)));
         drop(history);
-
         let (base, _dir) = storage_config_with_temp_dir();
         let cfg = StorageConfig::builder()
             .enabled(true)
@@ -27117,7 +25858,6 @@ mod tests {
         assert_eq!(history.len(), 1);
         assert!(history.contains_key(&(challenge.manifest_digest, challenge.provider_id)));
     }
-
     #[test]
     fn por_ingestion_overview_reports_pending_and_failures() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -27126,12 +25866,10 @@ mod tests {
         handle
             .record_por_challenge(&challenge)
             .expect("record challenge");
-
         let overview = handle.por_ingestion_overview();
         assert_eq!(overview.len(), 1);
         assert_eq!(overview[0].pending_challenges, 1);
         assert_eq!(overview[0].failures_total, 0);
-
         let mut verdict = por_sample_verdict(&challenge, [0; 32]);
         verdict.outcome = AuditOutcomeV1::Failed;
         verdict.failure_reason = Some("missed".to_string());
@@ -27141,7 +25879,6 @@ mod tests {
         handle
             .record_por_verdict(&verdict, &por_sample_auditor_keys(), 1)
             .expect("record failure verdict");
-
         let overview_after = handle.por_ingestion_overview();
         assert_eq!(overview_after.len(), 1);
         assert_eq!(overview_after[0].pending_challenges, 0);
@@ -27151,7 +25888,6 @@ mod tests {
             Some(verdict.decided_at)
         );
     }
-
     #[test]
     fn node_handle_gc_evicts_expired_manifest_and_publishes_audit() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -27163,11 +25899,9 @@ mod tests {
         };
         let handle =
             NodeHandle::new_with_policies(cfg, RepairConfig::default(), GcConfig::from(&gc_actual));
-
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
         handle.set_governance_publisher(trait_publisher);
-
         let declaration = CapacityDeclarationV1 {
             version: CAPACITY_DECLARATION_VERSION_V1,
             provider_id: [0xAB; 32],
@@ -27204,7 +25938,6 @@ mod tests {
         handle
             .record_capacity_declaration(&record)
             .expect("record declaration");
-
         let payload = b"gc-expired-payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let retention_epoch = 1_700_000_000;
@@ -27215,18 +25948,15 @@ mod tests {
             .pin_policy(policy)
             .build()
             .expect("manifest");
-
         let mut reader = payload.as_slice();
         let manifest_id = handle
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest manifest");
         let manifest_digest: [u8; 32] = manifest.digest().expect("digest").into();
-
         let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
         assert_eq!(report.evictions.len(), 1);
         assert_eq!(report.freed_bytes, plan.content_length);
         assert!(handle.manifest_metadata(&manifest_id).is_err());
-
         let payloads = publisher.take();
         let mut gc_events = Vec::new();
         for payload in payloads {
@@ -27243,7 +25973,6 @@ mod tests {
         assert_eq!(event.payload.freed_bytes, plan.content_length);
         assert!(event.payload.blocked_reason.is_none());
     }
-
     #[test]
     fn gc_eviction_transaction_prepare_checkpoint_failure_prevents_domain_commit() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -27265,7 +25994,6 @@ mod tests {
         let committed = fs::read(&checkpoint_path).expect("read committed auxiliary checkpoint");
         fs::remove_file(&checkpoint_path).expect("remove auxiliary checkpoint");
         fs::create_dir(&checkpoint_path).expect("inject auxiliary checkpoint directory");
-
         let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
         assert!(report.evictions.is_empty());
         assert_eq!(report.errors, 1);
@@ -27281,7 +26009,6 @@ mod tests {
                 .is_empty()
         );
         assert!(handle.durability_failure_reason().is_none());
-
         fs::remove_dir(&checkpoint_path).expect("remove injected checkpoint directory");
         write_local_checkpoint_atomic(&checkpoint_path, &committed)
             .expect("restore committed checkpoint");
@@ -27291,7 +26018,6 @@ mod tests {
         assert!(restored.manifest_metadata(&manifest_id).is_ok());
         assert_eq!(restored.pending_governance_publication_count(), 0);
     }
-
     #[test]
     fn gc_eviction_transaction_discards_pre_domain_crash_intent() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -27341,7 +26067,6 @@ mod tests {
         assert!(storage.manifest(&manifest_id).is_some());
         drop(target);
         drop(handle);
-
         let restored =
             NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
         assert!(restored.manifest_metadata(&manifest_id).is_ok());
@@ -27363,7 +26088,6 @@ mod tests {
                 .is_empty()
         );
     }
-
     #[test]
     fn gc_eviction_transaction_fail_closes_storage_generation_drift() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -27403,7 +26127,6 @@ mod tests {
             b"gc-generation-drift-interloper",
             &handle,
         );
-
         let error = handle
             .settle_gc_eviction_intent_against_storage(
                 &gc_guard,
@@ -27431,13 +26154,11 @@ mod tests {
         drop(gc_guard);
         drop(target);
         drop(handle);
-
         let error =
             NodeHandle::try_new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1))
                 .expect_err("ambiguous GC generation must also fail startup");
         assert!(error.to_string().contains("storage generation drift"));
     }
-
     #[test]
     fn gc_eviction_transaction_recovers_post_domain_crash_exactly_once() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -27479,7 +26200,6 @@ mod tests {
         assert_eq!(handle.pending_governance_publication_count(), 0);
         drop(target);
         drop(handle);
-
         let restored = NodeHandle::new_with_policies(
             cfg.clone(),
             RepairConfig::default(),
@@ -27515,7 +26235,6 @@ mod tests {
         assert_eq!(audit.payload.manifest_digest, digest);
         assert_eq!(audit.payload.freed_bytes, payload.len() as u64);
         drop(restored);
-
         let acknowledged =
             NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
         assert_eq!(acknowledged.pending_governance_publication_count(), 0);
@@ -27532,7 +26251,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn gc_eviction_transaction_finalization_checkpoint_failure_fail_stops_and_recovers() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -27572,7 +26290,6 @@ mod tests {
         );
         fs::remove_file(&checkpoint_path).expect("remove prepared auxiliary checkpoint");
         fs::create_dir(&checkpoint_path).expect("inject auxiliary checkpoint directory");
-
         let error = handle
             .settle_gc_eviction_intent_against_storage(
                 &gc_guard,
@@ -27614,13 +26331,11 @@ mod tests {
                 .is_err()
         );
         assert!(publisher.take().is_empty());
-
         drop(target);
         fs::remove_dir(&checkpoint_path).expect("remove injected checkpoint directory");
         write_local_checkpoint_atomic(&checkpoint_path, &prepared)
             .expect("restore prepared GC checkpoint");
         drop(handle);
-
         let restored =
             NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
         assert!(restored.manifest_metadata(&manifest_id).is_err());
@@ -27643,7 +26358,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn gc_eviction_transaction_reservation_survives_full_outbox_restart() {
         let (base, _dir) = storage_config_with_temp_dir();
@@ -27687,7 +26401,6 @@ mod tests {
                     GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1,
                 )
                 .expect("reserve final outbox slot");
-
             let mut competing = proof_token_issuance_fixture();
             competing.token_id = [0xD1; 16];
             competing.token_blake3 = [0xD2; 32];
@@ -27705,7 +26418,6 @@ mod tests {
         assert_eq!(handle.pending_governance_publication_count(), 1);
         drop(target);
         drop(handle);
-
         let restored = NodeHandle::new_with_policies(
             cfg.clone(),
             RepairConfig::default(),
@@ -27726,13 +26438,11 @@ mod tests {
             .expect("drain full recovered outbox");
         assert_eq!(publisher.take().len(), 2);
         drop(restored);
-
         let acknowledged =
             NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
         assert_eq!(acknowledged.pending_governance_publication_count(), 0);
         assert_eq!(acknowledged.storage.as_ref().unwrap().gc_counters().1, 1);
     }
-
     #[test]
     fn gc_eviction_transaction_rejects_intent_binding_and_counter_tampering() {
         for tamper_counter in [false, true] {
@@ -27800,7 +26510,6 @@ mod tests {
             .expect("write tampered GC checkpoint");
             drop(target);
             drop(handle);
-
             let error = NodeHandle::try_new_with_policies(
                 cfg,
                 RepairConfig::default(),
@@ -27815,7 +26524,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn gc_eviction_transaction_rejects_acknowledged_link_counter_tampering() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -27854,13 +26562,11 @@ mod tests {
         )
         .expect("write forged GC link checkpoint");
         drop(handle);
-
         let error =
             NodeHandle::try_new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1))
                 .expect_err("forged GC storage counter linkage must fail startup");
         assert!(error.to_string().contains("storage counter generation"));
     }
-
     #[test]
     fn gc_blocks_shared_chunks_with_zero_byte_audit() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -27870,7 +26576,6 @@ mod tests {
         let payload = b"gc-shared-chunk-zero-byte-audit";
         build_manifest_with_retention(vec![0x76; 8], now_unix + 60, payload, &handle);
         build_manifest_with_retention(vec![0x77; 8], now_unix - 1, payload, &handle);
-
         let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
         assert_eq!(report.errors, 0);
         assert!(report.evictions.is_empty());
@@ -27893,7 +26598,6 @@ mod tests {
             Some(GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1)
         );
     }
-
     #[test]
     fn gc_eviction_transaction_publisher_failure_retries_durable_audit() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -27908,7 +26612,6 @@ mod tests {
         handle
             .try_set_governance_publisher(failing.clone())
             .expect("install initially idle failing publisher");
-
         let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
         assert_eq!(report.evictions.len(), 1);
         assert_eq!(report.errors, 1);
@@ -27922,7 +26625,6 @@ mod tests {
         assert_eq!(recording.take().len(), 1);
         assert_eq!(handle.pending_governance_publication_count(), 0);
         drop(handle);
-
         let restored =
             NodeHandle::new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1));
         assert_eq!(restored.storage.as_ref().unwrap().gc_counters().1, 1);
@@ -27935,7 +26637,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn gc_eviction_transaction_serializes_concurrent_sweeps() {
         let (cfg, _dir) = storage_config_with_temp_dir();
@@ -27982,7 +26683,6 @@ mod tests {
             4
         );
     }
-
     #[test]
     fn gc_blocked_audit_full_outbox_is_reported_without_eviction() {
         let (base, _dir) = storage_config_with_temp_dir();
@@ -28000,7 +26700,6 @@ mod tests {
         let payload = b"gc-blocked-full-outbox";
         let first = build_manifest_with_retention(vec![0x91; 8], now_unix - 1, payload, &handle);
         let second = build_manifest_with_retention(vec![0x92; 8], now_unix - 1, payload, &handle);
-
         let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
         assert!(report.evictions.is_empty());
         assert_eq!(report.errors, 1);
@@ -28015,17 +26714,14 @@ mod tests {
         assert_eq!(handle.storage.as_ref().unwrap().gc_counters(), (0, 0));
         assert_eq!(handle.pending_governance_publication_count(), 1);
     }
-
     #[test]
     fn node_handle_reconciliation_emits_report() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let handle =
             NodeHandle::new_with_policies(cfg, enabled_repair_config(1), GcConfig::default());
-
         let publisher = Arc::new(RecordingPublisher::default());
         let trait_publisher: Arc<dyn GovernancePublisher> = publisher.clone();
         handle.set_governance_publisher(trait_publisher);
-
         let declaration = CapacityDeclarationV1 {
             version: CAPACITY_DECLARATION_VERSION_V1,
             provider_id: [0x11; 32],
@@ -28062,7 +26758,6 @@ mod tests {
         handle
             .record_capacity_declaration(&record)
             .expect("record declaration");
-
         let payload = b"reconciliation-payload";
         let plan = CarBuildPlan::single_file(payload).expect("plan");
         let mut policy = PinPolicy::default();
@@ -28076,13 +26771,11 @@ mod tests {
         handle
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest manifest");
-
         let repair_projection = finalized_repair_projection(vec![active_native_repair_task(
             manifest_digest,
             declaration.provider_id,
         )]);
         publisher.take();
-
         let now_unix = 1_700_000_200;
         let reconciliation = handle
             .run_reconciliation_once(now_unix, &repair_projection)
@@ -28099,7 +26792,6 @@ mod tests {
         assert_eq!(reconciliation.gc_freed_bytes_total, 0);
         assert_eq!(reconciliation.divergence_count, 0);
         assert!(reconciliation.appeal_finance.is_none());
-
         let payloads = publisher.take();
         let decoded = payloads
             .iter()
@@ -28108,7 +26800,6 @@ mod tests {
             })
             .expect("reconciliation payload");
         assert_eq!(decoded, reconciliation);
-
         let reconciliation_again = handle
             .run_reconciliation_once(now_unix, &repair_projection)
             .expect("reconciliation report");
@@ -28125,10 +26816,7 @@ mod tests {
             reconciliation.gc_snapshot_hash
         );
     }
-
     include!("lib/reconciliation_and_repair_tests.rs");
-
     include!("lib/storage_disabled_test.rs");
-
     include!("lib/governance_dag_test_support.rs");
 }

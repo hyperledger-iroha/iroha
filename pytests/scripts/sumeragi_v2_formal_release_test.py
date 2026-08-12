@@ -638,6 +638,33 @@ def test_every_sumeragi_formal_java_entrypoint_uses_the_shared_resolver() -> Non
     assert "/target/tlapm/" not in release
     assert "/target/verus/" not in release
     assert "/target/tla2tools/" not in release
+    authenticated_runners = (
+        "run_sumeragi_v2_applied_phase_admission_mutations.sh",
+        "run_sumeragi_v2_adequate_leader_readiness_mutations.sh",
+        "run_sumeragi_v2_certified_response_registration_mutation.sh",
+        "run_sumeragi_v2_commit_import_provenance_mutations.sh",
+        "run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh",
+        "run_sumeragi_v2_effect_capacity_ownership_mutation.sh",
+        "run_sumeragi_v2_historical_discovery_occurrence_rank_mutation.sh",
+        "run_sumeragi_v2_indexed_service_activation_mutations.sh",
+        "run_sumeragi_v2_liveness_ownership_mutations.sh",
+        "run_sumeragi_v2_post_decision_timeout_mutation.sh",
+        "run_sumeragi_v2_producer_continuation_physical_cut_mutations.sh",
+        "run_sumeragi_v2_reply_writer_deadline_mutations.sh",
+        "run_sumeragi_v2_serve_scheduler_ordinal_mutations.sh",
+        "run_sumeragi_v2_service_rank_mutation.sh",
+        "run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
+    )
+    required = 'readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"'
+    for runner in authenticated_runners:
+        source = (ROOT_DIR / "scripts" / "formal" / runner).read_text(encoding="utf-8")
+        assert source.count(required) == 1
+        assert "${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/" not in source
+        if runner in {
+            "run_sumeragi_v2_reply_writer_deadline_mutations.sh",
+            "run_sumeragi_v2_typed_rollover_handoff_mutations.sh",
+        }:
+            assert '${TLAPM_STDLIB:?TLAPM_STDLIB must name the authenticated external standard library}' in source
 
 
 def test_restart_locked_fetch_order_mutation_is_release_gated_and_pinned() -> None:

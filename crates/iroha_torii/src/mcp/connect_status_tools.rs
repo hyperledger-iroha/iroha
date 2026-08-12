@@ -69,7 +69,7 @@ fn iroha_connect_session_status_tool() -> ToolSpec {
 }
 
 #[cfg(test)]
-mod tests {
+mod connect_status_tests {
     use super::{ToolEffect, connect_session_status_tool};
 
     #[test]

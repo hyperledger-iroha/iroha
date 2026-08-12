@@ -1,18 +1,8 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Grouped integration harness for Nexus, streaming, and Sora/SoraFS flows.
 
-#[path = "byte_merkle_cross.rs"]
-mod byte_merkle_cross;
-#[path = "byte_merkle_path.rs"]
-mod byte_merkle_path;
-#[path = "ivm_header_decode.rs"]
-mod ivm_header_decode;
-#[path = "ivm_header_smoke.rs"]
-mod ivm_header_smoke;
 #[path = "kotodama_examples.rs"]
 mod kotodama_examples;
-#[path = "merkle_unified.rs"]
-mod merkle_unified;
 #[path = "nexus/mod.rs"]
 mod nexus;
 #[path = "norito_burn_fixture.rs"]

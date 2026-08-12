@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  ledger::escrow::accept(1);
+}
+
+}

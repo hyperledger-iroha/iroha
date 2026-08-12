@@ -823,17 +823,19 @@ AsyncUntrustedCompletionRequestWitness(recipient, nonce) ==
     AsyncCertifiedRequestEnvelope(
       recipient, recipient, AsyncUntrustedCompletionQcWitness, nonce))
 
+AsyncUntrustedCertifiedResponseItem(recipient, nonce) ==
+  LET request == AsyncUntrustedCompletionRequestWitness(recipient, nonce)
+  IN AsyncNetworkItem(
+       "CertifiedResponse", AsyncUntrustedSource,
+       AsyncCertifiedResponseEnvelope(
+         request, recipient, recipient, AsyncUntrustedSource))
+
 AsyncUntrustedTransportCompletionItem(kind, recipient, nonce) ==
   LET bodyEnvelope ==
         AsyncBodyEnvelope(recipient, context.height, nodeView[recipient],
                           AsyncHeartbeatSubject, NoAsyncChunk, nonce)
-      request ==
-        AsyncUntrustedCompletionRequestWitness(recipient, nonce)
   IN IF kind = "CertifiedResponse"
-     THEN AsyncNetworkItem(
-            "CertifiedResponse", AsyncUntrustedSource,
-            AsyncCertifiedResponseEnvelope(
-              request, recipient, recipient, AsyncUntrustedSource))
+     THEN AsyncUntrustedCertifiedResponseItem(recipient, nonce)
      ELSE AsyncNetworkItem(kind, AsyncUntrustedSource, bodyEnvelope)
 
 AsyncNetworkItems ==
@@ -868,8 +870,7 @@ AsyncNetworkItems ==
           source \in AsyncIngressSources,
           archiveServer \in AsyncArchiveServerIds,
           request \in AsyncCertifiedRequestItems}
-  \cup {AsyncUntrustedTransportCompletionItem(
-           "CertifiedResponse", recipient, nonce):
+  \cup {AsyncUntrustedCertifiedResponseItem(recipient, nonce):
           recipient \in ValidatorIds,
           nonce \in 0..(AsyncIngressCapacity - 1)}
   \cup {AsyncNetworkItem(
@@ -1996,7 +1997,9 @@ AsyncItemTyped(item) ==
        [] item.kind = "CertifiedResponse" ->
             AsyncCertifiedResponseEnvelopeTyped(item.envelope)
        [] item.kind = "CommitCertificateResponse" ->
-            AsyncCommitCertificateResponseEnvelopeTyped(item.envelope)
+            /\ AsyncCommitCertificateResponseEnvelopeTyped(item.envelope)
+            /\ item.source =
+                 item.envelope.request.envelope.recipient
        [] OTHER ->
             /\ item.kind \in {"Chunk", "NormalJunk", "ProgressJunk", "Noise"}
             /\ AsyncBodyEnvelopeTyped(item.envelope)
@@ -7895,7 +7898,7 @@ AsyncProducerIngressRequest(item) ==
          item.envelope.recipient, item)
   ELSE IF item.kind = "CertifiedResponse"
        THEN AsyncCertifiedResponseCanonicalWireIdentity(item)
-       ELSE item
+       ELSE AsyncNetworkItem(item.kind, item.source, item.envelope)
 
 AsyncProducerIngressRequests ==
   {AsyncProducerIngressRequest(item): item \in AsyncNetworkItems}
@@ -7905,9 +7908,9 @@ AsyncProducerObligation(request, authenticatedSource) ==
    authenticatedSource |-> authenticatedSource]
 
 AsyncProducerObligationSet ==
-  {AsyncProducerObligation(request, authenticatedSource):
-     request \in AsyncProducerIngressRequests,
-     authenticatedSource \in AsyncIngressSources}
+  [request:
+     AsyncProducerIngressRequests,
+   authenticatedSource: AsyncIngressSources]
 
 AsyncProducerIngressStage == <<"Ingress", "Observe">>
 
@@ -7922,10 +7925,10 @@ AsyncProducerIngressEpisode(item, authenticatedSource) ==
     authenticatedSource, AsyncProducerIngressStage)
 
 AsyncProducerIngressEpisodeSet ==
-  {AsyncProducerEpisode(
-     request, authenticatedSource, AsyncProducerIngressStage):
-     request \in AsyncProducerIngressRequests,
-     authenticatedSource \in AsyncIngressSources}
+  [request:
+     AsyncProducerIngressRequests,
+   authenticatedSource: AsyncIngressSources,
+   stage: {AsyncProducerIngressStage}]
 
 AsyncProducerIngressOwner(item) ==
   [kind |-> "Ingress",
@@ -12121,15 +12124,21 @@ AsyncProducerExactRetransmissionEpisodeStepFor(request) ==
   /\ AsyncProducerAdmittedIngressEpisodesFor(request)
        \subseteq AsyncProducerConsumedIngressEpisodesFor(request)
 
-AsyncProducerJournalClosed ==
-  /\ asyncProducerConsumedEpisodes
+AsyncProducerJournalClosedAt(
+    knownObligations, consumedEpisodes, originHistory) ==
+  /\ consumedEpisodes
        \subseteq AsyncProducerIngressEpisodeSet
-  /\ \A episode \in asyncProducerConsumedEpisodes:
+  /\ \A episode \in consumedEpisodes:
        /\ AsyncProducerEpisodeObligation(episode)
-            \in asyncProducerKnownObligations
+            \in knownObligations
        /\ AsyncProducerCanonicalOrigin(episode)
-            \in asyncProducerOriginHistory
+            \in originHistory
 
+AsyncProducerJournalClosed ==
+  AsyncProducerJournalClosedAt(
+    asyncProducerKnownObligations,
+    asyncProducerConsumedEpisodes,
+    asyncProducerOriginHistory)
 THEOREM AsyncProducerFirstDistinctEpisodeStrictlyConsumesFiniteRank ==
   /\ AsyncConfiguration
   /\ AsyncProducerJournalClosed
@@ -12245,6 +12254,7 @@ MatchingCommitCertificateRequests(response) ==
 CommitCertificateResponseAuthorized(item) ==
   /\ item.kind = "CommitCertificateResponse"
   /\ item.source \in AsyncIngressSources
+  /\ item.source = item.envelope.request.envelope.recipient
   /\ item.envelope.request \in asyncActiveRequests
   /\ CommitCertificateRequestAuthorized(item.envelope.request)
   /\ item.envelope.qc \in commitQCs
@@ -12389,6 +12399,8 @@ AsyncCommitImportDirectEvidence(candidate, qc) ==
 AsyncCommitImportResponseEvidence(candidate, qc) ==
   /\ candidate.evidence \in asyncSentItems
   /\ candidate.evidence.kind = "CommitCertificateResponse"
+  /\ candidate.evidence.source =
+       candidate.evidence.envelope.request.envelope.recipient
   /\ candidate.evidence.envelope.recipient = candidate.node
   /\ candidate.evidence.envelope.qc = qc
   /\ CommitCertificateRequestAuthorized(
@@ -29498,27 +29510,33 @@ AsyncRestartAuthorityInvariant ==
       \in {"RestartRequired", "ReplayRequired", "Replaying"} =>
     generation[asyncRecoveryNode] = asyncRecoveryGeneration
 
-AsyncProducerTypeInvariant ==
-  /\ IsFiniteSet(asyncProducerKnownObligations)
-  /\ IsFiniteSet(asyncProducerConsumedEpisodes)
-  /\ IsFiniteSet(asyncProducerOriginHistory)
-  /\ asyncProducerKnownObligations
+AsyncProducerTypeInvariantAt(
+    knownObligations, consumedEpisodes, originHistory) ==
+  /\ IsFiniteSet(knownObligations)
+  /\ IsFiniteSet(consumedEpisodes)
+  /\ IsFiniteSet(originHistory)
+  /\ knownObligations
        \subseteq AsyncProducerObligationSet
-  /\ asyncProducerConsumedEpisodes
+  /\ consumedEpisodes
        \subseteq AsyncProducerIngressEpisodeSet
-  /\ asyncProducerOriginHistory
+  /\ originHistory
        \subseteq AsyncProducerIngressOriginSet
-  /\ AsyncProducerJournalClosed
-  /\ \A episode \in asyncProducerConsumedEpisodes:
+  /\ AsyncProducerJournalClosedAt(
+       knownObligations, consumedEpisodes, originHistory)
+  /\ \A episode \in consumedEpisodes:
        /\ AsyncProducerEpisodeObligation(episode)
-            \in asyncProducerKnownObligations
+            \in knownObligations
        /\ AsyncProducerCanonicalOrigin(episode)
-            \in asyncProducerOriginHistory
-  /\ \A origin \in asyncProducerOriginHistory:
-       /\ origin.producerEpisode
-            \in asyncProducerConsumedEpisodes
+            \in originHistory
+  /\ \A origin \in originHistory:
+       /\ origin.producerEpisode \in consumedEpisodes
        /\ origin.owner.request = origin.producerEpisode.request
 
+AsyncProducerTypeInvariant ==
+  AsyncProducerTypeInvariantAt(
+    asyncProducerKnownObligations,
+    asyncProducerConsumedEpisodes,
+    asyncProducerOriginHistory)
 AsyncServeProducerEpisodeTypeInvariant ==
   asyncServeProducerEpisodeDue \in [ValidatorIds -> BOOLEAN]
 

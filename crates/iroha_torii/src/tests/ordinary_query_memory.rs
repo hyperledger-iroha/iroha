@@ -227,6 +227,7 @@ mod ordinary_query_memory_tests {
             limits.max_page_items(),
             limits.max_source_item_bytes(),
             limits.max_response_bytes(),
+            limits.max_request_graph_bytes(),
             limits.max_revalidation_archive_bytes(),
             limits.revalidation_decode_limits(),
         )
@@ -510,7 +511,9 @@ mod ordinary_query_memory_tests {
         let request = authorize_query_for_test(
             iroha_data_model::query::QueryRequest::Singular(
                 iroha_data_model::query::SingularQueryBox::FindProofRecordById(
-                    iroha_data_model::query::proof::prelude::FindProofRecordById { id: record.id },
+                    iroha_data_model::query::proof::prelude::FindProofRecordById {
+                        id: record.id.clone(),
+                    },
                 ),
             ),
             authority,

@@ -21,7 +21,6 @@ const ENVELOPE_VERSION: u8 = 1;
 const ENVELOPE_HEADER_BYTES: usize = ENVELOPE_MAGIC.len() + 1 + 32;
 const CONTEXT_DOMAIN: &[u8] = b"iroha.vega.figure9.microsoft-mc.context.v1";
 const PINNED_SOURCE_COMMIT: &[u8] = b"c0ee259053cd12eaf43ed71b5cde375452b3ee4d";
-const FIGURE9_MC_ENGINE_READY: bool = false;
 
 /// Reject proving until the exact Microsoft Figure 9 prover is internalized.
 pub(super) fn prove_figure9_mc<R: VegaRandomSourceV1>(
@@ -33,7 +32,6 @@ pub(super) fn prove_figure9_mc<R: VegaRandomSourceV1>(
 ) -> Result<Vec<u8>, VegaMdlProofErrorV1> {
     validate_context(context)?;
     let _ = (public_inputs, witness, config, random);
-    debug_assert!(!FIGURE9_MC_ENGINE_READY);
     // TODO: Port the exact first-party Figure 9 verifier key/setup/prover and
     // remove this gate only after canonical Microsoft proof bytes, constraint
     // order, and the pinned verifier digest pass cross-conformance tests.
@@ -64,7 +62,6 @@ pub(super) fn verify_figure9_mc(
     }
     microsoft_mc::scan_canonical_figure9_proof(&envelope[ENVELOPE_HEADER_BYTES..])
         .map_err(|_| VegaMdlProofErrorV1::InvalidProofEncoding)?;
-    debug_assert!(!FIGURE9_MC_ENGINE_READY);
     // A structurally canonical proof is not accepted without the exact key and
     // every Microsoft equation check. This is intentionally fail-closed.
     Err(VegaMdlProofErrorV1::VerificationFailed)
@@ -103,8 +100,7 @@ fn validate_context(context: &VegaMdlProofContextV1<'_>) -> Result<[u8; 32], Veg
             context.statement_schema_digest,
             context.engine_manifest_digest,
         ]
-        .iter()
-        .any(|digest| *digest == [0; 32])
+        .contains(&[0; 32])
     {
         return Err(VegaMdlProofErrorV1::InvalidContext);
     }
@@ -163,7 +159,6 @@ mod tests {
 
     #[test]
     fn production_prover_is_explicitly_fail_closed() {
-        assert!(!FIGURE9_MC_ENGINE_READY);
         let one = [1_u8; 32];
         let witness = VegaMdlFigure9WitnessV1::new(
             &FIGURE9_LAYOUT.issuer_template,

@@ -208,11 +208,22 @@ _MAX_EVIDENCE_BYTES = 128 * 1024 * 1024
 _MAX_TERMINAL_RECEIPT_BYTES = 64 * 1024 * 1024
 _MAX_HELPER_OUTPUT_BYTES = 16 * 1024 * 1024
 _MAX_RUNNER_TOOLS = 256
+_MAX_RETAINED_RECORDS = 250_000
+_MAX_RETAINED_DEPTH = 128
+_MAX_RETAINED_PATH_BYTES = 4096
+_MAX_RETAINED_FILE_BYTES = 4 * 1024 * 1024 * 1024
+_MAX_RETAINED_TOTAL_BYTES = 64 * 1024 * 1024 * 1024
+_MAX_VALIDATOR_DIAGNOSTIC_BYTES = 64 * 1024
+_MAX_VALIDATOR_FAILURE_MARKER_BYTES = 64 * 1024
 _DEFAULT_COMMAND_TIMEOUT_SECONDS = 600
 _DIRECTORY_MODE = 0o700
 _TOOL_MODE = 0o500
 _DATA_MODE = 0o400
 _COOPERATIVE_CANCELLED_STATUS = 125
+_RECEIPT_VALIDATION_FAILED_STATUS = 74
+_VALIDATOR_OPTION_NAMES_SHA256 = (
+    "deea2d469c8fe65392527c24562b64fa728c21f6ee9f679d595e09304e8b56b1"
+)
 _CANCELLATION_REQUEST_BYTES = (
     b'{"reason":"operator-request","schema_version":1}\n'
 )
@@ -387,6 +398,81 @@ def _read_file(
             opened.st_mtime_ns,
             opened.st_ctime_ns,
             stat.S_IMODE(opened.st_mode),
+        ):
+            raise BootstrapError(f"{label} changed while it was read")
+        return FileSnapshot(
+            path,
+            b"".join(chunks),
+            opened.st_dev,
+            opened.st_ino,
+            stat.S_IMODE(opened.st_mode),
+            opened.st_uid,
+            opened.st_nlink,
+            opened.st_size,
+            opened.st_mtime_ns,
+            opened.st_ctime_ns,
+        )
+    finally:
+        os.close(descriptor)
+
+
+def _read_file_at(
+    parent_fd: int,
+    name: str,
+    path: Path,
+    label: str,
+    *,
+    maximum_bytes: int,
+) -> FileSnapshot:
+    """Read one bounded regular file relative to a held parent directory."""
+
+    if name in {"", ".", ".."} or "/" in name or "\0" in name:
+        raise BootstrapError(f"{label} has an unsafe leaf name")
+    try:
+        before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as error:
+        raise BootstrapError(f"{label} is unavailable") from error
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or stat.S_ISLNK(before.st_mode)
+        or before.st_size > maximum_bytes
+    ):
+        raise BootstrapError(f"{label} is not one bounded regular file")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent_fd)
+    except OSError as error:
+        raise BootstrapError(f"{label} could not be opened safely") from error
+    try:
+        opened = os.fstat(descriptor)
+        stable = (
+            "st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink",
+            "st_size", "st_mtime_ns", "st_ctime_ns",
+        )
+        if not stat.S_ISREG(opened.st_mode) or any(
+            getattr(opened, field) != getattr(before, field) for field in stable
+        ):
+            raise BootstrapError(f"{label} changed while it was opened")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            block = os.read(
+                descriptor, min(1024 * 1024, maximum_bytes + 1 - total)
+            )
+            if not block:
+                break
+            chunks.append(block)
+            total += len(block)
+            if total > maximum_bytes:
+                raise BootstrapError(f"{label} exceeds its closed size limit")
+        after = os.fstat(descriptor)
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if total != opened.st_size or any(
+            getattr(after, field) != getattr(opened, field)
+            or getattr(current, field) != getattr(opened, field)
+            for field in stable
         ):
             raise BootstrapError(f"{label} changed while it was read")
         return FileSnapshot(
@@ -882,6 +968,79 @@ def _capture_large_file(path: Path, label: str) -> LargeFileSnapshot:
             raise BootstrapError(f"{label} changed while it was hashed")
         if size != opened.st_size:
             raise BootstrapError(f"{label} has inconsistent size metadata")
+        return LargeFileSnapshot(
+            path=path,
+            sha256=digest.hexdigest(),
+            device=opened.st_dev,
+            inode=opened.st_ino,
+            mode=stat.S_IMODE(opened.st_mode),
+            owner=opened.st_uid,
+            nlink=opened.st_nlink,
+            size=opened.st_size,
+            mtime_ns=opened.st_mtime_ns,
+            ctime_ns=opened.st_ctime_ns,
+        )
+    finally:
+        os.close(descriptor)
+
+
+def _capture_large_file_at(
+    parent_fd: int,
+    name: str,
+    path: Path,
+    label: str,
+    *,
+    maximum_bytes: int,
+) -> LargeFileSnapshot:
+    """Hash one bounded regular file relative to a held directory."""
+
+    if name in {"", ".", ".."} or "/" in name or "\0" in name:
+        raise BootstrapError(f"{label} has an unsafe leaf name")
+    try:
+        before = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as error:
+        raise BootstrapError(f"{label} is unavailable") from error
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or stat.S_ISLNK(before.st_mode)
+        or before.st_size > maximum_bytes
+    ):
+        raise BootstrapError(f"{label} is not one bounded regular file")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent_fd)
+    except OSError as error:
+        raise BootstrapError(f"{label} could not be opened safely") from error
+    try:
+        opened = os.fstat(descriptor)
+        stable = (
+            "st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink",
+            "st_size", "st_mtime_ns", "st_ctime_ns",
+        )
+        if not stat.S_ISREG(opened.st_mode) or any(
+            getattr(opened, field) != getattr(before, field) for field in stable
+        ):
+            raise BootstrapError(f"{label} changed while it was opened")
+        digest = hashlib.sha256()
+        total = 0
+        while True:
+            block = os.read(descriptor, 1024 * 1024)
+            if not block:
+                break
+            total += len(block)
+            if total > maximum_bytes:
+                raise BootstrapError(f"{label} exceeds its closed size limit")
+            digest.update(block)
+        after = os.fstat(descriptor)
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if total != opened.st_size or any(
+            getattr(after, field) != getattr(opened, field)
+            or getattr(current, field) != getattr(opened, field)
+            for field in stable
+        ):
+            raise BootstrapError(f"{label} changed while it was hashed")
         return LargeFileSnapshot(
             path=path,
             sha256=digest.hexdigest(),
@@ -2028,6 +2187,585 @@ def _validate_terminal_release_evidence(
     return artifact_snapshots, directory_snapshots
 
 
+def _retained_release_layout(
+    evidence: Path,
+    evidence_fd: int,
+) -> tuple[Path, Path, Path, FileSnapshot | None, FileSnapshot | None, FileSnapshot | None]:
+    """Authenticate the outer-published retained tree through held directories."""
+
+    result_name = "release-runner-result.json"
+    try:
+        os.stat(result_name, dir_fd=evidence_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        release_runner = evidence / "release-runner"
+        return (
+            release_runner,
+            release_runner / "output" / "release" / "RELEASE_COMPLETED.json",
+            release_runner / "sealed-identity.json",
+            None,
+            None,
+            None,
+        )
+    except OSError as error:
+        raise BootstrapError("protected outer release result is unavailable") from error
+    result_path = evidence / result_name
+    result_snapshot = _read_file_at(
+        evidence_fd,
+        result_name,
+        result_path,
+        "protected outer release result",
+        maximum_bytes=_MAX_EVIDENCE_BYTES,
+    )
+    if (
+        result_snapshot.mode != _DATA_MODE
+        or result_snapshot.owner != os.getuid()
+        or result_snapshot.nlink != 1
+    ):
+        raise BootstrapError("protected outer release result metadata is not exact")
+    result = _require_exact_json_fields(
+        _parse_canonical_json(result_snapshot, "protected outer release result"),
+        {
+            "format", "schema_version", "invocation_root", "source_root",
+            "source_manifest_sha256", "sealed_identity", "receipt", "inventory",
+            "receipt_validation",
+        },
+        "protected outer release result",
+    )
+    if (
+        result["format"] != "iroha-sumeragi-v2-retained-release-evidence"
+        or type(result["schema_version"]) is not int
+        or result["schema_version"] != 1
+        or not isinstance(result["invocation_root"], str)
+        or not isinstance(result["source_root"], str)
+        or not isinstance(result["source_manifest_sha256"], str)
+        or _DIGEST_RE.fullmatch(result["source_manifest_sha256"]) is None
+    ):
+        raise BootstrapError("protected outer release result schema is not exact")
+    release_runner = _absolute_resolved_existing(
+        Path(result["invocation_root"]), "retained release evidence root"
+    )
+    source = _absolute_resolved_existing(
+        Path(result["source_root"]), "retained sealed source"
+    )
+    if (
+        source != release_runner / "source"
+        or _inside(release_runner, evidence)
+        or _inside(evidence, release_runner)
+    ):
+        raise BootstrapError("retained release evidence is not an exact external root")
+
+    root_snapshot = _private_directory_snapshot(
+        release_runner, "retained release evidence root"
+    )
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        root_fd = os.open(release_runner, directory_flags)
+    except OSError as error:
+        raise BootstrapError("retained release evidence root could not be held") from error
+    root_opened = os.fstat(root_fd)
+    if (
+        not stat.S_ISDIR(root_opened.st_mode)
+        or (root_opened.st_dev, root_opened.st_ino)
+        != (root_snapshot.device, root_snapshot.inode)
+        or stat.S_IMODE(root_opened.st_mode) != root_snapshot.mode
+        or root_opened.st_uid != root_snapshot.owner
+    ):
+        os.close(root_fd)
+        raise BootstrapError("retained release evidence root changed while opened")
+
+    protected_specs = {
+        "receipt": (
+            "RELEASE_COMPLETED.json",
+            _MAX_TERMINAL_RECEIPT_BYTES,
+            "output/release/RELEASE_COMPLETED.json",
+        ),
+        "sealed_identity": (
+            "sealed-identity.json", _MAX_IDENTITY_BYTES, "sealed-identity.json",
+        ),
+        "inventory": (
+            "release-retained-inventory.json",
+            256 * 1024 * 1024,
+            "retained-evidence-inventory.json",
+        ),
+        "receipt_validation": (
+            "receipt-validation-ack.json",
+            _MAX_EVIDENCE_BYTES,
+            "receipt-validation-ack.json",
+        ),
+    }
+    protected: dict[str, FileSnapshot] = {}
+    binding_records: dict[str, dict[str, Any]] = {}
+    try:
+        for field, (filename, maximum, relative) in protected_specs.items():
+            record = _require_exact_json_fields(
+                result[field], {"path", "sha256", "size", "protected_path"},
+                f"retained {field} binding",
+            )
+            expected_local = release_runner.joinpath(*relative.split("/"))
+            expected_protected = evidence / filename
+            if (
+                not isinstance(record["path"], str)
+                or Path(record["path"]) != expected_local
+                or not isinstance(record["protected_path"], str)
+                or Path(record["protected_path"]) != expected_protected
+                or not isinstance(record["sha256"], str)
+                or _DIGEST_RE.fullmatch(record["sha256"]) is None
+                or type(record["size"]) is not int
+                or record["size"] < 0
+            ):
+                raise BootstrapError(f"retained {field} binding is not exact")
+            copied = _read_file_at(
+                evidence_fd,
+                filename,
+                expected_protected,
+                f"protected retained {field}",
+                maximum_bytes=maximum,
+            )
+            if (
+                copied.sha256 != record["sha256"]
+                or copied.size != record["size"]
+                or copied.mode != _DATA_MODE
+                or copied.owner != os.getuid()
+                or copied.nlink != 1
+            ):
+                raise BootstrapError(f"retained {field} protected copy is not exact")
+            protected[field] = copied
+            binding_records[field] = record
+
+        inventory_local = _read_file_at(
+            root_fd,
+            "retained-evidence-inventory.json",
+            release_runner / "retained-evidence-inventory.json",
+            "retained evidence inventory",
+            maximum_bytes=256 * 1024 * 1024,
+        )
+        if (
+            inventory_local.sha256 != protected["inventory"].sha256
+            or inventory_local.size != protected["inventory"].size
+            or inventory_local.owner != os.getuid()
+            or inventory_local.nlink != 1
+            or inventory_local.mode != _DATA_MODE
+        ):
+            raise BootstrapError("retained inventory local and protected copies disagree")
+        inventory_snapshot = protected["inventory"]
+        inventory = _require_exact_json_fields(
+            _parse_canonical_json(inventory_snapshot, "retained release inventory"),
+            {
+                "format", "schema_version", "invocation_root", "source_root",
+                "source_manifest_sha256", "record_count", "file_bytes", "records",
+            },
+            "retained release inventory",
+        )
+        records = inventory["records"]
+        if (
+            inventory["format"] != result["format"]
+            or type(inventory["schema_version"]) is not int
+            or inventory["schema_version"] != 1
+            or inventory["invocation_root"] != str(release_runner)
+            or inventory["source_root"] != str(source)
+            or inventory["source_manifest_sha256"]
+            != result["source_manifest_sha256"]
+            or type(records) is not list
+            or type(inventory["record_count"]) is not int
+            or inventory["record_count"] != len(records)
+            or not 0 <= inventory["record_count"] <= _MAX_RETAINED_RECORDS
+            or type(inventory["file_bytes"]) is not int
+            or not 0 <= inventory["file_bytes"] <= _MAX_RETAINED_TOTAL_BYTES
+        ):
+            raise BootstrapError("retained release inventory contract is not exact")
+        for index, record in enumerate(records):
+            if not isinstance(record, dict):
+                raise BootstrapError(f"retained release inventory record {index} is not exact")
+            kind = record.get("kind")
+            expected_keys = (
+                {"path", "kind", "mode"}
+                if kind == "directory"
+                else {"path", "kind", "mode", "size", "sha256"}
+                if kind == "file"
+                else set()
+            )
+            relative = record.get("path")
+            mode = record.get("mode")
+            if (
+                set(record) != expected_keys
+                or not isinstance(relative, str)
+                or not relative
+                or relative.startswith("/")
+                or any(part in {"", ".", ".."} for part in relative.split("/"))
+                or len(relative.encode()) > _MAX_RETAINED_PATH_BYTES
+                or len(relative.split("/")) > _MAX_RETAINED_DEPTH
+                or not isinstance(mode, str)
+                or re.fullmatch(r"[0-7]{4}", mode) is None
+                or (
+                    kind == "file"
+                    and (
+                        type(record.get("size")) is not int
+                        or not 0 <= record["size"] <= _MAX_RETAINED_FILE_BYTES
+                        or not isinstance(record.get("sha256"), str)
+                        or _DIGEST_RE.fullmatch(record["sha256"]) is None
+                    )
+                )
+            ):
+                raise BootstrapError(f"retained release inventory record {index} is not exact")
+
+        observed: list[dict[str, Any]] = []
+        local_files: dict[str, LargeFileSnapshot] = {}
+        file_bytes = 0
+        record_count = 0
+        stable_directory_fields = (
+            "st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink",
+            "st_mtime_ns", "st_ctime_ns",
+        )
+
+        def directory_names(descriptor: int, label: str) -> tuple[str, ...]:
+            names: list[str] = []
+            try:
+                with os.scandir(descriptor) as entries:
+                    for entry in entries:
+                        names.append(entry.name)
+                        if len(names) > _MAX_RETAINED_RECORDS:
+                            raise BootstrapError(f"{label} contains too many entries")
+            except OSError as error:
+                raise BootstrapError(f"{label} could not be enumerated") from error
+            return tuple(sorted(names))
+
+        def walk(descriptor: int, relative_directory: str) -> None:
+            nonlocal file_bytes, record_count
+            before = os.fstat(descriptor)
+            names = directory_names(
+                descriptor, f"retained {relative_directory or '.'}"
+            )
+            for name in names:
+                if not relative_directory and name in {
+                    "source", "retained-evidence-inventory.json",
+                }:
+                    continue
+                if name.startswith((".owned-quarantine.", ".owned-quiescent.")):
+                    raise BootstrapError("retained release contains a cleanup quarantine")
+                relative = name if not relative_directory else f"{relative_directory}/{name}"
+                if (
+                    len(relative.encode()) > _MAX_RETAINED_PATH_BYTES
+                    or len(relative.split("/")) > _MAX_RETAINED_DEPTH
+                ):
+                    raise BootstrapError("retained release path exceeds its bound")
+                try:
+                    metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                except OSError as error:
+                    raise BootstrapError(f"retained release entry is unavailable: {relative}") from error
+                record_count += 1
+                if (
+                    record_count > _MAX_RETAINED_RECORDS
+                    or metadata.st_uid != os.getuid()
+                    or stat.S_ISLNK(metadata.st_mode)
+                ):
+                    raise BootstrapError(f"retained release entry is unsafe: {relative}")
+                path = release_runner.joinpath(*relative.split("/"))
+                if stat.S_ISDIR(metadata.st_mode):
+                    observed.append({
+                        "path": relative,
+                        "kind": "directory",
+                        "mode": f"{stat.S_IMODE(metadata.st_mode):04o}",
+                    })
+                    try:
+                        child = os.open(name, directory_flags, dir_fd=descriptor)
+                    except OSError as error:
+                        raise BootstrapError(f"retained directory could not be opened: {relative}") from error
+                    try:
+                        opened = os.fstat(child)
+                        if not stat.S_ISDIR(opened.st_mode) or any(
+                            getattr(opened, field) != getattr(metadata, field)
+                            for field in stable_directory_fields
+                        ):
+                            raise BootstrapError(f"retained directory changed: {relative}")
+                        walk(child, relative)
+                    finally:
+                        os.close(child)
+                    current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                    if any(
+                        getattr(current, field) != getattr(metadata, field)
+                        for field in stable_directory_fields
+                    ):
+                        raise BootstrapError(f"retained directory changed: {relative}")
+                elif stat.S_ISREG(metadata.st_mode):
+                    if metadata.st_nlink != 1 or stat.S_IMODE(metadata.st_mode) & 0o022:
+                        raise BootstrapError(f"retained release file is unsafe: {relative}")
+                    snapshot = _capture_large_file_at(
+                        descriptor,
+                        name,
+                        path,
+                        f"retained release entry {relative}",
+                        maximum_bytes=_MAX_RETAINED_FILE_BYTES,
+                    )
+                    file_bytes += snapshot.size
+                    if file_bytes > _MAX_RETAINED_TOTAL_BYTES:
+                        raise BootstrapError("retained release files exceed their total bound")
+                    observed.append({
+                        "path": relative,
+                        "kind": "file",
+                        "mode": f"{snapshot.mode:04o}",
+                        "size": snapshot.size,
+                        "sha256": snapshot.sha256,
+                    })
+                    local_files[relative] = snapshot
+                else:
+                    raise BootstrapError(f"retained release entry is special: {relative}")
+            after = os.fstat(descriptor)
+            if names != directory_names(
+                descriptor, f"retained {relative_directory or '.'}"
+            ) or any(
+                getattr(after, field) != getattr(before, field)
+                for field in stable_directory_fields
+            ):
+                raise BootstrapError(
+                    f"retained directory changed while read: {relative_directory or '.'}"
+                )
+
+        walk(root_fd, "")
+        if (
+            observed != records
+            or inventory["file_bytes"] != file_bytes
+            or inventory["record_count"] != record_count
+            or _private_directory_snapshot(
+                release_runner, "retained release evidence root"
+            ) != root_snapshot
+        ):
+            raise BootstrapError("retained release exact inventory changed")
+        for field, (_, _, relative) in protected_specs.items():
+            if field == "inventory":
+                local_digest = inventory_local.sha256
+                local_size = inventory_local.size
+            else:
+                local = local_files.get(relative)
+                if local is None:
+                    raise BootstrapError(f"retained {field} is absent from the exact tree")
+                local_digest = local.sha256
+                local_size = local.size
+            record = binding_records[field]
+            if record["sha256"] != local_digest or record["size"] != local_size:
+                raise BootstrapError(f"retained {field} local binding changed")
+    finally:
+        os.close(root_fd)
+
+    ack_snapshot = protected["receipt_validation"]
+    ack = _require_exact_json_fields(
+        _parse_canonical_json(ack_snapshot, "receipt validation acknowledgment"),
+        {"format", "schema_version", "profile", "invocation_root", "sealed_source", "receipt", "validator", "argv", "exit_status", "stdout", "stderr"},
+        "receipt validation acknowledgment",
+    )
+    receipt_record = _require_exact_json_fields(ack["receipt"], {"path", "sha256", "size"}, "ack receipt")
+    source_record = _require_exact_json_fields(ack["sealed_source"], {"path", "manifest_sha256"}, "ack sealed source")
+    validator_record = _require_exact_json_fields(ack["validator"], {"path", "sha256", "bootstrap_completion_sha256"}, "ack validator")
+    stdout_record = _require_exact_json_fields(ack["stdout"], {"base64", "sha256", "size"}, "ack stdout")
+    stderr_record = _require_exact_json_fields(ack["stderr"], {"base64", "sha256", "size"}, "ack stderr")
+    argv_record = _require_exact_json_fields(ack["argv"], {"profile", "python_flags", "validator", "operation", "option_names_sha256"}, "ack argv")
+    expected_stdout = f"Sumeragi v2 aggregate release receipt verified: {result['receipt']['path']}\n".encode()
+    validator_snapshot = _read_file_at(
+        evidence_fd,
+        "validate-receipt.py",
+        evidence / "validate-receipt.py",
+        "archived receipt validator",
+        maximum_bytes=_MAX_HELPER_BYTES,
+    )
+    try:
+        stdout = base64.b64decode(stdout_record["base64"], validate=True)
+        stderr = base64.b64decode(stderr_record["base64"], validate=True)
+    except (TypeError, ValueError, binascii.Error) as error:
+        raise BootstrapError("receipt validation acknowledgment streams are malformed") from error
+    if (
+        ack["format"] != "iroha-sumeragi-v2-receipt-validation-ack"
+        or type(ack["schema_version"]) is not int or ack["schema_version"] != 1
+        or ack["profile"] != "release" or ack["invocation_root"] != str(release_runner)
+        or source_record != {"path": str(source), "manifest_sha256": result["source_manifest_sha256"]}
+        or receipt_record != {"path": result["receipt"]["path"], "sha256": protected["receipt"].sha256, "size": protected["receipt"].size}
+        or validator_record["path"] != str(validator_snapshot.path)
+        or validator_record["sha256"] != validator_snapshot.sha256
+        or not isinstance(validator_record["bootstrap_completion_sha256"], str)
+        or _DIGEST_RE.fullmatch(validator_record["bootstrap_completion_sha256"]) is None
+        or type(receipt_record["size"]) is not int
+        or type(ack["exit_status"]) is not int or ack["exit_status"] != 0
+        or argv_record["profile"] != "release"
+        or argv_record["python_flags"] != ["-I", "-S"]
+        or argv_record["validator"] != "protected:validate-receipt.py"
+        or argv_record["operation"] != "verify-existing-and-ack"
+        or argv_record["option_names_sha256"] != "deea2d469c8fe65392527c24562b64fa728c21f6ee9f679d595e09304e8b56b1"
+        or type(stdout_record["size"]) is not int or type(stderr_record["size"]) is not int
+        or stdout != expected_stdout or stderr
+        or stdout_record != {"base64": base64.b64encode(stdout).decode(), "sha256": hashlib.sha256(stdout).hexdigest(), "size": len(stdout)}
+        or stderr_record != {"base64": "", "sha256": hashlib.sha256(b"").hexdigest(), "size": 0}
+    ):
+        raise BootstrapError("receipt validation acknowledgment contract is not exact")
+    return release_runner, protected["receipt"].path, protected["sealed_identity"].path, result_snapshot, inventory_snapshot, ack_snapshot
+
+
+def _receipt_validation_failure(
+    evidence: Path,
+    evidence_fd: int,
+    identity: dict[str, Any],
+    identity_snapshot: FileSnapshot,
+    bootstrap_marker: FileSnapshot,
+    protected_validator: FileSnapshot,
+) -> tuple[FileSnapshot, dict[str, FileSnapshot]]:
+    """Authenticate the bounded failure record published after root cleanup."""
+
+    marker_snapshot = _read_file_at(
+        evidence_fd,
+        "RECEIPT_VALIDATION_FAILED.json",
+        evidence / "RECEIPT_VALIDATION_FAILED.json",
+        "receipt validation failure marker",
+        maximum_bytes=_MAX_VALIDATOR_FAILURE_MARKER_BYTES,
+    )
+    marker = _require_exact_json_fields(
+        _parse_canonical_json(marker_snapshot, "receipt validation failure marker"),
+        {
+            "format", "schema_version", "result", "stage", "profile",
+            "bootstrap_completion_sha256", "candidate_identity",
+            "sealed_source_manifest_sha256", "receipt", "validator", "argv",
+            "diagnostics", "invocation_cleanup",
+        },
+        "receipt validation failure marker",
+    )
+    candidate = _require_exact_json_fields(
+        marker["candidate_identity"], {"sha256", "head_commit", "head_tree"},
+        "receipt validation failure candidate identity",
+    )
+    receipt = _require_exact_json_fields(
+        marker["receipt"], {"disclosure", "sha256", "size_bytes"},
+        "receipt validation failure receipt",
+    )
+    validator = _require_exact_json_fields(
+        marker["validator"], {"archive_name", "sha256", "exit_status"},
+        "receipt validation failure validator",
+    )
+    argv = _require_exact_json_fields(
+        marker["argv"],
+        {"profile", "python_flags", "validator", "operation", "option_names_sha256"},
+        "receipt validation failure argv",
+    )
+    diagnostics = _require_exact_json_fields(
+        marker["diagnostics"], {"stdout", "stderr"},
+        "receipt validation failure diagnostics",
+    )
+    if (
+        marker["format"] != "iroha-sumeragi-v2-receipt-validation-failure"
+        or type(marker["schema_version"]) is not int
+        or marker["schema_version"] != 1
+        or marker["result"] != "release-failed"
+        or marker["stage"] != "protected-receipt-validation"
+        or marker["profile"] != "release"
+        or marker["bootstrap_completion_sha256"] != bootstrap_marker.sha256
+        or candidate != {
+            "sha256": identity_snapshot.sha256,
+            "head_commit": identity["head_commit"],
+            "head_tree": identity["head_tree"],
+        }
+        or not isinstance(marker["sealed_source_manifest_sha256"], str)
+        or _DIGEST_RE.fullmatch(marker["sealed_source_manifest_sha256"]) is None
+        or receipt.get("disclosure") != "unverified-no-retention"
+        or not isinstance(receipt.get("sha256"), str)
+        or _DIGEST_RE.fullmatch(receipt["sha256"]) is None
+        or type(receipt.get("size_bytes")) is not int
+        or receipt["size_bytes"] < 0
+        or validator.get("archive_name") != "validate-receipt.py"
+        or validator.get("sha256") != protected_validator.sha256
+        or type(validator.get("exit_status")) is not int
+        or not 1 <= validator["exit_status"] <= 255
+        or argv != {
+            "profile": "release",
+            "python_flags": ["-I", "-S"],
+            "validator": "protected:validate-receipt.py",
+            "operation": "verify-existing-and-ack",
+            "option_names_sha256": _VALIDATOR_OPTION_NAMES_SHA256,
+        }
+        or marker["invocation_cleanup"] != "complete"
+    ):
+        raise BootstrapError("receipt validation failure marker contract is not exact")
+
+    streams: dict[str, FileSnapshot] = {}
+    for name in ("stdout", "stderr"):
+        record = _require_exact_json_fields(
+            diagnostics[name],
+            {
+                "name", "sha256", "captured_size_bytes", "observed_size_bytes",
+                "truncated", "mode",
+            },
+            f"receipt validator {name} diagnostic",
+        )
+        expected_name = f"receipt-validator-failure.{name}"
+        if (
+            record.get("name") != expected_name
+            or not isinstance(record.get("sha256"), str)
+            or _DIGEST_RE.fullmatch(record["sha256"]) is None
+            or type(record.get("captured_size_bytes")) is not int
+            or not 0 <= record["captured_size_bytes"] <= _MAX_VALIDATOR_DIAGNOSTIC_BYTES
+            or type(record.get("observed_size_bytes")) is not int
+            or record["observed_size_bytes"] < record["captured_size_bytes"]
+            or type(record.get("truncated")) is not bool
+            or record["truncated"]
+            != (record["observed_size_bytes"] > record["captured_size_bytes"])
+            or record.get("mode") != "0400"
+        ):
+            raise BootstrapError(f"receipt validator {name} diagnostic contract is not exact")
+        snapshot = _read_file_at(
+            evidence_fd,
+            expected_name,
+            evidence / expected_name,
+            f"receipt validator {name} diagnostic",
+            maximum_bytes=_MAX_VALIDATOR_DIAGNOSTIC_BYTES,
+        )
+        if (
+            snapshot.sha256 != record["sha256"]
+            or snapshot.size != record["captured_size_bytes"]
+            or snapshot.mode != _DATA_MODE
+            or snapshot.owner != os.getuid()
+            or snapshot.nlink != 1
+        ):
+            raise BootstrapError(f"receipt validator {name} diagnostic changed")
+        streams[name] = snapshot
+    for name in (
+        "BOOTSTRAP_RELEASE_COMPLETED.json", "RELEASE_COMPLETED.json",
+        "receipt-validation-ack.json", "release-retained-inventory.json",
+        "release-runner-result.json", "sealed-identity.json",
+    ):
+        try:
+            os.stat(name, dir_fd=evidence_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise BootstrapError("could not inspect failure-only evidence") from error
+        raise BootstrapError("receipt validation failure retained success evidence")
+    return marker_snapshot, streams
+
+
+def _remove_completed_runner_log(
+    evidence_fd: int, snapshot: LargeFileSnapshot, label: str
+) -> None:
+    """Remove a completed bootstrap-owned runner log at a quiescent boundary."""
+
+    try:
+        current = os.stat(snapshot.path.name, dir_fd=evidence_fd, follow_symlinks=False)
+    except OSError as error:
+        raise BootstrapError(f"{label} became unavailable before cleanup") from error
+    if (
+        not stat.S_ISREG(current.st_mode)
+        or (current.st_dev, current.st_ino) != (snapshot.device, snapshot.inode)
+        or current.st_uid != snapshot.owner
+        or current.st_nlink != snapshot.nlink
+        or current.st_size != snapshot.size
+        or stat.S_IMODE(current.st_mode) != snapshot.mode
+    ):
+        raise BootstrapError(f"{label} changed before cleanup")
+    try:
+        os.unlink(snapshot.path.name, dir_fd=evidence_fd)
+        os.fsync(evidence_fd)
+    except OSError as error:
+        raise BootstrapError(f"could not remove {label}") from error
+
+
 def _validate_terminal_receipt(
     *,
     evidence: Path,
@@ -2041,13 +2779,15 @@ def _validate_terminal_receipt(
     protected: dict[str, FileSnapshot],
     identity_attestation: dict[str, Any],
     expected_signer_fingerprint: str,
+    release_runner: Path | None = None,
+    receipt_path: Path | None = None,
 ) -> tuple[
     FileSnapshot,
     dict[str, Any],
     list[LargeFileSnapshot],
     list[DirectorySnapshot],
 ]:
-    release_runner = evidence / "release-runner"
+    release_runner = release_runner or evidence / "release-runner"
     output = release_runner / "output"
     release = output / "release"
     directories = [
@@ -2055,7 +2795,7 @@ def _validate_terminal_receipt(
         _private_directory_snapshot(output, "release output directory"),
         _private_directory_snapshot(release, "terminal receipt directory"),
     ]
-    receipt_path = release / "RELEASE_COMPLETED.json"
+    receipt_path = receipt_path or release / "RELEASE_COMPLETED.json"
     receipt_snapshot = _read_file(
         receipt_path,
         "terminal release receipt",
@@ -2158,7 +2898,7 @@ def _validate_terminal_receipt(
     terminal_artifacts, terminal_evidence_directories = (
         _validate_terminal_release_evidence(
             receipt_evidence=receipt_evidence,
-            evidence=evidence,
+            evidence=output,
             release_root=release_runner / "source",
             receipt_identity=receipt_identity,
             runner_record=runner_record,
@@ -2351,13 +3091,16 @@ def _validate_retained_source(
     manifest_helper: Path,
     environment: dict[str, str],
     timeout_seconds: int,
+    release_runner: Path | None = None,
+    sealed_identity_path: Path | None = None,
 ) -> tuple[FileSnapshot, dict[str, Any], DirectorySnapshot]:
-    sealed_root = evidence / "release-runner" / "source"
+    release_runner = release_runner or evidence / "release-runner"
+    sealed_root = release_runner / "source"
     sealed_directory = _sealed_directory_snapshot(
         sealed_root, "retained sealed source root"
     )
     sealed_identity_snapshot = _read_file(
-        evidence / "release-runner" / "sealed-identity.json",
+        sealed_identity_path or release_runner / "sealed-identity.json",
         "retained sealed identity",
         maximum_bytes=_MAX_IDENTITY_BYTES,
     )
@@ -3180,39 +3923,77 @@ def _revalidate_runner_tools(
 
 
 def _cleanup(path: Path) -> None:
-    stack = [path]
-    while stack:
-        target = stack.pop()
-        try:
-            metadata = target.lstat()
-        except OSError:
-            continue
-        if (
-            stat.S_ISDIR(metadata.st_mode)
-            and not stat.S_ISLNK(metadata.st_mode)
-            and metadata.st_uid == os.getuid()
-        ):
-            try:
-                os.chmod(target, stat.S_IMODE(metadata.st_mode) | 0o700)
-            except OSError:
-                continue
-            try:
-                with os.scandir(target) as entries:
-                    for entry in entries:
-                        try:
-                            if entry.is_dir(follow_symlinks=False):
-                                stack.append(Path(entry.path))
-                        except OSError:
-                            continue
-            except OSError:
-                continue
-
     try:
-        shutil.rmtree(path)
+        parent = path.parent.resolve(strict=True)
+        parent_fd = os.open(
+            parent,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
     except FileNotFoundError:
         return
     except OSError as error:
         print(f"warning: could not remove failed bootstrap evidence: {error}", file=sys.stderr)
+        return
+    try:
+        expected = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat.S_ISDIR(expected.st_mode) or expected.st_uid != os.getuid():
+            return
+
+        def remove_tree(directory_fd: int, label: str) -> None:
+            with os.scandir(directory_fd) as entries:
+                names = tuple(sorted(entry.name for entry in entries))
+            for name in names:
+                metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
+                    child = os.open(
+                        name,
+                        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+                        | getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=directory_fd,
+                    )
+                    try:
+                        opened = os.fstat(child)
+                        if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino) or opened.st_uid != os.getuid():
+                            raise BootstrapError(f"failed cleanup entry changed: {label}/{name}")
+                        os.fchmod(child, stat.S_IMODE(opened.st_mode) | 0o700)
+                        remove_tree(child, f"{label}/{name}")
+                    finally:
+                        os.close(child)
+                    current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                    if (current.st_dev, current.st_ino) != (metadata.st_dev, metadata.st_ino):
+                        raise BootstrapError(f"failed cleanup entry was replaced: {label}/{name}")
+                    os.rmdir(name, dir_fd=directory_fd)
+                elif stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+                    current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                    if (current.st_dev, current.st_ino) != (metadata.st_dev, metadata.st_ino):
+                        raise BootstrapError(f"failed cleanup entry was replaced: {label}/{name}")
+                    os.unlink(name, dir_fd=directory_fd)
+                else:
+                    raise BootstrapError(f"failed cleanup refuses special entry: {label}/{name}")
+
+        root_fd = os.open(
+            path.name,
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=parent_fd,
+        )
+        try:
+            opened = os.fstat(root_fd)
+            if (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino):
+                return
+            os.fchmod(root_fd, stat.S_IMODE(opened.st_mode) | 0o700)
+            remove_tree(root_fd, path.name)
+        finally:
+            os.close(root_fd)
+        current = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino):
+            raise BootstrapError("failed cleanup root was replaced")
+        os.rmdir(path.name, dir_fd=parent_fd)
+    except (FileNotFoundError, OSError, BootstrapError) as error:
+        print(f"warning: could not remove failed bootstrap evidence: {error}", file=sys.stderr)
+    finally:
+        os.close(parent_fd)
 
 
 def bootstrap(args: argparse.Namespace) -> int:
@@ -3260,6 +4041,13 @@ def bootstrap(args: argparse.Namespace) -> int:
             "receipt_validator_support",
             args.receipt_validator_support,
             args.expected_receipt_validator_support_sha256,
+            _MAX_HELPER_BYTES,
+            False,
+        ),
+        (
+            "runtime_helper",
+            args.runtime_helper,
+            args.expected_runtime_helper_sha256,
             _MAX_HELPER_BYTES,
             False,
         ),
@@ -3322,6 +4110,7 @@ def bootstrap(args: argparse.Namespace) -> int:
     evidence, evidence_fd = _prepare_evidence_directory(args.evidence_dir, candidate)
     evidence_directory_stat = os.fstat(evidence_fd)
     success = False
+    retained_failure_cleanup: DirectorySnapshot | None = None
     runner_stdout_descriptor: int | None = None
     runner_stderr_descriptor: int | None = None
     runner_logs: dict[str, LargeFileSnapshot] = {}
@@ -3348,6 +4137,7 @@ def bootstrap(args: argparse.Namespace) -> int:
             "identity_verifier": "verify-identity.py",
             "receipt_validator": "validate-receipt.py",
             "receipt_validator_support": "sumeragi_v2_localnet_manifest.py",
+            "runtime_helper": "copy-release-runtime.py",
             "runner_tool_manifest": "runner-tool-manifest.json",
             "allowed_signers": "bootstrap-allowed-signers",
             "revocation": "bootstrap-revocation",
@@ -3519,6 +4309,12 @@ def bootstrap(args: argparse.Namespace) -> int:
 
         completion_path = evidence / "BOOTSTRAP_COMPLETED.json"
         policy_environment_without_self_digest = {
+            "SUMERAGI_V2_RELEASE_RUNTIME_HELPER": str(
+                archives["runtime_helper"].path
+            ),
+            "SUMERAGI_V2_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256": protected[
+                "runtime_helper"
+            ].sha256,
             "SUMERAGI_V2_RELEASE_SSH_KEYGEN_BIN": str(archives["ssh_keygen"].path),
             "SUMERAGI_V2_RELEASE_EXPECTED_GIT_SHA256": protected["git"].sha256,
             "SUMERAGI_V2_RELEASE_EXPECTED_SSH_KEYGEN_SHA256": protected[
@@ -3554,6 +4350,12 @@ def bootstrap(args: argparse.Namespace) -> int:
             for key, value in policy_environment_without_self_digest.items()
             if key.startswith("SUMERAGI_V2_RELEASE_BOOTSTRAP_")
         }
+        alias_environment_without_self_digest.update({
+            "IROHA_RELEASE_RUNTIME_HELPER": str(archives["runtime_helper"].path),
+            "IROHA_RELEASE_EXPECTED_RUNTIME_HELPER_SHA256": protected[
+                "runtime_helper"
+            ].sha256,
+        })
         runner_environment_without_self_digest = _closed_environment(
             evidence,
             [runner_bin],
@@ -3749,6 +4551,31 @@ def bootstrap(args: argparse.Namespace) -> int:
                 f"post-run bootstrap evidence became unavailable: {error}"
             )
 
+        if runner_status == _RECEIPT_VALIDATION_FAILED_STATUS:
+            if post_error is not None:
+                raise post_error
+            failure_marker, _ = _receipt_validation_failure(
+                evidence,
+                evidence_fd,
+                identity,
+                identity_snapshot,
+                marker,
+                protected["receipt_validator"],
+            )
+            for label, snapshot in sorted(runner_logs.items()):
+                _remove_completed_runner_log(
+                    evidence_fd, snapshot, f"release runner {label} log"
+                )
+            success = True
+            try:
+                print(
+                    "protected receipt validation failed; bounded diagnostics: "
+                    f"{failure_marker.path} sha256={failure_marker.sha256}",
+                    file=sys.stderr,
+                )
+            except OSError:
+                pass
+            return 2
         if runner_status == _COOPERATIVE_CANCELLED_STATUS:
             if post_error is not None:
                 raise post_error
@@ -3781,6 +4608,20 @@ def bootstrap(args: argparse.Namespace) -> int:
             raise post_error
 
         (
+            retained_release_root,
+            retained_receipt_path,
+            retained_identity_path,
+            retained_result_snapshot,
+            retained_inventory_snapshot,
+            retained_validation_ack,
+        ) = _retained_release_layout(evidence, evidence_fd)
+        if retained_result_snapshot is None or retained_validation_ack is None:
+            raise BootstrapError("production release lacks protected retained result and validator acknowledgment")
+        if retained_result_snapshot is not None:
+            retained_failure_cleanup = _private_directory_snapshot(
+                retained_release_root, "retained release cleanup root"
+            )
+        (
             terminal_receipt,
             terminal_receipt_value,
             terminal_artifacts,
@@ -3797,6 +4638,8 @@ def bootstrap(args: argparse.Namespace) -> int:
             protected=protected,
             identity_attestation=identity_attestation,
             expected_signer_fingerprint=args.expected_signer_fingerprint,
+            release_runner=retained_release_root,
+            receipt_path=retained_receipt_path,
         )
         _require_unchanged(
             terminal_receipt,
@@ -3820,24 +4663,20 @@ def bootstrap(args: argparse.Namespace) -> int:
                 manifest_helper=archives["manifest_helper"].path,
                 environment=runner_environment,
                 timeout_seconds=args.command_timeout_seconds,
+                release_runner=retained_release_root,
+                sealed_identity_path=retained_identity_path,
             )
         )
-        receipt_validation = _run_protected_receipt_validator(
-            evidence=evidence,
-            candidate=candidate,
-            receipt=terminal_receipt_value,
-            receipt_snapshot=terminal_receipt,
-            sealed_identity_snapshot=sealed_identity_snapshot,
-            sealed_root=sealed_directory.path,
-            archives=archives,
-            protected=protected,
-            identity_snapshot=identity_snapshot,
-            identity_outputs=identity_outputs,
-            bootstrap_marker=marker,
-            expected_signer_fingerprint=args.expected_signer_fingerprint,
-            environment=runner_environment,
-            timeout_seconds=args.command_timeout_seconds,
-        )
+        ack = _parse_canonical_json(retained_validation_ack, "receipt validation acknowledgment")
+        if ack["validator"]["bootstrap_completion_sha256"] != marker.sha256:
+            raise BootstrapError("receipt validation acknowledgment names the wrong bootstrap")
+        for snapshot, label in (
+            (retained_result_snapshot, "protected outer release result"),
+            (retained_inventory_snapshot, "protected retained release inventory"),
+            (retained_validation_ack, "protected receipt validation acknowledgment"),
+        ):
+            if snapshot is not None:
+                _require_unchanged(snapshot, label, maximum_bytes=max(snapshot.size, 1))
         _require_unchanged(
             terminal_receipt,
             "protected-validator terminal release receipt",
@@ -3893,7 +4732,15 @@ def bootstrap(args: argparse.Namespace) -> int:
             "receipt_validator": {
                 "archive_path": str(archives["receipt_validator"].path),
                 "sha256": protected["receipt_validator"].sha256,
-                "exit_status": receipt_validation.returncode,
+                "exit_status": ack["exit_status"],
+                "ack_path": (
+                    str(retained_validation_ack.path)
+                    if retained_validation_ack is not None else None
+                ),
+                "ack_sha256": (
+                    retained_validation_ack.sha256
+                    if retained_validation_ack is not None else None
+                ),
             },
             "terminal_receipt": {
                 "path": str(terminal_receipt.path),
@@ -4019,6 +4866,15 @@ def bootstrap(args: argparse.Namespace) -> int:
             if success:
                 raise BootstrapError("could not close successful bootstrap evidence")
         if not success:
+            if retained_failure_cleanup is not None:
+                try:
+                    if _private_directory_snapshot(
+                        retained_failure_cleanup.path,
+                        "retained release cleanup root",
+                    ) == retained_failure_cleanup:
+                        _cleanup(retained_failure_cleanup.path)
+                except (BootstrapError, OSError):
+                    pass
             _cleanup(evidence)
 
 
@@ -4050,6 +4906,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--expected-receipt-validator-support-sha256", required=True
     )
+    parser.add_argument("--runtime-helper", type=Path, required=True)
+    parser.add_argument("--expected-runtime-helper-sha256", required=True)
     parser.add_argument("--runner-tool-manifest", type=Path, required=True)
     parser.add_argument("--expected-runner-tool-manifest-sha256", required=True)
     parser.add_argument("--bash-bin", type=Path, required=True)

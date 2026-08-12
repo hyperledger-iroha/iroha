@@ -1515,7 +1515,7 @@ pub mod query {
     use iroha_data_model::query::{
         dsl::{CompoundPredicate, EvaluatePredicate},
         error::QueryExecutionFail as Error,
-        json::{EqualsCondition, InCondition, PredicateJson},
+        json::PredicateJson,
     };
     use iroha_data_model::rwa::RwaEntry;
     use norito::json::Value;
@@ -1549,40 +1549,6 @@ pub mod query {
             view.ingest_predicate(parsed);
 
             view
-        }
-
-        fn parse_predicate_value(value: Value) -> Option<PredicateJson> {
-            PredicateJson::try_from_value(&value).ok().or_else(|| {
-                if let Value::Object(map) = value {
-                    let mut predicate = PredicateJson::default();
-                    for (field, raw_value) in map {
-                        match raw_value {
-                            Value::String(raw) => {
-                                predicate
-                                    .equals
-                                    .push(EqualsCondition::new(field, Value::String(raw)));
-                            }
-                            Value::Bool(raw) => {
-                                predicate
-                                    .equals
-                                    .push(EqualsCondition::new(field, Value::Bool(raw)));
-                            }
-                            Value::Null => {
-                                predicate
-                                    .equals
-                                    .push(EqualsCondition::new(field, Value::Null));
-                            }
-                            Value::Array(values) if !values.is_empty() => {
-                                predicate.r#in.push(InCondition::new(field, values));
-                            }
-                            _ => {}
-                        }
-                    }
-                    Some(predicate)
-                } else {
-                    None
-                }
-            })
         }
 
         fn ingest_predicate(&mut self, predicate: PredicateJson) {
@@ -1787,7 +1753,7 @@ pub mod query {
 
     fn rwa_json_value<'a>(cache: &'a mut Option<Value>, rwa: &Rwa) -> Option<&'a Value> {
         if cache.is_none() {
-            *cache = super::query::ordinary_predicate_json_value(rwa);
+            *cache = crate::smartcontracts::isi::query::ordinary_predicate_json_value(rwa);
         }
         cache.as_ref()
     }
@@ -1924,9 +1890,9 @@ pub mod query {
         ) -> Result<impl Iterator<Item = Rwa>, Error> {
             let world = state_ro.world();
             let predicate_view = RwaPredicateView::from_predicate(&filter);
-            let predicate_json = filter
-                .json_payload()
-                .and_then(iroha_data_model::query::json::predicate_json_candidate_plan_for_execution);
+            let predicate_json = filter.json_payload().and_then(
+                iroha_data_model::query::json::predicate_json_candidate_plan_for_execution,
+            );
 
             let iter: Box<dyn Iterator<Item = Rwa> + '_> =
                 if let Some(candidate_ids) = predicate_view.indexed_candidate_ids(world) {

@@ -404,7 +404,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
 /// by Iroha out of the box.
 pub fn default() -> InstructionRegistry {
     let registry = apply_registrars(ALL_REGISTRARS.iter().copied());
-    with_stable_ids(registry)
+    wire_ids::apply(registry)
 }
 
 /// Return whether `wire_id` identifies a built-in instruction accepted by the default registry.
@@ -424,14 +424,6 @@ fn apply_registrars(registrars: impl IntoIterator<Item = Registrar>) -> Instruct
         .fold(InstructionRegistry::new(), |registry, register| {
             register(registry)
         })
-}
-
-/// Attach stable wire identifiers without rebuilding any typed codec adapter.
-///
-/// Every concrete codec path is minted exactly once by [`ALL_REGISTRARS`].
-/// This pass only replaces lookup metadata on the existing entries.
-fn with_stable_ids(registry: InstructionRegistry) -> InstructionRegistry {
-    wire_ids::apply(registry)
 }
 
 #[cfg(test)]

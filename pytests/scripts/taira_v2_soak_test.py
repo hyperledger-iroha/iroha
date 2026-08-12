@@ -341,6 +341,7 @@ esac
     cargo.chmod(0o755)
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["IROHA_RELEASE_CARGO_BIN"] = str(cargo)
     env["TAIRA_SOAK_CAPTURE"] = str(capture)
     env["TAIRA_EVIDENCE_CHECK_CAPTURE"] = str(checker_capture)
     env["TAIRA_FAKE_INVENTORY_MODE"] = inventory_mode
@@ -404,7 +405,7 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     calls = [line for line in captured.splitlines() if line.startswith("args=")]
     assert len(calls) == 2
     assert all(
-        "+1.93.1 test -j1 --locked --offline --release -p integration_tests "
+        "test -j1 --locked --offline --release -p integration_tests "
         "--test consensus_and_da"
         in call
         for call in calls

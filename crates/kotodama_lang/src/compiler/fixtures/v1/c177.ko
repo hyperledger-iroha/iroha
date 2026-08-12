@@ -1,0 +1,22 @@
+
+        seiyaku Demo {
+            kotoage fn run() authorize("Entry") {}
+
+            #[test]
+            fn smoke() {
+                let _acct = test::actor_account("issuer");
+                let _pk = test::actor_public_key("issuer");
+                let _sig = test::actor_sign(actor: "issuer", payload: b"message");
+                test::invoke_kotoage_as(
+                    actor: "issuer",
+                    kotoage: "run",
+                    arguments: Json::parse("{}"),
+                );
+                test::expect_reject_as(
+                    actor: "issuer",
+                    kotoage: "run",
+                    arguments: Json::parse("{}"),
+                );
+            }
+        }
+        

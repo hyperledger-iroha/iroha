@@ -1,0 +1,13 @@
+
+            fn methods() {
+                var List<int, 4> values = [1, 2];
+                values.len();
+                values.get(0);
+                values.try_set(index: 0, value: 3);
+                values.try_push(4);
+                values.contains(3);
+                values.pop();
+                values.take(2);
+                values.enumerate();
+            }
+        

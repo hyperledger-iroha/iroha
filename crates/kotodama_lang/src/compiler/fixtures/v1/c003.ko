@@ -1,0 +1,23 @@
+
+seiyaku StableLoop {
+  kotoage fn main() -> int authorize("Entry") {
+    var alpha = 1;
+    var beta = 2;
+    var gamma = 3;
+    var delta = 4;
+    var epsilon = 5;
+    var cursor = 0;
+    for step in range(4) {
+      if alpha < beta {
+        gamma = gamma + delta;
+      } else {
+        delta = delta + gamma;
+      }
+      alpha = alpha + 1;
+      beta = beta + 2;
+      epsilon = epsilon + alpha;
+      cursor = step + 1;
+    }
+    return alpha + beta + gamma + delta + epsilon + cursor;
+  }
+}

@@ -678,11 +678,12 @@ fn bounded_attachment_discovery_cursor_reaches_every_later_entry() {
         assert!(window.locations.len() <= geometry.max_locations);
         assert!(window.locations.windows(2).all(|pair| pair[0] < pair[1]));
         completed = window.sweep_complete;
+        let budget_reason = window.budget_reason();
         discovered.extend(window.locations);
         if completed {
             break;
         }
-        assert_eq!(window.budget_reason(), Some("work"));
+        assert_eq!(budget_reason, Some("work"));
     }
     assert!(completed, "bounded cursor must finish the directory sweep");
     discovered.sort_unstable();

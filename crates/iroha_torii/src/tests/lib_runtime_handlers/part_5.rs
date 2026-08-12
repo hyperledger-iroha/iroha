@@ -1324,10 +1324,18 @@ async fn trusted_internal_asset_read_is_exactly_scoped_bound_and_conflict_safe()
     }
 
     let conflicting = Asset::new(asset_id, Quantity::from(43_u32));
+    let mut budget = super::torii_local_routed_read_budget(&app).expect("local routed-read budget");
+    let expected =
+        super::torii_bounded_routed_read_source_payload::<Asset, _>(&expected, &mut budget)
+            .expect("bound expected asset payload");
+    let conflicting =
+        super::torii_bounded_routed_read_source_payload::<Asset, _>(&conflicting, &mut budget)
+            .expect("bound conflicting asset payload");
     let conflict = match super::merged_trusted_internal_read_response(
         vec![expected, conflicting],
         ResponseFormat::Json,
         "local",
+        budget,
     ) {
         Ok(_) => panic!("conflicting route payloads must fail closed"),
         Err(response) => response,

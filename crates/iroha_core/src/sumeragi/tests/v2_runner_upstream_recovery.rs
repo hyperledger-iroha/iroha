@@ -61,10 +61,7 @@ fn initially_absent_configured_validator_claims_one_process_generation() {
     let generation = claim.generation();
     assert_ne!(generation, 0);
     assert_eq!(claim.local_peer_id(), &local_peer);
-    assert_eq!(
-        claim.network_id(),
-        context.network_id
-    );
+    assert_eq!(claim.network_id(), context.network_id);
 
     let mut later_context = context.clone();
     later_context.roster.push(wire::ValidatorPower {

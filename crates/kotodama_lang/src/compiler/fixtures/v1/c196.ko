@@ -1,0 +1,6 @@
+
+                seiyaku NoBypass {
+                    const int limit = 4;
+                    view fn inspect(int limit) -> int { return limit; }
+                }
+                

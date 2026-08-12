@@ -7,6 +7,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPTS_DIR = Path(__file__).resolve().parents[1]
 if str(SCRIPTS_DIR) not in sys.path:
@@ -340,6 +342,41 @@ def test_response_file_read_uses_no_follow_open_flags(
     assert captured["flags"] & os.O_RDONLY == os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
         assert captured["flags"] & os.O_NOFOLLOW
+    if hasattr(os, "O_NONBLOCK"):
+        assert captured["flags"] & os.O_NONBLOCK
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFO creation unavailable")
+def test_response_file_fifo_swap_cannot_block(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    args_file = tmp_path / "reviewed.args"
+    args_file.write_text("--dry-run\n", encoding="utf-8")
+    original_open = os.open
+    swapped = False
+
+    def swap_leaf_before_open(path: str | Path, flags: int, *args, **kwargs):
+        nonlocal swapped
+        if (
+            not swapped
+            and path == args_file.name
+            and kwargs.get("dir_fd") is not None
+            and not flags & getattr(os, "O_DIRECTORY", 0)
+        ):
+            swapped = True
+            args_file.unlink()
+            os.mkfifo(args_file, 0o600)
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", swap_leaf_before_open)
+
+    try:
+        expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
+    except ValueError as error:
+        assert str(error) == ARGFILE_MISSING_DIAGNOSTIC
+    else:
+        raise AssertionError("FIFO-swapped response file was accepted")
 
 
 def test_response_file_parent_swap_during_read_fails_closed(

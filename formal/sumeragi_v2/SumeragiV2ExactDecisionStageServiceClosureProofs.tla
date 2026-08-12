@@ -1020,9 +1020,8 @@ ExactDecisionRequestPacketOwned(
 ExactDecisionRequestIngressOwned(
     node, qc, archive, request) ==
   /\ ExactDecisionBodyHoldingAlias(node, qc, archive, request)
-  /\ request \in
-       SequenceSet(
-         IngressLane(archive, IngressResourceSource(request)))
+  /\ \E source \in AsyncIngressSources:
+       request \in SequenceSet(IngressLane(archive, source))
 
 ExactDecisionServeLifecycleIdentity(archive, request) ==
   AsyncServeLogicalRequestIdentity(archive, request)
@@ -1092,7 +1091,8 @@ ExactDecisionResponsePhysicalCompletionResidual(
     node, qc, archive, request, response, packet) ==
   /\ ExactDecisionResponseAdmissionResidual(
        node, qc, archive, request, response, packet)
-  /\ packet = OldestDueSourcePacket(node, response.source)
+  /\ packet =
+       OldestDueSourcePacket(node, packet.authenticatedSource)
   /\ CertifiedResponseFreshClaimGateAllows(response)
   /\ ~AsyncTransportCompletionOwnerGateAllows(response)
 
@@ -1253,8 +1253,9 @@ THEOREM ExactRequestPacketAdmissionCreatesIngressOwner ==
   \A node, qc, archive, request, packet:
     /\ ExactDecisionRequestPacketOwned(
          node, qc, archive, request, packet)
-    /\ packet = OldestDueSourcePacket(archive, request.source)
-    /\ AdmitIngressPacket(archive, request.source)
+    /\ packet =
+         OldestDueSourcePacket(archive, packet.authenticatedSource)
+    /\ AdmitIngressPacket(archive, packet.authenticatedSource)
     => ExactDecisionRequestIngressOwned(
          node, qc, archive, request)'
 BY Isa
@@ -1266,7 +1267,9 @@ BY Isa
        IngressPacketPolicyRejected,
        CertifiedResponsePacketPolicyRejected,
        UntrustedGenericCompletionPacketPolicyRejected,
-       IngressResourceSource, IngressLane, SequenceSet
+       IngressResourceSourceVia, IngressResourceSource,
+       IngressHasCoalescingOwnerVia,
+       IngressLane, SequenceSet
 
 THEOREM NormalExactRequestIngressCreatesFreshServeOwner ==
   \A node, qc, archive, request:
@@ -1370,8 +1373,8 @@ THEOREM FreshExactResponsePacketAdmissionAcquiresRecipientClaim ==
     /\ ExactDecisionResponsePacketOwned(
          node, qc, archive, request, response, packet)
     /\ packet =
-         OldestDueSourcePacket(node, response.source)
-    /\ AdmitFreshHiddenPacket(node, response.source)
+         OldestDueSourcePacket(node, packet.authenticatedSource)
+    /\ AdmitFreshHiddenPacket(node, packet.authenticatedSource)
     => /\ ExactDecisionResponseIngressOwned(
             node, qc, archive, request, response)'
        /\ AsyncCertifiedResponseAuthProjection(response)
@@ -1386,17 +1389,19 @@ BY Isa
        ExactDecisionAuthenticatedResponse,
        ExactDecisionBodyHoldingAlias,
        AdmitFreshHiddenPacket, AdmitHiddenPacket,
+       IngressHasCoalescingOwnerVia,
        IngressHasCoalescingOwner, IngressCoalescingIdentity,
        CertifiedResponseClaimMatches,
-       IngressResourceSource, IngressLane, SequenceSet
+       IngressResourceSourceVia, IngressResourceSource,
+       IngressLane, SequenceSet
 
 THEOREM ExactResponsePacketCoalescingRetainsRouteNeutralClaim ==
   \A node, qc, archive, request, response, packet:
     /\ ExactDecisionResponsePacketOwned(
          node, qc, archive, request, response, packet)
     /\ packet =
-         OldestDueSourcePacket(node, response.source)
-    /\ CoalesceHiddenPacket(node, response.source)
+         OldestDueSourcePacket(node, packet.authenticatedSource)
+    /\ CoalesceHiddenPacket(node, packet.authenticatedSource)
     => /\ asyncCertifiedResponseClaim' =
             asyncCertifiedResponseClaim
        /\ ExactDecisionRouteNeutralResponseClaimOwned(
@@ -1406,8 +1411,10 @@ BY Isa
        ExactDecisionRouteNeutralResponseClaimOwned,
        ExactDecisionAuthenticatedResponse,
        ExactDecisionBodyHoldingAlias,
-       CoalesceHiddenPacket, IngressHasCoalescingOwner,
-       IngressCoalescingIdentity, CertifiedResponseClaimMatches
+       CoalesceHiddenPacket, IngressHasCoalescingOwnerVia,
+       IngressHasCoalescingOwner, IngressCoalescingIdentity,
+       IngressResourceSourceVia, IngressResourceSource,
+       CertifiedResponseClaimMatches
 
 THEOREM ExactDecisionRouteNeutralClaimProjectsIngressOwner ==
   \A node, qc, archive, request, response:
@@ -1431,8 +1438,8 @@ THEOREM FreshExactResponseAdmissionCreatesRouteNeutralIngressOwner ==
     /\ ExactDecisionResponsePacketOwned(
          node, qc, archive, request, response, packet)
     /\ packet =
-         OldestDueSourcePacket(node, response.source)
-    /\ AdmitFreshHiddenPacket(node, response.source)
+         OldestDueSourcePacket(node, packet.authenticatedSource)
+    /\ AdmitFreshHiddenPacket(node, packet.authenticatedSource)
     => ExactDecisionRouteNeutralClaimIngressOwned(
          node, qc, response)'
 BY FreshExactResponsePacketAdmissionAcquiresRecipientClaim,
@@ -1444,8 +1451,8 @@ THEOREM CoalescedExactResponseCreatesRouteNeutralIngressOwner ==
     /\ ExactDecisionResponsePacketOwned(
          node, qc, archive, request, response, packet)
     /\ packet =
-         OldestDueSourcePacket(node, response.source)
-    /\ CoalesceHiddenPacket(node, response.source)
+         OldestDueSourcePacket(node, packet.authenticatedSource)
+    /\ CoalesceHiddenPacket(node, packet.authenticatedSource)
     => ExactDecisionRouteNeutralClaimIngressOwned(
          node, qc, response)'
 BY ExactResponsePacketCoalescingRetainsRouteNeutralClaim,
@@ -1517,9 +1524,9 @@ ExactDecisionWireItem(item) ==
           ELSE DecisionCertifiedResponseLineageExact(node, qc, item)
 
 ExactDecisionWireIngressOwned(item) ==
-  item \in SequenceSet(
-    IngressLane(
-      item.envelope.recipient, IngressResourceSource(item)))
+  \E source \in AsyncIngressSources:
+    item \in SequenceSet(
+      IngressLane(item.envelope.recipient, source))
 
 ExactDecisionWireNextOwner(item) ==
   IF item.kind = "CertifiedRequest"
@@ -1544,23 +1551,23 @@ ExactDecisionWireRunnerReachRank(item) ==
 
 ExactDecisionWirePacketExitReady(packet) ==
   LET recipient == packet.item.envelope.recipient
-      source == packet.item.source
+      source == packet.authenticatedSource
       head == OldestDueSourcePacket(recipient, source)
   IN /\ packet = head
-     /\ IngressPacketCanLeaveTransport(head.item)
+     /\ IngressPacketCanLeaveTransport(head.item, source)
 
 ExactDecisionWirePacketHeadOfLineShadowed(packet) ==
   LET recipient == packet.item.envelope.recipient
-      source == packet.item.source
+      source == packet.authenticatedSource
   IN /\ DueSourcePackets(recipient, source) # {}
      /\ packet # OldestDueSourcePacket(recipient, source)
 
 ExactDecisionWirePacketGateBlocked(packet) ==
   LET recipient == packet.item.envelope.recipient
-      source == packet.item.source
+      source == packet.authenticatedSource
       head == OldestDueSourcePacket(recipient, source)
   IN /\ packet = head
-     /\ ~IngressPacketCanLeaveTransport(head.item)
+     /\ ~IngressPacketCanLeaveTransport(head.item, source)
 
 ExactDecisionWireTransportResidual(packet) ==
   /\ packet \in OverdueResponsivePackets
@@ -1599,7 +1606,8 @@ THEOREM ExitReadyExactDecisionWireHeadEnablesRemoval ==
     /\ ExactDecisionWirePacketExitReady(packet)
     => ENABLED (
          PostGstAdmitHiddenPacket(
-           packet.item.envelope.recipient, packet.item.source)
+           packet.item.envelope.recipient,
+           packet.authenticatedSource)
            /\ packet \notin asyncTransport')
 BY AsyncStrongTypeProjectsAsyncType,
    GstResponsiveNodesAreUp,
@@ -1642,7 +1650,7 @@ BY Isa
 ExactResponseNonTimedBlockedHead(packet) ==
   LET response == packet.item
       recipient == response.envelope.recipient
-      source == response.source
+      source == packet.authenticatedSource
       head == OldestDueSourcePacket(recipient, source)
   IN /\ packet \in OverdueResponsivePackets
      /\ response.kind = "CertifiedResponse"
@@ -1656,7 +1664,7 @@ ExactResponseNonTimedBlockedHead(packet) ==
      /\ DueSourcePackets(recipient, source) # {}
      /\ head # packet
      /\ head \notin OverdueResponsivePackets
-     /\ ~IngressPacketCanLeaveTransport(head.item)
+     /\ ~IngressPacketCanLeaveTransport(head.item, source)
 
 THEOREM NonTimedBlockedHeadDisablesExactResponseLaneAdmission ==
   \A packet:
@@ -1664,7 +1672,8 @@ THEOREM NonTimedBlockedHeadDisablesExactResponseLaneAdmission ==
     /\ gst
     /\ ExactResponseNonTimedBlockedHead(packet)
     => ~ENABLED PostGstAdmitHiddenPacket(
-         packet.item.envelope.recipient, packet.item.source)
+         packet.item.envelope.recipient,
+         packet.authenticatedSource)
 BY ExpandENABLED, Isa
    DEF ExactResponseNonTimedBlockedHead,
        IngressPacketCanLeaveTransport,
@@ -1732,8 +1741,8 @@ THEOREM ExactDecisionFreshResponsePhysicalCompletionDebtIsFinite ==
     /\ ExactDecisionFreshResponsePhysicalCompletionResidual(item)
     => /\ IngressResourceSource(item) = AsyncUntrustedSource
        /\ IngressUsesPhysicalCompletionOwner(item)
-       /\ TransportCompletionOwnerDebt(item) \in Nat \ {0}
-       /\ TransportCompletionOwnerDebt(item)
+       /\ TransportCompletionOwnerDebt(item, item.source) \in Nat \ {0}
+       /\ TransportCompletionOwnerDebt(item, item.source)
             <= AsyncIngressCapacity
 BY ExactDecisionResponseUsesNormalizedPhysicalOwner,
    IngressGateOwnerDebtsAreFiniteNaturals,
@@ -1747,8 +1756,9 @@ THEOREM ExactDecisionResponsePhysicalCompletionDebtIsFinite ==
          node, qc, archive, request, response, packet)
     => /\ IngressResourceSource(response) = AsyncUntrustedSource
        /\ IngressUsesPhysicalCompletionOwner(response)
-       /\ TransportCompletionOwnerDebt(response) \in Nat \ {0}
-       /\ TransportCompletionOwnerDebt(response)
+       /\ TransportCompletionOwnerDebt(
+              response, response.source) \in Nat \ {0}
+       /\ TransportCompletionOwnerDebt(response, response.source)
             <= AsyncIngressCapacity
 BY ExactDecisionFreshResponsePhysicalCompletionDebtIsFinite,
    ExactDecisionResponsePacketIsAuthorized, Isa
@@ -1888,12 +1898,14 @@ PROOF
              AsyncCurrentResponsiveVoters, CurrentVoters
     <2>2. /\ IngressResourceSource(response) =
                   AsyncUntrustedSource
-           /\ TransportCompletionOwnerIndices(response) # {}
+           /\ TransportCompletionOwnerIndices(
+                response, response.source) # {}
       BY <1>1,
          ExactDecisionResponsePhysicalCompletionDebtIsFinite,
          FS_CardinalityType, IsaT(180)
          DEF TransportCompletionOwnerDebt
-    <2>3. PICK index \in TransportCompletionOwnerIndices(response):
+    <2>3. PICK index \in TransportCompletionOwnerIndices(
+                          response, response.source):
              TRUE
       BY <2>2
     <2>4. /\ index \in
@@ -1945,8 +1957,8 @@ THEOREM ExactDecisionFencedCompletionDrainLowersPhysicalDebt ==
     /\ ExactDecisionDrainablePhysicalCompletionResidual(
          node, qc, archive, request, response, packet)
     /\ DrainFairIngressSelected(node)
-    => TransportCompletionOwnerDebt(response)' + 1 =
-         TransportCompletionOwnerDebt(response)
+    => TransportCompletionOwnerDebt(response, response.source)' + 1 =
+         TransportCompletionOwnerDebt(response, response.source)
 BY ExactDecisionDrainablePhysicalCompletionCreatesPrioritySource,
    PrioritySourceSelectsRequestFencedCompletion,
    FirstDrainableIngressIndexIsDrainable,
@@ -1980,8 +1992,8 @@ THEOREM ExactDecisionIngressTurnDrainsFencedPhysicalOwner ==
     /\ ExactDecisionDrainablePhysicalCompletionIngressReady(
          node, qc, archive, request, response, packet)
     /\ PostGstRunNode(node)
-    => TransportCompletionOwnerDebt(response)' + 1 =
-         TransportCompletionOwnerDebt(response)
+    => TransportCompletionOwnerDebt(response, response.source)' + 1 =
+         TransportCompletionOwnerDebt(response, response.source)
 PROOF
   <1>1. ASSUME NEW node, NEW qc, NEW archive, NEW request,
                 NEW response, NEW packet,
@@ -1989,8 +2001,10 @@ PROOF
                 ExactDecisionDrainablePhysicalCompletionIngressReady(
                   node, qc, archive, request, response, packet),
                 PostGstRunNode(node)
-         PROVE TransportCompletionOwnerDebt(response)' + 1 =
-                 TransportCompletionOwnerDebt(response)
+         PROVE TransportCompletionOwnerDebt(
+                   response, response.source)' + 1 =
+                 TransportCompletionOwnerDebt(
+                   response, response.source)
     <2>1. /\ DrainableClaimedResponseReadyIndices(node) = {}
            /\ DrainableRequestFencedCompletionReadyIndices(node) # {}
            /\ DrainableIngressIndices(node) # {}
@@ -2119,9 +2133,10 @@ ExactDecisionRequestPacketAdmissionReady(
   /\ ExactDecisionRequestIngressResidual(
        node, qc, archive, request, packet)
   /\ packet = OldestDueSourcePacket(
-       archive, request.source)
+       archive, packet.authenticatedSource)
   /\ ENABLED (
-       PostGstAdmitHiddenPacket(archive, request.source)
+       PostGstAdmitHiddenPacket(
+         archive, packet.authenticatedSource)
          /\ packet \notin asyncTransport')
 
 ExactDecisionRequestHeadGateOwnerResidual(
@@ -2159,9 +2174,11 @@ ExactDecisionResponsePacketAdmissionReady(
     node, qc, archive, request, response, packet) ==
   /\ ExactDecisionResponseAdmissionResidual(
        node, qc, archive, request, response, packet)
-  /\ packet = OldestDueSourcePacket(node, response.source)
+  /\ packet =
+       OldestDueSourcePacket(node, packet.authenticatedSource)
   /\ ENABLED (
-       PostGstAdmitHiddenPacket(node, response.source)
+       PostGstAdmitHiddenPacket(
+         node, packet.authenticatedSource)
          /\ packet \notin asyncTransport')
 
 ExactDecisionResponseHeadGateOwnerResidual(
@@ -2179,7 +2196,8 @@ ExactDecisionResponseClaimContentionResidual(
     node, qc, archive, request, response, packet) ==
   /\ ExactDecisionResponseHeadGateOwnerResidual(
        node, qc, archive, request, response, packet)
-  /\ packet = OldestDueSourcePacket(node, response.source)
+  /\ packet =
+       OldestDueSourcePacket(node, packet.authenticatedSource)
   /\ CertifiedResponseAuthorized(response)
   /\ ~CertifiedResponseRecipientClaimAvailable(response)
   /\ ~CertifiedResponseClaimMatches(response)
@@ -2299,16 +2317,20 @@ THEOREM ExactDecisionResponseNonPhysicalNonClaimDueHeadCanLeaveTransport ==
     /\ AsyncStrongTypeInvariant
     /\ ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerResidual(
          node, qc, archive, request, response, packet)
-    /\ packet = OldestDueSourcePacket(node, response.source)
-    => IngressPacketCanLeaveTransport(response)
+    /\ packet =
+         OldestDueSourcePacket(node, packet.authenticatedSource)
+    => IngressPacketCanLeaveTransport(
+         response, packet.authenticatedSource)
 PROOF
   <1>1. ASSUME NEW node, NEW qc, NEW archive, NEW request,
                 NEW response, NEW packet,
                 AsyncStrongTypeInvariant,
                 ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerResidual(
                   node, qc, archive, request, response, packet),
-                packet = OldestDueSourcePacket(node, response.source)
-         PROVE IngressPacketCanLeaveTransport(response)
+                packet = OldestDueSourcePacket(
+                  node, packet.authenticatedSource)
+         PROVE IngressPacketCanLeaveTransport(
+                 response, packet.authenticatedSource)
     <2>1. /\ AsyncItemTyped(response)
            /\ response.kind = "CertifiedResponse"
            /\ response.envelope.recipient = node
@@ -2334,18 +2356,21 @@ PROOF
              AsyncPacketContentTypeInvariant,
              AsyncPacketTyped
     <2>2. CASE CertifiedResponseClaimMatches(response)
-      <3>1. IngressHasCoalescingOwner(response)
+      <3>1. IngressHasCoalescingOwnerVia(
+               response, packet.authenticatedSource)
         BY <1>1, <2>1, <2>2, IsaT(180)
            DEF AsyncStrongTypeInvariant,
                AsyncCertifiedResponseClaimIngressOwnershipInvariant,
                CertifiedResponseClaimIngressOwner,
                CertifiedResponseClaimMatches,
                CertifiedResponseClaimsAt,
-               IngressHasCoalescingOwner,
+               IngressHasCoalescingOwnerVia,
                IngressCoalescingIdentity,
+               IngressResourceSourceVia,
                IngressResourceSource,
                IngressLaneDepth, SequenceSet
-      <3>2. IngressCoalescingGateAllows(response)
+      <3>2. IngressCoalescingGateAllows(
+               response, packet.authenticatedSource)
         BY <2>1, <2>2, <3>1
            DEF IngressCoalescingGateAllows
       <3> QED BY <3>2 DEF IngressPacketCanLeaveTransport
@@ -2380,18 +2405,32 @@ PROOF
                ExactDecisionResponseNonPhysicalHeadGateOwnerResidual,
                ExactDecisionResponsePhysicalCompletionResidual
       <3>4. IngressDepth(response.envelope.recipient)
-               < IngressUsableCapacityAfterAdmission(response)
+               < IngressUsableCapacityAfterAdmissionVia(
+                   response, packet.authenticatedSource)
         BY <1>1, <2>1, <3>3,
-           FreshCertifiedResponsePhysicalGateSuppliesIngressCapacity
+           FreshCertifiedResponsePhysicalGateSuppliesIngressCapacity,
+           Isa
+           DEF IngressUsableCapacityAfterAdmissionVia,
+               IngressUsableCapacityAfterAdmission,
+               IngressProtectedSlotCountAfterAdmissionVia,
+               IngressProtectedSlotCountAfterAdmission,
+               IngressLanesAfterAdmissionVia,
+               IngressLanesAfterAdmission,
+               IngressResourceSourceVia,
+               IngressResourceSource
       <3>5. /\ AsyncTimeoutVoteByteGateAllows(response)
              /\ AsyncUntrustedGenericCompletionGateAllows(response)
         BY <2>1
            DEF AsyncTimeoutVoteByteGateAllows,
                AsyncUntrustedGenericCompletionGateAllows,
                IngressAdmissionClass
-      <3>6. CanAdmitIngressItem(response)
-        BY <3>2, <3>3, <3>4, <3>5
-           DEF CanAdmitIngressItem
+      <3>6. CanAdmitIngressItemVia(
+               response, packet.authenticatedSource)
+        BY <2>1, <3>2, <3>3, <3>4, <3>5, Isa
+           DEF CanAdmitIngressItemVia,
+               AsyncServeTransportAdmissionGateAllowsVia,
+               AsyncCertifiedFenceEscapeOwnerGateAllowsVia,
+               AsyncCertifiedFenceEscapeItem
       <3> QED BY <3>6 DEF IngressPacketCanLeaveTransport
     <2> QED BY <2>2, <2>3
   <1> QED BY <1>1
@@ -2402,7 +2441,8 @@ THEOREM ExactDecisionResponseDueHeadIsAdmissionReady ==
     /\ ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerResidual(
          node, qc, archive, request, response, packet)
     /\ packet.deadline <= asyncNow
-    /\ packet = OldestDueSourcePacket(node, response.source)
+    /\ packet =
+         OldestDueSourcePacket(node, packet.authenticatedSource)
     => ExactDecisionResponsePacketAdmissionReady(
          node, qc, archive, request, response, packet)
 BY ExactDecisionResponseNonPhysicalNonClaimDueHeadCanLeaveTransport,
@@ -2442,7 +2482,8 @@ THEOREM ExactDecisionResponseRemainingHeadGateIsDeadlineOrShadow ==
     /\ ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerResidual(
          node, qc, archive, request, response, packet)
     => \/ packet.deadline > asyncNow
-       \/ packet # OldestDueSourcePacket(node, response.source)
+       \/ packet #
+            OldestDueSourcePacket(node, packet.authenticatedSource)
 BY ExactDecisionResponseDueHeadIsAdmissionReady, Isa
    DEF ExactDecisionResponseNonPhysicalNonClaimHeadGateOwnerResidual,
        ExactDecisionResponseNonPhysicalHeadGateOwnerResidual,
@@ -2453,8 +2494,9 @@ THEOREM ExactDecisionResponseAdmissionCreatesExactOutcome ==
     /\ AsyncStrongTypeInvariant
     /\ ExactDecisionResponseAdmissionResidual(
          node, qc, archive, request, response, packet)
-    /\ packet = OldestDueSourcePacket(node, response.source)
-    /\ PostGstAdmitHiddenPacket(node, response.source)
+    /\ packet =
+         OldestDueSourcePacket(node, packet.authenticatedSource)
+    /\ PostGstAdmitHiddenPacket(node, packet.authenticatedSource)
     => ExactDecisionResponseAdmissionOutcome(node, qc, response)'
 BY FreshExactResponseAdmissionCreatesRouteNeutralIngressOwner,
    CoalescedExactResponseCreatesRouteNeutralIngressOwner,
@@ -2493,7 +2535,7 @@ THEOREM ExactDecisionResponseReadyEnablesFairAdmission ==
     /\ ~ExactDecisionResponseAdmissionOutcome(node, qc, response)
     => ENABLED
          <<PostGstAdmitHiddenPacket(
-             node, response.source)>>_AsyncAllVars
+             node, packet.authenticatedSource)>>_AsyncAllVars
 BY ENABLEDaxioms, Isa
    DEF ExactDecisionResponsePacketAdmissionReady,
        ExactDecisionResponseAdmissionResidual,
@@ -2509,7 +2551,7 @@ THEOREM ExactDecisionResponseFairAdmissionCreatesOutcome ==
          node, qc, archive, request, response, packet)
     /\ ~ExactDecisionResponseAdmissionOutcome(node, qc, response)
     /\ <<PostGstAdmitHiddenPacket(
-           node, response.source)>>_AsyncAllVars
+           node, packet.authenticatedSource)>>_AsyncAllVars
     => ExactDecisionResponseAdmissionOutcome(node, qc, response)'
 BY ExactDecisionResponseAdmissionCreatesExactOutcome, Isa
    DEF ExactDecisionResponsePacketAdmissionReady,
@@ -2646,7 +2688,7 @@ Ingress budget, removes exactly one old owner and lowers the outer component.
 ***************************************************************************)
 
 ExactDecisionPhysicalCompletionRunnerRank(node, response) ==
-  <<TransportCompletionOwnerDebt(response),
+  <<TransportCompletionOwnerDebt(response, response.source),
     DrainableIngressTurnReachRank(node)>>
 
 ExactDecisionPhysicalCompletionRunnerCarrier == Nat \X Nat
@@ -2742,8 +2784,9 @@ THEOREM ExactDecisionPhysicalCompletionNonIngressRunLowersRank ==
        \/ AsyncServeIngressTargetOnlyTurn(node)
     => /\ DrainableIngressTurnReachRank(node)'
               < DrainableIngressTurnReachRank(node)
-       /\ TransportCompletionOwnerDebt(response)'
-              = TransportCompletionOwnerDebt(response)
+       /\ TransportCompletionOwnerDebt(response, response.source)'
+              = TransportCompletionOwnerDebt(
+                  response, response.source)
 BY LocalStepDecreasesDrainableIngressTurnReach,
    SerializedRunnerRuntimeDecreasesDrainableIngressTurnReach,
    SerializedLocalPredecessorDecreasesDrainableIngressTurnReach,
@@ -2809,8 +2852,10 @@ PROOF
                SelectedLocalAdmissionAdvance
       <3>2. /\ DrainableIngressTurnReachRank(node)'
                        < DrainableIngressTurnReachRank(node)
-              /\ TransportCompletionOwnerDebt(response)' =
-                       TransportCompletionOwnerDebt(response)
+              /\ TransportCompletionOwnerDebt(
+                   response, response.source)' =
+                       TransportCompletionOwnerDebt(
+                         response, response.source)
         BY <2>1, <3>1,
            ExactDecisionPhysicalCompletionNonIngressRunLowersRank
       <3> QED BY <1>1, <2>2, <3>2, Isa
@@ -2833,8 +2878,10 @@ PROOF
              ExactDecisionPhysicalCompletionResidualIsDrainable
              DEF ExactDecisionPhysicalCompletionAtRank,
                  ExactDecisionDrainablePhysicalCompletionIngressReady
-        <4>2. TransportCompletionOwnerDebt(response)' + 1 =
-                    TransportCompletionOwnerDebt(response)
+        <4>2. TransportCompletionOwnerDebt(
+                    response, response.source)' + 1 =
+                    TransportCompletionOwnerDebt(
+                      response, response.source)
           BY <1>1, <4>1,
              ExactDecisionIngressTurnDrainsFencedPhysicalOwner
              DEF ExactDecisionPhysicalCompletionAtRank
@@ -2856,8 +2903,10 @@ PROOF
                     < DrainableIngressTurnReachRank(node)
           BY <2>1, <3>1, <4>1,
              ExhaustedIngressStepDecreasesDrainableIngressTurnReach
-        <4>3. TransportCompletionOwnerDebt(response)' =
-                    TransportCompletionOwnerDebt(response)
+        <4>3. TransportCompletionOwnerDebt(
+                    response, response.source)' =
+                    TransportCompletionOwnerDebt(
+                      response, response.source)
           BY <3>1, <4>1, Isa
              DEF IngressDrainStep, TransportCompletionOwnerDebt,
                  TransportCompletionOwnerIndices, IngressLane
@@ -2884,8 +2933,10 @@ PROOF
                SelectedLocalAdmissionAdvance
       <3>2. /\ DrainableIngressTurnReachRank(node)'
                        < DrainableIngressTurnReachRank(node)
-              /\ TransportCompletionOwnerDebt(response)' =
-                       TransportCompletionOwnerDebt(response)
+              /\ TransportCompletionOwnerDebt(
+                   response, response.source)' =
+                       TransportCompletionOwnerDebt(
+                         response, response.source)
         BY <2>1, <3>1,
            ExactDecisionPhysicalCompletionNonIngressRunLowersRank
       <3> QED BY <1>1, <2>2, <3>2, Isa
@@ -3923,9 +3974,9 @@ THEOREM ExactDecisionRequestAdmissionCreatesExactOutcome ==
     /\ ExactDecisionRequestIngressResidual(
          node, qc, archive, request, packet)
     /\ packet = OldestDueSourcePacket(
-         archive, request.source)
+         archive, packet.authenticatedSource)
     /\ PostGstAdmitHiddenPacket(
-         archive, request.source)
+         archive, packet.authenticatedSource)
     => ExactDecisionRequestAdmissionOutcome(
          node, qc, archive, request)'
 BY ExactRequestPacketAdmissionCreatesIngressOwner, Isa
@@ -3961,7 +4012,7 @@ THEOREM ExactDecisionRequestReadyEnablesFairAdmission ==
          node, qc, archive, request)
     => ENABLED
          <<PostGstAdmitHiddenPacket(
-             archive, request.source)>>_AsyncAllVars
+             archive, packet.authenticatedSource)>>_AsyncAllVars
 BY ENABLEDaxioms, Isa
    DEF ExactDecisionRequestPacketAdmissionReady,
        ExactDecisionRequestIngressResidual,
@@ -3978,7 +4029,7 @@ THEOREM ExactDecisionRequestFairAdmissionCreatesOutcome ==
     /\ ~ExactDecisionRequestAdmissionOutcome(
          node, qc, archive, request)
     /\ <<PostGstAdmitHiddenPacket(
-           archive, request.source)>>_AsyncAllVars
+           archive, packet.authenticatedSource)>>_AsyncAllVars
     => ExactDecisionRequestAdmissionOutcome(
          node, qc, archive, request)'
 BY ExactDecisionRequestAdmissionCreatesExactOutcome, Isa
@@ -6231,7 +6282,8 @@ PROOF
         <4>1. [](ExactDecisionRequestPacketAdmissionReady(
                    node, qc, archive, request, packet)
                   => /\ archive \in Responsive
-                     /\ request.source \in AsyncIngressSources)
+                     /\ packet.authenticatedSource
+                          \in AsyncIngressSources)
           BY <2>1, <2>2, Isa, PTL
              DEF ExactDecisionRequestPacketAdmissionReady,
                  ExactDecisionRequestIngressResidual,
@@ -6256,11 +6308,12 @@ PROOF
                         node, qc, archive, request)'
           BY <2>1, ExactDecisionRequestAdmissionReadyStepIsSafe
         <4>3. CASE /\ archive \in Responsive
-                     /\ request.source \in AsyncIngressSources
+                     /\ packet.authenticatedSource
+                          \in AsyncIngressSources
           <5>1. AsyncSpecAt(initialContext)
                    => WF_AsyncAllVars(
                         PostGstAdmitHiddenPacket(
-                          archive, request.source))
+                          archive, packet.authenticatedSource))
             BY <4>3 DEF AsyncSpecAt, AsyncFairnessAt
           <5>2. /\ ExactDecisionRequestPacketAdmissionReady(
                        node, qc, archive, request, packet)
@@ -6268,21 +6321,24 @@ PROOF
                         node, qc, archive, request)
                   => ENABLED
                        <<PostGstAdmitHiddenPacket(
-                           archive, request.source)>>_AsyncAllVars
+                           archive,
+                           packet.authenticatedSource)>>_AsyncAllVars
             BY ExactDecisionRequestReadyEnablesFairAdmission
           <5>3. /\ ExactDecisionRequestPacketAdmissionReady(
                        node, qc, archive, request, packet)
                    /\ ~ExactDecisionRequestAdmissionOutcome(
                         node, qc, archive, request)
                    /\ <<PostGstAdmitHiddenPacket(
-                         archive, request.source)>>_AsyncAllVars
+                         archive,
+                         packet.authenticatedSource)>>_AsyncAllVars
                   => ExactDecisionRequestAdmissionOutcome(
                        node, qc, archive, request)'
             BY ExactDecisionRequestFairAdmissionCreatesOutcome
           <5> QED BY <4>2, <5>1, <5>2, <5>3, PTL
                DEF AsyncSpecAt
         <4>4. CASE \/ archive \notin Responsive
-                     \/ request.source \notin AsyncIngressSources
+                     \/ packet.authenticatedSource
+                          \notin AsyncIngressSources
           <5>1. AsyncSpecAt(initialContext)
                    => []~ExactDecisionRequestPacketAdmissionReady(
                          node, qc, archive, request, packet)
@@ -6665,11 +6721,15 @@ ExactDecisionRequestIngressPriorityDebt(archive) ==
   Cardinality(ExactDecisionRequestIngressPriorityOwners(archive))
 
 ExactDecisionRequestIngressLaneIndices(archive, request) ==
-  {index \in
-       1..Len(IngressLane(
-                archive, IngressResourceSource(request))):
-     IngressLane(
-       archive, IngressResourceSource(request))[index] = request}
+  LET source ==
+        Head(
+          SelectSeq(
+            asyncIngressReady[archive],
+            LAMBDA laneSource:
+              request \in
+                SequenceSet(IngressLane(archive, laneSource))))
+  IN {index \in 1..Len(IngressLane(archive, source)):
+        IngressLane(archive, source)[index] = request}
 
 ExactDecisionRequestIngressLanePosition(archive, request) ==
   CHOOSE least \in
@@ -6686,8 +6746,14 @@ ExactDecisionRequestIngressOccurrenceMultiplicityResidual(
        ExactDecisionRequestIngressLaneIndices(archive, request)) > 1
 
 ExactDecisionRequestIngressSourcePosition(archive, request) ==
-  IngressSourceServiceRank(
-    archive, IngressResourceSource(request))
+  LET source ==
+        Head(
+          SelectSeq(
+            asyncIngressReady[archive],
+            LAMBDA laneSource:
+              request \in
+                SequenceSet(IngressLane(archive, laneSource))))
+  IN IngressSourceServiceRank(archive, source)
 
 ExactDecisionRequestIngressReachRank(archive) ==
   IF NodeHasApplication(archive)
@@ -6813,86 +6879,113 @@ THEOREM ExactDecisionRequestIngressLanePositionIsEarliestOccurrence ==
     /\ AsyncStrongTypeInvariant
     /\ ExactDecisionRequestIngressLaneResidual(
          node, qc, archive, request)
-    => /\ ExactDecisionRequestIngressLaneIndices(archive, request) # {}
-       /\ ExactDecisionRequestIngressLanePosition(archive, request)
-            \in ExactDecisionRequestIngressLaneIndices(archive, request)
-       /\ ExactDecisionRequestIngressLanePosition(archive, request)
-            \in 1..Len(
-                 IngressLane(
-                   archive, IngressResourceSource(request)))
-       /\ IngressLane(
-            archive, IngressResourceSource(request))[
-              ExactDecisionRequestIngressLanePosition(
-                archive, request)] = request
-       /\ \A other \in
-              ExactDecisionRequestIngressLaneIndices(archive, request):
-            ExactDecisionRequestIngressLanePosition(archive, request)
-              <= other
+    => LET source ==
+             Head(
+               SelectSeq(
+                 asyncIngressReady[archive],
+                 LAMBDA laneSource:
+                   request \in
+                     SequenceSet(IngressLane(archive, laneSource))))
+       IN /\ ExactDecisionRequestIngressLaneIndices(
+                archive, request) # {}
+          /\ ExactDecisionRequestIngressLanePosition(archive, request)
+               \in ExactDecisionRequestIngressLaneIndices(
+                     archive, request)
+          /\ ExactDecisionRequestIngressLanePosition(archive, request)
+               \in 1..Len(IngressLane(archive, source))
+          /\ IngressLane(archive, source)[
+               ExactDecisionRequestIngressLanePosition(
+                 archive, request)] = request
+          /\ \A other \in
+                 ExactDecisionRequestIngressLaneIndices(
+                   archive, request):
+               ExactDecisionRequestIngressLanePosition(
+                 archive, request) <= other
 PROOF
   <1>1. ASSUME NEW node, NEW qc, NEW archive, NEW request,
                 AsyncStrongTypeInvariant,
                 ExactDecisionRequestIngressLaneResidual(
                   node, qc, archive, request)
-         PROVE /\ ExactDecisionRequestIngressLaneIndices(
-                    archive, request) # {}
-               /\ ExactDecisionRequestIngressLanePosition(
-                    archive, request)
-                    \in ExactDecisionRequestIngressLaneIndices(
-                          archive, request)
-               /\ ExactDecisionRequestIngressLanePosition(
-                    archive, request)
-                    \in 1..Len(
-                         IngressLane(
-                           archive, IngressResourceSource(request)))
-               /\ IngressLane(
-                    archive, IngressResourceSource(request))[
-                      ExactDecisionRequestIngressLanePosition(
-                        archive, request)] = request
-               /\ \A other \in
-                      ExactDecisionRequestIngressLaneIndices(
-                        archive, request):
-                    ExactDecisionRequestIngressLanePosition(
-                      archive, request) <= other
+         PROVE LET source ==
+                     Head(
+                       SelectSeq(
+                         asyncIngressReady[archive],
+                         LAMBDA laneSource:
+                           request \in
+                             SequenceSet(
+                               IngressLane(archive, laneSource))))
+               IN /\ ExactDecisionRequestIngressLaneIndices(
+                        archive, request) # {}
+                  /\ ExactDecisionRequestIngressLanePosition(
+                        archive, request)
+                       \in ExactDecisionRequestIngressLaneIndices(
+                             archive, request)
+                  /\ ExactDecisionRequestIngressLanePosition(
+                        archive, request)
+                       \in 1..Len(IngressLane(archive, source))
+                  /\ IngressLane(archive, source)[
+                       ExactDecisionRequestIngressLanePosition(
+                         archive, request)] = request
+                  /\ \A other \in
+                         ExactDecisionRequestIngressLaneIndices(
+                           archive, request):
+                       ExactDecisionRequestIngressLanePosition(
+                         archive, request) <= other
+    <2> DEFINE Source ==
+           Head(
+             SelectSeq(
+               asyncIngressReady[archive],
+               LAMBDA laneSource:
+                 request \in
+                   SequenceSet(IngressLane(archive, laneSource))))
     <2> DEFINE Indices ==
            ExactDecisionRequestIngressLaneIndices(archive, request)
-    <2>1. PICK witness \in
-                    1..Len(
-                         IngressLane(
-                           archive, IngressResourceSource(request))):
-             IngressLane(
-               archive, IngressResourceSource(request))[witness] = request
+    <2>1. \E laneSource \in AsyncIngressSources:
+             request \in SequenceSet(
+               IngressLane(archive, laneSource))
       BY <1>1
          DEF ExactDecisionRequestIngressLaneResidual,
              ExactDecisionRequestIngressOwned,
              ExactDecisionBodyHoldingAlias,
              ExactDecisionActiveRequestOwner,
-             ExactDecisionServiceSource,
-             SequenceSet
-    <2>2. /\ witness \in Indices
+             ExactDecisionServiceSource
+    <2>2. /\ Source \in AsyncIngressSources
+           /\ request \in SequenceSet(IngressLane(archive, Source))
+      BY <1>1, <2>1, IsaT(300)
+         DEF Source, SelectSeq,
+             AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncIngressTypeInvariant,
+             AsyncIngressTopologyTypeInvariant,
+             AsyncIngressNonemptySourcesFor,
+             IngressLaneDepth, IngressLane, SequenceSet
+    <2>3. PICK witness \in 1..Len(IngressLane(archive, Source)):
+             IngressLane(archive, Source)[witness] = request
+      BY <2>2 DEF SequenceSet
+    <2>4. /\ witness \in Indices
            /\ witness \in Nat
            /\ Indices # {}
-      BY <2>1, FS_EmptySet, Isa
+      BY <2>3, FS_EmptySet, Isa
          DEF Indices, ExactDecisionRequestIngressLaneIndices
-    <2>3. \E least \in Nat:
+    <2>5. \E least \in Nat:
              /\ least \in Indices
              /\ \A prior \in 0..(least - 1): prior \notin Indices
-      BY <2>2, SmallestNatural, SMTT(30)
-    <2>4. PICK least \in Nat:
+      BY <2>4, SmallestNatural, SMTT(30)
+    <2>6. PICK least \in Nat:
              /\ least \in Indices
              /\ \A prior \in 0..(least - 1): prior \notin Indices
-      BY <2>3
-    <2>5. \A other \in Indices: least <= other
-      BY <2>4, SMT
+      BY <2>5
+    <2>7. \A other \in Indices: least <= other
+      BY <2>6, SMT
          DEF Indices, ExactDecisionRequestIngressLaneIndices
-    <2>6. /\ ExactDecisionRequestIngressLanePosition(
+    <2>8. /\ ExactDecisionRequestIngressLanePosition(
                   archive, request) \in Indices
            /\ \A other \in Indices:
                 ExactDecisionRequestIngressLanePosition(
                   archive, request) <= other
-      BY <2>4, <2>5, Zenon
+      BY <2>6, <2>7, Zenon
          DEF ExactDecisionRequestIngressLanePosition, Indices
-    <2> QED BY <2>2, <2>6
-         DEF Indices, ExactDecisionRequestIngressLaneIndices
+    <2> QED BY <2>3, <2>4, <2>8
+         DEF Source, Indices, ExactDecisionRequestIngressLaneIndices
   <1> QED BY <1>1
 
 THEOREM ExactDecisionRequestIngressRankComponentsAreTyped ==
@@ -9285,10 +9378,9 @@ THEOREM ExactDecisionRequestFrozenServeBarrierPreservesTargetIngressCoalescing =
             archive,
             ExactDecisionServeLifecycleIdentity(
               archive, request))'
-       /\ request
-            \in SequenceSet(
-                 IngressLane(
-                   archive, IngressResourceSource(request)))'
+       /\ \E source \in AsyncIngressSources:
+            request \in SequenceSet(
+              IngressLane(archive, source))'
        /\ ExactDecisionRequestFrozenServeBarrierIdentities(
             archive, request)' = {}
 BY ExactDecisionRequestFrozenServeBarrierMaterializationLowersRank,
@@ -10679,7 +10771,8 @@ PROOF
         <4>1. [](ExactDecisionResponsePacketAdmissionReady(
                    node, qc, archive, request, response, packet)
                   => /\ node \in Responsive
-                     /\ response.source \in AsyncIngressSources)
+                     /\ packet.authenticatedSource
+                          \in AsyncIngressSources)
           BY <2>1, <2>2, Isa, PTL
              DEF ExactDecisionResponsePacketAdmissionReady,
                  ExactDecisionResponseAdmissionResidual,
@@ -10704,11 +10797,12 @@ PROOF
                         node, qc, response)'
           BY <2>1, ExactDecisionResponseAdmissionReadyStepIsSafe
         <4>3. CASE /\ node \in Responsive
-                     /\ response.source \in AsyncIngressSources
+                     /\ packet.authenticatedSource
+                          \in AsyncIngressSources
           <5>1. AsyncSpecAt(initialContext)
                    => WF_AsyncAllVars(
                         PostGstAdmitHiddenPacket(
-                          node, response.source))
+                          node, packet.authenticatedSource))
             BY <4>3 DEF AsyncSpecAt, AsyncFairnessAt
           <5>2. /\ ExactDecisionResponsePacketAdmissionReady(
                        node, qc, archive, request, response, packet)
@@ -10716,21 +10810,24 @@ PROOF
                         node, qc, response)
                   => ENABLED
                        <<PostGstAdmitHiddenPacket(
-                           node, response.source)>>_AsyncAllVars
+                           node,
+                           packet.authenticatedSource)>>_AsyncAllVars
             BY ExactDecisionResponseReadyEnablesFairAdmission
           <5>3. /\ ExactDecisionResponsePacketAdmissionReady(
                        node, qc, archive, request, response, packet)
                    /\ ~ExactDecisionResponseAdmissionOutcome(
                         node, qc, response)
                    /\ <<PostGstAdmitHiddenPacket(
-                         node, response.source)>>_AsyncAllVars
+                         node,
+                         packet.authenticatedSource)>>_AsyncAllVars
                   => ExactDecisionResponseAdmissionOutcome(
                        node, qc, response)'
             BY ExactDecisionResponseFairAdmissionCreatesOutcome
           <5> QED BY <4>2, <5>1, <5>2, <5>3, PTL
                DEF AsyncSpecAt
         <4>4. CASE \/ node \notin Responsive
-                     \/ response.source \notin AsyncIngressSources
+                     \/ packet.authenticatedSource
+                          \notin AsyncIngressSources
           <5>1. AsyncSpecAt(initialContext)
                    => []~ExactDecisionResponsePacketAdmissionReady(
                          node, qc, archive, request, response, packet)
@@ -11253,11 +11350,15 @@ ExactDecisionTargetNeutralPacketDependencyRankForSnapshot(
     snapshot, packet) ==
   LET recipient == packet.item.envelope.recipient
   IN <<OlderDueNonOverdueShadowDebt(packet),
-       <<FreshIngressCapacityOwnerDebt(packet.item),
-         <<TimeoutVoteByteOwnerDebt(packet.item),
-           <<TransportCompletionOwnerDebt(packet.item),
+       <<FreshIngressCapacityOwnerDebt(
+            packet.item, packet.authenticatedSource),
+         <<TimeoutVoteByteOwnerDebt(
+              packet.item, packet.authenticatedSource),
+           <<TransportCompletionOwnerDebt(
+                packet.item, packet.authenticatedSource),
              <<BoundedTransportServiceRank(
-                  packet.item.envelope.recipient, packet.item.source),
+                  packet.item.envelope.recipient,
+                  packet.authenticatedSource),
                <<ResetAwareIngressReachRank(recipient),
                  <<ReadyRunAuxRank(recipient),
                    <<Stage4CapacityRank(recipient),

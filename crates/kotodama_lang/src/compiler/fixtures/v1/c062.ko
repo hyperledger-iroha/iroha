@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  let Secret<int> _secret = crypto::private_input(Name::parse("not_index"));
+}
+
+}

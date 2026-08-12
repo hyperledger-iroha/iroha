@@ -41,9 +41,7 @@ isi! {
         pub successor_of: Option<ManifestDigest>,
     }
 }
-
 impl crate::seal::Instruction for RegisterPinManifest {}
-
 isi! {
     /// Approve a previously registered manifest digest.
 pub struct ApprovePinManifest {
@@ -63,9 +61,7 @@ pub struct ApprovePinManifest {
         pub council_envelope_digest: Option<[u8; 32]>,
     }
 }
-
 impl crate::seal::Instruction for ApprovePinManifest {}
-
 isi! {
     /// Retire a manifest digest from the pin registry.
 pub struct RetirePinManifest {
@@ -75,9 +71,7 @@ pub struct RetirePinManifest {
         pub reason: Option<String>,
     }
 }
-
 impl crate::seal::Instruction for RetirePinManifest {}
-
 isi! {
     /// Bind an approved alias to a manifest digest.
 pub struct BindManifestAlias {
@@ -91,9 +85,7 @@ pub struct BindManifestAlias {
         pub expiry_epoch: u64,
     }
 }
-
 impl crate::seal::Instruction for BindManifestAlias {}
-
 isi! {
     /// Register or update capacity for an already governed, bonded provider.
     ///
@@ -106,9 +98,7 @@ pub struct RegisterCapacityDeclaration {
     pub record: CapacityDeclarationRecord,
     }
 }
-
 impl crate::seal::Instruction for RegisterCapacityDeclaration {}
-
 isi! {
     /// Record a capacity telemetry snapshot for a provider.
 pub struct RecordCapacityTelemetry {
@@ -116,9 +106,7 @@ pub struct RecordCapacityTelemetry {
     pub record: CapacityTelemetryRecord,
     }
 }
-
 impl crate::seal::Instruction for RecordCapacityTelemetry {}
-
 isi! {
     /// Register a governance-authored dispute targeting a storage provider.
 pub struct RegisterCapacityDispute {
@@ -126,9 +114,7 @@ pub struct RegisterCapacityDispute {
     pub record: CapacityDisputeRecord,
     }
 }
-
 impl crate::seal::Instruction for RegisterCapacityDispute {}
-
 isi! {
     /// Issue a replication order covering one or more storage providers.
 pub struct IssueReplicationOrder {
@@ -145,9 +131,7 @@ pub struct IssueReplicationOrder {
         pub musubi_archive: Option<ArchiveId>,
     }
 }
-
 impl crate::seal::Instruction for IssueReplicationOrder {}
-
 isi! {
     /// Mark a replication order as completed.
 pub struct CompleteReplicationOrder {
@@ -165,9 +149,7 @@ pub struct CompleteReplicationOrder {
         pub finalized_anchor: ProviderIngestFinalizedAnchorV1,
     }
 }
-
 impl crate::seal::Instruction for CompleteReplicationOrder {}
-
 isi! {
     /// Replace the provider assignment set of a pending replication order.
 pub struct ReviseReplicationOrderAssignments {
@@ -181,9 +163,7 @@ pub struct ReviseReplicationOrderAssignments {
         pub assignments: Vec<ReplicationAssignmentV1>,
     }
 }
-
 impl crate::seal::Instruction for ReviseReplicationOrderAssignments {}
-
 isi! {
     /// Mark a pending replication order as expired after its deadline.
 pub struct ExpireReplicationOrder {
@@ -193,9 +173,7 @@ pub struct ExpireReplicationOrder {
         pub expiration_epoch: u64,
     }
 }
-
 impl crate::seal::Instruction for ExpireReplicationOrder {}
-
 isi! {
     /// Retired direct provider-owner registration surface.
     ///
@@ -208,9 +186,7 @@ pub struct RegisterProviderOwner {
         pub owner: AccountId,
     }
 }
-
 impl crate::seal::Instruction for RegisterProviderOwner {}
-
 isi! {
     /// Retired direct provider-owner removal surface.
     ///
@@ -221,9 +197,7 @@ pub struct UnregisterProviderOwner {
     pub provider_id: ProviderId,
     }
 }
-
 impl crate::seal::Instruction for UnregisterProviderOwner {}
-
 /// Establish one previously unknown `SoraFS` provider-owner binding.
 #[derive(
     Debug,
@@ -247,7 +221,6 @@ pub struct EstablishSorafsProviderOwnerV1 {
     /// Existing account that will own the provider.
     pub owner: AccountId,
 }
-
 /// Compare-and-set replacement of one `SoraFS` provider owner.
 #[derive(
     Debug,
@@ -273,7 +246,6 @@ pub struct RebindSorafsProviderOwnerV1 {
     /// Existing account that becomes the next owner.
     pub next_owner: AccountId,
 }
-
 /// Compare-and-remove one `SoraFS` provider-owner binding.
 #[derive(
     Debug,
@@ -297,7 +269,6 @@ pub struct RemoveSorafsProviderOwnerV1 {
     /// Exact current owner required for compare-and-remove.
     pub expected_owner: AccountId,
 }
-
 /// Closed provider-owner transition admitted only through native governance.
 #[derive(
     Debug,
@@ -334,7 +305,6 @@ pub enum SorafsProviderGovernanceActionV1 {
     #[codec(index = 2)]
     Remove(RemoveSorafsProviderOwnerV1),
 }
-
 impl SorafsProviderGovernanceActionV1 {
     /// Validate the closed action before proposal admission or enactment.
     ///
@@ -361,7 +331,6 @@ impl SorafsProviderGovernanceActionV1 {
         }
         Ok(())
     }
-
     /// Provider identifier affected by this transition.
     #[must_use]
     pub const fn provider_id(&self) -> ProviderId {
@@ -372,7 +341,6 @@ impl SorafsProviderGovernanceActionV1 {
         }
     }
 }
-
 isi! {
     /// Compare-and-set the completion authority for a `SoraFS` provider.
 pub struct SetProviderIngestCompletionAuthority {
@@ -384,9 +352,7 @@ pub struct SetProviderIngestCompletionAuthority {
         pub next: ProviderIngestCompletionAuthorityV1,
     }
 }
-
 impl crate::seal::Instruction for SetProviderIngestCompletionAuthority {}
-
 isi! {
     /// Revoke the exact current completion authority for a `SoraFS` provider.
 pub struct RevokeProviderIngestCompletionAuthority {
@@ -396,9 +362,7 @@ pub struct RevokeProviderIngestCompletionAuthority {
         pub expected_current: ProviderIngestCompletionAuthorityV1,
     }
 }
-
 impl crate::seal::Instruction for RevokeProviderIngestCompletionAuthority {}
-
 isi! {
     /// Update the governance-controlled pricing schedule for `SoraFS`.
     pub struct SetPricingSchedule {
@@ -406,9 +370,7 @@ isi! {
         pub schedule: PricingScheduleRecord,
     }
 }
-
 impl crate::seal::Instruction for SetPricingSchedule {}
-
 isi! {
     /// Upsert the governed credit projection for a storage provider.
     ///
@@ -421,9 +383,7 @@ isi! {
         pub record: ProviderCreditRecord,
     }
 }
-
 impl crate::seal::Instruction for UpsertProviderCredit {}
-
 isi! {
     /// Activate the next governance-controlled `PoP` issuer policy revision.
     pub struct SetSorafsPopIssuerPolicy {
@@ -431,9 +391,7 @@ isi! {
         pub policy: PopIssuerPolicyV1,
     }
 }
-
 impl crate::seal::Instruction for SetSorafsPopIssuerPolicy {}
-
 isi! {
     /// Commit a bounded batch of private `PoP` credentials and public roots atomically.
     pub struct CommitSorafsPopCredentialBatch {
@@ -442,9 +400,7 @@ isi! {
         pub batch_payload: Vec<u8>,
     }
 }
-
 impl crate::seal::Instruction for CommitSorafsPopCredentialBatch {}
-
 isi! {
     /// Publish a strict signed extension of the active `PoP` revocation list.
     pub struct PublishSorafsPopRevocationList {
@@ -456,9 +412,7 @@ isi! {
         pub issuer_policy_digest: [u8; 32],
     }
 }
-
 impl crate::seal::Instruction for PublishSorafsPopRevocationList {}
-
 isi! {
     /// Activate the next governance-controlled `SoraFS` orderbook policy revision.
     pub struct SetSorafsOrderbookPolicy {
@@ -466,9 +420,7 @@ isi! {
         pub policy: OrderbookAdmissionPolicyV1,
     }
 }
-
 impl crate::seal::Instruction for SetSorafsOrderbookPolicy {}
-
 isi! {
     /// Submit a signed canonical order to the authoritative `SoraFS` orderbook ledger.
     pub struct SubmitSorafsOrderbookOrder {
@@ -480,9 +432,7 @@ isi! {
         pub policy_digest: [u8; 32],
     }
 }
-
 impl crate::seal::Instruction for SubmitSorafsOrderbookOrder {}
-
 isi! {
     /// Commit a signed owner cancellation to the authoritative `SoraFS` orderbook ledger.
     pub struct CancelSorafsOrderbookOrder {
@@ -494,9 +444,7 @@ isi! {
         pub policy_digest: [u8; 32],
     }
 }
-
 impl crate::seal::Instruction for CancelSorafsOrderbookOrder {}
-
 isi! {
     /// Execute one bounded deterministic price-time matching transition.
     pub struct MatchSorafsOrderbook {
@@ -509,9 +457,7 @@ isi! {
         pub max_fills: u32,
     }
 }
-
 impl crate::seal::Instruction for MatchSorafsOrderbook {}
-
 isi! {
     /// Retire expired orders and channels in one bounded authoritative transition.
     pub struct MaintainSorafsOrderbook {
@@ -524,9 +470,7 @@ isi! {
         pub max_items: u32,
     }
 }
-
 impl crate::seal::Instruction for MaintainSorafsOrderbook {}
-
 isi! {
     /// Settle a funded channel lock and record its signed receipt in the authoritative ledger.
     pub struct RecordSorafsOrderbookSettlementReceipt {
@@ -538,9 +482,7 @@ isi! {
         pub policy_digest: [u8; 32],
     }
 }
-
 impl crate::seal::Instruction for RecordSorafsOrderbookSettlementReceipt {}
-
 isi! {
     /// Activate the next chain-authoritative reserve/rent policy revision.
     pub struct SetSorafsReservePolicy {
@@ -548,9 +490,7 @@ isi! {
         pub policy: ReserveAuthorityPolicyV1,
     }
 }
-
 impl crate::seal::Instruction for SetSorafsReservePolicy {}
-
 isi! {
     /// Register one provider reserve partition and immutable underwriting terms.
     pub struct RegisterSorafsReserveAccount {
@@ -561,9 +501,7 @@ isi! {
         pub policy_digest: [u8; 32],
     }
 }
-
 impl crate::seal::Instruction for RegisterSorafsReserveAccount {}
-
 isi! {
     /// Submit a provider-authenticated reserve top-up or withdrawal request.
     pub struct RequestSorafsReserveMovement {
@@ -583,9 +521,7 @@ isi! {
         pub policy_digest: [u8; 32],
     }
 }
-
 impl crate::seal::Instruction for RequestSorafsReserveMovement {}
-
 isi! {
     /// Decide and atomically apply or reject a pending reserve movement.
     pub struct DecideSorafsReserveMovement {
@@ -603,9 +539,7 @@ isi! {
         pub rationale: String,
     }
 }
-
 impl crate::seal::Instruction for DecideSorafsReserveMovement {}
-
 isi! {
     /// Charge one or more deterministic rent periods to a provider.
     pub struct ChargeSorafsReserveRent {
@@ -620,9 +554,7 @@ isi! {
         pub policy_digest: [u8; 32],
     }
 }
-
 impl crate::seal::Instruction for ChargeSorafsReserveRent {}
-
 isi! {
     /// Advance a provider's deterministic reserve lifecycle projection.
     pub struct AdvanceSorafsReserveLifecycle {
@@ -637,9 +569,7 @@ isi! {
         pub policy_digest: [u8; 32],
     }
 }
-
 impl crate::seal::Instruction for AdvanceSorafsReserveLifecycle {}
-
 isi! {
     /// Draw reserve credit under the provider's tier and global debt caps.
     pub struct DrawSorafsReserveCredit {
@@ -654,9 +584,7 @@ isi! {
         pub policy_digest: [u8; 32],
     }
 }
-
 impl crate::seal::Instruction for DrawSorafsReserveCredit {}
-
 isi! {
     /// Repay accrued reserve interest and then credit principal.
     pub struct RepaySorafsReserveCredit {
@@ -671,9 +599,7 @@ isi! {
         pub policy_digest: [u8; 32],
     }
 }
-
 impl crate::seal::Instruction for RepaySorafsReserveCredit {}
-
 isi! {
     /// Submit a bounded provider-authenticated reserve lifecycle appeal.
     pub struct SubmitSorafsReserveAppeal {
@@ -699,9 +625,7 @@ isi! {
         pub policy_digest: [u8; 32],
     }
 }
-
 impl crate::seal::Instruction for SubmitSorafsReserveAppeal {}
-
 isi! {
     /// Attach a terminal governance decision to a pending reserve appeal.
     pub struct DecideSorafsReserveAppeal {
@@ -719,9 +643,7 @@ isi! {
         pub rationale: String,
     }
 }
-
 impl crate::seal::Instruction for DecideSorafsReserveAppeal {}
-
 /// Repair lease-claim action.
 #[derive(
     Debug,
@@ -744,7 +666,6 @@ pub struct SorafsRepairClaimV1 {
     /// Bounded caller key used for exact replay handling.
     pub idempotency_key: String,
 }
-
 /// Repair lease-renewal action.
 #[derive(
     Debug,
@@ -769,7 +690,6 @@ pub struct SorafsRepairRenewV1 {
     /// Bounded caller key used for exact replay handling.
     pub idempotency_key: String,
 }
-
 /// Successful repair terminal action.
 #[derive(
     Debug,
@@ -795,7 +715,6 @@ pub struct SorafsRepairCompleteV1 {
     /// Bounded caller key used for exact replay handling.
     pub idempotency_key: String,
 }
-
 /// Failed repair terminal action without slashing.
 #[derive(
     Debug,
@@ -821,7 +740,6 @@ pub struct SorafsRepairFailV1 {
     /// Bounded caller key used for exact replay handling.
     pub idempotency_key: String,
 }
-
 /// Escalated repair terminal action with an atomic slash proposal.
 #[derive(
     Debug,
@@ -847,7 +765,6 @@ pub struct SorafsRepairEscalateV1 {
     /// Bounded caller key used for exact replay handling.
     pub idempotency_key: String,
 }
-
 /// Chain-authoritative mutation of one `SoraFS` repair task.
 #[derive(
     Debug,
@@ -880,7 +797,6 @@ pub enum SorafsRepairTaskActionV1 {
     /// Commit an escalated terminal outcome and slash proposal atomically.
     Escalate(SorafsRepairEscalateV1),
 }
-
 impl SorafsRepairTaskActionV1 {
     /// Return the caller-supplied idempotency key.
     #[must_use]
@@ -894,7 +810,6 @@ impl SorafsRepairTaskActionV1 {
         }
     }
 }
-
 isi! {
     /// Admit one exact canonical repair report under a subsystem exactly-once identity.
     pub struct SubmitSorafsRepairTask {
@@ -906,9 +821,7 @@ isi! {
         pub report_payload: Vec<u8>,
     }
 }
-
 impl crate::seal::Instruction for SubmitSorafsRepairTask {}
-
 isi! {
     /// Apply one compare-and-set repair lease or terminal transition.
     pub struct ApplySorafsRepairTaskAction {
@@ -920,9 +833,7 @@ isi! {
         pub action: SorafsRepairTaskActionV1,
     }
 }
-
 impl crate::seal::Instruction for ApplySorafsRepairTaskAction {}
-
 isi! {
     /// Commit the provider owner's single appeal against an escalated repair slash.
     pub struct SubmitSorafsRepairAppeal {
@@ -939,9 +850,7 @@ isi! {
         pub idempotency_key: String,
     }
 }
-
 impl crate::seal::Instruction for SubmitSorafsRepairAppeal {}
-
 /// Canonical PDP proof material accepted by the chain-authoritative outcome journal.
 #[derive(
     Debug,
@@ -964,7 +873,6 @@ pub struct SorafsPdpProofOutcomeSubmissionV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
     pub archive_payload: Vec<u8>,
 }
-
 /// Canonical `PoTR` proof material accepted by the chain-authoritative outcome journal.
 #[derive(
     Debug,
@@ -990,7 +898,6 @@ pub struct SorafsPotrProofOutcomeSubmissionV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub admission_envelope_digest: [u8; 32],
 }
-
 /// Existing canonical proof material accepted by the chain-authoritative outcome journal.
 #[derive(
     Debug,
@@ -1024,7 +931,6 @@ pub enum SorafsProofOutcomeSubmissionV1 {
     #[codec(index = 1)]
     Potr(SorafsPotrProofOutcomeSubmissionV1),
 }
-
 isi! {
     /// Activate or rotate provider-scoped governed keys for `PDP` and `PoTR` outcome validation.
     pub struct SetSorafsProofOutcomeSignerPolicy {
@@ -1032,9 +938,7 @@ isi! {
         pub policy: ProofOutcomeSignerPolicyV1,
     }
 }
-
 impl crate::seal::Instruction for SetSorafsProofOutcomeSignerPolicy {}
-
 isi! {
     /// Commit one validated `PDP` or `PoTR` terminal outcome.
     pub struct SubmitSorafsProofOutcome {
@@ -1042,9 +946,7 @@ isi! {
         pub submission: SorafsProofOutcomeSubmissionV1,
     }
 }
-
 impl crate::seal::Instruction for SubmitSorafsProofOutcome {}
-
 isi! {
     /// Activate the next governed recorder-policy revision for the reputation journal.
     pub struct SetSorafsReputationJournalAuthorityPolicy {
@@ -1052,9 +954,7 @@ isi! {
         pub policy: ReputationJournalAuthorityPolicyV1,
     }
 }
-
 impl crate::seal::Instruction for SetSorafsReputationJournalAuthorityPolicy {}
-
 isi! {
     /// Commit one terminal native `PoR` projection to the global reputation journal.
     pub struct AppendSorafsPorReputationJournalEntry {
@@ -1064,9 +964,7 @@ isi! {
         pub entry: ReputationJournalEntryV1,
     }
 }
-
 impl crate::seal::Instruction for AppendSorafsPorReputationJournalEntry {}
-
 isi! {
     /// Commit one regional-gateway stream-token result to the global reputation journal.
     pub struct AppendSorafsStreamTokenReputationJournalEntry {
@@ -1076,9 +974,7 @@ isi! {
         pub entry: ReputationJournalEntryV1,
     }
 }
-
 impl crate::seal::Instruction for AppendSorafsStreamTokenReputationJournalEntry {}
-
 isi! {
     /// Resolve one pending authoritative capacity dispute and append its terminal journal revision.
     pub struct ResolveSorafsCapacityDispute {
@@ -1096,9 +992,7 @@ isi! {
         pub rationale: Option<String>,
     }
 }
-
 impl crate::seal::Instruction for ResolveSorafsCapacityDispute {}
-
 isi! {
     /// Activate the next authoritative `SoraFS` moderation-ledger policy revision.
     pub struct SetSorafsModerationPolicy {
@@ -1106,9 +1000,7 @@ isi! {
         pub policy: ModerationLedgerPolicyV1,
     }
 }
-
 impl crate::seal::Instruction for SetSorafsModerationPolicy {}
-
 isi! {
     /// Admit one appellant-authenticated moderation appeal and pin active `PoP` anchors.
     pub struct SubmitSorafsModerationAppeal {
@@ -1116,9 +1008,7 @@ isi! {
         pub intake: ModerationAppealIntakeV1,
     }
 }
-
 impl crate::seal::Instruction for SubmitSorafsModerationAppeal {}
-
 isi! {
     /// Register one authority-bound private `PoP` membership proof for panel eligibility.
     pub struct RegisterSorafsModerationJurorEligibility {
@@ -1131,9 +1021,7 @@ isi! {
         pub membership_proof_payload: Vec<u8>,
     }
 }
-
 impl crate::seal::Instruction for RegisterSorafsModerationJurorEligibility {}
-
 isi! {
     /// Close eligibility registration and persist the uniquely deterministic panel draw.
     pub struct FinalizeSorafsModerationSortition {
@@ -1157,9 +1045,7 @@ isi! {
         pub proposed_waitlist: Vec<AccountId>,
     }
 }
-
 impl crate::seal::Instruction for FinalizeSorafsModerationSortition {}
-
 isi! {
     /// Accept one authority-bound primary moderation-juror assignment.
     pub struct AcceptSorafsModerationJurorAssignment {
@@ -1172,9 +1058,7 @@ isi! {
         pub sortition_digest: [u8; 32],
     }
 }
-
 impl crate::seal::Instruction for AcceptSorafsModerationJurorAssignment {}
-
 isi! {
     /// Apply deterministic no-show replacements and activate commit/reveal atomically.
     pub struct ActivateSorafsModerationCase {
@@ -1187,9 +1071,7 @@ isi! {
         pub sortition_digest: [u8; 32],
     }
 }
-
 impl crate::seal::Instruction for ActivateSorafsModerationCase {}
-
 isi! {
     /// Submit one canonical juror commitment to an authoritative moderation case.
     pub struct SubmitSorafsModerationCommit {
@@ -1198,9 +1080,7 @@ isi! {
         pub commit_payload: Vec<u8>,
     }
 }
-
 impl crate::seal::Instruction for SubmitSorafsModerationCommit {}
-
 isi! {
     /// Raise one bounded payload-free challenge during a moderation challenge window.
     pub struct RaiseSorafsModerationChallenge {
@@ -1221,9 +1101,7 @@ isi! {
         pub reason: String,
     }
 }
-
 impl crate::seal::Instruction for RaiseSorafsModerationChallenge {}
-
 isi! {
     /// Resolve one pending authoritative moderation challenge.
     pub struct ResolveSorafsModerationChallenge {
@@ -1237,9 +1115,7 @@ isi! {
         pub decision: ModerationChallengeDecisionV1,
     }
 }
-
 impl crate::seal::Instruction for ResolveSorafsModerationChallenge {}
-
 isi! {
     /// Submit one canonical juror reveal to an authoritative moderation case.
     pub struct SubmitSorafsModerationReveal {
@@ -1248,9 +1124,7 @@ isi! {
         pub reveal_payload: Vec<u8>,
     }
 }
-
 impl crate::seal::Instruction for SubmitSorafsModerationReveal {}
-
 isi! {
     /// Finalize a closed moderation case and atomically record outcome and no-shows.
     pub struct FinalizeSorafsModerationCase {
@@ -1260,9 +1134,7 @@ isi! {
         pub round_id: String,
     }
 }
-
 impl crate::seal::Instruction for FinalizeSorafsModerationCase {}
-
 impl RegisterPinManifest {
     /// Create a new `RegisterPinManifest` instruction.
     #[must_use]
@@ -1278,7 +1150,6 @@ impl RegisterPinManifest {
         }
     }
 }
-
 impl ApprovePinManifest {
     /// Create a new `ApprovePinManifest` instruction.
     #[must_use]
@@ -1294,7 +1165,6 @@ impl ApprovePinManifest {
         }
     }
 }
-
 impl RetirePinManifest {
     /// Create a new `RetirePinManifest` instruction.
     #[must_use]
@@ -1302,7 +1172,6 @@ impl RetirePinManifest {
         Self { digest, reason }
     }
 }
-
 impl BindManifestAlias {
     /// Create a new `BindManifestAlias` instruction.
     #[must_use]
@@ -1320,7 +1189,6 @@ impl BindManifestAlias {
         }
     }
 }
-
 impl RegisterCapacityDeclaration {
     /// Create a new `RegisterCapacityDeclaration` instruction.
     #[must_use]
@@ -1328,7 +1196,6 @@ impl RegisterCapacityDeclaration {
         Self { record }
     }
 }
-
 impl RecordCapacityTelemetry {
     /// Create a new `RecordCapacityTelemetry` instruction.
     #[must_use]
@@ -1336,7 +1203,6 @@ impl RecordCapacityTelemetry {
         Self { record }
     }
 }
-
 impl RegisterCapacityDispute {
     /// Create a new `RegisterCapacityDispute` instruction.
     #[must_use]
@@ -1344,7 +1210,6 @@ impl RegisterCapacityDispute {
         Self { record }
     }
 }
-
 impl IssueReplicationOrder {
     /// Create a new `IssueReplicationOrder` instruction.
     #[allow(clippy::too_many_arguments)]
@@ -1363,7 +1228,6 @@ impl IssueReplicationOrder {
             musubi_archive: None,
         }
     }
-
     /// Bind this order to one already-registered immutable Musubi archive.
     #[must_use]
     pub const fn for_musubi_archive(mut self, archive_id: ArchiveId) -> Self {
@@ -1371,7 +1235,6 @@ impl IssueReplicationOrder {
         self
     }
 }
-
 impl CompleteReplicationOrder {
     /// Create a new `CompleteReplicationOrder` instruction.
     #[must_use]
@@ -1393,7 +1256,6 @@ impl CompleteReplicationOrder {
         }
     }
 }
-
 impl ReviseReplicationOrderAssignments {
     /// Create an exact compare-and-set assignment revision.
     #[must_use]
@@ -1411,7 +1273,6 @@ impl ReviseReplicationOrderAssignments {
         }
     }
 }
-
 impl ExpireReplicationOrder {
     /// Create a new `ExpireReplicationOrder` instruction.
     #[must_use]
@@ -1422,7 +1283,6 @@ impl ExpireReplicationOrder {
         }
     }
 }
-
 impl SetPricingSchedule {
     /// Create a new `SetPricingSchedule` instruction.
     #[must_use]
@@ -1430,7 +1290,6 @@ impl SetPricingSchedule {
         Self { schedule }
     }
 }
-
 impl UpsertProviderCredit {
     /// Create a new `UpsertProviderCredit` instruction.
     #[must_use]
@@ -1438,7 +1297,6 @@ impl UpsertProviderCredit {
         Self { record }
     }
 }
-
 impl SetSorafsPopIssuerPolicy {
     /// Construct an issuer-policy activation instruction.
     #[must_use]
@@ -1446,7 +1304,6 @@ impl SetSorafsPopIssuerPolicy {
         Self { policy }
     }
 }
-
 impl CommitSorafsPopCredentialBatch {
     /// Construct an atomic credential commitment batch instruction.
     #[must_use]
@@ -1454,7 +1311,6 @@ impl CommitSorafsPopCredentialBatch {
         Self { batch_payload }
     }
 }
-
 impl PublishSorafsPopRevocationList {
     /// Construct a signed revocation publication instruction.
     #[must_use]
@@ -1465,7 +1321,6 @@ impl PublishSorafsPopRevocationList {
         }
     }
 }
-
 impl SetSorafsOrderbookPolicy {
     /// Construct a policy-activation instruction.
     #[must_use]
@@ -1473,7 +1328,6 @@ impl SetSorafsOrderbookPolicy {
         Self { policy }
     }
 }
-
 impl SubmitSorafsOrderbookOrder {
     /// Construct a signed order-submission instruction.
     #[must_use]
@@ -1484,7 +1338,6 @@ impl SubmitSorafsOrderbookOrder {
         }
     }
 }
-
 impl CancelSorafsOrderbookOrder {
     /// Construct a signed owner-cancellation instruction.
     #[must_use]
@@ -1495,7 +1348,6 @@ impl CancelSorafsOrderbookOrder {
         }
     }
 }
-
 impl MatchSorafsOrderbook {
     /// Construct a bounded deterministic matching instruction.
     #[must_use]
@@ -1507,7 +1359,6 @@ impl MatchSorafsOrderbook {
         }
     }
 }
-
 impl MaintainSorafsOrderbook {
     /// Construct a bounded order/channel expiry instruction.
     #[must_use]
@@ -1519,7 +1370,6 @@ impl MaintainSorafsOrderbook {
         }
     }
 }
-
 impl RecordSorafsOrderbookSettlementReceipt {
     /// Construct a signed funded-lock settlement and receipt instruction.
     #[must_use]
@@ -1530,7 +1380,6 @@ impl RecordSorafsOrderbookSettlementReceipt {
         }
     }
 }
-
 impl SetSorafsReservePolicy {
     /// Construct an authoritative reserve policy activation.
     #[must_use]
@@ -1538,7 +1387,6 @@ impl SetSorafsReservePolicy {
         Self { policy }
     }
 }
-
 impl RegisterSorafsReserveAccount {
     /// Construct a provider reserve-account registration.
     #[must_use]
@@ -1549,7 +1397,6 @@ impl RegisterSorafsReserveAccount {
         }
     }
 }
-
 impl RequestSorafsReserveMovement {
     /// Construct a provider reserve movement request.
     #[must_use]
@@ -1571,7 +1418,6 @@ impl RequestSorafsReserveMovement {
         }
     }
 }
-
 impl DecideSorafsReserveMovement {
     /// Construct a terminal reserve movement decision.
     #[must_use]
@@ -1591,7 +1437,6 @@ impl DecideSorafsReserveMovement {
         }
     }
 }
-
 impl ChargeSorafsReserveRent {
     /// Construct a deterministic reserve rent charge.
     #[must_use]
@@ -1609,7 +1454,6 @@ impl ChargeSorafsReserveRent {
         }
     }
 }
-
 impl AdvanceSorafsReserveLifecycle {
     /// Construct a reserve lifecycle transition.
     #[must_use]
@@ -1627,7 +1471,6 @@ impl AdvanceSorafsReserveLifecycle {
         }
     }
 }
-
 impl DrawSorafsReserveCredit {
     /// Construct a capped reserve-credit draw.
     #[must_use]
@@ -1645,7 +1488,6 @@ impl DrawSorafsReserveCredit {
         }
     }
 }
-
 impl RepaySorafsReserveCredit {
     /// Construct a reserve-credit repayment.
     #[must_use]
@@ -1663,7 +1505,6 @@ impl RepaySorafsReserveCredit {
         }
     }
 }
-
 impl SubmitSorafsReserveAppeal {
     /// Construct a provider reserve lifecycle appeal.
     #[allow(clippy::too_many_arguments)]
@@ -1688,7 +1529,6 @@ impl SubmitSorafsReserveAppeal {
         }
     }
 }
-
 impl DecideSorafsReserveAppeal {
     /// Construct a terminal reserve appeal decision.
     #[must_use]
@@ -1708,7 +1548,6 @@ impl DecideSorafsReserveAppeal {
         }
     }
 }
-
 impl SubmitSorafsRepairTask {
     /// Construct an exactly-once repair-task admission instruction.
     #[must_use]
@@ -1719,7 +1558,6 @@ impl SubmitSorafsRepairTask {
         }
     }
 }
-
 impl ApplySorafsRepairTaskAction {
     /// Construct a compare-and-set repair-task mutation.
     #[must_use]
@@ -1735,7 +1573,6 @@ impl ApplySorafsRepairTaskAction {
         }
     }
 }
-
 impl SubmitSorafsRepairAppeal {
     /// Construct a provider-owner repair slash appeal.
     #[must_use]
@@ -1755,7 +1592,6 @@ impl SubmitSorafsRepairAppeal {
         }
     }
 }
-
 impl SetSorafsProofOutcomeSignerPolicy {
     /// Construct a governed proof-signer policy activation.
     #[must_use]
@@ -1763,7 +1599,6 @@ impl SetSorafsProofOutcomeSignerPolicy {
         Self { policy }
     }
 }
-
 impl SubmitSorafsProofOutcome {
     /// Construct a canonical proof-outcome submission.
     #[must_use]
@@ -1771,7 +1606,6 @@ impl SubmitSorafsProofOutcome {
         Self { submission }
     }
 }
-
 impl SetSorafsReputationJournalAuthorityPolicy {
     /// Construct a governed reputation recorder-policy activation.
     #[must_use]
@@ -1779,7 +1613,6 @@ impl SetSorafsReputationJournalAuthorityPolicy {
         Self { policy }
     }
 }
-
 impl AppendSorafsPorReputationJournalEntry {
     /// Construct a canonical `PoR` reputation-journal append.
     #[must_use]
@@ -1787,7 +1620,6 @@ impl AppendSorafsPorReputationJournalEntry {
         Self { entry }
     }
 }
-
 impl AppendSorafsStreamTokenReputationJournalEntry {
     /// Construct a canonical stream-token reputation-journal append.
     #[must_use]
@@ -1795,7 +1627,6 @@ impl AppendSorafsStreamTokenReputationJournalEntry {
         Self { entry }
     }
 }
-
 impl ResolveSorafsCapacityDispute {
     /// Construct a governed, predecessor-bound capacity-dispute resolution.
     #[must_use]
@@ -1815,7 +1646,6 @@ impl ResolveSorafsCapacityDispute {
         }
     }
 }
-
 impl SetSorafsModerationPolicy {
     /// Construct a moderation policy activation instruction.
     #[must_use]
@@ -1823,7 +1653,6 @@ impl SetSorafsModerationPolicy {
         Self { policy }
     }
 }
-
 impl SubmitSorafsModerationAppeal {
     /// Construct an appellant-authenticated appeal-intake instruction.
     #[must_use]
@@ -1831,7 +1660,6 @@ impl SubmitSorafsModerationAppeal {
         Self { intake }
     }
 }
-
 impl RegisterSorafsModerationJurorEligibility {
     /// Construct a private `PoP` eligibility-proof submission.
     #[must_use]
@@ -1843,7 +1671,6 @@ impl RegisterSorafsModerationJurorEligibility {
         }
     }
 }
-
 impl FinalizeSorafsModerationSortition {
     /// Construct a deterministic sortition-finalization instruction.
     #[must_use]
@@ -1865,7 +1692,6 @@ impl FinalizeSorafsModerationSortition {
         }
     }
 }
-
 impl AcceptSorafsModerationJurorAssignment {
     /// Construct an authority-bound assignment acceptance.
     #[must_use]
@@ -1877,7 +1703,6 @@ impl AcceptSorafsModerationJurorAssignment {
         }
     }
 }
-
 impl ActivateSorafsModerationCase {
     /// Construct a deterministic failover and ballot-activation instruction.
     #[must_use]
@@ -1889,7 +1714,6 @@ impl ActivateSorafsModerationCase {
         }
     }
 }
-
 impl SubmitSorafsModerationCommit {
     /// Construct a canonical commitment submission.
     #[must_use]
@@ -1897,7 +1721,6 @@ impl SubmitSorafsModerationCommit {
         Self { commit_payload }
     }
 }
-
 impl RaiseSorafsModerationChallenge {
     /// Construct a payload-free challenge submission.
     #[allow(clippy::too_many_arguments)]
@@ -1922,7 +1745,6 @@ impl RaiseSorafsModerationChallenge {
         }
     }
 }
-
 impl ResolveSorafsModerationChallenge {
     /// Construct a challenge-resolution instruction.
     #[must_use]
@@ -1940,7 +1762,6 @@ impl ResolveSorafsModerationChallenge {
         }
     }
 }
-
 impl SubmitSorafsModerationReveal {
     /// Construct a canonical reveal submission.
     #[must_use]
@@ -1948,7 +1769,6 @@ impl SubmitSorafsModerationReveal {
         Self { reveal_payload }
     }
 }
-
 impl FinalizeSorafsModerationCase {
     /// Construct a terminal case-finalization instruction.
     #[must_use]
@@ -1956,7 +1776,6 @@ impl FinalizeSorafsModerationCase {
         Self { case_id, round_id }
     }
 }
-
 impl RegisterProviderOwner {
     /// Create a new `RegisterProviderOwner` instruction.
     #[must_use]
@@ -1964,7 +1783,6 @@ impl RegisterProviderOwner {
         Self { provider_id, owner }
     }
 }
-
 impl UnregisterProviderOwner {
     /// Create a new `UnregisterProviderOwner` instruction.
     #[must_use]
@@ -1972,7 +1790,6 @@ impl UnregisterProviderOwner {
         Self { provider_id }
     }
 }
-
 impl SetProviderIngestCompletionAuthority {
     /// Create an exact compare-and-set provider completion authority update.
     #[must_use]
@@ -1988,7 +1805,6 @@ impl SetProviderIngestCompletionAuthority {
         }
     }
 }
-
 impl RevokeProviderIngestCompletionAuthority {
     /// Create an exact compare-and-remove provider completion authority revocation.
     #[must_use]
@@ -2002,11 +1818,9 @@ impl RevokeProviderIngestCompletionAuthority {
         }
     }
 }
-
 fn sorafs_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
 }
-
 macro_rules! impl_sorafs_decode_from_slice {
     ($ty:ty { $($field:ident : $field_ty:ty),+ $(,)? }) => {
         impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
@@ -2015,7 +1829,6 @@ macro_rules! impl_sorafs_decode_from_slice {
                 if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
                     return super::decode_packed_instruction_payload::<Self>(bytes);
                 }
-
                 let mut offset = 0usize;
                 $(
                     let $field = super::decode_aos_canonical_field::<$field_ty>(
@@ -2032,43 +1845,35 @@ macro_rules! impl_sorafs_decode_from_slice {
         }
     };
 }
-
 impl_sorafs_decode_from_slice!(RegisterPinManifest {
     manifest_payload: Vec<u8>,
     alias: Option<ManifestAliasBinding>,
     successor_of: Option<ManifestDigest>,
 });
-
 impl_sorafs_decode_from_slice!(ApprovePinManifest {
     digest: ManifestDigest,
     council_envelope: Option<Vec<u8>>,
     council_envelope_digest: Option<[u8; 32]>,
 });
-
 impl_sorafs_decode_from_slice!(RetirePinManifest {
     digest: ManifestDigest,
     reason: Option<String>,
 });
-
 impl_sorafs_decode_from_slice!(BindManifestAlias {
     digest: ManifestDigest,
     binding: ManifestAliasBinding,
     bound_epoch: u64,
     expiry_epoch: u64,
 });
-
 impl_sorafs_decode_from_slice!(RegisterCapacityDeclaration {
     record: CapacityDeclarationRecord,
 });
-
 impl_sorafs_decode_from_slice!(RecordCapacityTelemetry {
     record: CapacityTelemetryRecord,
 });
-
 impl_sorafs_decode_from_slice!(RegisterCapacityDispute {
     record: CapacityDisputeRecord,
 });
-
 impl_sorafs_decode_from_slice!(IssueReplicationOrder {
     order_id: ReplicationOrderId,
     order_payload: Vec<u8>,
@@ -2076,7 +1881,6 @@ impl_sorafs_decode_from_slice!(IssueReplicationOrder {
     deadline_epoch: u64,
     musubi_archive: Option<ArchiveId>,
 });
-
 impl_sorafs_decode_from_slice!(CompleteReplicationOrder {
     order_id: ReplicationOrderId,
     provider_id: ProviderId,
@@ -2085,100 +1889,80 @@ impl_sorafs_decode_from_slice!(CompleteReplicationOrder {
     expected_assignment_revision: u64,
     finalized_anchor: ProviderIngestFinalizedAnchorV1,
 });
-
 impl_sorafs_decode_from_slice!(ReviseReplicationOrderAssignments {
     order_id: ReplicationOrderId,
     expected_assignment_revision: u64,
     next_assignment_revision: u64,
     assignments: Vec<ReplicationAssignmentV1>,
 });
-
 impl_sorafs_decode_from_slice!(ExpireReplicationOrder {
     order_id: ReplicationOrderId,
     expiration_epoch: u64,
 });
-
 impl_sorafs_decode_from_slice!(RegisterProviderOwner {
     provider_id: ProviderId,
     owner: AccountId,
 });
-
 impl_sorafs_decode_from_slice!(UnregisterProviderOwner {
     provider_id: ProviderId,
 });
-
 impl_sorafs_decode_from_slice!(SetProviderIngestCompletionAuthority {
     provider_id: ProviderId,
     expected_current: Option<ProviderIngestCompletionAuthorityV1>,
     next: ProviderIngestCompletionAuthorityV1,
 });
-
 impl_sorafs_decode_from_slice!(RevokeProviderIngestCompletionAuthority {
     provider_id: ProviderId,
     expected_current: ProviderIngestCompletionAuthorityV1,
 });
-
 impl_sorafs_decode_from_slice!(SetPricingSchedule {
     schedule: PricingScheduleRecord,
 });
-
 impl_sorafs_decode_from_slice!(UpsertProviderCredit {
     record: ProviderCreditRecord,
 });
-
 impl_sorafs_decode_from_slice!(SetSorafsPopIssuerPolicy {
     policy: PopIssuerPolicyV1,
 });
-
 impl_sorafs_decode_from_slice!(CommitSorafsPopCredentialBatch {
     batch_payload: Vec<u8>,
 });
-
 impl_sorafs_decode_from_slice!(PublishSorafsPopRevocationList {
     revocation_list_payload: Vec<u8>,
     issuer_policy_digest: [u8; 32],
 });
-
 impl_sorafs_decode_from_slice!(SetSorafsOrderbookPolicy {
     policy: OrderbookAdmissionPolicyV1,
 });
-
 impl_sorafs_decode_from_slice!(SubmitSorafsOrderbookOrder {
     order_payload: Vec<u8>,
     policy_digest: [u8; 32],
 });
-
 impl_sorafs_decode_from_slice!(CancelSorafsOrderbookOrder {
     cancel_payload: Vec<u8>,
     policy_digest: [u8; 32],
 });
-
 impl_sorafs_decode_from_slice!(MatchSorafsOrderbook {
     policy_digest: [u8; 32],
     expected_book_revision: u64,
     max_fills: u32,
 });
-
 impl_sorafs_decode_from_slice!(MaintainSorafsOrderbook {
     policy_digest: [u8; 32],
     expected_book_revision: u64,
     max_items: u32,
 });
-
 impl_sorafs_decode_from_slice!(RecordSorafsOrderbookSettlementReceipt {
     receipt_payload: Vec<u8>,
     policy_digest: [u8; 32],
 });
-
 impl_sorafs_decode_from_slice!(SetSorafsReservePolicy {
     policy: ReserveAuthorityPolicyV1,
 });
-
 impl_sorafs_decode_from_slice!(RegisterSorafsReserveAccount {
     terms: ReserveProviderTermsV1,
     policy_digest: [u8; 32],
 });
-
 impl_sorafs_decode_from_slice!(RequestSorafsReserveMovement {
     movement_id: [u8; 32],
     provider_id: ProviderId,
@@ -2187,7 +1971,6 @@ impl_sorafs_decode_from_slice!(RequestSorafsReserveMovement {
     expected_provider_revision: u64,
     policy_digest: [u8; 32],
 });
-
 impl_sorafs_decode_from_slice!(DecideSorafsReserveMovement {
     movement_id: [u8; 32],
     expected_provider_revision: u64,
@@ -2195,35 +1978,30 @@ impl_sorafs_decode_from_slice!(DecideSorafsReserveMovement {
     approve: bool,
     rationale: String,
 });
-
 impl_sorafs_decode_from_slice!(ChargeSorafsReserveRent {
     provider_id: ProviderId,
     expected_provider_revision: u64,
     billing_periods: u16,
     policy_digest: [u8; 32],
 });
-
 impl_sorafs_decode_from_slice!(AdvanceSorafsReserveLifecycle {
     provider_id: ProviderId,
     expected_provider_revision: u64,
     days_past_due: u16,
     policy_digest: [u8; 32],
 });
-
 impl_sorafs_decode_from_slice!(DrawSorafsReserveCredit {
     provider_id: ProviderId,
     expected_provider_revision: u64,
     amount: XorQuantity,
     policy_digest: [u8; 32],
 });
-
 impl_sorafs_decode_from_slice!(RepaySorafsReserveCredit {
     provider_id: ProviderId,
     expected_provider_revision: u64,
     amount: XorQuantity,
     policy_digest: [u8; 32],
 });
-
 impl_sorafs_decode_from_slice!(SubmitSorafsReserveAppeal {
     appeal_id: [u8; 32],
     provider_id: ProviderId,
@@ -2233,7 +2011,6 @@ impl_sorafs_decode_from_slice!(SubmitSorafsReserveAppeal {
     evidence_digest: Option<[u8; 32]>,
     policy_digest: [u8; 32],
 });
-
 impl_sorafs_decode_from_slice!(DecideSorafsReserveAppeal {
     appeal_id: [u8; 32],
     expected_provider_revision: u64,
@@ -2241,18 +2018,15 @@ impl_sorafs_decode_from_slice!(DecideSorafsReserveAppeal {
     accept: bool,
     rationale: String,
 });
-
 impl_sorafs_decode_from_slice!(SubmitSorafsRepairTask {
     source_identity: [u8; 32],
     report_payload: Vec<u8>,
 });
-
 impl_sorafs_decode_from_slice!(ApplySorafsRepairTaskAction {
     ticket_id: String,
     expected_revision: u64,
     action: SorafsRepairTaskActionV1,
 });
-
 impl_sorafs_decode_from_slice!(SubmitSorafsRepairAppeal {
     ticket_id: String,
     expected_revision: u64,
@@ -2260,27 +2034,21 @@ impl_sorafs_decode_from_slice!(SubmitSorafsRepairAppeal {
     reason: String,
     idempotency_key: String,
 });
-
 impl_sorafs_decode_from_slice!(SetSorafsProofOutcomeSignerPolicy {
     policy: ProofOutcomeSignerPolicyV1,
 });
-
 impl_sorafs_decode_from_slice!(SubmitSorafsProofOutcome {
     submission: SorafsProofOutcomeSubmissionV1,
 });
-
 impl_sorafs_decode_from_slice!(SetSorafsReputationJournalAuthorityPolicy {
     policy: ReputationJournalAuthorityPolicyV1,
 });
-
 impl_sorafs_decode_from_slice!(AppendSorafsPorReputationJournalEntry {
     entry: ReputationJournalEntryV1,
 });
-
 impl_sorafs_decode_from_slice!(AppendSorafsStreamTokenReputationJournalEntry {
     entry: ReputationJournalEntryV1,
 });
-
 impl_sorafs_decode_from_slice!(ResolveSorafsCapacityDispute {
     dispute_id: CapacityDisputeId,
     expected_authority_policy_digest: [u8; 32],
@@ -2288,21 +2056,17 @@ impl_sorafs_decode_from_slice!(ResolveSorafsCapacityDispute {
     decision_digest: [u8; 32],
     rationale: Option<String>,
 });
-
 impl_sorafs_decode_from_slice!(SetSorafsModerationPolicy {
     policy: ModerationLedgerPolicyV1,
 });
-
 impl_sorafs_decode_from_slice!(SubmitSorafsModerationAppeal {
     intake: ModerationAppealIntakeV1,
 });
-
 impl_sorafs_decode_from_slice!(RegisterSorafsModerationJurorEligibility {
     case_id: String,
     round_id: String,
     membership_proof_payload: Vec<u8>,
 });
-
 impl_sorafs_decode_from_slice!(FinalizeSorafsModerationSortition {
     case_id: String,
     round_id: String,
@@ -2311,23 +2075,19 @@ impl_sorafs_decode_from_slice!(FinalizeSorafsModerationSortition {
     proposed_jurors: Vec<AccountId>,
     proposed_waitlist: Vec<AccountId>,
 });
-
 impl_sorafs_decode_from_slice!(AcceptSorafsModerationJurorAssignment {
     case_id: String,
     round_id: String,
     sortition_digest: [u8; 32],
 });
-
 impl_sorafs_decode_from_slice!(ActivateSorafsModerationCase {
     case_id: String,
     round_id: String,
     sortition_digest: [u8; 32],
 });
-
 impl_sorafs_decode_from_slice!(SubmitSorafsModerationCommit {
     commit_payload: Vec<u8>,
 });
-
 impl_sorafs_decode_from_slice!(RaiseSorafsModerationChallenge {
     case_id: String,
     round_id: String,
@@ -2337,23 +2097,19 @@ impl_sorafs_decode_from_slice!(RaiseSorafsModerationChallenge {
     evidence_digest: [u8; 32],
     reason: String,
 });
-
 impl_sorafs_decode_from_slice!(ResolveSorafsModerationChallenge {
     case_id: String,
     round_id: String,
     challenge_id: String,
     decision: ModerationChallengeDecisionV1,
 });
-
 impl_sorafs_decode_from_slice!(SubmitSorafsModerationReveal {
     reveal_payload: Vec<u8>,
 });
-
 impl_sorafs_decode_from_slice!(FinalizeSorafsModerationCase {
     case_id: String,
     round_id: String,
 });
-
 #[cfg(test)]
 mod tests {
     use iroha_primitives::numeric::{Numeric, Quantity};
@@ -2368,7 +2124,6 @@ mod tests {
             StreamTokenValidationStatusV1,
         },
     };
-
     fn owner() -> AccountId {
         AccountId::new(
             "ed0120BDF918243253B1E731FA096194C8928DA37C4D3226F97EEBD18CF5523D758D6C"
@@ -2376,15 +2131,12 @@ mod tests {
                 .expect("public key"),
         )
     }
-
     fn digest(byte: u8) -> ManifestDigest {
         ManifestDigest::new([byte; 32])
     }
-
     fn provider(byte: u8) -> ProviderId {
         ProviderId::new([byte; 32])
     }
-
     #[test]
     fn provider_governance_actions_are_closed_canonical_and_compare_and_set() {
         let current = owner();
@@ -2418,7 +2170,6 @@ mod tests {
                 .expect("canonical action roundtrip");
             assert_eq!(decoded, action);
         }
-
         assert!(
             SorafsProviderGovernanceActionV1::Establish(EstablishSorafsProviderOwnerV1 {
                 provider_id: ProviderId::default(),
@@ -2437,7 +2188,6 @@ mod tests {
             .is_err()
         );
     }
-
     fn xor_quantity_nanos(value: u128) -> Quantity {
         Quantity::from_canonical_numeric(Numeric::new(
             value,
@@ -2445,11 +2195,9 @@ mod tests {
         ))
         .expect("u128 nano-XOR SoraFS fixture fits Quantity")
     }
-
     fn order_id() -> ReplicationOrderId {
         ReplicationOrderId::new([0x44; 32])
     }
-
     fn alias() -> ManifestAliasBinding {
         ManifestAliasBinding {
             namespace: "sora".to_owned(),
@@ -2457,7 +2205,6 @@ mod tests {
             proof: vec![0xAA, 0xBB],
         }
     }
-
     fn capacity_declaration() -> CapacityDeclarationRecord {
         CapacityDeclarationRecord::new(
             provider(0x31),
@@ -2469,7 +2216,6 @@ mod tests {
             Metadata::default(),
         )
     }
-
     fn capacity_telemetry() -> CapacityTelemetryRecord {
         CapacityTelemetryRecord::new(
             provider(0x32),
@@ -2490,7 +2236,6 @@ mod tests {
         )
         .with_nonce(7)
     }
-
     fn capacity_dispute() -> CapacityDisputeRecord {
         CapacityDisputeRecord::new_pending(
             CapacityDisputeId::new([0xD1; 32]),
@@ -2510,7 +2255,6 @@ mod tests {
             vec![0x99, 0x88],
         )
     }
-
     fn provider_credit() -> ProviderCreditRecord {
         ProviderCreditRecord::new(
             provider(0x34),
@@ -2523,7 +2267,6 @@ mod tests {
             Metadata::default(),
         )
     }
-
     fn provider_ingest_completion_authority() -> ProviderIngestCompletionAuthorityV1 {
         ProviderIngestCompletionAuthorityV1::new(
             owner(),
@@ -2535,14 +2278,12 @@ mod tests {
             },
         )
     }
-
     fn provider_ingest_finalized_anchor() -> ProviderIngestFinalizedAnchorV1 {
         ProviderIngestFinalizedAnchorV1 {
             height: 87,
             block_hash: [0x93; 32],
         }
     }
-
     fn replacement_assignments() -> Vec<ReplicationAssignmentV1> {
         vec![ReplicationAssignmentV1 {
             provider_id: [0x94; 32],
@@ -2550,7 +2291,6 @@ mod tests {
             lane: None,
         }]
     }
-
     fn reputation_policy() -> ReputationJournalAuthorityPolicyV1 {
         ReputationJournalAuthorityPolicyV1 {
             version: crate::sorafs::reputation::REPUTATION_JOURNAL_AUTHORITY_POLICY_VERSION_V1,
@@ -2562,7 +2302,6 @@ mod tests {
             max_source_age_ms: 24 * 60 * 60 * 1_000,
         }
     }
-
     fn por_reputation_entry() -> ReputationJournalEntryV1 {
         let policy = reputation_policy();
         ReputationJournalEntryV1::try_new(
@@ -2591,7 +2330,6 @@ mod tests {
         )
         .expect("canonical PoR reputation entry")
     }
-
     fn token_reputation_entry() -> ReputationJournalEntryV1 {
         let policy = reputation_policy();
         ReputationJournalEntryV1::try_new(
@@ -2614,7 +2352,6 @@ mod tests {
         )
         .expect("canonical stream-token reputation entry")
     }
-
     fn orderbook_policy() -> OrderbookAdmissionPolicyV1 {
         OrderbookAdmissionPolicyV1 {
             version: crate::sorafs::orderbook::ORDERBOOK_ADMISSION_POLICY_VERSION_V1,
@@ -2636,7 +2373,6 @@ mod tests {
             max_receipts_per_channel: 1_024,
         }
     }
-
     fn reserve_policy() -> ReserveAuthorityPolicyV1 {
         let domain = crate::domain::DomainId::try_new("sora", "universal").expect("reserve domain");
         ReserveAuthorityPolicyV1 {
@@ -2664,12 +2400,10 @@ mod tests {
             max_open_appeals_per_provider: 2,
         }
     }
-
     #[test]
     fn reserve_policy_digest_commits_service_authorities() {
         let policy = reserve_policy();
         let baseline = policy.digest().expect("baseline reserve policy digest");
-
         let mut operations_rotated = policy.clone();
         operations_rotated.operations_authority = policy.treasury_account.clone();
         assert_ne!(
@@ -2678,7 +2412,6 @@ mod tests {
                 .expect("operations-authority digest"),
             baseline
         );
-
         let mut decision_rotated = policy;
         decision_rotated.decision_authority = decision_rotated.treasury_account.clone();
         assert_ne!(
@@ -2688,7 +2421,6 @@ mod tests {
             baseline
         );
     }
-
     fn reserve_terms() -> ReserveProviderTermsV1 {
         ReserveProviderTermsV1 {
             provider_id: provider(0x36),
@@ -2699,7 +2431,6 @@ mod tests {
             capacity_gib: 16,
         }
     }
-
     fn pop_issuer_policy() -> PopIssuerPolicyV1 {
         PopIssuerPolicyV1 {
             version: crate::sorafs::pop_registry::POP_ISSUER_POLICY_VERSION_V1,
@@ -2715,7 +2446,6 @@ mod tests {
             paused: false,
         }
     }
-
     fn moderation_policy() -> ModerationLedgerPolicyV1 {
         ModerationLedgerPolicyV1 {
             version: crate::sorafs::moderation_ledger::MODERATION_LEDGER_POLICY_VERSION_V1,
@@ -2731,7 +2461,6 @@ mod tests {
             unrevealed_commit_penalty_points: 20,
         }
     }
-
     fn proof_outcome_signer_policy() -> ProofOutcomeSignerPolicyV1 {
         ProofOutcomeSignerPolicyV1 {
             version: crate::sorafs::proof_ledger::PROOF_OUTCOME_SIGNER_POLICY_VERSION_V1,
@@ -2746,7 +2475,6 @@ mod tests {
             valid_until_unix: 2_000,
         }
     }
-
     fn moderation_appeal_intake() -> ModerationAppealIntakeV1 {
         let appellant = owner();
         ModerationAppealIntakeV1 {
@@ -2773,7 +2501,6 @@ mod tests {
             policy_digest: moderation_policy().digest().expect("policy digest"),
         }
     }
-
     fn assert_slice_roundtrip<T>(value: T)
     where
         T: Clone + PartialEq + core::fmt::Debug + norito::codec::Encode,
@@ -2784,7 +2511,6 @@ mod tests {
         assert_eq!(used, bytes.len());
         assert_eq!(decoded, value);
     }
-
     fn assert_registry_decodes<T>(registry: &crate::isi::InstructionRegistry, value: T)
     where
         T: crate::isi::Instruction
@@ -2802,7 +2528,6 @@ mod tests {
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
     }
-
     #[test]
     fn issue_replication_order_rejects_the_pre_binding_wire_layout() {
         #[derive(Encode)]
@@ -2812,7 +2537,6 @@ mod tests {
             issued_epoch: u64,
             deadline_epoch: u64,
         }
-
         let retired = PreBindingIssueReplicationOrder {
             order_id: order_id(),
             order_payload: vec![0x01, 0x02, 0x03],
@@ -2825,19 +2549,15 @@ mod tests {
             "the four-field pre-binding wire must be regenerated, not defaulted"
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn register_pin_manifest_json_roundtrip() {
         let manifest = RegisterPinManifest::new(vec![1, 2, 3], None, None);
-
         let value = norito::json::to_value(&manifest).expect("register pin manifest json");
         let decoded: RegisterPinManifest =
             norito::json::from_value(value).expect("register pin manifest decode");
-
         assert_eq!(decoded, manifest);
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_outcome_submission_json_is_tagged_exact_and_fail_closed() {
@@ -2856,7 +2576,6 @@ mod tests {
                 .expect("decode PDP submission"),
             pdp
         );
-
         let potr = SorafsProofOutcomeSubmissionV1::Potr(SorafsPotrProofOutcomeSubmissionV1 {
             receipt_payload: vec![4, 5],
             admission_envelope_digest: [7; 32],
@@ -2875,7 +2594,6 @@ mod tests {
                 .expect("decode PoTR submission"),
             potr
         );
-
         for malformed in [
             r#"{"proof_kind":"unknown","value":{"archive_payload":"AAEC"}}"#,
             r#"{"proof_kind":"pdp","value":{"archive_payload":"***"}}"#,
@@ -2891,7 +2609,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn proof_outcome_submission_schema_references_explicit_payloads() {
         use core::any::TypeId;
@@ -2921,7 +2638,6 @@ mod tests {
         assert!(schema.contains_key::<SorafsPdpProofOutcomeSubmissionV1>());
         assert!(schema.contains_key::<SorafsPotrProofOutcomeSubmissionV1>());
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn sorafs_decode_from_slice_roundtrips() {
@@ -3185,7 +2901,6 @@ mod tests {
             "round-1".to_owned(),
         ));
     }
-
     #[test]
     #[expect(
         clippy::too_many_lines,

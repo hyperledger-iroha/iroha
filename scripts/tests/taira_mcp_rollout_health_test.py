@@ -256,6 +256,44 @@ def test_sumeragi_checker_accepts_authoritative_v2(tmp_path: Path) -> None:
     assert '"commit_qc_signers": 3' in result.stdout
 
 
+def test_public_sumeragi_checker_rejects_non_four_validator_roster(
+    tmp_path: Path,
+) -> None:
+    context = _healthy_base_payload()
+    context["height_context"]["validator_count"] = 7  # type: ignore[index]
+    context["height_context"]["quorum"] = {  # type: ignore[index]
+        "min_signers": 5,
+        "total_power": 7,
+    }
+    result = _run_checker(tmp_path, context)
+    assert result.returncode == 1
+    assert "Taira requires exactly 4" in result.stderr
+
+    commit = _healthy_base_payload()
+    commit["last_commit_qc"].update(  # type: ignore[union-attr]
+        {
+            "validator_count": 7,
+            "signer_count": 5,
+            "min_signers": 5,
+            "signed_power": 5,
+            "total_power": 7,
+        }
+    )
+    result = _run_checker(tmp_path, commit)
+    assert result.returncode == 1
+    assert "durable CommitQC does not satisfy its frozen dual quorum" in result.stderr
+
+
+def test_sorafs_public_smoke_pins_exact_four_validator_status() -> None:
+    source = (
+        ROOT / "configs/soranexus/taira/check_sorafs_rollout.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "if validator_count != 4:" in source
+    assert "Taira requires exactly 4" in source
+    assert "commit_validators != 4" in source
+
+
 def test_validator_fleet_gate_retains_exact_dataspace_and_commit_identity(
     tmp_path: Path,
 ) -> None:

@@ -95,7 +95,6 @@ use thiserror::Error;
 
 const AMX_POLICY_METADATA_KEY: &str = "amx_policy";
 const AMX_POLICY_REJECT_CROSS_DATASPACE: &str = "reject_cross_dataspace";
-
 /// Read-only transaction fields consumed by deterministic lane and dataspace routing.
 ///
 /// Both accepted transactions and canonical unsigned payloads implement this view so
@@ -104,21 +103,16 @@ const AMX_POLICY_REJECT_CROSS_DATASPACE: &str = "reject_cross_dataspace";
 pub trait TransactionRoutingView {
     /// Return the authority when this entrypoint has one.
     fn authority_opt(&self) -> Option<&AccountId>;
-
     /// Return routing metadata when this entrypoint has it.
     fn metadata(&self) -> Option<&Metadata>;
-
     /// Return the executable used for native routing inspection.
     fn executable(&self) -> Option<&Executable>;
-
     /// Evaluate a predicate over the instruction batch used by matcher rules.
     fn any_matching_instruction(&self, predicate: &mut dyn FnMut(&dyn Instruction) -> bool)
     -> bool;
-
     /// Return the signature-independent hash used for elastic default-lane sharding.
     fn routing_hash(&self) -> Hash;
 }
-
 fn executable_any_matching_instruction(
     executable: &Executable,
     predicate: &mut dyn FnMut(&dyn Instruction) -> bool,
@@ -127,16 +121,13 @@ fn executable_any_matching_instruction(
         .explicit_instructions()
         .any(|instruction| predicate(&**instruction))
 }
-
 impl TransactionRoutingView for AcceptedTransaction<'_> {
     fn authority_opt(&self) -> Option<&AccountId> {
         AcceptedTransaction::authority_opt(self)
     }
-
     fn metadata(&self) -> Option<&Metadata> {
         AcceptedTransaction::metadata(self)
     }
-
     fn executable(&self) -> Option<&Executable> {
         match self.entrypoint() {
             iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
@@ -149,7 +140,6 @@ impl TransactionRoutingView for AcceptedTransaction<'_> {
             | iroha_data_model::transaction::TransactionEntrypoint::Time(_) => None,
         }
     }
-
     fn any_matching_instruction(
         &self,
         predicate: &mut dyn FnMut(&dyn Instruction) -> bool,
@@ -168,7 +158,6 @@ impl TransactionRoutingView for AcceptedTransaction<'_> {
             | iroha_data_model::transaction::TransactionEntrypoint::Time(_) => false,
         }
     }
-
     fn routing_hash(&self) -> Hash {
         self.external().map_or_else(
             || self.hash_as_entrypoint().into(),
@@ -176,27 +165,22 @@ impl TransactionRoutingView for AcceptedTransaction<'_> {
         )
     }
 }
-
 impl TransactionRoutingView for TransactionPayload {
     fn authority_opt(&self) -> Option<&AccountId> {
         Some(&self.authority)
     }
-
     fn metadata(&self) -> Option<&Metadata> {
         Some(&self.metadata)
     }
-
     fn executable(&self) -> Option<&Executable> {
         Some(&self.instructions)
     }
-
     fn any_matching_instruction(
         &self,
         predicate: &mut dyn FnMut(&dyn Instruction) -> bool,
     ) -> bool {
         executable_any_matching_instruction(&self.instructions, predicate)
     }
-
     fn routing_hash(&self) -> Hash {
         HashOf::new(self).into()
     }
@@ -209,7 +193,6 @@ pub struct RoutingDecision {
     /// Dataspace assigned to the transaction.
     pub dataspace_id: DataSpaceId,
 }
-
 impl RoutingDecision {
     /// Create a new routing decision.
     #[must_use]
@@ -220,13 +203,11 @@ impl RoutingDecision {
         }
     }
 }
-
 impl Default for RoutingDecision {
     fn default() -> Self {
         Self::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
     }
 }
-
 /// Role of one route in a transaction routing plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum RouteLegRole {
@@ -235,7 +216,6 @@ pub enum RouteLegRole {
     /// The route prepares or commits one dataspace-local leg of the plan.
     Participant,
 }
-
 /// One lane/dataspace leg in a transaction routing plan.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct RouteLeg {
@@ -244,7 +224,6 @@ pub struct RouteLeg {
     /// Plan role assigned to the leg.
     pub role: RouteLegRole,
 }
-
 impl RouteLeg {
     /// Construct a new route leg.
     #[must_use]
@@ -252,7 +231,6 @@ impl RouteLeg {
         Self { route, role }
     }
 }
-
 /// Native AMX routing plan for a transaction that touches multiple dataspaces.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct NativeAmxRoutingPlan {
@@ -263,7 +241,6 @@ pub struct NativeAmxRoutingPlan {
     /// Dataspace-local participant routes sorted by dataspace and lane id.
     pub participants: Vec<RouteLeg>,
 }
-
 /// Complete routing plan for a transaction.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum RoutingPlan {
@@ -272,14 +249,12 @@ pub enum RoutingPlan {
     /// The transaction requires native AMX coordination across dataspaces.
     NativeAmx(NativeAmxRoutingPlan),
 }
-
 impl RoutingPlan {
     /// Construct a single-route coordinator plan.
     #[must_use]
     pub const fn single(route: RoutingDecision) -> Self {
         Self::Single(RouteLeg::new(route, RouteLegRole::Coordinator))
     }
-
     /// Construct a canonical native AMX plan.
     #[must_use]
     pub fn native_amx(coordinator: RoutingDecision, mut participants: Vec<RouteLeg>) -> Self {
@@ -295,7 +270,6 @@ impl RoutingPlan {
             participants,
         })
     }
-
     /// Return the route that existing single-route queue machinery should use as coordinator.
     #[must_use]
     pub const fn coordinator_route(&self) -> RoutingDecision {
@@ -304,7 +278,6 @@ impl RoutingPlan {
             Self::NativeAmx(plan) => plan.coordinator.route,
         }
     }
-
     /// Return the coordinator leg.
     #[must_use]
     pub const fn coordinator_leg(&self) -> RouteLeg {
@@ -313,7 +286,6 @@ impl RoutingPlan {
             Self::NativeAmx(plan) => plan.coordinator,
         }
     }
-
     /// Return all plan legs in deterministic coordinator-first order.
     #[must_use]
     pub fn legs(&self) -> Vec<RouteLeg> {
@@ -327,7 +299,6 @@ impl RoutingPlan {
             }
         }
     }
-
     /// Return the deterministic digest for the plan.
     #[must_use]
     pub fn digest(&self) -> Hash {
@@ -337,7 +308,6 @@ impl RoutingPlan {
         }
     }
 }
-
 /// Deterministic routing resolution failure against configured Nexus catalogs.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum RoutingResolveError {
@@ -439,7 +409,6 @@ pub enum RoutingResolveError {
     #[error("provided routing plan does not match the current Nexus routing policy")]
     StaleRoutingPlan,
 }
-
 impl RoutingResolveError {
     /// Stable telemetry label for deterministic routing failures.
     #[must_use]
@@ -466,7 +435,6 @@ impl RoutingResolveError {
         }
     }
 }
-
 /// Evaluate the configured routing policy for a transaction, returning the lane and dataspace.
 ///
 /// This does not validate the decision against the lane or dataspace catalogs. Use
@@ -498,7 +466,6 @@ pub fn evaluate_policy(
         .unwrap_or(policy.default_dataspace);
     RoutingDecision::new(lane_id, dataspace_id)
 }
-
 fn fail_closed_policy_route_with_view(
     policy: &LaneRoutingPolicy,
     tx: &dyn TransactionRoutingView,
@@ -530,7 +497,6 @@ fn fail_closed_policy_route_with_view(
         target.dataspace_id
     }
     .unwrap_or(policy.default_dataspace);
-
     canonical_dataspace_route(
         target_dataspace,
         &nexus.lane_catalog,
@@ -545,7 +511,6 @@ fn fail_closed_policy_route_with_view(
     })
     .unwrap_or_else(|_| RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
 }
-
 /// Evaluate the routing policy and resolve it against the configured catalogs.
 pub fn evaluate_policy_with_catalog(
     policy: &LaneRoutingPolicy,
@@ -596,7 +561,6 @@ pub fn evaluate_policy_with_catalog(
         None,
     )
 }
-
 /// Evaluate the routing policy and resolve the full routing plan against the configured catalogs.
 pub fn evaluate_policy_plan_with_catalog(
     policy: &LaneRoutingPolicy,
@@ -647,7 +611,6 @@ pub fn evaluate_policy_plan_with_catalog(
         None,
     )
 }
-
 /// Evaluate the routing policy against catalogs, resolving opaque dataspace-scoped
 /// permissions from the current world snapshot when possible.
 pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
@@ -666,7 +629,6 @@ pub fn evaluate_policy_with_catalog_and_world<W: WorldReadOnly>(
         None,
     )
 }
-
 /// Evaluate the routing policy against catalogs and the current world at a deterministic ledger time.
 pub fn evaluate_policy_with_catalog_and_world_at<W: WorldReadOnly>(
     policy: &LaneRoutingPolicy,
@@ -685,7 +647,6 @@ pub fn evaluate_policy_with_catalog_and_world_at<W: WorldReadOnly>(
         Some(ledger_time_ms),
     )
 }
-
 fn evaluate_policy_with_catalog_and_world_at_opt<W: WorldReadOnly>(
     policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
@@ -760,7 +721,6 @@ fn evaluate_policy_with_catalog_and_world_at_opt<W: WorldReadOnly>(
         None,
     )
 }
-
 /// Evaluate the routing policy and resolve the full routing plan against catalogs/world state.
 pub fn evaluate_policy_plan_with_catalog_and_world<W: WorldReadOnly>(
     policy: &LaneRoutingPolicy,
@@ -779,7 +739,6 @@ pub fn evaluate_policy_plan_with_catalog_and_world<W: WorldReadOnly>(
         None,
     )
 }
-
 /// Evaluate the routing policy and resolve the full plan at a deterministic ledger time.
 pub fn evaluate_policy_plan_with_catalog_and_world_at<W: WorldReadOnly>(
     policy: &LaneRoutingPolicy,
@@ -799,7 +758,6 @@ pub fn evaluate_policy_plan_with_catalog_and_world_at<W: WorldReadOnly>(
         None,
     )
 }
-
 /// Evaluate the active Nexus routing policy and resolve the full plan at a deterministic ledger
 /// time.
 ///
@@ -821,7 +779,6 @@ pub fn evaluate_policy_plan_with_nexus_and_world_at<W: WorldReadOnly>(
         None,
     )
 }
-
 /// Evaluate the active Nexus routing policy and resolve the full plan at a deterministic ledger
 /// time and block height.
 pub fn evaluate_policy_plan_with_nexus_and_world_at_block_height<W: WorldReadOnly>(
@@ -844,7 +801,6 @@ pub fn evaluate_policy_plan_with_nexus_and_world_at_block_height<W: WorldReadOnl
         )),
     )
 }
-
 fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
     policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
@@ -919,7 +875,6 @@ fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
         autoscale_range,
     )
 }
-
 fn dataspace_scoped_permission_routing_decision(
     tx: &dyn TransactionRoutingView,
     lane_catalog: Option<&LaneCatalog>,
@@ -931,7 +886,6 @@ fn dataspace_scoped_permission_routing_decision(
     let Some(executable) = transaction_executable(tx) else {
         return Ok(None);
     };
-
     match executable {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
@@ -997,11 +951,9 @@ fn dataspace_scoped_permission_routing_decision(
             }
         }
     }
-
     let Some(dataspace_id) = target_dataspace else {
         return Ok(None);
     };
-
     match (lane_catalog, dataspace_catalog) {
         (Some(lane_catalog), Some(dataspace_catalog)) => {
             canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog).map(Some)
@@ -1009,7 +961,6 @@ fn dataspace_scoped_permission_routing_decision(
         _ => Ok(None),
     }
 }
-
 fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
     tx: &dyn TransactionRoutingView,
     lane_catalog: Option<&LaneCatalog>,
@@ -1022,7 +973,6 @@ fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
     let Some(executable) = transaction_executable(tx) else {
         return Ok(None);
     };
-
     match executable {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
@@ -1091,11 +1041,9 @@ fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
             }
         }
     }
-
     let Some(dataspace_id) = target_dataspace else {
         return Ok(None);
     };
-
     match (lane_catalog, dataspace_catalog) {
         (Some(lane_catalog), Some(dataspace_catalog)) => {
             canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog).map(Some)
@@ -1103,7 +1051,6 @@ fn dataspace_scoped_permission_routing_decision_with_world<W: WorldReadOnly>(
         _ => Ok(None),
     }
 }
-
 fn settlement_routing_decision_without_catalog(
     tx: &dyn TransactionRoutingView,
 ) -> Option<RoutingDecision> {
@@ -1114,7 +1061,6 @@ fn settlement_routing_decision_without_catalog(
     (dataspace_id == DataSpaceId::UNIVERSAL)
         .then(|| RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
 }
-
 fn settlement_routing_decision(
     tx: &dyn TransactionRoutingView,
     lane_catalog: &LaneCatalog,
@@ -1128,7 +1074,6 @@ fn settlement_routing_decision(
     };
     canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog).map(Some)
 }
-
 fn settlement_routing_decision_with_world<W: WorldReadOnly>(
     tx: &dyn TransactionRoutingView,
     lane_catalog: &LaneCatalog,
@@ -1147,7 +1092,6 @@ fn settlement_routing_decision_with_world<W: WorldReadOnly>(
     };
     canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog).map(Some)
 }
-
 fn native_amx_fx_routing_plan_with_world<W: WorldReadOnly>(
     tx: &dyn TransactionRoutingView,
     matched_rule: Option<&LaneRoutingRule>,
@@ -1159,7 +1103,6 @@ fn native_amx_fx_routing_plan_with_world<W: WorldReadOnly>(
     if !transaction_contains_fx_corridor_settlement(tx) {
         return Ok(None);
     }
-
     let coordinator_route =
         canonical_dataspace_route(DataSpaceId::UNIVERSAL, lane_catalog, dataspace_catalog)?;
     let mut participant_dataspaces = native_amx_participant_dataspaces_with_world_at(
@@ -1187,13 +1130,11 @@ fn native_amx_fx_routing_plan_with_world<W: WorldReadOnly>(
                 .map(|route| RouteLeg::new(route, RouteLegRole::Participant))
         })
         .collect::<Result<Vec<_>, _>>()?;
-
     Ok(Some(RoutingPlan::native_amx(
         coordinator_route,
         participants,
     )))
 }
-
 fn merge_settlement_target_dataspace(
     target_dataspace: &mut Option<DataSpaceId>,
     candidate: Option<DataSpaceId>,
@@ -1201,7 +1142,6 @@ fn merge_settlement_target_dataspace(
     let Some(candidate) = candidate else {
         return;
     };
-
     match *target_dataspace {
         Some(existing) if existing != candidate => {
             // Mixed settlement legs require a deterministic coordinator route instead of being
@@ -1212,7 +1152,6 @@ fn merge_settlement_target_dataspace(
         None => *target_dataspace = Some(candidate),
     }
 }
-
 fn settlement_pair_dataspace_target(
     first: Option<DataSpaceId>,
     second: Option<DataSpaceId>,
@@ -1224,7 +1163,6 @@ fn settlement_pair_dataspace_target(
         (None, None) => None,
     }
 }
-
 fn fx_corridor_policy_with_world<W: WorldReadOnly>(
     world: &W,
     policy_id: &Name,
@@ -1243,7 +1181,6 @@ fn fx_corridor_policy_with_world<W: WorldReadOnly>(
             policy_id: policy_id.clone(),
         })
 }
-
 fn fx_corridor_policy_with_state(
     state_view: Option<&StateView<'_>>,
     policy_id: &Name,
@@ -1254,7 +1191,6 @@ fn fx_corridor_policy_with_state(
         })?;
     fx_corridor_policy_with_world(state_view.world(), policy_id)
 }
-
 fn asset_id_explicit_dataspace_target(
     asset_id: &iroha_data_model::asset::AssetId,
 ) -> Option<DataSpaceId> {
@@ -1263,13 +1199,11 @@ fn asset_id_explicit_dataspace_target(
         iroha_data_model::asset::AssetBalanceScope::Global => None,
     }
 }
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct AssetBalanceDefinitionRouteTarget {
     dataspace_id: Option<DataSpaceId>,
     balance_scope_policy: Option<AssetBalancePolicy>,
 }
-
 fn merge_instruction_dataspace_targets<I>(targets: I) -> Option<DataSpaceId>
 where
     I: IntoIterator<Item = Option<DataSpaceId>>,
@@ -1278,7 +1212,6 @@ where
         settlement_pair_dataspace_target(acc, Some(target))
     })
 }
-
 fn trigger_executable_transaction_dataspace_target(
     executable: &Executable,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -1321,7 +1254,6 @@ fn trigger_executable_transaction_dataspace_target(
         }
     }
 }
-
 fn trigger_executable_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     executable: &Executable,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -1368,7 +1300,6 @@ fn trigger_executable_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         }
     }
 }
-
 fn asset_balance_operation_dataspace_target(
     asset_definition_target: AssetBalanceDefinitionRouteTarget,
     explicit_asset_target: Option<DataSpaceId>,
@@ -1382,7 +1313,6 @@ fn asset_balance_operation_dataspace_target(
     } else {
         asset_definition_target.dataspace_id
     };
-
     let authoritative_asset_target =
         settlement_pair_dataspace_target(effective_definition_target, explicit_asset_target);
     let ignore_universal_account_fallbacks = asset_definition_target.balance_scope_policy
@@ -1395,14 +1325,12 @@ fn asset_balance_operation_dataspace_target(
             target
         }
     });
-
     merge_instruction_dataspace_targets(
         core::iter::once(effective_definition_target)
             .chain(core::iter::once(explicit_asset_target))
             .chain(account_targets),
     )
 }
-
 fn asset_definition_requires_universal_coordinator(
     asset_definition_id: &AssetDefinitionId,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -1412,7 +1340,6 @@ fn asset_definition_requires_universal_coordinator(
         .balance_scope_policy
         == Some(AssetBalancePolicy::Global)
 }
-
 fn asset_definition_requires_universal_coordinator_with_world<W: WorldReadOnly>(
     asset_definition_id: &AssetDefinitionId,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -1428,7 +1355,6 @@ fn asset_definition_requires_universal_coordinator_with_world<W: WorldReadOnly>(
     .balance_scope_policy
         == Some(AssetBalancePolicy::Global)
 }
-
 fn settlement_transaction_dataspace_target(
     tx: &dyn TransactionRoutingView,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -1438,7 +1364,6 @@ fn settlement_transaction_dataspace_target(
         return Ok(None);
     };
     let mut target_dataspace = None;
-
     match executable {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
@@ -1480,10 +1405,8 @@ fn settlement_transaction_dataspace_target(
             }
         }
     }
-
     Ok(target_dataspace)
 }
-
 fn settlement_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     tx: &dyn TransactionRoutingView,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -1494,7 +1417,6 @@ fn settlement_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         return Ok(None);
     };
     let mut target_dataspace = None;
-
     match executable {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
@@ -1539,17 +1461,14 @@ fn settlement_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             }
         }
     }
-
     Ok(target_dataspace)
 }
-
 fn instruction_settlement_dataspace_target(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let any = instruction.as_any();
-
     if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
         return Ok(settlement_pair_dataspace_target(
             asset_balance_definition_dataspace_target(
@@ -1564,7 +1483,6 @@ fn instruction_settlement_dataspace_target(
             ),
         ));
     }
-
     if let Some(pvp) = any.downcast_ref::<PvpIsi>() {
         return Ok(settlement_pair_dataspace_target(
             asset_balance_definition_dataspace_target(
@@ -1579,11 +1497,9 @@ fn instruction_settlement_dataspace_target(
             ),
         ));
     }
-
     if any.downcast_ref::<SetFxCorridorPolicy>().is_some() {
         return Ok(Some(DataSpaceId::UNIVERSAL));
     }
-
     if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
         let policy = fx_corridor_policy_with_state(state_view, &fx.policy_id)?;
         return Ok(settlement_pair_dataspace_target(
@@ -1601,7 +1517,6 @@ fn instruction_settlement_dataspace_target(
             fx_corridor_policy_with_state(state_view, &fx.policy_id)?.destination_dataspace,
         ));
     }
-
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
         return Ok(match settlement {
             SettlementInstructionBox::Dvp(dvp) => settlement_pair_dataspace_target(
@@ -1644,10 +1559,8 @@ fn instruction_settlement_dataspace_target(
             }
         });
     }
-
     Ok(None)
 }
-
 fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -1655,7 +1568,6 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
     ledger_time_ms: Option<u64>,
 ) -> Result<Option<DataSpaceId>, RoutingResolveError> {
     let any = instruction.as_any();
-
     if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
         return Ok(settlement_pair_dataspace_target(
             asset_balance_definition_dataspace_target_with_world(
@@ -1672,7 +1584,6 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
             ),
         ));
     }
-
     if let Some(pvp) = any.downcast_ref::<PvpIsi>() {
         return Ok(settlement_pair_dataspace_target(
             asset_balance_definition_dataspace_target_with_world(
@@ -1689,11 +1600,9 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
             ),
         ));
     }
-
     if any.downcast_ref::<SetFxCorridorPolicy>().is_some() {
         return Ok(Some(DataSpaceId::UNIVERSAL));
     }
-
     if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
         let policy = fx_corridor_policy_with_world(world, &fx.policy_id)?;
         return Ok(settlement_pair_dataspace_target(
@@ -1711,7 +1620,6 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
             fx_corridor_policy_with_world(world, &fx.policy_id)?.destination_dataspace,
         ));
     }
-
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
         return Ok(match settlement {
             SettlementInstructionBox::Dvp(dvp) => settlement_pair_dataspace_target(
@@ -1758,10 +1666,8 @@ fn instruction_settlement_dataspace_target_with_world<W: WorldReadOnly>(
             }
         });
     }
-
     Ok(None)
 }
-
 fn transaction_contains_fx_corridor_settlement(tx: &dyn TransactionRoutingView) -> bool {
     let Some(executable) = transaction_executable(tx) else {
         return false;
@@ -1784,11 +1690,9 @@ fn transaction_contains_fx_corridor_settlement(tx: &dyn TransactionRoutingView) 
         Executable::ContractCall(_) | Executable::Ivm(_) => false,
     }
 }
-
 fn transaction_executable(tx: &dyn TransactionRoutingView) -> Option<&Executable> {
     tx.executable()
 }
-
 fn amx_policy_rejects_cross_dataspace(tx: &dyn TransactionRoutingView) -> bool {
     tx.metadata()
         .and_then(|metadata| metadata.get(AMX_POLICY_METADATA_KEY))
@@ -1799,13 +1703,11 @@ fn amx_policy_rejects_cross_dataspace(tx: &dyn TransactionRoutingView) -> bool {
                 .eq_ignore_ascii_case(AMX_POLICY_REJECT_CROSS_DATASPACE)
         })
 }
-
 #[derive(Clone, Copy)]
 enum NativeDataspaceConflict {
     Permission,
     Transaction,
 }
-
 fn native_dataspace_conflict_error(
     kind: NativeDataspaceConflict,
     first_dataspace_id: DataSpaceId,
@@ -1826,7 +1728,6 @@ fn native_dataspace_conflict_error(
         }
     }
 }
-
 fn merge_native_target_dataspace(
     target_dataspace: &mut Option<DataSpaceId>,
     candidate: Option<DataSpaceId>,
@@ -1839,7 +1740,6 @@ fn merge_native_target_dataspace(
     let Some(candidate) = candidate else {
         return Ok(());
     };
-
     match *target_dataspace {
         Some(existing) if existing == candidate => {}
         Some(existing) if existing == DataSpaceId::UNIVERSAL => {}
@@ -1858,17 +1758,14 @@ fn merge_native_target_dataspace(
         }
         None => *target_dataspace = Some(candidate),
     }
-
     Ok(())
 }
-
 #[derive(Clone, Debug, Default)]
 struct TransactionDataspaceTarget {
     dataspace_id: Option<DataSpaceId>,
     coordinator_route: bool,
     participants: BTreeSet<DataSpaceId>,
 }
-
 struct SameTransactionMultisigProposalTarget {
     account: AccountId,
     instructions_hash: HashOf<Vec<InstructionBox>>,
@@ -1876,7 +1773,6 @@ struct SameTransactionMultisigProposalTarget {
     concrete_dataspaces: BTreeSet<DataSpaceId>,
     requires_universal_coordinator: bool,
 }
-
 fn merge_transaction_target_dataspace(
     target: &mut TransactionDataspaceTarget,
     candidate: Option<DataSpaceId>,
@@ -1888,7 +1784,6 @@ fn merge_transaction_target_dataspace(
     if candidate != DataSpaceId::UNIVERSAL {
         target.participants.insert(candidate);
     }
-
     match target.dataspace_id {
         Some(existing) if existing == candidate => {}
         Some(existing) => {
@@ -1907,10 +1802,8 @@ fn merge_transaction_target_dataspace(
             target.dataspace_id = Some(candidate);
         }
     }
-
     Ok(())
 }
-
 fn merge_transaction_concrete_or_collapsed_dataspaces(
     target: &mut TransactionDataspaceTarget,
     concrete_dataspaces: Option<BTreeSet<DataSpaceId>>,
@@ -1925,10 +1818,8 @@ fn merge_transaction_concrete_or_collapsed_dataspaces(
         }
         return Ok(());
     }
-
     merge_transaction_target_dataspace(target, collapsed_dataspace, reject_cross_dataspace)
 }
-
 fn apply_authority_dataspace_target(
     target: &mut TransactionDataspaceTarget,
     authority_target: Option<DataSpaceId>,
@@ -1937,13 +1828,11 @@ fn apply_authority_dataspace_target(
     let Some(authority_target) = authority_target else {
         return;
     };
-
     if target.dataspace_id.is_none() {
         target.dataspace_id = Some(authority_target);
         target.coordinator_route = authority_target == DataSpaceId::UNIVERSAL;
         return;
     }
-
     if target.dataspace_id == Some(DataSpaceId::UNIVERSAL)
         && authority_target != DataSpaceId::UNIVERSAL
         && allow_universal_override
@@ -1953,7 +1842,6 @@ fn apply_authority_dataspace_target(
         target.dataspace_id = Some(authority_target);
     }
 }
-
 fn transaction_dataspace_routing_target(
     tx: &dyn TransactionRoutingView,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -1962,7 +1850,6 @@ fn transaction_dataspace_routing_target(
     transaction_dataspace_routing_target_info(tx, dataspace_catalog, state_view)
         .map(|target| target.dataspace_id)
 }
-
 fn transaction_dataspace_routing_target_info(
     tx: &dyn TransactionRoutingView,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -1973,7 +1860,6 @@ fn transaction_dataspace_routing_target_info(
     };
     let mut target = TransactionDataspaceTarget::default();
     let reject_cross_dataspace = amx_policy_rejects_cross_dataspace(tx);
-
     match executable {
         Executable::Instructions(instructions) => {
             let instruction_refs = instructions.iter().collect::<Vec<_>>();
@@ -2104,10 +1990,8 @@ fn transaction_dataspace_routing_target_info(
             }
         }
     }
-
     Ok(target)
 }
-
 fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
     tx: &dyn TransactionRoutingView,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -2119,7 +2003,6 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
     };
     let mut target = TransactionDataspaceTarget::default();
     let reject_cross_dataspace = amx_policy_rejects_cross_dataspace(tx);
-
     match executable {
         Executable::Instructions(instructions) => {
             let instruction_refs = instructions.iter().collect::<Vec<_>>();
@@ -2262,10 +2145,8 @@ fn transaction_dataspace_routing_target_info_with_world<W: WorldReadOnly>(
             }
         }
     }
-
     Ok(target)
 }
-
 /// Return the concrete dataspace participants of a native AMX candidate.
 ///
 /// This is intentionally narrower than route resolution: it preserves the
@@ -2280,7 +2161,6 @@ pub(crate) fn native_amx_participant_dataspaces_with_world<W: WorldReadOnly>(
     native_amx_participant_dataspaces_with_world_at(tx, dataspace_catalog, world, None)
         .unwrap_or_default()
 }
-
 fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
     tx: &dyn TransactionRoutingView,
     dataspace_catalog: &DataSpaceCatalog,
@@ -2291,7 +2171,6 @@ fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
     let Some(executable) = transaction_executable(tx) else {
         return Ok(Vec::new());
     };
-
     match executable {
         Executable::Instructions(instructions) => {
             let instruction_refs = instructions.iter().collect::<Vec<_>>();
@@ -2362,10 +2241,8 @@ fn native_amx_participant_dataspaces_with_world_at<W: WorldReadOnly>(
             }
         }
     }
-
     Ok(dataspaces.into_iter().collect())
 }
-
 fn insert_native_amx_participant(
     dataspaces: &mut std::collections::BTreeSet<DataSpaceId>,
     target: Option<DataSpaceId>,
@@ -2376,7 +2253,6 @@ fn insert_native_amx_participant(
         dataspaces.insert(dataspace);
     }
 }
-
 fn collect_asset_balance_native_amx_participants<I>(
     dataspaces: &mut std::collections::BTreeSet<DataSpaceId>,
     definition_target: AssetBalanceDefinitionRouteTarget,
@@ -2394,7 +2270,6 @@ fn collect_asset_balance_native_amx_participants<I>(
         insert_native_amx_participant(dataspaces, account_target);
     }
 }
-
 fn collect_settlement_pair_native_amx_participants<W: WorldReadOnly>(
     dataspaces: &mut std::collections::BTreeSet<DataSpaceId>,
     first_asset_definition: &AssetDefinitionId,
@@ -2415,7 +2290,6 @@ fn collect_settlement_pair_native_amx_participants<W: WorldReadOnly>(
         );
     }
 }
-
 fn collect_trigger_executable_native_amx_participants<W: WorldReadOnly>(
     executable: &Executable,
     dataspace_catalog: &DataSpaceCatalog,
@@ -2477,7 +2351,6 @@ fn collect_trigger_executable_native_amx_participants<W: WorldReadOnly>(
     }
     Ok(())
 }
-
 fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspace_catalog: &DataSpaceCatalog,
@@ -2494,7 +2367,6 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
             ledger_time_ms,
         ),
     );
-
     let any = instruction.as_any();
     if let Some(primary) =
         any.downcast_ref::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>()
@@ -2512,7 +2384,6 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
         }
         return Ok(());
     }
-
     if let Some(multisig) = multisig_instruction(instruction) {
         let (account, instructions) = match multisig {
             MultisigInstructionBox::Propose(propose) => {
@@ -2550,7 +2421,6 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
         dataspaces.extend(nested_dataspaces);
         return Ok(());
     }
-
     if let Some(RegisterBox::Trigger(register)) = any.downcast_ref::<RegisterBox>() {
         return collect_trigger_executable_native_amx_participants(
             register.object.action().executable(),
@@ -2560,7 +2430,6 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
             dataspaces,
         );
     }
-
     let fx_instruction = any.downcast_ref::<SettleFxCorridor>().or_else(|| {
         any.downcast_ref::<SettlementInstructionBox>()
             .and_then(|settlement| match settlement {
@@ -2578,7 +2447,6 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
         insert_native_amx_participant(dataspaces, Some(policy.destination_dataspace));
         return Ok(());
     }
-
     let settlement_pair = if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
         Some((
             dvp.delivery_leg().asset_definition_id(),
@@ -2617,7 +2485,6 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
         );
         return Ok(());
     }
-
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         if let TransferBox::Asset(transfer) = transfer {
             collect_asset_balance_native_amx_participants(
@@ -2637,7 +2504,6 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
             return Ok(());
         }
     }
-
     if let Some(mint) = any.downcast_ref::<MintBox>() {
         if let MintBox::Asset(mint) = mint {
             collect_asset_balance_native_amx_participants(
@@ -2658,7 +2524,6 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
             return Ok(());
         }
     }
-
     if let Some(burn) = any.downcast_ref::<BurnBox>() {
         if let BurnBox::Asset(burn) = burn {
             collect_asset_balance_native_amx_participants(
@@ -2679,7 +2544,6 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
             return Ok(());
         }
     }
-
     insert_native_amx_participant(
         dataspaces,
         instruction_transaction_dataspace_target_with_world(
@@ -2691,20 +2555,17 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
     );
     Ok(())
 }
-
 enum AccountPermissionHolderTarget<'account> {
     Holder(&'account AccountId),
     Skip,
     Abort,
 }
-
 fn account_permission_holder_routing_target<'tx>(
     tx: &'tx dyn TransactionRoutingView,
 ) -> Option<&'tx AccountId> {
     let Some(executable) = transaction_executable(tx) else {
         return None;
     };
-
     match executable {
         Executable::Instructions(instructions) => account_permission_holder_from_instructions(
             instructions.iter().map(|instruction| &**instruction),
@@ -2721,7 +2582,6 @@ fn account_permission_holder_routing_target<'tx>(
         ),
     }
 }
-
 fn account_permission_holder_from_instructions<'instruction, I>(
     instructions: I,
 ) -> Option<&'instruction AccountId>
@@ -2730,7 +2590,6 @@ where
 {
     let mut holder: Option<&AccountId> = None;
     let mut saw_account_permission = false;
-
     for instruction in instructions {
         match instruction_account_permission_holder(instruction) {
             AccountPermissionHolderTarget::Holder(candidate) => {
@@ -2748,15 +2607,12 @@ where
             }
         }
     }
-
     if saw_account_permission { holder } else { None }
 }
-
 fn instruction_account_permission_holder(
     instruction: &dyn Instruction,
 ) -> AccountPermissionHolderTarget<'_> {
     let any = instruction.as_any();
-
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
         return match grant {
             GrantBox::Permission(grant) => {
@@ -2769,7 +2625,6 @@ fn instruction_account_permission_holder(
             GrantBox::Role(_) | GrantBox::RolePermission(_) => AccountPermissionHolderTarget::Abort,
         };
     }
-
     if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
         return match revoke {
             RevokeBox::Permission(revoke) => {
@@ -2784,10 +2639,8 @@ fn instruction_account_permission_holder(
             }
         };
     }
-
     AccountPermissionHolderTarget::Abort
 }
-
 fn compare_and_set_primary_account_alias_dataspace_targets(
     primary: &iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias,
 ) -> BTreeSet<DataSpaceId> {
@@ -2798,7 +2651,6 @@ fn compare_and_set_primary_account_alias_dataspace_targets(
         .map(|alias| alias.dataspace_id)
         .collect()
 }
-
 fn compare_and_set_primary_account_alias_dataspace_target(
     primary: &iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias,
 ) -> Option<DataSpaceId> {
@@ -2808,14 +2660,12 @@ fn compare_and_set_primary_account_alias_dataspace_target(
             .map(Some),
     )
 }
-
 fn instruction_transaction_dataspace_target(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
     let any = instruction.as_any();
-
     if let Some(ensure) = any.downcast_ref::<iroha_data_model::isi::alias_setup::EnsureAlias>() {
         return Some(ensure.intent.target().dataspace_id());
     }
@@ -2843,7 +2693,6 @@ fn instruction_transaction_dataspace_target(
             )
         });
     }
-
     if let Some(multisig) = multisig_instruction(instruction) {
         return match &multisig {
             MultisigInstructionBox::Propose(propose) => {
@@ -2865,7 +2714,6 @@ fn instruction_transaction_dataspace_target(
             | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
     }
-
     if let Some(propose) = any.downcast_ref::<MultisigPropose>() {
         return multisig_propose_transaction_dataspace_target(
             propose,
@@ -2873,7 +2721,6 @@ fn instruction_transaction_dataspace_target(
             state_view,
         );
     }
-
     if let Some(approve) = any.downcast_ref::<MultisigApprove>() {
         return multisig_approve_transaction_dataspace_target(
             approve,
@@ -2881,7 +2728,6 @@ fn instruction_transaction_dataspace_target(
             state_view,
         );
     }
-
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
         return match grant {
             GrantBox::Permission(grant) => {
@@ -2900,7 +2746,6 @@ fn instruction_transaction_dataspace_target(
             GrantBox::Role(_) => None,
         };
     }
-
     if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
         return match revoke {
             RevokeBox::Permission(revoke) => {
@@ -2919,7 +2764,6 @@ fn instruction_transaction_dataspace_target(
             RevokeBox::Role(_) => None,
         };
     }
-
     if let Some(register) = any.downcast_ref::<RegisterBox>() {
         return match register {
             RegisterBox::Domain(register) => domain_dataspace_target_with_state(
@@ -2945,7 +2789,6 @@ fn instruction_transaction_dataspace_target(
             RegisterBox::Peer(_) | RegisterBox::Nft(_) | RegisterBox::Role(_) => None,
         };
     }
-
     if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
         return match unregister {
             UnregisterBox::Domain(unregister) => domain_dataspace_target_with_state(
@@ -2967,7 +2810,6 @@ fn instruction_transaction_dataspace_target(
             | UnregisterBox::Trigger(_) => None,
         };
     }
-
     if let Some(set_key_value) = any.downcast_ref::<SetKeyValueBox>() {
         return match set_key_value {
             SetKeyValueBox::Domain(set) => {
@@ -2988,7 +2830,6 @@ fn instruction_transaction_dataspace_target(
             SetKeyValueBox::Nft(_) | SetKeyValueBox::Trigger(_) => None,
         };
     }
-
     if let Some(remove_key_value) = any.downcast_ref::<RemoveKeyValueBox>() {
         return match remove_key_value {
             RemoveKeyValueBox::Domain(remove) => {
@@ -3009,7 +2850,6 @@ fn instruction_transaction_dataspace_target(
             RemoveKeyValueBox::Nft(_) | RemoveKeyValueBox::Trigger(_) => None,
         };
     }
-
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         return match transfer {
             TransferBox::Domain(transfer) => {
@@ -3045,7 +2885,6 @@ fn instruction_transaction_dataspace_target(
             TransferBox::Nft(_) => None,
         };
     }
-
     if let Some(mint) = any.downcast_ref::<MintBox>() {
         return match mint {
             MintBox::Asset(mint) => asset_balance_operation_dataspace_target(
@@ -3064,7 +2903,6 @@ fn instruction_transaction_dataspace_target(
             MintBox::TriggerRepetitions(_) => None,
         };
     }
-
     if let Some(burn) = any.downcast_ref::<BurnBox>() {
         return match burn {
             BurnBox::Asset(burn) => asset_balance_operation_dataspace_target(
@@ -3083,7 +2921,6 @@ fn instruction_transaction_dataspace_target(
             BurnBox::TriggerRepetitions(_) => None,
         };
     }
-
     if let Some(register_zk_asset) = any.downcast_ref::<RegisterZkAsset>() {
         return asset_balance_definition_dataspace_target(
             &register_zk_asset.asset,
@@ -3091,7 +2928,6 @@ fn instruction_transaction_dataspace_target(
             state_view,
         );
     }
-
     if let Some(schedule_transition) = any.downcast_ref::<ScheduleConfidentialPolicyTransition>() {
         return asset_balance_definition_dataspace_target(
             &schedule_transition.asset,
@@ -3099,7 +2935,6 @@ fn instruction_transaction_dataspace_target(
             state_view,
         );
     }
-
     if let Some(cancel_transition) = any.downcast_ref::<CancelConfidentialPolicyTransition>() {
         return asset_balance_definition_dataspace_target(
             &cancel_transition.asset,
@@ -3107,39 +2942,30 @@ fn instruction_transaction_dataspace_target(
             state_view,
         );
     }
-
     if let Some(target) = musubi_instruction_dataspace_target(any) {
         return Some(target);
     }
-
     if let Some(publish) = any.downcast_ref::<PublishSpaceDirectoryManifest>() {
         return Some(publish.manifest.dataspace);
     }
-
     if let Some(revoke) = any.downcast_ref::<RevokeSpaceDirectoryManifest>() {
         return Some(revoke.dataspace);
     }
-
     if let Some(expire) = any.downcast_ref::<ExpireSpaceDirectoryManifest>() {
         return Some(expire.dataspace);
     }
-
     if let Some(activate) = any.downcast_ref::<ActivateContractInstance>() {
         return contract_address_dataspace_target(&activate.contract_address);
     }
-
     if let Some(commit) = any.downcast_ref::<CommitContractDeployment>() {
         return contract_address_dataspace_target(&commit.contract_address);
     }
-
     if let Some(deactivate) = any.downcast_ref::<DeactivateContractInstance>() {
         return contract_address_dataspace_target(&deactivate.contract_address);
     }
-
     if let Some(set_alias) = any.downcast_ref::<SetContractAlias>() {
         return contract_address_dataspace_target(&set_alias.contract_address);
     }
-
     if let Some(asset_definition_id) = confidential_asset_definition_target(any) {
         return asset_definition_dataspace_target(
             asset_definition_id,
@@ -3149,10 +2975,8 @@ fn instruction_transaction_dataspace_target(
             state_view,
         );
     }
-
     None
 }
-
 fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -3160,7 +2984,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     let any = instruction.as_any();
-
     if let Some(ensure) = any.downcast_ref::<iroha_data_model::isi::alias_setup::EnsureAlias>() {
         return Some(ensure.intent.target().dataspace_id());
     }
@@ -3183,7 +3006,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         return compare_and_set_primary_account_alias_dataspace_target(primary)
             .or_else(|| account_dataspace_target(Some(world), &primary.account, ledger_time_ms));
     }
-
     if let Some(multisig) = multisig_instruction(instruction) {
         return match &multisig {
             MultisigInstructionBox::Propose(propose) => {
@@ -3207,7 +3029,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
     }
-
     if let Some(propose) = any.downcast_ref::<MultisigPropose>() {
         return multisig_propose_transaction_dataspace_target_with_world(
             propose,
@@ -3216,7 +3037,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             ledger_time_ms,
         );
     }
-
     if let Some(approve) = any.downcast_ref::<MultisigApprove>() {
         return multisig_approve_transaction_dataspace_target_with_world(
             approve,
@@ -3225,7 +3045,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             ledger_time_ms,
         );
     }
-
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
         return match grant {
             GrantBox::Permission(grant) => dataspace_scoped_permission_target_with_world(
@@ -3244,7 +3063,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             GrantBox::Role(_) => None,
         };
     }
-
     if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
         return match revoke {
             RevokeBox::Permission(revoke) => dataspace_scoped_permission_target_with_world(
@@ -3263,7 +3081,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             RevokeBox::Role(_) => None,
         };
     }
-
     if let Some(register) = any.downcast_ref::<RegisterBox>() {
         return match register {
             RegisterBox::Domain(register) => domain_dataspace_target_with_world(
@@ -3294,7 +3111,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             RegisterBox::Peer(_) | RegisterBox::Nft(_) | RegisterBox::Role(_) => None,
         };
     }
-
     if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
         return match unregister {
             UnregisterBox::Domain(unregister) => domain_dataspace_target_with_world(
@@ -3320,7 +3136,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             | UnregisterBox::Trigger(_) => None,
         };
     }
-
     if let Some(set_key_value) = any.downcast_ref::<SetKeyValueBox>() {
         return match set_key_value {
             SetKeyValueBox::Domain(set) => domain_dataspace_target_with_world(
@@ -3343,7 +3158,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             SetKeyValueBox::Nft(_) | SetKeyValueBox::Trigger(_) => None,
         };
     }
-
     if let Some(remove_key_value) = any.downcast_ref::<RemoveKeyValueBox>() {
         return match remove_key_value {
             RemoveKeyValueBox::Domain(remove) => domain_dataspace_target_with_world(
@@ -3368,7 +3182,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             RemoveKeyValueBox::Nft(_) | RemoveKeyValueBox::Trigger(_) => None,
         };
     }
-
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         return match transfer {
             TransferBox::Domain(transfer) => domain_dataspace_target_with_world(
@@ -3401,7 +3214,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             TransferBox::Nft(_) => None,
         };
     }
-
     if let Some(mint) = any.downcast_ref::<MintBox>() {
         return match mint {
             MintBox::Asset(mint) => asset_balance_operation_dataspace_target(
@@ -3421,7 +3233,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             MintBox::TriggerRepetitions(_) => None,
         };
     }
-
     if let Some(burn) = any.downcast_ref::<BurnBox>() {
         return match burn {
             BurnBox::Asset(burn) => asset_balance_operation_dataspace_target(
@@ -3441,7 +3252,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             BurnBox::TriggerRepetitions(_) => None,
         };
     }
-
     if let Some(register_zk_asset) = any.downcast_ref::<RegisterZkAsset>() {
         return asset_balance_definition_dataspace_target_with_world(
             &register_zk_asset.asset,
@@ -3450,7 +3260,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             ledger_time_ms,
         );
     }
-
     if let Some(schedule_transition) = any.downcast_ref::<ScheduleConfidentialPolicyTransition>() {
         return asset_balance_definition_dataspace_target_with_world(
             &schedule_transition.asset,
@@ -3459,7 +3268,6 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             ledger_time_ms,
         );
     }
-
     if let Some(cancel_transition) = any.downcast_ref::<CancelConfidentialPolicyTransition>() {
         return asset_balance_definition_dataspace_target_with_world(
             &cancel_transition.asset,
@@ -3468,39 +3276,30 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             ledger_time_ms,
         );
     }
-
     if let Some(target) = musubi_instruction_dataspace_target(any) {
         return Some(target);
     }
-
     if let Some(publish) = any.downcast_ref::<PublishSpaceDirectoryManifest>() {
         return Some(publish.manifest.dataspace);
     }
-
     if let Some(revoke) = any.downcast_ref::<RevokeSpaceDirectoryManifest>() {
         return Some(revoke.dataspace);
     }
-
     if let Some(expire) = any.downcast_ref::<ExpireSpaceDirectoryManifest>() {
         return Some(expire.dataspace);
     }
-
     if let Some(activate) = any.downcast_ref::<ActivateContractInstance>() {
         return contract_address_dataspace_target(&activate.contract_address);
     }
-
     if let Some(commit) = any.downcast_ref::<CommitContractDeployment>() {
         return contract_address_dataspace_target(&commit.contract_address);
     }
-
     if let Some(deactivate) = any.downcast_ref::<DeactivateContractInstance>() {
         return contract_address_dataspace_target(&deactivate.contract_address);
     }
-
     if let Some(set_alias) = any.downcast_ref::<SetContractAlias>() {
         return contract_address_dataspace_target(&set_alias.contract_address);
     }
-
     if let Some(asset_definition_id) = confidential_asset_definition_target(any) {
         return asset_definition_dataspace_target_with_world(
             asset_definition_id,
@@ -3511,10 +3310,8 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             ledger_time_ms,
         );
     }
-
     None
 }
-
 fn multisig_instruction(instruction: &dyn Instruction) -> Option<MultisigInstructionBox> {
     let any = instruction.as_any();
     if let Some(multisig) = instruction
@@ -3548,7 +3345,6 @@ fn multisig_instruction(instruction: &dyn Instruction) -> Option<MultisigInstruc
             })
     })
 }
-
 fn multisig_proposal_state_key(
     multisig_account: &AccountId,
     instructions_hash: &HashOf<Vec<InstructionBox>>,
@@ -3556,7 +3352,6 @@ fn multisig_proposal_state_key(
     const DELIMITER: char = '/';
     const MULTISIG: &str = "multisig";
     const MULTISIG_PROPOSAL_STATE: &str = "proposal";
-
     StatePath::from_str(&format!(
         "{MULTISIG}{DELIMITER}{MULTISIG_PROPOSAL_STATE}{DELIMITER}{}{DELIMITER}{}",
         HashOf::new(multisig_account),
@@ -3564,7 +3359,6 @@ fn multisig_proposal_state_key(
     ))
     .expect("multisig proposal state path must be valid")
 }
-
 fn multisig_proposal_state<W: WorldReadOnly>(
     world: &W,
     multisig_account: &AccountId,
@@ -3574,7 +3368,6 @@ fn multisig_proposal_state<W: WorldReadOnly>(
     let bytes = world.smart_contract_state().get(&key)?;
     norito::decode_from_bytes::<MultisigProposalState>(bytes).ok()
 }
-
 fn extend_instruction_concrete_dataspace_targets(
     targets: &mut BTreeSet<DataSpaceId>,
     instruction: &dyn Instruction,
@@ -3588,14 +3381,12 @@ fn extend_instruction_concrete_dataspace_targets(
         targets.extend(nested_targets);
         return;
     }
-
     if let Some(target) =
         instruction_transaction_dataspace_target(instruction, dataspace_catalog, state_view)
     {
         targets.insert(target);
     }
 }
-
 fn trigger_executable_concrete_dataspace_targets(
     executable: &Executable,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -3653,7 +3444,6 @@ fn trigger_executable_concrete_dataspace_targets(
     }
     targets
 }
-
 fn deferred_instruction_concrete_dataspace_targets(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -3667,7 +3457,6 @@ fn deferred_instruction_concrete_dataspace_targets(
             primary,
         ));
     }
-
     if let Some(multisig) = multisig_instruction(instruction) {
         return match &multisig {
             MultisigInstructionBox::Propose(propose) => {
@@ -3707,7 +3496,6 @@ fn deferred_instruction_concrete_dataspace_targets(
             | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
     }
-
     let register = instruction.as_any().downcast_ref::<RegisterBox>()?;
     let RegisterBox::Trigger(register) = register else {
         return None;
@@ -3718,7 +3506,6 @@ fn deferred_instruction_concrete_dataspace_targets(
         state_view,
     ))
 }
-
 fn extend_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
     targets: &mut BTreeSet<DataSpaceId>,
     instruction: &dyn Instruction,
@@ -3736,7 +3523,6 @@ fn extend_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
         targets.extend(nested_targets);
         return;
     }
-
     if let Some(target) = instruction_transaction_dataspace_target_with_world(
         instruction,
         dataspace_catalog,
@@ -3746,7 +3532,6 @@ fn extend_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
         targets.insert(target);
     }
 }
-
 fn trigger_executable_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
     executable: &Executable,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -3808,7 +3593,6 @@ fn trigger_executable_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
     }
     targets
 }
-
 fn deferred_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -3823,7 +3607,6 @@ fn deferred_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
             primary,
         ));
     }
-
     if let Some(multisig) = multisig_instruction(instruction) {
         let instructions = match &multisig {
             MultisigInstructionBox::Propose(propose) => Some(propose.instructions.clone()),
@@ -3835,7 +3618,6 @@ fn deferred_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
             | MultisigInstructionBox::Cancel(_)
             | MultisigInstructionBox::InvalidateOutstanding(_) => None,
         };
-
         return match instructions {
             Some(instructions) => {
                 let mut targets = BTreeSet::new();
@@ -3859,7 +3641,6 @@ fn deferred_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
             },
         };
     }
-
     let register = instruction.as_any().downcast_ref::<RegisterBox>()?;
     let RegisterBox::Trigger(register) = register else {
         return None;
@@ -3871,7 +3652,6 @@ fn deferred_instruction_concrete_dataspace_targets_with_world<W: WorldReadOnly>(
         ledger_time_ms,
     ))
 }
-
 fn same_transaction_multisig_proposal_targets(
     instructions: &[&InstructionBox],
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -3918,7 +3698,6 @@ fn same_transaction_multisig_proposal_targets(
         })
         .collect()
 }
-
 fn same_transaction_multisig_proposal_targets_with_world<W: WorldReadOnly>(
     instructions: &[&InstructionBox],
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -3969,7 +3748,6 @@ fn same_transaction_multisig_proposal_targets_with_world<W: WorldReadOnly>(
         })
         .collect()
 }
-
 fn same_transaction_multisig_approve_route_target<'a>(
     proposals: &'a [SameTransactionMultisigProposalTarget],
     instruction: &dyn Instruction,
@@ -3986,7 +3764,6 @@ fn same_transaction_multisig_approve_route_target<'a>(
             && proposal.instructions_hash == approve.instructions_hash
     })
 }
-
 fn multisig_propose_transaction_dataspace_target(
     propose: &MultisigPropose,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -4003,7 +3780,6 @@ fn multisig_propose_transaction_dataspace_target(
         )
     })
 }
-
 fn multisig_approve_transaction_dataspace_target(
     approve: &MultisigApprove,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -4030,7 +3806,6 @@ fn multisig_approve_transaction_dataspace_target(
             )
         })
 }
-
 fn multisig_approve_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     approve: &MultisigApprove,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -4052,7 +3827,6 @@ fn multisig_approve_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         })
         .or_else(|| account_dataspace_target(Some(world), &approve.account, ledger_time_ms))
 }
-
 fn multisig_propose_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     propose: &MultisigPropose,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -4069,7 +3843,6 @@ fn multisig_propose_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     }))
     .or_else(|| account_dataspace_target(Some(world), &propose.account, ledger_time_ms))
 }
-
 fn confidential_asset_definition_target(any: &dyn std::any::Any) -> Option<&AssetDefinitionId> {
     if let Some(topup) = any.downcast_ref::<TopUpKagemushaRecursiveV4>() {
         return Some(topup.request.asset.definition());
@@ -4079,7 +3852,6 @@ fn confidential_asset_definition_target(any: &dyn std::any::Any) -> Option<&Asse
     }
     None
 }
-
 fn trigger_executable_requires_universal_coordinator(
     executable: &Executable,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -4135,7 +3907,6 @@ fn trigger_executable_requires_universal_coordinator(
         }
     }
 }
-
 fn trigger_executable_requires_universal_coordinator_with_world<W: WorldReadOnly>(
     executable: &Executable,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -4210,18 +3981,15 @@ fn trigger_executable_requires_universal_coordinator_with_world<W: WorldReadOnly
         }
     }
 }
-
 fn instruction_transaction_target_requires_universal_coordinator(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> bool {
     let any = instruction.as_any();
-
     if musubi_instruction_requires_universal_coordinator(any) {
         return true;
     }
-
     if let Some(multisig) = multisig_instruction(instruction) {
         let instructions = match multisig {
             MultisigInstructionBox::Propose(propose) => Some(propose.instructions),
@@ -4259,7 +4027,6 @@ fn instruction_transaction_target_requires_universal_coordinator(
                 )
             });
     }
-
     if let Some(RegisterBox::Trigger(register)) = any.downcast_ref::<RegisterBox>() {
         return trigger_executable_requires_universal_coordinator(
             register.object.action().executable(),
@@ -4267,7 +4034,6 @@ fn instruction_transaction_target_requires_universal_coordinator(
             state_view,
         );
     }
-
     if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
         return fx_corridor_policy_with_state(state_view, &fx.policy_id)
             .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
@@ -4278,7 +4044,6 @@ fn instruction_transaction_target_requires_universal_coordinator(
         return fx_corridor_policy_with_state(state_view, &fx.policy_id)
             .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
     }
-
     if let Some(transfer) = any.downcast_ref::<TransferBox>()
         && let TransferBox::Asset(transfer) = transfer
     {
@@ -4290,7 +4055,6 @@ fn instruction_transaction_target_requires_universal_coordinator(
         .balance_scope_policy
             == Some(AssetBalancePolicy::Global);
     }
-
     if let Some(mint) = any.downcast_ref::<MintBox>()
         && let MintBox::Asset(mint) = mint
     {
@@ -4302,7 +4066,6 @@ fn instruction_transaction_target_requires_universal_coordinator(
         .balance_scope_policy
             == Some(AssetBalancePolicy::Global);
     }
-
     if let Some(burn) = any.downcast_ref::<BurnBox>()
         && let BurnBox::Asset(burn) = burn
     {
@@ -4314,7 +4077,6 @@ fn instruction_transaction_target_requires_universal_coordinator(
         .balance_scope_policy
             == Some(AssetBalancePolicy::Global);
     }
-
     if let Some(register_zk_asset) = any.downcast_ref::<RegisterZkAsset>() {
         return asset_definition_requires_universal_coordinator(
             &register_zk_asset.asset,
@@ -4322,7 +4084,6 @@ fn instruction_transaction_target_requires_universal_coordinator(
             state_view,
         );
     }
-
     if let Some(schedule_transition) = any.downcast_ref::<ScheduleConfidentialPolicyTransition>() {
         return asset_definition_requires_universal_coordinator(
             &schedule_transition.asset,
@@ -4330,7 +4091,6 @@ fn instruction_transaction_target_requires_universal_coordinator(
             state_view,
         );
     }
-
     if let Some(cancel_transition) = any.downcast_ref::<CancelConfidentialPolicyTransition>() {
         return asset_definition_requires_universal_coordinator(
             &cancel_transition.asset,
@@ -4338,10 +4098,8 @@ fn instruction_transaction_target_requires_universal_coordinator(
             state_view,
         );
     }
-
     false
 }
-
 fn instruction_transaction_target_requires_universal_coordinator_with_world<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -4349,11 +4107,9 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
     ledger_time_ms: Option<u64>,
 ) -> bool {
     let any = instruction.as_any();
-
     if musubi_instruction_requires_universal_coordinator(any) {
         return true;
     }
-
     if let Some(multisig) = multisig_instruction(instruction) {
         let instructions = match multisig {
             MultisigInstructionBox::Propose(propose) => Some(propose.instructions),
@@ -4388,7 +4144,6 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
                 )
             });
     }
-
     if let Some(RegisterBox::Trigger(register)) = any.downcast_ref::<RegisterBox>() {
         return trigger_executable_requires_universal_coordinator_with_world(
             register.object.action().executable(),
@@ -4397,7 +4152,6 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
             ledger_time_ms,
         );
     }
-
     if let Some(fx) = any.downcast_ref::<SettleFxCorridor>() {
         return fx_corridor_policy_with_world(world, &fx.policy_id)
             .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
@@ -4408,7 +4162,6 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
         return fx_corridor_policy_with_world(world, &fx.policy_id)
             .is_ok_and(|policy| policy.source_dataspace != policy.destination_dataspace);
     }
-
     if let Some(transfer) = any.downcast_ref::<TransferBox>()
         && let TransferBox::Asset(transfer) = transfer
     {
@@ -4421,7 +4174,6 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
         .balance_scope_policy
             == Some(AssetBalancePolicy::Global);
     }
-
     if let Some(mint) = any.downcast_ref::<MintBox>()
         && let MintBox::Asset(mint) = mint
     {
@@ -4434,7 +4186,6 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
         .balance_scope_policy
             == Some(AssetBalancePolicy::Global);
     }
-
     if let Some(burn) = any.downcast_ref::<BurnBox>()
         && let BurnBox::Asset(burn) = burn
     {
@@ -4447,7 +4198,6 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
         .balance_scope_policy
             == Some(AssetBalancePolicy::Global);
     }
-
     if let Some(register_zk_asset) = any.downcast_ref::<RegisterZkAsset>() {
         return asset_definition_requires_universal_coordinator_with_world(
             &register_zk_asset.asset,
@@ -4456,7 +4206,6 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
             ledger_time_ms,
         );
     }
-
     if let Some(schedule_transition) = any.downcast_ref::<ScheduleConfidentialPolicyTransition>() {
         return asset_definition_requires_universal_coordinator_with_world(
             &schedule_transition.asset,
@@ -4465,7 +4214,6 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
             ledger_time_ms,
         );
     }
-
     if let Some(cancel_transition) = any.downcast_ref::<CancelConfidentialPolicyTransition>() {
         return asset_definition_requires_universal_coordinator_with_world(
             &cancel_transition.asset,
@@ -4474,10 +4222,8 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
             ledger_time_ms,
         );
     }
-
     false
 }
-
 fn account_dataspace_target<W: WorldReadOnly>(
     world: Option<&W>,
     account_id: &AccountId,
@@ -4495,11 +4241,9 @@ fn account_dataspace_target<W: WorldReadOnly>(
         }
         return (dataspace_id != DataSpaceId::UNIVERSAL).then_some(dataspace_id);
     }
-
     let account = world.accounts().get(account_id)?;
     let mut dataspaces = BTreeSet::new();
     let mut primary_dataspace = None;
-
     if let Some(now_ms) = ledger_time_ms {
         if let Some(label) = account.as_ref().label()
             && crate::sns::resolve_active_account_alias(
@@ -4528,7 +4272,6 @@ fn account_dataspace_target<W: WorldReadOnly>(
             }
         }
     }
-
     if let Some(uaid) = account.as_ref().uaid().copied()
         && let Some(bindings) = world.uaid_dataspaces().get(&uaid)
     {
@@ -4536,7 +4279,6 @@ fn account_dataspace_target<W: WorldReadOnly>(
             accounts.contains(account_id).then_some(*dataspace)
         }));
     }
-
     if primary_dataspace.is_none_or(|dataspace| dataspace == DataSpaceId::UNIVERSAL) {
         dataspaces.insert(DataSpaceId::UNIVERSAL);
     }
@@ -4546,7 +4288,6 @@ fn account_dataspace_target<W: WorldReadOnly>(
     let dataspace_id = *dataspaces.iter().next()?;
     (dataspace_id != DataSpaceId::UNIVERSAL).then_some(dataspace_id)
 }
-
 fn authority_dataspace_target(
     state_view: Option<&StateView<'_>>,
     tx: &dyn TransactionRoutingView,
@@ -4559,7 +4300,6 @@ fn authority_dataspace_target(
         )
     })
 }
-
 fn authority_dataspace_target_with_world<W: WorldReadOnly>(
     world: Option<&W>,
     tx: &dyn TransactionRoutingView,
@@ -4568,7 +4308,6 @@ fn authority_dataspace_target_with_world<W: WorldReadOnly>(
     tx.authority_opt()
         .and_then(|authority| account_dataspace_target(world, authority, ledger_time_ms))
 }
-
 fn domain_dataspace_target_with_state(
     domain_id: &DomainId,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -4580,7 +4319,6 @@ fn domain_dataspace_target_with_state(
         state_view,
     )
 }
-
 fn domain_dataspace_target_with_world<W: WorldReadOnly>(
     domain_id: &DomainId,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -4594,15 +4332,12 @@ fn domain_dataspace_target_with_world<W: WorldReadOnly>(
         ledger_time_ms,
     )
 }
-
 fn contract_address_dataspace_target(contract_address: &ContractAddress) -> Option<DataSpaceId> {
     contract_address.dataspace_id().ok()
 }
-
 fn musubi_package_dataspace_target(package: &MusubiPackageIdV1) -> DataSpaceId {
     package.home_dataspace
 }
-
 fn musubi_instruction_dataspace_target(any: &dyn core::any::Any) -> Option<DataSpaceId> {
     if let Some(register) = any.downcast_ref::<RegisterMusubiNamespaceBindingV1>() {
         return Some(register.binding.home_dataspace);
@@ -4662,7 +4397,6 @@ fn musubi_instruction_dataspace_target(any: &dyn core::any::Any) -> Option<DataS
     }
     None
 }
-
 fn musubi_instruction_requires_universal_coordinator(any: &dyn core::any::Any) -> bool {
     any.downcast_ref::<RegisterMusubiNamespaceBindingV1>()
         .is_some()
@@ -4674,7 +4408,6 @@ fn musubi_instruction_requires_universal_coordinator(any: &dyn core::any::Any) -
         || any.downcast_ref::<RetargetMusubiAliasV1>().is_some()
         || any.downcast_ref::<SetMusubiArtifactTakedownV1>().is_some()
 }
-
 fn dataspace_alias_target(
     dataspace_alias: &str,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -4686,7 +4419,6 @@ fn dataspace_alias_target(
         .by_alias(dataspace_alias)
         .map(|entry| entry.id)
 }
-
 fn dataspace_alias_target_with_state(
     dataspace_alias: &str,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -4704,7 +4436,6 @@ fn dataspace_alias_target_with_state(
     )
     .or_else(|| dataspace_alias_target(dataspace_alias, Some(catalog)))
 }
-
 fn dataspace_alias_target_with_world<W: WorldReadOnly>(
     dataspace_alias: &str,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -4718,7 +4449,6 @@ fn dataspace_alias_target_with_world<W: WorldReadOnly>(
         })
         .or_else(|| dataspace_alias_target(dataspace_alias, Some(catalog)))
 }
-
 fn state_view_ledger_time_ms(state_view: &StateView<'_>) -> u64 {
     state_view
         .latest_block()
@@ -4726,7 +4456,6 @@ fn state_view_ledger_time_ms(state_view: &StateView<'_>) -> u64 {
         .map(|block| u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
 }
-
 fn asset_definition_target_from_parts_with_state(
     asset_definition_id: &AssetDefinitionId,
     owning_domain: Option<&DomainId>,
@@ -4749,7 +4478,6 @@ fn asset_definition_target_from_parts_with_state(
     };
     dataspace_alias_target_with_state(&dataspace_alias, dataspace_catalog, state_view)
 }
-
 fn asset_definition_target_from_parts_with_world<W: WorldReadOnly>(
     asset_definition_id: &AssetDefinitionId,
     owning_domain: Option<&DomainId>,
@@ -4770,7 +4498,6 @@ fn asset_definition_target_from_parts_with_world<W: WorldReadOnly>(
     };
     dataspace_alias_target_with_world(&dataspace_alias, dataspace_catalog, world, ledger_time_ms)
 }
-
 fn trigger_executable_transaction_target_needs_state(executable: &Executable) -> bool {
     match executable {
         Executable::Instructions(instructions) => instructions.iter().any(|instruction| {
@@ -4788,20 +4515,16 @@ fn trigger_executable_transaction_target_needs_state(executable: &Executable) ->
         }),
     }
 }
-
 fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instruction) -> bool {
     let any = instruction.as_any();
-
     if any.downcast_ref::<SettleFxCorridor>().is_some() {
         return true;
     }
-
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>()
         && matches!(settlement, SettlementInstructionBox::SettleFxCorridor(_))
     {
         return true;
     }
-
     if let Some(multisig) = multisig_instruction(instruction) {
         return match multisig {
             MultisigInstructionBox::Propose(_) | MultisigInstructionBox::Approve(_) => true,
@@ -4810,21 +4533,17 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
             | MultisigInstructionBox::InvalidateOutstanding(_) => false,
         };
     }
-
     if any.downcast_ref::<MultisigPropose>().is_some() {
         return true;
     }
-
     if any.downcast_ref::<MultisigApprove>().is_some() {
         return true;
     }
-
     if let Some(RegisterBox::Trigger(register)) = any.downcast_ref::<RegisterBox>() {
         return trigger_executable_transaction_target_needs_state(
             register.object.action().executable(),
         );
     }
-
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
         return match grant {
             GrantBox::Permission(grant) => {
@@ -4836,7 +4555,6 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
             GrantBox::Role(_) => false,
         };
     }
-
     if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
         return match revoke {
             RevokeBox::Permission(revoke) => {
@@ -4848,22 +4566,18 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
             RevokeBox::Role(_) => false,
         };
     }
-
     if any.downcast_ref::<DvpIsi>().is_some() {
         return true;
     }
-
     if any.downcast_ref::<PvpIsi>().is_some() {
         return true;
     }
-
     if any.downcast_ref::<SettleFxCorridor>().is_some()
         || any.downcast_ref::<FundFxCorridorEscrow>().is_some()
         || any.downcast_ref::<RefundFxCorridorEscrow>().is_some()
     {
         return true;
     }
-
     if let Some(settlement) = any.downcast_ref::<SettlementInstructionBox>() {
         return match settlement {
             SettlementInstructionBox::Dvp(_) | SettlementInstructionBox::Pvp(_) => true,
@@ -4873,36 +4587,29 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
             | SettlementInstructionBox::SettleFxCorridor(_) => true,
         };
     }
-
     if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
         return matches!(unregister, UnregisterBox::AssetDefinition(_));
     }
-
     if let Some(set_key_value) = any.downcast_ref::<SetKeyValueBox>() {
         return matches!(set_key_value, SetKeyValueBox::Account(_))
             || matches!(set_key_value, SetKeyValueBox::AssetDefinition(_));
     }
-
     if let Some(remove_key_value) = any.downcast_ref::<RemoveKeyValueBox>() {
         return matches!(remove_key_value, RemoveKeyValueBox::Account(_))
             || matches!(remove_key_value, RemoveKeyValueBox::AssetDefinition(_));
     }
-
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         return match transfer {
             TransferBox::AssetDefinition(_) | TransferBox::Asset(_) => true,
             TransferBox::Domain(_) | TransferBox::Nft(_) => false,
         };
     }
-
     if let Some(mint) = any.downcast_ref::<MintBox>() {
         return matches!(mint, MintBox::Asset(_));
     }
-
     if let Some(burn) = any.downcast_ref::<BurnBox>() {
         return matches!(burn, BurnBox::Asset(_));
     }
-
     if any.downcast_ref::<RegisterZkAsset>().is_some()
         || any
             .downcast_ref::<ScheduleConfidentialPolicyTransition>()
@@ -4913,21 +4620,17 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
     {
         return true;
     }
-
     if confidential_asset_definition_target(any).is_some() {
         return true;
     }
-
     false
 }
-
 fn instruction_dataspace_scoped_permission_target(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
     let any = instruction.as_any();
-
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
         return match grant {
             GrantBox::Permission(grant) => {
@@ -4939,7 +4642,6 @@ fn instruction_dataspace_scoped_permission_target(
             GrantBox::Role(_) => None,
         };
     }
-
     if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
         return match revoke {
             RevokeBox::Permission(revoke) => {
@@ -4951,10 +4653,8 @@ fn instruction_dataspace_scoped_permission_target(
             RevokeBox::Role(_) => None,
         };
     }
-
     None
 }
-
 fn instruction_dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -4962,7 +4662,6 @@ fn instruction_dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
     ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     let any = instruction.as_any();
-
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
         return match grant {
             GrantBox::Permission(grant) => dataspace_scoped_permission_target_with_world(
@@ -4980,7 +4679,6 @@ fn instruction_dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
             GrantBox::Role(_) => None,
         };
     }
-
     if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
         return match revoke {
             RevokeBox::Permission(revoke) => dataspace_scoped_permission_target_with_world(
@@ -4998,10 +4696,8 @@ fn instruction_dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
             RevokeBox::Role(_) => None,
         };
     }
-
     None
 }
-
 fn asset_definition_dataspace_target(
     asset_definition_id: &AssetDefinitionId,
     owning_domain: Option<&DomainId>,
@@ -5039,7 +4735,6 @@ fn asset_definition_dataspace_target(
         state_view,
     )
 }
-
 fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
     asset_definition_id: &AssetDefinitionId,
     owning_domain: Option<&DomainId>,
@@ -5077,7 +4772,6 @@ fn asset_definition_dataspace_target_with_world<W: WorldReadOnly>(
         ledger_time_ms,
     )
 }
-
 fn asset_balance_definition_route_target(
     asset_definition_id: &AssetDefinitionId,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -5113,7 +4807,6 @@ fn asset_balance_definition_route_target(
         balance_scope_policy: effective_policy,
     }
 }
-
 fn asset_balance_definition_dataspace_target(
     asset_definition_id: &AssetDefinitionId,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -5122,7 +4815,6 @@ fn asset_balance_definition_dataspace_target(
     asset_balance_definition_route_target(asset_definition_id, dataspace_catalog, state_view)
         .dataspace_id
 }
-
 fn asset_balance_definition_route_target_with_world<W: WorldReadOnly>(
     asset_definition_id: &AssetDefinitionId,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -5159,7 +4851,6 @@ fn asset_balance_definition_route_target_with_world<W: WorldReadOnly>(
         balance_scope_policy: effective_policy,
     }
 }
-
 fn asset_balance_definition_dataspace_target_with_world<W: WorldReadOnly>(
     asset_definition_id: &AssetDefinitionId,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -5174,20 +4865,17 @@ fn asset_balance_definition_dataspace_target_with_world<W: WorldReadOnly>(
     )
     .dataspace_id
 }
-
 fn asset_definition_for_routing<W: WorldReadOnly>(
     world: &W,
     asset_definition_id: &AssetDefinitionId,
 ) -> Option<AssetDefinition> {
     world.asset_definition(asset_definition_id).ok()
 }
-
 fn asset_definition_for_balance_routing<W: WorldReadOnly>(
     world: &W,
     asset_definition_id: &AssetDefinitionId,
 ) -> Option<AssetDefinition> {
     let mut definition = world.asset_definition(asset_definition_id).ok()?;
-
     if definition.balance_scope_policy() == AssetBalancePolicy::Global {
         definition.alias = None;
     } else if definition.alias.is_none() {
@@ -5196,10 +4884,8 @@ fn asset_definition_for_balance_routing<W: WorldReadOnly>(
             .get(&definition.id)
             .map(|binding| binding.alias.clone());
     }
-
     Some(definition)
 }
-
 fn account_alias_permission_scope_dataspace_target_with_state(
     scope: &AccountAliasPermissionScope,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -5213,7 +4899,6 @@ fn account_alias_permission_scope_dataspace_target_with_state(
         AccountAliasPermissionScope::Alias(alias) => Some(alias.dataspace_id),
     }
 }
-
 fn account_alias_permission_scope_dataspace_target_with_world<W: WorldReadOnly>(
     scope: &AccountAliasPermissionScope,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -5228,7 +4913,6 @@ fn account_alias_permission_scope_dataspace_target_with_world<W: WorldReadOnly>(
         AccountAliasPermissionScope::Alias(alias) => Some(alias.dataspace_id),
     }
 }
-
 fn asset_definition_alias_permission_scope_dataspace_target_with_state(
     scope: &AssetDefinitionAliasPermissionScope,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -5242,7 +4926,6 @@ fn asset_definition_alias_permission_scope_dataspace_target_with_state(
         AssetDefinitionAliasPermissionScope::Alias(alias) => Some(alias.dataspace_id),
     }
 }
-
 fn asset_definition_alias_permission_scope_dataspace_target_with_world<W: WorldReadOnly>(
     scope: &AssetDefinitionAliasPermissionScope,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -5257,7 +4940,6 @@ fn asset_definition_alias_permission_scope_dataspace_target_with_world<W: WorldR
         AssetDefinitionAliasPermissionScope::Alias(alias) => Some(alias.dataspace_id),
     }
 }
-
 fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bool {
     match permission.name() {
         "CanMintAssetToAccount" => permission
@@ -5318,7 +5000,6 @@ fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bo
         _ => false,
     }
 }
-
 fn dataspace_scoped_permission_target(
     permission: &Permission,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -5502,7 +5183,6 @@ fn dataspace_scoped_permission_target(
             _ => None,
         };
     }
-
     match permission.name() {
         "CanPublishSpaceDirectoryManifest" => permission
             .payload()
@@ -5522,7 +5202,6 @@ fn dataspace_scoped_permission_target(
         _ => None,
     }
 }
-
 fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
     permission: &Permission,
     dataspace_catalog: Option<&DataSpaceCatalog>,
@@ -5711,7 +5390,6 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
             _ => None,
         };
     }
-
     match permission.name() {
         "CanPublishSpaceDirectoryManifest" => permission
             .payload()
@@ -5731,12 +5409,10 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
         _ => None,
     }
 }
-
 fn instruction_dataspace_scoped_permission_target_needs_state(
     instruction: &dyn Instruction,
 ) -> bool {
     let any = instruction.as_any();
-
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
         return match grant {
             GrantBox::Permission(grant) => {
@@ -5748,7 +5424,6 @@ fn instruction_dataspace_scoped_permission_target_needs_state(
             GrantBox::Role(_) => false,
         };
     }
-
     if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
         return match revoke {
             RevokeBox::Permission(revoke) => {
@@ -5760,15 +5435,12 @@ fn instruction_dataspace_scoped_permission_target_needs_state(
             RevokeBox::Role(_) => false,
         };
     }
-
     false
 }
-
 fn dataspace_scoped_permission_routing_requires_state(tx: &dyn TransactionRoutingView) -> bool {
     let Some(executable) = transaction_executable(tx) else {
         return false;
     };
-
     match executable {
         Executable::Instructions(instructions) => instructions.iter().any(|instruction| {
             instruction_dataspace_scoped_permission_target_needs_state(&**instruction)
@@ -5785,7 +5457,6 @@ fn dataspace_scoped_permission_routing_requires_state(tx: &dyn TransactionRoutin
         }),
     }
 }
-
 fn canonical_dataspace_route(
     dataspace_id: DataSpaceId,
     lane_catalog: &LaneCatalog,
@@ -5799,28 +5470,24 @@ fn canonical_dataspace_route(
         .min()
         .or_else(|| legacy_single_lane_for_dataspace(dataspace_id, lane_catalog))
         .ok_or(RoutingResolveError::NoLaneForDataspace { dataspace_id })?;
-
     resolve_routing_decision(
         RoutingDecision::new(lane_id, dataspace_id),
         lane_catalog,
         dataspace_catalog,
     )
 }
-
 fn is_canonical_dataspace_lane(
     lane: &iroha_data_model::nexus::LaneConfig,
     dataspace_id: DataSpaceId,
 ) -> bool {
     lane.dataspace_id == dataspace_id && !lane_uses_reserved_autoscale_metadata(lane)
 }
-
 fn lane_uses_reserved_autoscale_metadata(lane: &iroha_data_model::nexus::LaneConfig) -> bool {
     lane.metadata.contains_key(AUTOSCALE_META_MANAGED)
         || lane.metadata.contains_key(AUTOSCALE_META_CREATED_HEIGHT)
         || lane.metadata.contains_key(AUTOSCALE_META_DRAIN_STATE)
         || lane.metadata.contains_key(AUTOSCALE_META_COMMITTEE)
 }
-
 fn reject_autoscale_owned_rule_lane(
     rule: &LaneRoutingRule,
     lane_catalog: &LaneCatalog,
@@ -5834,18 +5501,15 @@ fn reject_autoscale_owned_rule_lane(
     }
     Ok(())
 }
-
 fn is_autoscale_managed_elastic_lane(lane: &iroha_data_model::nexus::LaneConfig) -> bool {
     lane.is_autoscale_managed_elastic()
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AutoscaleElasticRange {
     min_lanes: u32,
     max_lanes: u32,
     current_height: Option<u64>,
 }
-
 impl AutoscaleElasticRange {
     fn from_nexus(nexus: &iroha_config::parameters::actual::Nexus) -> Self {
         let min_lanes = nexus.autoscale.min_lanes.get();
@@ -5867,7 +5531,6 @@ impl AutoscaleElasticRange {
             current_height: None,
         }
     }
-
     fn from_nexus_at_height(
         nexus: &iroha_config::parameters::actual::Nexus,
         current_height: u64,
@@ -5877,19 +5540,16 @@ impl AutoscaleElasticRange {
             ..Self::from_nexus(nexus)
         }
     }
-
     const fn contains_lane(self, lane_id: LaneId) -> bool {
         let lane = lane_id.as_u32();
         lane >= self.min_lanes && lane < self.max_lanes
     }
-
     fn lane_created_height_active(self, lane: &iroha_data_model::nexus::LaneConfig) -> bool {
         self.current_height.is_none_or(|current_height| {
             lane.autoscale_created_height()
                 .is_some_and(|created_height| created_height <= current_height)
         })
     }
-
     fn contains_active_elastic_lane(self, lane: &iroha_data_model::nexus::LaneConfig) -> bool {
         self.contains_lane(lane.id)
             && is_autoscale_managed_elastic_lane(lane)
@@ -5900,7 +5560,6 @@ impl AutoscaleElasticRange {
             )
     }
 }
-
 fn default_route_elastic_candidates(
     policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
@@ -5916,11 +5575,9 @@ fn default_route_elastic_candidates(
     if default_lane.dataspace_id != policy.default_dataspace {
         return Vec::new();
     }
-
     let Some(autoscale_range) = autoscale_range else {
         return vec![policy.default_lane];
     };
-
     if lane_catalog.lanes().iter().any(|lane| {
         lane.id != policy.default_lane
             && autoscale_range.contains_lane(lane.id)
@@ -5929,7 +5586,6 @@ fn default_route_elastic_candidates(
     }) {
         return vec![policy.default_lane];
     }
-
     let mut candidates = vec![policy.default_lane];
     candidates.extend(
         lane_catalog
@@ -5946,7 +5602,6 @@ fn default_route_elastic_candidates(
     candidates.dedup();
     candidates
 }
-
 fn insert_height_active_routable_lane(
     lanes: &mut BTreeSet<LaneId>,
     route: RoutingDecision,
@@ -5959,7 +5614,6 @@ fn insert_height_active_routable_lane(
         lanes.insert(route.lane_id);
     }
 }
-
 /// Resolve the set of lanes that the configured Nexus routing policy can select at a block height.
 pub(crate) fn routable_lane_ids_for_nexus_at_height(
     nexus: &Nexus,
@@ -5969,11 +5623,9 @@ pub(crate) fn routable_lane_ids_for_nexus_at_height(
     if !nexus.enabled {
         return lane_ids;
     }
-
     let policy = &nexus.routing_policy;
     let lane_catalog = &nexus.lane_catalog;
     let dataspace_catalog = &nexus.dataspace_catalog;
-
     let default_lane_can_anchor = lane_catalog
         .lanes()
         .iter()
@@ -5997,14 +5649,12 @@ pub(crate) fn routable_lane_ids_for_nexus_at_height(
             }
         }
     }
-
     for dataspace in dataspace_catalog.entries() {
         if let Ok(route) = canonical_dataspace_route(dataspace.id, lane_catalog, dataspace_catalog)
         {
             insert_height_active_routable_lane(&mut lane_ids, route, nexus, block_height);
         }
     }
-
     for rule in &policy.rules {
         if reject_autoscale_owned_rule_lane(rule, lane_catalog).is_err() {
             continue;
@@ -6018,10 +5668,8 @@ pub(crate) fn routable_lane_ids_for_nexus_at_height(
             insert_height_active_routable_lane(&mut lane_ids, route, nexus, block_height);
         }
     }
-
     lane_ids
 }
-
 fn default_route_shard_index(tx: &dyn TransactionRoutingView, lane_count: usize) -> usize {
     let hash = tx.routing_hash();
     let mut bytes = [0_u8; core::mem::size_of::<u64>()];
@@ -6029,7 +5677,6 @@ fn default_route_shard_index(tx: &dyn TransactionRoutingView, lane_count: usize)
     let shard = u64::from_le_bytes(bytes);
     (shard % lane_count as u64) as usize
 }
-
 fn resolve_default_routing_decision(
     policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
@@ -6046,7 +5693,6 @@ fn resolve_default_routing_decision(
             lane_id: policy.default_lane,
         });
     }
-
     if let Some(tx) = tx {
         let candidates = default_route_elastic_candidates(policy, lane_catalog, autoscale_range);
         if candidates.len() > 1 {
@@ -6058,14 +5704,12 @@ fn resolve_default_routing_decision(
             );
         }
     }
-
     resolve_routing_decision(
         RoutingDecision::new(policy.default_lane, policy.default_dataspace),
         lane_catalog,
         dataspace_catalog,
     )
 }
-
 fn routing_plan_digest(routes: &[RoutingDecision]) -> Hash {
     let mut bytes = Vec::with_capacity(16 + routes.len() * 12);
     bytes.extend_from_slice(b"iroha:routing-plan:v1");
@@ -6075,7 +5719,6 @@ fn routing_plan_digest(routes: &[RoutingDecision]) -> Hash {
     }
     Hash::new(bytes)
 }
-
 fn native_amx_plan_digest(coordinator: RoutingDecision, participants: &[RouteLeg]) -> Hash {
     let mut bytes = Vec::with_capacity(24 + participants.len() * 13);
     bytes.extend_from_slice(b"iroha:native-amx-plan:v1");
@@ -6089,7 +5732,6 @@ fn native_amx_plan_digest(coordinator: RoutingDecision, participants: &[RouteLeg
     }
     Hash::new(bytes)
 }
-
 fn resolve_policy_routing_plan(
     policy: &LaneRoutingPolicy,
     matched_rule: Option<&LaneRoutingRule>,
@@ -6100,7 +5742,6 @@ fn resolve_policy_routing_plan(
     autoscale_range: Option<AutoscaleElasticRange>,
 ) -> Result<RoutingPlan, RoutingResolveError> {
     add_smart_contract_deploy_policy_participant(&mut target, matched_rule);
-
     if !target.participants.is_empty()
         && (target.participants.len() > 1 || target.coordinator_route)
     {
@@ -6126,7 +5767,6 @@ fn resolve_policy_routing_plan(
             .collect::<Result<Vec<_>, _>>()?;
         return Ok(RoutingPlan::native_amx(coordinator_route, participants));
     }
-
     let decision = resolve_policy_routing_decision(
         policy,
         matched_rule,
@@ -6139,7 +5779,6 @@ fn resolve_policy_routing_plan(
     )?;
     Ok(RoutingPlan::single(decision))
 }
-
 fn add_smart_contract_deploy_policy_participant(
     target: &mut TransactionDataspaceTarget,
     matched_rule: Option<&LaneRoutingRule>,
@@ -6159,14 +5798,12 @@ fn add_smart_contract_deploy_policy_participant(
     {
         return;
     }
-
     target.participants.insert(rule_dataspace);
     target.dataspace_id = Some(DataSpaceId::UNIVERSAL);
     if target_is_universal {
         target.coordinator_route = true;
     }
 }
-
 fn smart_contract_deploy_policy_dataspace(
     matched_rule: Option<&LaneRoutingRule>,
 ) -> Option<DataSpaceId> {
@@ -6175,7 +5812,6 @@ fn smart_contract_deploy_policy_dataspace(
     (dataspace != DataSpaceId::UNIVERSAL && rule_matches_smart_contract_deploy(rule))
         .then_some(dataspace)
 }
-
 fn rule_matches_smart_contract_deploy(rule: &LaneRoutingRule) -> bool {
     rule.matcher.instruction.as_deref().is_some_and(|matcher| {
         let matcher = matcher.trim();
@@ -6183,7 +5819,6 @@ fn rule_matches_smart_contract_deploy(rule: &LaneRoutingRule) -> bool {
             || matches_label(matcher, "smart_contract::deploy")
     })
 }
-
 fn resolve_policy_routing_decision(
     policy: &LaneRoutingPolicy,
     matched_rule: Option<&LaneRoutingRule>,
@@ -6197,7 +5832,6 @@ fn resolve_policy_routing_decision(
     if target_is_coordinator_route && target_dataspace == Some(DataSpaceId::UNIVERSAL) {
         return canonical_dataspace_route(DataSpaceId::UNIVERSAL, lane_catalog, dataspace_catalog);
     }
-
     if let Some(dataspace_id) = target_dataspace {
         if let Some(rule) = matched_rule {
             reject_autoscale_owned_rule_lane(rule, lane_catalog)?;
@@ -6218,7 +5852,6 @@ fn resolve_policy_routing_decision(
         }
         return canonical_dataspace_route(dataspace_id, lane_catalog, dataspace_catalog);
     }
-
     if let Some(rule) = matched_rule {
         reject_autoscale_owned_rule_lane(rule, lane_catalog)?;
         let decision = RoutingDecision::new(
@@ -6227,10 +5860,8 @@ fn resolve_policy_routing_decision(
         );
         return resolve_routing_decision(decision, lane_catalog, dataspace_catalog);
     }
-
     resolve_default_routing_decision(policy, lane_catalog, dataspace_catalog, tx, autoscale_range)
 }
-
 fn evaluate_query_policy_with_view(
     policy: &LaneRoutingPolicy,
     authority: &AccountId,
@@ -6246,7 +5877,6 @@ fn evaluate_query_policy_with_view(
         .unwrap_or(policy.default_dataspace);
     RoutingDecision::new(lane_id, dataspace_id)
 }
-
 /// Resolve the configured routing policy for a signed query authority.
 ///
 /// Query routing intentionally ignores transaction-instruction matchers because
@@ -6298,7 +5928,6 @@ pub fn resolve_query_routing_decision(
         None,
     )
 }
-
 fn resolve_query_routing_decision_with_world<W: WorldReadOnly>(
     policy: &LaneRoutingPolicy,
     lane_catalog: &LaneCatalog,
@@ -6323,7 +5952,6 @@ fn resolve_query_routing_decision_with_world<W: WorldReadOnly>(
         autoscale_range,
     )
 }
-
 /// Resolve a policy decision against lane/dataspace catalogs without fallback.
 ///
 /// This function intentionally rejects unresolved or ambiguous combinations
@@ -6342,7 +5970,6 @@ pub fn resolve_routing_decision(
             lane_id: decision.lane_id,
         });
     };
-
     let dataspace_known = dataspace_catalog
         .entries()
         .iter()
@@ -6355,7 +5982,6 @@ pub fn resolve_routing_decision(
             dataspace_id: decision.dataspace_id,
         });
     }
-
     if lane.dataspace_id != decision.dataspace_id {
         if lane.id == LaneId::SINGLE
             && lane.dataspace_id == DataSpaceId::UNIVERSAL
@@ -6369,10 +5995,8 @@ pub fn resolve_routing_decision(
             dataspace_id: decision.dataspace_id,
         });
     }
-
     Ok(decision)
 }
-
 fn legacy_single_lane_for_dataspace(
     dataspace_id: DataSpaceId,
     lane_catalog: &LaneCatalog,
@@ -6397,14 +6021,12 @@ fn legacy_single_lane_for_dataspace(
         })
         .map(|lane| lane.id)
 }
-
 fn rule_matches(
     rule: &LaneRoutingRule,
     tx: &dyn TransactionRoutingView,
     state_view: Option<&StateView<'_>>,
 ) -> bool {
     let matcher = &rule.matcher;
-
     if let Some(account) = matcher.account.as_deref()
         && !tx
             .authority_opt()
@@ -6412,16 +6034,13 @@ fn rule_matches(
     {
         return false;
     }
-
     if let Some(instruction) = matcher.instruction.as_deref()
         && !instructions_match(instruction, tx, state_view)
     {
         return false;
     }
-
     true
 }
-
 fn rule_matches_with_world<W: WorldReadOnly>(
     rule: &LaneRoutingRule,
     tx: &dyn TransactionRoutingView,
@@ -6430,7 +6049,6 @@ fn rule_matches_with_world<W: WorldReadOnly>(
     ledger_time_ms: Option<u64>,
 ) -> bool {
     let matcher = &rule.matcher;
-
     if let Some(account) = matcher.account.as_deref()
         && !tx.authority_opt().is_some_and(|authority| {
             account_matches_with_world(account, authority, dataspace_catalog, world, ledger_time_ms)
@@ -6438,16 +6056,13 @@ fn rule_matches_with_world<W: WorldReadOnly>(
     {
         return false;
     }
-
     if let Some(instruction) = matcher.instruction.as_deref()
         && !instructions_match_with_world(instruction, tx, dataspace_catalog, world, ledger_time_ms)
     {
         return false;
     }
-
     true
 }
-
 fn query_rule_matches(
     rule: &LaneRoutingRule,
     authority: &AccountId,
@@ -6456,12 +6071,10 @@ fn query_rule_matches(
     if rule.matcher.instruction.is_some() {
         return false;
     }
-
     rule.matcher.account.as_deref().map_or(true, |account| {
         account_matches(account, authority, state_view)
     })
 }
-
 fn query_rule_matches_with_world<W: WorldReadOnly>(
     rule: &LaneRoutingRule,
     authority: &AccountId,
@@ -6472,12 +6085,10 @@ fn query_rule_matches_with_world<W: WorldReadOnly>(
     if rule.matcher.instruction.is_some() {
         return false;
     }
-
     rule.matcher.account.as_deref().map_or(true, |account| {
         account_matches_with_world(account, authority, dataspace_catalog, world, ledger_time_ms)
     })
 }
-
 fn account_matches_literal_or_encoded(pattern: &str, authority: &AccountId) -> bool {
     if authority.to_string() == pattern {
         return true;
@@ -6486,7 +6097,6 @@ fn account_matches_literal_or_encoded(pattern: &str, authority: &AccountId) -> b
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .is_ok_and(|parsed| parsed == *authority)
 }
-
 fn account_matches(
     pattern: &str,
     authority: &iroha_data_model::account::AccountId,
@@ -6496,15 +6106,12 @@ fn account_matches(
     if pattern.is_empty() {
         return false;
     }
-
     if account_matches_literal_or_encoded(pattern, authority) {
         return true;
     }
-
     let Some(state_view) = state_view else {
         return false;
     };
-
     account_matches_with_world(
         pattern,
         authority,
@@ -6513,7 +6120,6 @@ fn account_matches(
         Some(state_view_ledger_time_ms(state_view)),
     )
 }
-
 fn account_matches_with_world<W: WorldReadOnly>(
     pattern: &str,
     authority: &AccountId,
@@ -6525,11 +6131,9 @@ fn account_matches_with_world<W: WorldReadOnly>(
     if pattern.is_empty() {
         return false;
     }
-
     if account_matches_literal_or_encoded(pattern, authority) {
         return true;
     }
-
     if let Some(scope) = pattern.strip_prefix("*@") {
         return account_matches_alias_scope_with_world(
             scope,
@@ -6539,7 +6143,6 @@ fn account_matches_with_world<W: WorldReadOnly>(
             ledger_time_ms,
         );
     }
-
     AccountAlias::from_literal(pattern, dataspace_catalog)
         .ok()
         .is_some_and(|alias| {
@@ -6550,7 +6153,6 @@ fn account_matches_with_world<W: WorldReadOnly>(
             })
         })
 }
-
 fn account_matches_alias_scope(
     scope: &str,
     account_id: &AccountId,
@@ -6564,7 +6166,6 @@ fn account_matches_alias_scope(
         Some(state_view_ledger_time_ms(state_view)),
     )
 }
-
 fn account_matches_alias_scope_with_world<W: WorldReadOnly>(
     scope: &str,
     account_id: &AccountId,
@@ -6576,7 +6177,6 @@ fn account_matches_alias_scope_with_world<W: WorldReadOnly>(
     if scope.is_empty() {
         return false;
     }
-
     // When the committed directory has an entry, it is authoritative: malformed
     // or missing scope material must not fall through to a partial alias index.
     if world.account_scope_directory().get(account_id).is_some() {
@@ -6594,7 +6194,6 @@ fn account_matches_alias_scope_with_world<W: WorldReadOnly>(
                 })
             });
     }
-
     let Some(now_ms) = ledger_time_ms else {
         return false;
     };
@@ -6619,7 +6218,6 @@ fn account_matches_alias_scope_with_world<W: WorldReadOnly>(
                 .unwrap_or(false)
         })
 }
-
 fn instructions_match(
     matcher: &str,
     tx: &dyn TransactionRoutingView,
@@ -6633,12 +6231,10 @@ fn instructions_match(
     if matcher_label.is_empty() {
         return false;
     }
-
     tx.any_matching_instruction(&mut |instruction| {
         instruction_matches(matcher_label, destination_scope, instruction, state_view)
     })
 }
-
 fn instructions_match_with_world<W: WorldReadOnly>(
     matcher: &str,
     tx: &dyn TransactionRoutingView,
@@ -6654,7 +6250,6 @@ fn instructions_match_with_world<W: WorldReadOnly>(
     if matcher_label.is_empty() {
         return false;
     }
-
     tx.any_matching_instruction(&mut |instruction| {
         instruction_matches_with_world(
             matcher_label,
@@ -6666,7 +6261,6 @@ fn instructions_match_with_world<W: WorldReadOnly>(
         )
     })
 }
-
 fn split_instruction_matcher(matcher: &str) -> (&str, Option<&str>) {
     if let Some((label, domain)) = matcher.rsplit_once('@')
         && label.starts_with("transfer")
@@ -6677,10 +6271,8 @@ fn split_instruction_matcher(matcher: &str) -> (&str, Option<&str>) {
             return (label, Some(domain));
         }
     }
-
     (matcher, None)
 }
-
 fn instruction_matches(
     matcher: &str,
     destination_scope: Option<&str>,
@@ -6692,16 +6284,13 @@ fn instruction_matches(
     }) {
         return false;
     }
-
     if instruction_label_matches(matcher, instruction) {
         return true;
     }
-
     let id = Instruction::id(instruction).to_ascii_lowercase();
     if matches_label(matcher, &id) {
         return true;
     }
-
     id.split("::").any(|segment| {
         matches_label(matcher, segment)
             || segment
@@ -6709,7 +6298,6 @@ fn instruction_matches(
                 .is_some_and(|trimmed| !trimmed.is_empty() && matches_label(matcher, trimmed))
     })
 }
-
 fn instruction_matches_with_world<W: WorldReadOnly>(
     matcher: &str,
     destination_scope: Option<&str>,
@@ -6729,16 +6317,13 @@ fn instruction_matches_with_world<W: WorldReadOnly>(
     }) {
         return false;
     }
-
     if instruction_label_matches(matcher, instruction) {
         return true;
     }
-
     let id = Instruction::id(instruction).to_ascii_lowercase();
     if matches_label(matcher, &id) {
         return true;
     }
-
     id.split("::").any(|segment| {
         matches_label(matcher, segment)
             || segment
@@ -6746,7 +6331,6 @@ fn instruction_matches_with_world<W: WorldReadOnly>(
                 .is_some_and(|trimmed| !trimmed.is_empty() && matches_label(matcher, trimmed))
     })
 }
-
 fn transfer_destination_matches_alias_scope(
     instruction: &dyn Instruction,
     scope: &str,
@@ -6756,12 +6340,10 @@ fn transfer_destination_matches_alias_scope(
     if scope.is_empty() {
         return false;
     }
-
     let any = instruction.as_any();
     let Some(transfer) = any.downcast_ref::<TransferBox>() else {
         return false;
     };
-
     let destination = match transfer {
         TransferBox::Domain(transfer) => {
             return domain_scope_matches(scope, &transfer.object);
@@ -6777,7 +6359,6 @@ fn transfer_destination_matches_alias_scope(
     };
     account_matches_alias_scope(scope, destination, state_view)
 }
-
 fn transfer_destination_matches_alias_scope_with_world<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     scope: &str,
@@ -6789,12 +6370,10 @@ fn transfer_destination_matches_alias_scope_with_world<W: WorldReadOnly>(
     if scope.is_empty() {
         return false;
     }
-
     let any = instruction.as_any();
     let Some(transfer) = any.downcast_ref::<TransferBox>() else {
         return false;
     };
-
     let destination = match transfer {
         TransferBox::Domain(transfer) => {
             return domain_scope_matches(scope, &transfer.object);
@@ -6813,12 +6392,10 @@ fn transfer_destination_matches_alias_scope_with_world<W: WorldReadOnly>(
         ledger_time_ms,
     )
 }
-
 fn domain_scope_matches(scope: &str, domain_id: &DomainId) -> bool {
     scope.eq_ignore_ascii_case(domain_id.to_string().as_str())
         || scope.eq_ignore_ascii_case(domain_id.dataspace().as_ref())
 }
-
 fn asset_definition_scope_matches(
     scope: &str,
     asset_definition_id: &AssetDefinitionId,
@@ -6833,7 +6410,6 @@ fn asset_definition_scope_matches(
         })
         .is_some_and(|domain_id| domain_scope_matches(scope, &domain_id))
 }
-
 fn asset_definition_scope_matches_with_world<W: WorldReadOnly>(
     scope: &str,
     asset_definition_id: &AssetDefinitionId,
@@ -6845,10 +6421,8 @@ fn asset_definition_scope_matches_with_world<W: WorldReadOnly>(
         .cloned()
         .is_some_and(|domain_id| domain_scope_matches(scope, &domain_id))
 }
-
 fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bool {
     let any = instruction.as_any();
-
     if let Some(register) = any.downcast_ref::<RegisterBox>() {
         let variant = match register {
             RegisterBox::Peer(_) => "register::peer",
@@ -6861,7 +6435,6 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
         };
         return matches_box_variant(matcher, "register", variant);
     }
-
     if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
         let variant = match unregister {
             UnregisterBox::Peer(_) => "unregister::peer",
@@ -6874,7 +6447,6 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
         };
         return matches_box_variant(matcher, "unregister", variant);
     }
-
     if let Some(mint) = any.downcast_ref::<MintBox>() {
         let variant = match mint {
             MintBox::Asset(_) => "mint::asset",
@@ -6882,7 +6454,6 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
         };
         return matches_box_variant(matcher, "mint", variant);
     }
-
     if let Some(burn) = any.downcast_ref::<BurnBox>() {
         let variant = match burn {
             BurnBox::Asset(_) => "burn::asset",
@@ -6890,7 +6461,6 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
         };
         return matches_box_variant(matcher, "burn", variant);
     }
-
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         let variant = match transfer {
             TransferBox::Domain(_) => "transfer::domain",
@@ -6900,7 +6470,6 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
         };
         return matches_box_variant(matcher, "transfer", variant);
     }
-
     if let Some(set_key_value) = any.downcast_ref::<SetKeyValueBox>() {
         let variant = match set_key_value {
             SetKeyValueBox::Domain(_) => "set_key_value::domain",
@@ -6911,7 +6480,6 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
         };
         return matches_box_variant(matcher, "set_key_value", variant);
     }
-
     if let Some(remove_key_value) = any.downcast_ref::<RemoveKeyValueBox>() {
         let variant = match remove_key_value {
             RemoveKeyValueBox::Domain(_) => "remove_key_value::domain",
@@ -6922,7 +6490,6 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
         };
         return matches_box_variant(matcher, "remove_key_value", variant);
     }
-
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
         let variant = match grant {
             GrantBox::Permission(_) => "grant::permission",
@@ -6931,7 +6498,6 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
         };
         return matches_box_variant(matcher, "grant", variant);
     }
-
     if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
         let variant = match revoke {
             RevokeBox::Permission(_) => "revoke::permission",
@@ -6940,7 +6506,6 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
         };
         return matches_box_variant(matcher, "revoke", variant);
     }
-
     if any.is::<RegisterSmartContractCode>()
         || any.is::<RegisterSmartContractBytes>()
         || any.is::<UploadSmartContractCodeChunk>()
@@ -6950,18 +6515,14 @@ fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bo
         return matches_label(matcher, "smartcontract::deploy")
             || matches_label(matcher, "smart_contract::deploy");
     }
-
     false
 }
-
 fn matches_box_variant(matcher: &str, base: &str, variant: &str) -> bool {
     matches_label(matcher, base) || matches_label(matcher, variant)
 }
-
 fn matches_label(matcher: &str, label: &str) -> bool {
     label == matcher || eq_ignoring_underscores(label, matcher)
 }
-
 fn eq_ignoring_underscores(left: &str, right: &str) -> bool {
     let mut left_iter = left.bytes().filter(|byte| *byte != b'_');
     let mut right_iter = right.bytes().filter(|byte| *byte != b'_');
@@ -6973,12 +6534,10 @@ fn eq_ignoring_underscores(left: &str, right: &str) -> bool {
         }
     }
 }
-
 /// Strategy object that derives lane/dataspace assignments for queued transactions.
 pub trait LaneRouter: Send + Sync + 'static {
     /// Route the given transaction without requiring a state snapshot.
     fn route(&self, tx: &dyn TransactionRoutingView) -> RoutingDecision;
-
     /// Route the given transaction using an already acquired state view.
     ///
     /// Routers that require dynamic world-state can override this method and
@@ -6990,7 +6549,6 @@ pub trait LaneRouter: Send + Sync + 'static {
     ) -> RoutingDecision {
         self.route(tx)
     }
-
     /// Route the given transaction with narrow state access when possible.
     ///
     /// The default implementation prefers [`LaneRouter::route_without_state`]
@@ -7002,7 +6560,6 @@ pub trait LaneRouter: Send + Sync + 'static {
         let state_view = state.view();
         self.route_with_view(tx, &state_view)
     }
-
     /// Route the given transaction without a state snapshot when possible.
     ///
     /// Routers that do not depend on dynamic world-state can override this to
@@ -7010,7 +6567,6 @@ pub trait LaneRouter: Send + Sync + 'static {
     fn route_without_state(&self, tx: &dyn TransactionRoutingView) -> Option<RoutingDecision> {
         Some(self.route(tx))
     }
-
     /// Route the given transaction and return deterministic route-resolution errors.
     fn try_route(
         &self,
@@ -7018,7 +6574,6 @@ pub trait LaneRouter: Send + Sync + 'static {
     ) -> Result<RoutingDecision, RoutingResolveError> {
         Ok(self.route(tx))
     }
-
     /// Route with an existing state view and return deterministic route-resolution errors.
     fn try_route_with_view(
         &self,
@@ -7027,7 +6582,6 @@ pub trait LaneRouter: Send + Sync + 'static {
     ) -> Result<RoutingDecision, RoutingResolveError> {
         Ok(self.route_with_view(tx, state_view))
     }
-
     /// Route with narrow state access and return deterministic route-resolution errors.
     fn try_route_with_state(
         &self,
@@ -7040,7 +6594,6 @@ pub trait LaneRouter: Send + Sync + 'static {
         let state_view = state.view();
         self.try_route_with_view(tx, &state_view)
     }
-
     /// Route without state snapshot when possible and return deterministic route errors.
     fn try_route_without_state(
         &self,
@@ -7048,7 +6601,6 @@ pub trait LaneRouter: Send + Sync + 'static {
     ) -> Result<Option<RoutingDecision>, RoutingResolveError> {
         Ok(self.route_without_state(tx))
     }
-
     /// Build the full routing plan for a transaction and return deterministic errors.
     fn try_route_plan(
         &self,
@@ -7057,7 +6609,6 @@ pub trait LaneRouter: Send + Sync + 'static {
         self.try_route(tx)
             .map(|route| RoutingPlan::Single(RouteLeg::new(route, RouteLegRole::Coordinator)))
     }
-
     /// Build the full routing plan with an existing state view.
     fn try_route_plan_with_view(
         &self,
@@ -7067,7 +6618,6 @@ pub trait LaneRouter: Send + Sync + 'static {
         self.try_route_with_view(tx, state_view)
             .map(|route| RoutingPlan::Single(RouteLeg::new(route, RouteLegRole::Coordinator)))
     }
-
     /// Build the full routing plan with narrow state access when possible.
     fn try_route_plan_with_state(
         &self,
@@ -7080,7 +6630,6 @@ pub trait LaneRouter: Send + Sync + 'static {
         let state_view = state.view();
         self.try_route_plan_with_view(tx, &state_view)
     }
-
     /// Build the full routing plan without state when possible.
     fn try_route_plan_without_state(
         &self,
@@ -7091,11 +6640,9 @@ pub trait LaneRouter: Send + Sync + 'static {
             .map(|route| RoutingPlan::Single(RouteLeg::new(route, RouteLegRole::Coordinator))))
     }
 }
-
 /// Trivial router that keeps the single-lane/universal-dataspace behaviour.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct SingleLaneRouter;
-
 impl SingleLaneRouter {
     /// Create a router that always selects the default single lane/universal dataspace.
     #[must_use]
@@ -7103,13 +6650,11 @@ impl SingleLaneRouter {
         Self
     }
 }
-
 impl LaneRouter for SingleLaneRouter {
     fn route(&self, _tx: &dyn TransactionRoutingView) -> RoutingDecision {
         RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
     }
 }
-
 /// Router that applies the declarative policy derived from configuration.
 #[derive(Debug, Clone)]
 pub struct ConfigLaneRouter {
@@ -7117,7 +6662,6 @@ pub struct ConfigLaneRouter {
     dataspace_catalog: Arc<DataSpaceCatalog>,
     lane_catalog: Arc<LaneCatalog>,
 }
-
 impl ConfigLaneRouter {
     /// Build a router from the validated runtime configuration.
     #[must_use]
@@ -7132,7 +6676,6 @@ impl ConfigLaneRouter {
             lane_catalog: Arc::new(lane_catalog),
         }
     }
-
     fn catalog_only_routing_decision(
         &self,
         tx: &dyn TransactionRoutingView,
@@ -7156,12 +6699,10 @@ impl ConfigLaneRouter {
         Ok(None)
     }
 }
-
 impl LaneRouter for ConfigLaneRouter {
     fn route(&self, tx: &dyn TransactionRoutingView) -> RoutingDecision {
         evaluate_policy(&self.policy, tx)
     }
-
     fn route_with_view(
         &self,
         tx: &dyn TransactionRoutingView,
@@ -7176,11 +6717,9 @@ impl LaneRouter for ConfigLaneRouter {
                 )
             })
     }
-
     fn route_without_state(&self, tx: &dyn TransactionRoutingView) -> Option<RoutingDecision> {
         self.try_route_without_state(tx).ok().flatten()
     }
-
     fn try_route(
         &self,
         tx: &dyn TransactionRoutingView,
@@ -7241,7 +6780,6 @@ impl LaneRouter for ConfigLaneRouter {
             None,
         )
     }
-
     fn try_route_plan(
         &self,
         tx: &dyn TransactionRoutingView,
@@ -7310,7 +6848,6 @@ impl LaneRouter for ConfigLaneRouter {
             None,
         )
     }
-
     fn try_route_with_view(
         &self,
         tx: &dyn TransactionRoutingView,
@@ -7381,7 +6918,6 @@ impl LaneRouter for ConfigLaneRouter {
             )),
         )
     }
-
     fn try_route_plan_with_view(
         &self,
         tx: &dyn TransactionRoutingView,
@@ -7460,7 +6996,6 @@ impl LaneRouter for ConfigLaneRouter {
             )),
         )
     }
-
     fn try_route_without_state(
         &self,
         tx: &dyn TransactionRoutingView,
@@ -7505,7 +7040,6 @@ impl LaneRouter for ConfigLaneRouter {
         }
         self.try_route(tx).map(Some)
     }
-
     fn try_route_plan_without_state(
         &self,
         tx: &dyn TransactionRoutingView,
@@ -7550,7 +7084,6 @@ impl LaneRouter for ConfigLaneRouter {
         self.try_route_plan(tx).map(Some)
     }
 }
-
 impl ConfigLaneRouter {
     fn authority_scope_routing_requires_state(
         &self,
@@ -7592,33 +7125,27 @@ impl ConfigLaneRouter {
         Ok(!matched_rule)
     }
 }
-
 fn policy_needs_state(policy: &LaneRoutingPolicy) -> bool {
     policy
         .rules
         .iter()
         .any(|rule| matcher_needs_state(&rule.matcher))
 }
-
 fn matcher_needs_state(matcher: &LaneRoutingMatcher) -> bool {
     let account_needs_state = matcher.account.as_deref().is_some_and(|account| {
         let account = account.trim();
         account.contains('@')
     });
-
     let instruction_needs_state = matcher.instruction.as_deref().is_some_and(|instruction| {
         let instruction = instruction.trim().to_ascii_lowercase();
         instruction.starts_with("transfer") && instruction.rsplit_once('@').is_some()
     });
-
     account_needs_state || instruction_needs_state
 }
-
 fn transaction_target_routing_requires_state(tx: &dyn TransactionRoutingView) -> bool {
     let Some(executable) = transaction_executable(tx) else {
         return false;
     };
-
     match executable {
         Executable::Instructions(instructions) => instructions.iter().any(|instruction| {
             instruction_transaction_dataspace_target_needs_state(&**instruction)
@@ -7635,7 +7162,6 @@ fn transaction_target_routing_requires_state(tx: &dyn TransactionRoutingView) ->
         }),
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -7699,7 +7225,6 @@ mod tests {
     ) -> AcceptedTransaction<'static> {
         sample_transaction_with_metadata(authority, signer, instructions, Metadata::default())
     }
-
     fn resolved_account_alias(alias: &str, dataspace_id: DataSpaceId) -> ResolvedAccountAliasV1 {
         ResolvedAccountAliasV1::new(
             alias
@@ -7708,7 +7233,6 @@ mod tests {
             dataspace_id,
         )
     }
-
     fn sample_transaction_with_metadata(
         authority: &AccountId,
         signer: &iroha_crypto::PrivateKey,
@@ -7743,7 +7267,6 @@ mod tests {
         )
         .expect("tx should be accepted")
     }
-
     fn sample_executable_transaction(
         authority: &AccountId,
         signer: &iroha_crypto::PrivateKey,
@@ -7756,7 +7279,6 @@ mod tests {
             Metadata::default(),
         )
     }
-
     fn sample_executable_transaction_with_metadata(
         authority: &AccountId,
         signer: &iroha_crypto::PrivateKey,
@@ -7794,7 +7316,6 @@ mod tests {
         )
         .expect("tx should be accepted")
     }
-
     fn sample_proved_executable(
         overlay: Vec<InstructionBox>,
     ) -> iroha_data_model::transaction::Executable {
@@ -7812,7 +7333,6 @@ mod tests {
         bytecode.extend_from_slice(&0u32.to_le_bytes());
         bytecode.extend_from_slice(&0u32.to_le_bytes());
         bytecode.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-
         iroha_data_model::transaction::Executable::IvmProved(
             iroha_data_model::transaction::IvmProved {
                 bytecode: iroha_data_model::transaction::IvmBytecode::from_compiled(bytecode),
@@ -7822,7 +7342,6 @@ mod tests {
             },
         )
     }
-
     fn sample_contract_invocation(
         authority: &AccountId,
         dataspace: DataSpaceId,
@@ -7841,7 +7360,6 @@ mod tests {
             arguments: None,
         }
     }
-
     fn sample_trigger_registration(
         authority: &AccountId,
         name: &str,
@@ -7858,7 +7376,6 @@ mod tests {
         .expect("trigger action fixture satisfies validation invariants");
         InstructionBox::from(Register::trigger(Trigger::new(trigger_id, action)))
     }
-
     fn sample_contract_trigger_registration(
         authority: &AccountId,
         name: &str,
@@ -7871,7 +7388,6 @@ mod tests {
             Executable::ContractCall(sample_contract_invocation(authority, dataspace, nonce)),
         )
     }
-
     fn three_dataspace_contract_router() -> (
         LaneRoutingPolicy,
         DataSpaceCatalog,
@@ -7897,7 +7413,6 @@ mod tests {
         let router = ConfigLaneRouter::new(policy.clone(), catalog.clone(), lane_catalog.clone());
         (policy, catalog, lane_catalog, router)
     }
-
     fn account_scope_entry(
         dataspace: DataSpaceId,
     ) -> crate::nexus::space_directory::AccountScopeDirectoryEntry {
@@ -7905,7 +7420,6 @@ mod tests {
         entry.ensure_dataspace(dataspace);
         entry
     }
-
     fn catalog_with_lane_dataspaces(entries: &[(LaneId, DataSpaceId)]) -> LaneCatalog {
         let max_lane = entries
             .iter()
@@ -7925,14 +7439,12 @@ mod tests {
             .collect();
         LaneCatalog::new(lane_count, lanes).expect("valid lane catalog")
     }
-
     fn lane_catalog_from_configs(lanes: Vec<LaneConfig>) -> LaneCatalog {
         let max_lane = lanes.iter().map(|lane| lane.id.as_u32()).max().unwrap_or(0);
         let lane_count =
             std::num::NonZeroU32::new(max_lane + 1).expect("catalog requires nonzero lanes");
         LaneCatalog::new(lane_count, lanes).expect("valid lane catalog")
     }
-
     fn nexus_with_routing(
         routing_policy: LaneRoutingPolicy,
         lane_catalog: LaneCatalog,
@@ -7948,11 +7460,9 @@ mod tests {
             ..Nexus::default()
         }
     }
-
     fn default_lane_config() -> LaneConfig {
         LaneConfig::default()
     }
-
     fn autoscale_elastic_lane_config(
         lane_id: LaneId,
         dataspace_id: DataSpaceId,
@@ -7974,7 +7484,6 @@ mod tests {
         crate::state::attach_synthetic_autoscale_committee_for_test(&mut lane);
         lane
     }
-
     fn role_registration_instruction(authority: &AccountId, name: &str) -> InstructionBox {
         let role_id = iroha_data_model::role::RoleId {
             name: name.parse().expect("valid role name"),
@@ -7984,7 +7493,6 @@ mod tests {
             authority.clone(),
         )))
     }
-
     fn catalog_with_lanes(lanes: &[LaneId]) -> LaneCatalog {
         let entries: Vec<(LaneId, DataSpaceId)> = lanes
             .iter()
@@ -7992,7 +7500,6 @@ mod tests {
             .collect();
         catalog_with_lane_dataspaces(&entries)
     }
-
     fn state_from_world(world: crate::state::World) -> crate::state::State {
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
@@ -8003,11 +7510,9 @@ mod tests {
         #[cfg(not(feature = "telemetry"))]
         crate::state::State::new(world, kura, query)
     }
-
     fn blank_state() -> crate::state::State {
         state_from_world(crate::state::World::default())
     }
-
     fn seed_committed_height_for_router_test(state: &crate::state::State, height: u64) {
         let mut block_hashes = state.block_hashes.block();
         for idx in 0..height {
@@ -8017,7 +7522,6 @@ mod tests {
         }
         block_hashes.commit_for_tests();
     }
-
     fn install_router_nexus(state: &crate::state::State, router: &ConfigLaneRouter) {
         let mut nexus = state.nexus.write();
         nexus.enabled = true;
@@ -8025,7 +7529,6 @@ mod tests {
         nexus.dataspace_catalog = router.dataspace_catalog.as_ref().clone();
         nexus.lane_catalog = router.lane_catalog.as_ref().clone();
     }
-
     fn set_nexus_autoscale_range(
         state: &crate::state::State,
         enabled: bool,
@@ -8039,7 +7542,6 @@ mod tests {
         nexus.autoscale.max_lanes =
             std::num::NonZeroU32::new(max_lanes).expect("autoscale test max_lanes must be nonzero");
     }
-
     fn dataspace_catalog(entries: &[(DataSpaceId, &str)]) -> DataSpaceCatalog {
         let mut metadata = vec![iroha_data_model::nexus::DataSpaceMetadata::default()];
         metadata.extend(entries.iter().map(|(id, alias)| {
@@ -8052,7 +7554,6 @@ mod tests {
         }));
         DataSpaceCatalog::new(metadata).expect("valid dataspace catalog")
     }
-
     fn world_with_dynamic_dataspace_until(
         alias: &str,
         owner: &AccountId,
@@ -8077,15 +7578,12 @@ mod tests {
             .insert(crate::sns::record_storage_key(&selector), record.encode());
         world
     }
-
     fn world_with_dynamic_dataspace(alias: &str, owner: &AccountId) -> crate::state::World {
         world_with_dynamic_dataspace_until(alias, owner, u64::MAX)
     }
-
     fn account_alias(literal: &str, catalog: &DataSpaceCatalog) -> AccountAlias {
         AccountAlias::from_literal(literal, catalog).expect("valid account alias")
     }
-
     fn state_with_account_aliases(
         accounts: &[(AccountId, AccountAlias)],
         dataspace_catalog: DataSpaceCatalog,
@@ -8110,7 +7608,6 @@ mod tests {
                     account_id.clone(),
                 ),
             );
-
             let selector = crate::sns::selector_for_account_alias(alias, &dataspace_catalog)
                 .expect("fixture account alias selector");
             let address = AccountAddress::from_account_id(&account_id)
@@ -8141,7 +7638,6 @@ mod tests {
         state.nexus.write().dataspace_catalog = dataspace_catalog;
         state
     }
-
     fn state_with_account_scope_entries(
         accounts: &[(
             AccountId,
@@ -8165,7 +7661,6 @@ mod tests {
         }
         state
     }
-
     fn state_with_asset_definitions(
         asset_definitions: Vec<AssetDefinition>,
         dataspace_catalog: DataSpaceCatalog,
@@ -8185,7 +7680,6 @@ mod tests {
         }
         state
     }
-
     fn bind_asset_definition_alias(
         state: &mut crate::state::State,
         asset_definition: &AssetDefinitionId,
@@ -8206,7 +7700,6 @@ mod tests {
             },
         );
     }
-
     fn add_unlabeled_account_with_alias(
         state: &mut crate::state::State,
         account_id: &AccountId,
@@ -8227,7 +7720,6 @@ mod tests {
             .account_aliases_by_account
             .insert(account_id, BTreeSet::from([alias]));
     }
-
     fn scope_account_to_dataspace(
         state: &mut crate::state::State,
         account_id: &AccountId,
@@ -8240,7 +7732,6 @@ mod tests {
             .account_scope_directory
             .insert(account_id.clone(), scope_entry);
     }
-
     fn attach_valid_drain_state(lane: &mut LaneConfig, close_global_height: u64) {
         let keypair = KeyPair::try_from_seed(
             b"queue-router-drain-validator".to_vec(),
@@ -8278,9 +7769,7 @@ mod tests {
             hex::encode(norito::to_bytes(&state).expect("encode valid drain state")),
         );
     }
-
     include!("router_initial_routing_tests.rs");
-
     #[test]
     fn canonical_dataspace_route_ignores_autoscale_owned_lanes() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -8304,13 +7793,11 @@ mod tests {
         ]);
         let dataspace_catalog = DataSpaceCatalog::default();
         let expected = RoutingDecision::new(LaneId::new(9), DataSpaceId::UNIVERSAL);
-
         assert_eq!(
             canonical_dataspace_route(DataSpaceId::UNIVERSAL, &lane_catalog, &dataspace_catalog)
                 .expect("canonical universal route should use the non-autoscale base lane"),
             expected
         );
-
         let router = ConfigLaneRouter::new(policy.clone(), dataspace_catalog, lane_catalog);
         let state = blank_state();
         install_router_nexus(&state, &router);
@@ -8322,7 +7809,6 @@ mod tests {
                 DomainId::try_new("canonical", "universal").expect("domain"),
             )))],
         );
-
         assert_eq!(
             router
                 .try_route(&tx)
@@ -8336,7 +7822,6 @@ mod tests {
             expected
         );
     }
-
     #[test]
     fn canonical_dataspace_route_fails_closed_with_only_autoscale_owned_lanes() {
         let mut malformed_autoscale_claim =
@@ -8349,7 +7834,6 @@ mod tests {
             autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
             malformed_autoscale_claim,
         ]);
-
         assert_eq!(
             canonical_dataspace_route(
                 DataSpaceId::UNIVERSAL,
@@ -8361,7 +7845,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn canonical_dataspace_route_fails_closed_with_created_height_only_reserved_lane() {
         let mut marker_only = LaneConfig {
@@ -8374,7 +7857,6 @@ mod tests {
             .metadata
             .insert(AUTOSCALE_META_CREATED_HEIGHT.to_string(), "42".to_string());
         let lane_catalog = lane_catalog_from_configs(vec![marker_only]);
-
         assert_eq!(
             canonical_dataspace_route(
                 DataSpaceId::UNIVERSAL,
@@ -8386,7 +7868,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn canonical_dataspace_route_fails_closed_for_every_consensus_autoscale_marker() {
         for marker in [AUTOSCALE_META_DRAIN_STATE, AUTOSCALE_META_COMMITTEE] {
@@ -8400,7 +7881,6 @@ mod tests {
                 .metadata
                 .insert(marker.to_owned(), "malformed-but-reserved".to_owned());
             let lane_catalog = lane_catalog_from_configs(vec![marker_only]);
-
             assert_eq!(
                 canonical_dataspace_route(
                     DataSpaceId::UNIVERSAL,
@@ -8414,7 +7894,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn default_route_shards_no_target_traffic_across_autoscaled_lanes() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -8433,7 +7912,6 @@ mod tests {
         install_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         seed_committed_height_for_router_test(&state, 7);
-
         let mut lanes_seen = BTreeSet::new();
         for idx in 0..256 {
             let tx = sample_transaction(
@@ -8456,7 +7934,6 @@ mod tests {
                 &tx,
             )
             .expect("default route should resolve with configured catalog");
-
             assert_eq!(
                 with_catalog,
                 RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
@@ -8486,10 +7963,8 @@ mod tests {
                 break;
             }
         }
-
         assert_eq!(lanes_seen, BTreeSet::from([LaneId::SINGLE, LaneId::new(1)]));
     }
-
     #[test]
     fn default_route_shards_no_target_ivm_traffic_with_state_not_state_free_hint() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -8507,7 +7982,6 @@ mod tests {
         install_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         seed_committed_height_for_router_test(&state, 7);
-
         let mut lanes_seen = BTreeSet::new();
         for idx in 0..512_u64 {
             let mut metadata = Metadata::default();
@@ -8521,7 +7995,6 @@ mod tests {
                 sample_proved_executable(Vec::new()),
                 metadata,
             );
-
             assert_eq!(
                 router
                     .try_route_without_state(&tx)
@@ -8534,7 +8007,6 @@ mod tests {
                 None,
                 "non-fallible state-free hint must not pin no-target IVM traffic to the base lane"
             );
-
             let with_view = router
                 .try_route_with_view(&tx, &state.view())
                 .expect("live no-target IVM route should resolve");
@@ -8544,10 +8016,8 @@ mod tests {
                 break;
             }
         }
-
         assert_eq!(lanes_seen, BTreeSet::from([LaneId::SINGLE, LaneId::new(1)]));
     }
-
     #[test]
     fn default_route_sharding_fails_closed_for_future_created_elastic_lane() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -8565,7 +8035,6 @@ mod tests {
         install_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         seed_committed_height_for_router_test(&state, 6);
-
         for idx in 0..64 {
             let tx = sample_transaction(
                 &alice_id,
@@ -8593,7 +8062,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn nexus_world_routing_at_block_height_excludes_future_created_elastic_lane() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -8611,7 +8079,6 @@ mod tests {
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         let state = blank_state();
-
         let mut saw_active_elastic = false;
         for idx in 0..256 {
             let tx = sample_transaction(
@@ -8653,13 +8120,11 @@ mod tests {
                 break;
             }
         }
-
         assert!(
             saw_active_elastic,
             "fixture should find a transaction assigned to the active elastic lane"
         );
     }
-
     #[test]
     fn default_route_sharding_fails_closed_with_default_anchor_above_elastic_range() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -8689,7 +8154,6 @@ mod tests {
         install_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 3);
         seed_committed_height_for_router_test(&state, 7);
-
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
@@ -8727,7 +8191,6 @@ mod tests {
             RoutingPlan::single(expected)
         );
     }
-
     #[test]
     fn default_route_with_unmatched_rules_still_uses_live_autoscale_range() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -8760,7 +8223,6 @@ mod tests {
         install_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         seed_committed_height_for_router_test(&state, 7);
-
         let mut lanes_seen = BTreeSet::new();
         for idx in 0..512 {
             let tx = sample_transaction(
@@ -8796,7 +8258,6 @@ mod tests {
                 RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
                 "catalog-only routing remains pinned to the base default lane"
             );
-
             let with_state = router
                 .try_route_with_state(&tx, &state)
                 .expect("default route should resolve with live Nexus state");
@@ -8813,14 +8274,12 @@ mod tests {
                 break;
             }
         }
-
         assert_eq!(
             lanes_seen,
             BTreeSet::from([LaneId::SINGLE, LaneId::new(1)]),
             "live default-route sharding must use the elastic lane even when unrelated rules exist"
         );
     }
-
     #[test]
     fn default_route_sharding_ignores_autoscale_lanes_outside_enabled_range() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -8839,7 +8298,6 @@ mod tests {
         install_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         seed_committed_height_for_router_test(&state, 7);
-
         let mut lanes_seen = BTreeSet::new();
         for idx in 0..512 {
             let tx = sample_transaction(
@@ -8867,21 +8325,17 @@ mod tests {
                 break;
             }
         }
-
         assert_eq!(lanes_seen, BTreeSet::from([LaneId::SINGLE, LaneId::new(1)]));
     }
-
     #[test]
     fn default_route_sharding_fails_closed_when_elastic_range_contains_corruption() {
         struct CorruptionCase {
             name: &'static str,
             lane: LaneConfig,
         }
-
         let mut malformed_managed =
             autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::UNIVERSAL, 7);
         malformed_managed.alias = "malformed-elastic-lane".to_string();
-
         let cases = [
             CorruptionCase {
                 name: "manual-in-range",
@@ -8900,7 +8354,6 @@ mod tests {
                 lane: autoscale_elastic_lane_config(LaneId::new(2), DataSpaceId::new(9), 7),
             },
         ];
-
         for case in cases {
             let (alice_id, alice_keypair) = gen_account_in("wonderland");
             let policy = LaneRoutingPolicy {
@@ -8918,7 +8371,6 @@ mod tests {
             install_router_nexus(&state, &router);
             set_nexus_autoscale_range(&state, true, 1, 8);
             seed_committed_height_for_router_test(&state, 7);
-
             for idx in 0..64 {
                 let tx = sample_transaction(
                     &alice_id,
@@ -8955,7 +8407,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn default_route_sharding_ignores_managed_lanes_when_autoscale_disabled() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -8972,7 +8423,6 @@ mod tests {
         let state = blank_state();
         install_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, false, 1, 8);
-
         for idx in 0..64 {
             let tx = sample_transaction(
                 &alice_id,
@@ -8999,7 +8449,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn default_route_sharding_fails_closed_when_nexus_disabled() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -9017,7 +8466,6 @@ mod tests {
         install_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
         state.nexus.write().enabled = false;
-
         for idx in 0..64 {
             let tx = sample_transaction(
                 &alice_id,
@@ -9042,7 +8490,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn default_route_sharding_fails_closed_when_default_lane_is_inside_autoscale_range() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -9063,7 +8510,6 @@ mod tests {
         let state = blank_state();
         install_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 1, 8);
-
         for idx in 0..64 {
             let tx = sample_transaction(
                 &alice_id,
@@ -9088,7 +8534,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn default_route_sharding_fails_closed_when_autoscale_max_lanes_exceeds_cap() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -9110,7 +8555,6 @@ mod tests {
             1,
             iroha_config::parameters::defaults::nexus::autoscale::MAX_LANES + 1,
         );
-
         for idx in 0..64 {
             let tx = sample_transaction(
                 &alice_id,
@@ -9135,7 +8579,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn default_route_sharding_fails_closed_when_autoscale_min_exceeds_max() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -9152,7 +8595,6 @@ mod tests {
         let state = blank_state();
         install_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 4, 2);
-
         for idx in 0..64 {
             let tx = sample_transaction(
                 &alice_id,
@@ -9177,7 +8619,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn default_route_sharding_fails_closed_when_autoscale_min_equals_max() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -9194,7 +8635,6 @@ mod tests {
         let state = blank_state();
         install_router_nexus(&state, &router);
         set_nexus_autoscale_range(&state, true, 4, 4);
-
         for idx in 0..64 {
             let tx = sample_transaction(
                 &alice_id,
@@ -9220,7 +8660,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn default_route_rejects_autoscale_owned_default_lane() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -9242,7 +8681,6 @@ mod tests {
             alice_keypair.private_key(),
             vec![role_registration_instruction(&alice_id, "autoscaledefault")],
         );
-
         assert_eq!(
             router.try_route(&tx),
             Err(RoutingResolveError::AutoscaleOwnedDefaultLane {
@@ -9273,7 +8711,6 @@ mod tests {
         );
         assert_eq!(router.try_route_without_state(&tx), Ok(None));
     }
-
     #[test]
     fn default_route_rejects_created_height_only_default_lane() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -9301,7 +8738,6 @@ mod tests {
                 "createdheightdefault",
             )],
         );
-
         assert_eq!(
             router.try_route(&tx),
             Err(RoutingResolveError::AutoscaleOwnedDefaultLane {
@@ -9315,7 +8751,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn explicit_rule_overrides_autoscaled_default_sharding() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -9345,7 +8780,6 @@ mod tests {
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let state = blank_state();
         install_router_nexus(&state, &router);
-
         for idx in 0..32 {
             let tx = sample_transaction(
                 &alice_id,
@@ -9369,7 +8803,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn explicit_rule_rejects_autoscale_owned_rule_lane() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -9399,7 +8832,6 @@ mod tests {
             alice_keypair.private_key(),
             vec![role_registration_instruction(&alice_id, "autoscalerule")],
         );
-
         assert_eq!(
             router.try_route(&tx),
             Err(RoutingResolveError::AutoscaleOwnedRuleLane {
@@ -9435,7 +8867,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn explicit_rule_rejects_created_height_only_rule_lane() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -9471,7 +8902,6 @@ mod tests {
                 "createdheightrule",
             )],
         );
-
         assert_eq!(
             router.try_route(&tx),
             Err(RoutingResolveError::AutoscaleOwnedRuleLane {
@@ -9485,7 +8915,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn resolve_policy_rejects_rule_dataspace_override_for_target() {
         use iroha_data_model::nexus::DataSpaceMetadata;
@@ -9503,7 +8932,6 @@ mod tests {
                 },
             }],
         };
-
         let dataspace_catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
@@ -9514,7 +8942,6 @@ mod tests {
             },
         ])
         .expect("valid dataspace catalog");
-
         let lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(5), DataSpaceId::new(7)),
@@ -9537,7 +8964,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn settlement_routes_to_common_leg_dataspace_before_account_policy() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -9584,13 +9010,11 @@ mod tests {
                 ),
             ))],
         );
-
         assert_eq!(
             router.try_route(&tx).expect("settlement route"),
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn settlement_with_different_leg_dataspaces_routes_to_universal_coordinator() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -9641,13 +9065,11 @@ mod tests {
                 ),
             ))],
         );
-
         assert_eq!(
             router.try_route(&tx).expect("settlement route"),
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn settlement_pvp_with_different_leg_dataspaces_routes_to_universal_coordinator() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -9698,13 +9120,11 @@ mod tests {
                 ),
             ))],
         );
-
         assert_eq!(
             router.try_route(&tx).expect("settlement route"),
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn route_resolution_rejects_lane_dataspace_mismatch() {
         use iroha_data_model::nexus::DataSpaceMetadata;
@@ -9723,7 +9143,6 @@ mod tests {
                 },
             }],
         };
-
         let catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
@@ -9740,7 +9159,6 @@ mod tests {
             },
         ])
         .expect("valid dataspace catalog");
-
         let lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(4), DataSpaceId::new(7)),
@@ -9748,7 +9166,6 @@ mod tests {
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
         let state = blank_state();
         install_router_nexus(&state, &router);
-
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
@@ -9756,13 +9173,11 @@ mod tests {
                 DomainId::try_new("override", "universal").expect("domain"),
             )))],
         );
-
         let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(
             decision,
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
-
         let helper_err =
             evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
                 .expect_err("mismatched lane/dataspace must be rejected");
@@ -9771,7 +9186,6 @@ mod tests {
             RoutingResolveError::LaneDataspaceMismatch { .. }
         ));
     }
-
     #[test]
     fn route_resolution_rejects_unknown_lane() {
         use iroha_data_model::nexus::DataSpaceMetadata;
@@ -9790,7 +9204,6 @@ mod tests {
                 },
             }],
         };
-
         let catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
@@ -9801,13 +9214,11 @@ mod tests {
             },
         ])
         .expect("valid dataspace catalog");
-
         let lane_catalog =
             catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
         let state = blank_state();
         install_router_nexus(&state, &router);
-
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
@@ -9815,13 +9226,11 @@ mod tests {
                 DomainId::try_new("fallback", "universal").expect("domain"),
             )))],
         );
-
         let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(
             decision,
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
-
         let helper_err =
             evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
                 .expect_err("unknown lane must be rejected");
@@ -9830,7 +9239,6 @@ mod tests {
             RoutingResolveError::UnknownLane { .. }
         ));
     }
-
     #[test]
     fn route_resolution_rejects_missing_default_lane() {
         use iroha_data_model::nexus::DataSpaceMetadata;
@@ -9849,7 +9257,6 @@ mod tests {
                 },
             }],
         };
-
         let catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
@@ -9866,7 +9273,6 @@ mod tests {
             },
         ])
         .expect("valid dataspace catalog");
-
         let lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::new(2), DataSpaceId::new(7)),
             (LaneId::new(4), DataSpaceId::new(9)),
@@ -9874,7 +9280,6 @@ mod tests {
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
         let state = blank_state();
         install_router_nexus(&state, &router);
-
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
@@ -9882,13 +9287,11 @@ mod tests {
                 DomainId::try_new("fallback", "universal").expect("domain"),
             )))],
         );
-
         let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(
             decision,
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
-
         let helper_err =
             evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
                 .expect_err("missing default lane must be rejected");
@@ -9897,7 +9300,6 @@ mod tests {
             RoutingResolveError::UnknownLane { .. }
         ));
     }
-
     #[test]
     fn route_resolution_rejects_missing_default_dataspace() {
         use iroha_data_model::nexus::DataSpaceMetadata;
@@ -9916,7 +9318,6 @@ mod tests {
                 },
             }],
         };
-
         let catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
             id: DataSpaceId::new(7),
             alias: "alpha".to_string(),
@@ -9924,10 +9325,8 @@ mod tests {
             fault_tolerance: 1,
         }])
         .expect("valid dataspace catalog");
-
         let lane_catalog = catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::new(9))]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog.clone());
-
         let tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
@@ -9935,11 +9334,9 @@ mod tests {
                 DomainId::try_new("fallback", "universal").expect("domain"),
             )))],
         );
-
         let decision = router.route_with_view(&tx, &blank_state().view());
         assert_eq!(decision.lane_id, LaneId::SINGLE);
         assert_eq!(decision.dataspace_id, DataSpaceId::UNIVERSAL);
-
         let helper_err =
             evaluate_policy_with_catalog(router.policy.as_ref(), &lane_catalog, &catalog, &tx)
                 .expect_err("missing default dataspace must be rejected");
@@ -9948,7 +9345,6 @@ mod tests {
             RoutingResolveError::UnknownDataspace { .. }
         ));
     }
-
     #[test]
     fn route_resolution_accepts_dynamic_dataspace_on_default_public_lane() {
         let dynamic_dataspace = DataSpaceId::new(4_242);
@@ -9956,13 +9352,11 @@ mod tests {
             catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
         let catalog = dataspace_catalog(&[]);
         let decision = RoutingDecision::new(LaneId::SINGLE, dynamic_dataspace);
-
         assert_eq!(
             resolve_routing_decision(decision, &lane_catalog, &catalog),
             Ok(decision)
         );
     }
-
     #[test]
     fn route_resolution_rejects_unknown_dataspace_on_non_default_universal_lane() {
         let dynamic_dataspace = DataSpaceId::new(4_242);
@@ -9975,14 +9369,12 @@ mod tests {
             &catalog,
         )
         .expect_err("non-default universal lanes must not accept unknown dataspaces");
-
         assert!(matches!(
             err,
             RoutingResolveError::UnknownDataspace { dataspace_id }
                 if dataspace_id == dynamic_dataspace
         ));
     }
-
     #[test]
     fn route_resolution_rejects_dynamic_dataspace_on_dataspace_scoped_lane() {
         let configured_dataspace = DataSpaceId::new(7);
@@ -9995,14 +9387,12 @@ mod tests {
             &catalog,
         )
         .expect_err("dataspace-scoped lanes must not accept unknown dataspaces");
-
         assert!(matches!(
             err,
             RoutingResolveError::UnknownDataspace { dataspace_id }
                 if dataspace_id == dynamic_dataspace
         ));
     }
-
     #[test]
     fn route_resolution_rejects_universal_when_catalog_omits_universal() {
         let lane_catalog =
@@ -10020,14 +9410,12 @@ mod tests {
             &catalog,
         )
         .expect_err("reserved universal dataspace still needs a catalog entry");
-
         assert!(matches!(
             err,
             RoutingResolveError::UnknownDataspace { dataspace_id }
                 if dataspace_id == DataSpaceId::UNIVERSAL
         ));
     }
-
     #[test]
     fn dataspace_alias_target_with_world_resolves_active_sns_dataspace() {
         let (authority_id, _) = gen_account_in("wonderland");
@@ -10035,7 +9423,6 @@ mod tests {
         let world = world_with_dynamic_dataspace("alpha", &authority_id);
         let view = world.view();
         let expected = crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic id");
-
         assert_eq!(
             dataspace_alias_target_with_world("alpha", Some(&catalog), &view, Some(0)),
             Some(expected)
@@ -10049,7 +9436,6 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn dataspace_alias_target_with_world_rejects_inactive_sns_dataspace_at_ledger_time() {
         let (authority_id, _) = gen_account_in("wonderland");
@@ -10057,7 +9443,6 @@ mod tests {
         let world = world_with_dynamic_dataspace_until("alpha", &authority_id, 10);
         let view = world.view();
         let expected = crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic id");
-
         assert_eq!(
             dataspace_alias_target_with_world("alpha", Some(&catalog), &view, Some(9)),
             Some(expected)
@@ -10067,7 +9452,6 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn evaluate_policy_with_catalog_and_world_resolves_static_alias_without_ledger_time() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -10089,14 +9473,12 @@ mod tests {
         );
         let world = crate::state::World::default();
         let view = world.view();
-
         assert_eq!(
             evaluate_policy_with_catalog_and_world(&policy, &lane_catalog, &catalog, &tx, &view)
                 .expect("static alias should resolve without a ledger time"),
             RoutingDecision::new(LaneId::SINGLE, static_dataspace)
         );
     }
-
     #[test]
     fn evaluate_policy_with_catalog_and_world_at_respects_dynamic_sns_ledger_time() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -10118,7 +9500,6 @@ mod tests {
         let world = world_with_dynamic_dataspace_until("alpha", &authority_id, 10);
         let view = world.view();
         let expected = crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic id");
-
         assert_eq!(
             evaluate_policy_with_catalog_and_world_at(
                 &policy,
@@ -10149,7 +9530,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn evaluate_policy_plan_with_catalog_and_world_at_respects_dynamic_sns_ledger_time() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -10171,7 +9551,6 @@ mod tests {
         let world = world_with_dynamic_dataspace_until("alpha", &authority_id, 10);
         let view = world.view();
         let expected = crate::sns::dataspace_id_for_sns_alias("alpha").expect("dynamic id");
-
         assert_eq!(
             evaluate_policy_plan_with_catalog_and_world_at(
                 &policy,
@@ -10208,7 +9587,6 @@ mod tests {
             RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
         );
     }
-
     #[test]
     fn matches_register_domain_rule() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -10225,7 +9603,6 @@ mod tests {
                 },
             }],
         };
-
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let tx = sample_transaction(
@@ -10235,13 +9612,11 @@ mod tests {
                 DomainId::try_new("castle", "universal").expect("domain id"),
             )))],
         );
-
         let state = blank_state();
         install_router_nexus(&state, &router);
         let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
-
     #[test]
     fn matches_smartcontract_deploy_rule() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -10258,7 +9633,6 @@ mod tests {
                 },
             }],
         };
-
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let code = vec![0xCA, 0xFE, 0xBA, 0xBE];
@@ -10289,7 +9663,6 @@ mod tests {
             assert_eq!(decision.lane_id, LaneId::new(1));
         }
     }
-
     #[test]
     fn contract_call_routes_to_contract_address_dataspace_without_explicit_rule() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -10325,7 +9698,6 @@ mod tests {
             alice_keypair.private_key(),
             iroha_data_model::transaction::Executable::ContractCall(invocation),
         );
-
         assert_eq!(
             router
                 .try_route(&tx)
@@ -10333,7 +9705,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn asset_home_proved_coverage_overlay_domain_routes_to_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -10358,7 +9729,6 @@ mod tests {
                 DomainId::try_new("merchant", "paynet").expect("domain id"),
             )))]),
         );
-
         assert_eq!(
             router
                 .try_route(&tx)
@@ -10366,7 +9736,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn asset_home_proved_coverage_overlay_conflicting_domains_route_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -10397,7 +9766,6 @@ mod tests {
                 ))),
             ]),
         );
-
         assert_eq!(
             router
                 .try_route(&tx)
@@ -10405,7 +9773,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn asset_home_proved_coverage_overlay_permission_routes_to_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -10435,7 +9802,6 @@ mod tests {
                 permission, bob_id,
             ))]),
         );
-
         assert_eq!(
             router
                 .try_route(&tx)
@@ -10443,7 +9809,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn asset_home_proved_coverage_overlay_conflicting_permissions_route_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -10484,7 +9849,6 @@ mod tests {
                 )),
             ]),
         );
-
         assert_eq!(
             router
                 .try_route(&tx)
@@ -10492,7 +9856,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn asset_home_proved_state_coverage_overlay_mint_global_binding_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -10539,7 +9902,6 @@ mod tests {
         );
         bind_asset_definition_alias(&mut state, &asset_definition, "pkr#paynet");
         let state_view = state.view();
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -10564,7 +9926,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn asset_home_proved_state_coverage_overlay_permission_uses_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -10614,7 +9975,6 @@ mod tests {
         );
         bind_asset_definition_alias(&mut state, &asset_definition, "pkr#paynet");
         let state_view = state.view();
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -10639,7 +9999,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn asset_home_proved_state_coverage_overlay_state_resolved_conflict_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -10692,7 +10051,6 @@ mod tests {
         );
         bind_asset_definition_alias(&mut state, &asset_definition, "pkr#paynet");
         let state_view = state.view();
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state_view)
@@ -10711,7 +10069,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn asset_home_proved_settlement_coverage_overlay_dvp_routes_to_common_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -10751,7 +10108,6 @@ mod tests {
                 ),
             ))]),
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -10765,7 +10121,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn asset_home_proved_settlement_coverage_overlay_pvp_cross_dataspace_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -10806,7 +10161,6 @@ mod tests {
                 ),
             ))]),
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -10820,7 +10174,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn asset_home_proved_settlement_overlay_dvp_global_bindings_route_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -10891,7 +10244,6 @@ mod tests {
         bind_asset_definition_alias(&mut state, &delivery_definition, "bond#paynet");
         bind_asset_definition_alias(&mut state, &payment_definition, "cash#paynet");
         let state_view = state.view();
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -10916,7 +10268,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn asset_home_proved_account_coverage_overlay_permission_routes_by_destination_account() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -10964,7 +10315,6 @@ mod tests {
                 bob_id,
             ))]),
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -10978,7 +10328,6 @@ mod tests {
             RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2))
         );
     }
-
     #[test]
     fn contract_instance_activation_routes_to_contract_address_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -11012,7 +10361,6 @@ mod tests {
             alice_keypair.private_key(),
             vec![InstructionBox::from(instruction)],
         );
-
         assert_eq!(
             router
                 .try_route(&tx)
@@ -11020,7 +10368,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn atomic_contract_deployment_routes_to_new_address_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -11058,7 +10405,6 @@ mod tests {
             alice_keypair.private_key(),
             vec![InstructionBox::from(instruction)],
         );
-
         assert_eq!(
             router
                 .try_route(&tx)
@@ -11066,7 +10412,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn smart_contract_deploy_rule_with_target_dataspace_builds_native_amx_plan() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -11117,7 +10462,6 @@ mod tests {
                 ),
             ],
         );
-
         let plan = router
             .try_route_plan(&tx)
             .expect("contract deploy rule and target dataspace should build a native AMX plan");
@@ -11142,7 +10486,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn smart_contract_deploy_rule_with_universal_target_builds_native_amx_plan() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -11191,7 +10534,6 @@ mod tests {
                 ),
             ],
         );
-
         let plan = router
             .try_route_plan(&tx)
             .expect("universal contract deploy rule should build a native AMX plan");
@@ -11210,7 +10552,6 @@ mod tests {
             )]
         );
     }
-
     #[test]
     fn musubi_alias_registration_uses_universal_amx_with_home_dataspace_participant() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -11245,7 +10586,6 @@ mod tests {
             alice_keypair.private_key(),
             vec![InstructionBox::from(instruction)],
         );
-
         let plan = router
             .try_route_plan(&tx)
             .expect("Musubi alias route must resolve");
@@ -11264,7 +10604,6 @@ mod tests {
             )]
         );
     }
-
     #[test]
     fn musubi_release_publication_uses_universal_amx_with_home_dataspace_participant() {
         use iroha_data_model::{
@@ -11277,7 +10616,6 @@ mod tests {
                 MusubiVerificationLockV1,
             },
         };
-
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
         let lane_id = LaneId::new(2);
@@ -11340,7 +10678,6 @@ mod tests {
             alice_keypair.private_key(),
             vec![InstructionBox::from(instruction)],
         );
-
         let plan = router
             .try_route_plan(&tx)
             .expect("Musubi publication route must resolve");
@@ -11359,7 +10696,6 @@ mod tests {
             )]
         );
     }
-
     #[test]
     fn untargeted_authority_transaction_routes_to_single_scope_dataspace_with_state() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -11388,12 +10724,10 @@ mod tests {
                 code,
             })],
         );
-
         let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
         scope_entry.ensure_dataspace(dataspace_id);
         let state = state_with_account_scope_entries(&[(alice_id, scope_entry)], catalog);
         state.nexus.write().lane_catalog = router.lane_catalog.as_ref().clone();
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -11407,7 +10741,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn untargeted_universal_authority_transaction_uses_default_lane_with_state() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -11431,13 +10764,11 @@ mod tests {
                 code,
             })],
         );
-
         let mut state = blank_state();
         let account = Account::new(alice_id.clone()).build(&alice_id);
         let (account_id, account) = account.into_key_value();
         state.world.accounts.insert(account_id, account);
         install_router_nexus(&state, &router);
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
@@ -11445,7 +10776,6 @@ mod tests {
             RoutingDecision::new(default_lane, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn matches_set_key_value_rule_without_underscores() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -11462,7 +10792,6 @@ mod tests {
                 },
             }],
         };
-
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let instruction = SetKeyValue::account(
@@ -11475,19 +10804,16 @@ mod tests {
             alice_keypair.private_key(),
             vec![InstructionBox::from(instruction)],
         );
-
         let state = blank_state();
         install_router_nexus(&state, &router);
         let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
-
     #[test]
     fn matches_account_alias_scope_rule() {
         let (uae_id, uae_keypair) = gen_account_in("uae");
         let (bank_id, bank_keypair) = gen_account_in("banka");
         let catalog = DataSpaceCatalog::default();
-
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
             default_dataspace: DataSpaceId::UNIVERSAL,
@@ -11501,10 +10827,8 @@ mod tests {
                 },
             }],
         };
-
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
-
         let uae_tx = sample_transaction(
             &uae_id,
             uae_keypair.private_key(),
@@ -11519,7 +10843,6 @@ mod tests {
                 DomainId::try_new("bank-no-match", "universal").expect("domain id"),
             )))],
         );
-
         let state = state_with_account_aliases(
             &[
                 (
@@ -11536,17 +10859,14 @@ mod tests {
         install_router_nexus(&state, &router);
         let uae_decision = router.route_with_view(&uae_tx, &state.view());
         let bank_decision = router.route_with_view(&bank_tx, &state.view());
-
         assert_eq!(uae_decision.lane_id, LaneId::new(1));
         assert_eq!(bank_decision.lane_id, LaneId::SINGLE);
     }
-
     #[test]
     fn matches_transfer_destination_alias_scope_rule() {
         let (sender_id, sender_keypair) = gen_account_in("banka");
         let (receiver_id, _) = gen_account_in("acme");
         let catalog = DataSpaceCatalog::default();
-
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
             default_dataspace: DataSpaceId::UNIVERSAL,
@@ -11560,10 +10880,8 @@ mod tests {
                 },
             }],
         };
-
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
-
         let asset_definition: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("uae", "universal").unwrap(),
@@ -11576,7 +10894,6 @@ mod tests {
             sender_keypair.private_key(),
             vec![InstructionBox::from(transfer)],
         );
-
         let state = state_with_account_aliases(
             &[
                 (
@@ -11594,7 +10911,6 @@ mod tests {
         let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
-
     #[test]
     fn matches_transferred_domain_scope_rule() {
         let (sender_id, sender_keypair) = gen_account_in("banka");
@@ -11612,7 +10928,6 @@ mod tests {
                 },
             }],
         };
-
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
         let transfer = Transfer::domain(
@@ -11625,13 +10940,11 @@ mod tests {
             sender_keypair.private_key(),
             vec![InstructionBox::from(transfer)],
         );
-
         let state = blank_state();
         install_router_nexus(&state, &router);
         let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
-
     #[test]
     fn routes_domain_write_to_target_dataspace_without_explicit_rule() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -11655,13 +10968,11 @@ mod tests {
                 DomainId::try_new("merchant", "acme").expect("domain id"),
             )))],
         );
-
         assert_eq!(
             router.try_route(&tx).expect("domain route must resolve"),
             RoutingDecision::new(LaneId::new(2), dataspace_id)
         );
     }
-
     #[test]
     fn routes_asset_transfer_to_asset_definition_dataspace_without_explicit_rule() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -11710,14 +11021,12 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
                 .expect("opaque asset transfer should defer to state"),
             None
         );
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
@@ -11725,7 +11034,6 @@ mod tests {
             RoutingDecision::new(LaneId::new(2), dataspace_id)
         );
     }
-
     #[test]
     fn opaque_asset_transfer_defers_to_state_for_asset_definition_dataspace() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -11776,14 +11084,12 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
                 .expect("opaque asset transfer should defer to state"),
             None
         );
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
@@ -11791,7 +11097,6 @@ mod tests {
             RoutingDecision::new(LaneId::new(2), dataspace_id)
         );
     }
-
     #[test]
     fn canonical_asset_transfer_uses_stored_owning_domain_dataspace() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -11859,7 +11164,6 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
@@ -11867,7 +11171,6 @@ mod tests {
             RoutingDecision::new(LaneId::new(2), dataspace_id)
         );
     }
-
     #[test]
     fn dataspace_restricted_asset_transfer_ignores_universal_account_fallback_scope() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -11931,7 +11234,6 @@ mod tests {
             &receiver_id,
             account_alias("receiver@hbl.sbp", &dataspace_catalog),
         );
-
         let state_view = state.view();
         for account_id in [&sender_id, &receiver_id] {
             assert_eq!(
@@ -11944,7 +11246,6 @@ mod tests {
                 vec![DataSpaceId::UNIVERSAL, dataspace_id]
             );
         }
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state_view)
@@ -11952,7 +11253,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn asset_definition_registration_routes_by_declared_alias_dataspace() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -12000,7 +11300,6 @@ mod tests {
             sender_keypair.private_key(),
             vec![InstructionBox::from(Register::asset_definition(definition))],
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -12008,7 +11307,6 @@ mod tests {
             Some(RoutingDecision::new(lane_id, dataspace_id))
         );
     }
-
     #[test]
     fn asset_definition_registration_opaque_global_without_alias_routes_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -12050,7 +11348,6 @@ mod tests {
             sender_keypair.private_key(),
             vec![InstructionBox::from(Register::asset_definition(definition))],
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -12058,7 +11355,6 @@ mod tests {
             Some(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
         );
     }
-
     #[test]
     fn asset_home_extra_coverage_registration_universal_alias_routes_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -12100,7 +11396,6 @@ mod tests {
             sender_keypair.private_key(),
             vec![InstructionBox::from(Register::asset_definition(definition))],
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -12108,7 +11403,6 @@ mod tests {
             Some(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL))
         );
     }
-
     #[test]
     fn asset_home_extra_coverage_opaque_restricted_without_alias_uses_default_route() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -12155,7 +11449,6 @@ mod tests {
             vec![InstructionBox::from(Register::asset_definition(definition))],
         );
         let state = state_with_asset_definitions(Vec::new(), dataspace_catalog, lane_catalog);
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -12169,7 +11462,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn asset_home_more_coverage_alias_home_without_lane_returns_no_lane_error() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -12203,17 +11495,14 @@ mod tests {
             sender_keypair.private_key(),
             vec![InstructionBox::from(Register::asset_definition(definition))],
         );
-
         let err = router
             .try_route_without_state(&tx)
             .expect_err("alias home without lane should fail");
-
         assert_eq!(
             err,
             RoutingResolveError::NoLaneForDataspace { dataspace_id }
         );
     }
-
     #[test]
     fn asset_definition_registration_routes_mixed_declared_alias_dataspaces_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -12280,17 +11569,14 @@ mod tests {
                 InstructionBox::from(Register::asset_definition(aed)),
             ],
         );
-
         let route = router
             .try_route(&tx)
             .expect("mixed declared aliases should route to AMX coordinator");
-
         assert_eq!(
             route,
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn global_asset_transfer_alias_binding_routes_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -12354,7 +11640,6 @@ mod tests {
             },
         );
         scope_account_to_dataspace(&mut state, &sender_id, dataspace_id);
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -12368,7 +11653,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn asset_definition_permission_grant_uses_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -12443,7 +11727,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn asset_definition_permission_revoke_uses_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -12505,7 +11788,6 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -12519,7 +11801,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn asset_home_coverage_mint_global_binding_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -12578,7 +11859,6 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -12592,7 +11872,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn global_asset_mint_to_private_scoped_account_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -12652,7 +11931,6 @@ mod tests {
             },
         );
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -12666,7 +11944,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn global_asset_burn_from_private_scoped_account_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -12713,7 +11990,6 @@ mod tests {
         );
         bind_asset_definition_alias(&mut state, &asset_definition, "pkr#paynet");
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -12727,7 +12003,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn global_asset_mint_with_projected_private_home_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -12774,7 +12049,6 @@ mod tests {
             lane_catalog,
         );
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
@@ -12782,7 +12056,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn global_asset_burn_with_projected_private_home_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -12829,7 +12102,6 @@ mod tests {
             lane_catalog,
         );
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
@@ -12837,7 +12109,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn global_asset_transfer_with_projected_private_home_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -12886,7 +12157,6 @@ mod tests {
             lane_catalog,
         );
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
@@ -12894,7 +12164,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn explicit_dataspace_scoped_mint_routes_to_private_bucket() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -12945,7 +12214,6 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -12959,7 +12227,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn explicit_dataspace_scoped_transfer_routes_to_private_bucket() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -13012,7 +12279,6 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-
         assert_eq!(
             router.try_route_without_state(&tx).expect(
                 "explicit scoped transfer without state should defer for definition policy"
@@ -13026,7 +12292,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn global_asset_explicit_dataspace_scoped_mint_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -13077,7 +12342,6 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-
         assert_eq!(
             router.try_route_without_state(&tx).expect(
                 "explicit global asset mint without state should defer for definition policy"
@@ -13091,7 +12355,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn global_asset_explicit_dataspace_scoped_burn_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -13141,7 +12404,6 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
@@ -13149,7 +12411,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn global_asset_explicit_dataspace_scoped_transfer_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -13201,7 +12462,6 @@ mod tests {
             dataspace_catalog,
             lane_catalog,
         );
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
@@ -13209,7 +12469,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn global_asset_zk_registration_from_private_authority_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -13248,7 +12507,6 @@ mod tests {
             lane_catalog,
         );
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
-
         let instruction = InstructionBox::from(RegisterZkAsset::new(asset_definition, None, None));
         let tx = sample_transaction(&alice_id, alice_keypair.private_key(), vec![instruction]);
         assert_eq!(
@@ -13266,7 +12524,6 @@ mod tests {
             "registration should route to universal"
         );
     }
-
     #[test]
     fn native_amx_participants_ignore_private_scopes_for_global_asset_write() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -13309,7 +12566,6 @@ mod tests {
         );
         bind_asset_definition_alias(&mut state, &asset_definition, "pkr#paynet");
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
-
         let view = state.view();
         assert_eq!(
             native_amx_participant_dataspaces_with_world(
@@ -13320,7 +12576,6 @@ mod tests {
             Vec::<DataSpaceId>::new()
         );
     }
-
     #[test]
     fn native_amx_participants_preserve_restricted_asset_private_scope() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -13362,7 +12617,6 @@ mod tests {
         );
         bind_asset_definition_alias(&mut state, &asset_definition, "pkr#paynet");
         scope_account_to_dataspace(&mut state, &alice_id, dataspace_id);
-
         let view = state.view();
         assert_eq!(
             native_amx_participant_dataspaces_with_world(
@@ -13373,7 +12627,6 @@ mod tests {
             vec![dataspace_id]
         );
     }
-
     fn fx_corridor_fixture(
         source_dataspace: DataSpaceId,
         destination_dataspace: DataSpaceId,
@@ -13445,7 +12698,6 @@ mod tests {
             InstructionBox::from(SettlementInstructionBox::SettleFxCorridor(settlement)),
         )
     }
-
     fn install_fx_corridor_policy(state: &crate::state::State, corridor: FxCorridorPolicy) {
         let mut registry = FxCorridorPolicyRegistry::default();
         registry.upsert(corridor);
@@ -13458,7 +12710,6 @@ mod tests {
             ));
         world.commit();
     }
-
     fn fx_route_plan_results(
         router: &ConfigLaneRouter,
         tx: &dyn TransactionRoutingView,
@@ -13481,7 +12732,6 @@ mod tests {
         );
         (queued_plan, block_plan)
     }
-
     fn expected_fx_plan(
         source_lane: LaneId,
         source_dataspace: DataSpaceId,
@@ -13502,7 +12752,6 @@ mod tests {
             ],
         )
     }
-
     #[test]
     fn fx_corridor_non_deploy_first_match_does_not_add_rule_dataspaces() {
         let (authority, authority_keypair) = gen_account_in("wonderland");
@@ -13603,11 +12852,9 @@ mod tests {
             destination_dataspace,
         );
         let (queued_plan, block_plan) = fx_route_plan_results(&router, &tx, corridor, world);
-
         assert_eq!(queued_plan, Ok(expected.clone()));
         assert_eq!(block_plan, Ok(expected));
     }
-
     #[test]
     fn fx_corridor_universal_deploy_rule_does_not_add_policy_participant() {
         let (authority, authority_keypair) = gen_account_in("wonderland");
@@ -13667,11 +12914,9 @@ mod tests {
         );
         let (queued_plan, block_plan) =
             fx_route_plan_results(&router, &tx, corridor, crate::state::World::default());
-
         assert_eq!(queued_plan, Ok(expected.clone()));
         assert_eq!(block_plan, Ok(expected));
     }
-
     #[test]
     fn fx_corridor_deploy_policy_participant_is_deduplicated_from_intrinsic_participants() {
         let (authority, authority_keypair) = gen_account_in("wonderland");
@@ -13731,11 +12976,9 @@ mod tests {
         );
         let (queued_plan, block_plan) =
             fx_route_plan_results(&router, &tx, corridor, crate::state::World::default());
-
         assert_eq!(queued_plan, Ok(expected.clone()));
         assert_eq!(block_plan, Ok(expected));
     }
-
     #[test]
     fn fx_corridor_expired_sns_only_alias_is_excluded_with_queue_block_parity() {
         let (authority, authority_keypair) = gen_account_in("wonderland");
@@ -13791,7 +13034,6 @@ mod tests {
             corridor,
             world_with_dynamic_dataspace_until("alpha", &authority, 0),
         );
-
         assert_eq!(queued_plan, Ok(expected.clone()));
         assert_eq!(block_plan, Ok(expected));
         assert!(
@@ -13802,7 +13044,6 @@ mod tests {
                 .any(|leg| leg.route.dataspace_id == expired_dataspace)
         );
     }
-
     #[test]
     fn fx_corridor_deploy_policy_without_canonical_lane_fails_closed_with_parity() {
         let (authority, authority_keypair) = gen_account_in("wonderland");
@@ -13882,11 +13123,9 @@ mod tests {
         let expected_error = RoutingResolveError::NoLaneForDataspace {
             dataspace_id: deploy_dataspace,
         };
-
         assert_eq!(queued_plan, Err(expected_error.clone()));
         assert_eq!(block_plan, Err(expected_error));
     }
-
     #[test]
     fn fx_corridor_plan_includes_smart_contract_deploy_policy_participant() {
         let (authority, authority_keypair) = gen_account_in("wonderland");
@@ -13986,7 +13225,6 @@ mod tests {
                 ),
             ],
         );
-
         assert_eq!(
             router
                 .try_route_plan_with_view(&tx, &view)
@@ -14004,7 +13242,6 @@ mod tests {
             expected
         );
     }
-
     #[test]
     fn fx_corridor_state_view_plan_includes_active_sns_only_dataspace() {
         let (authority, authority_keypair) = gen_account_in("wonderland");
@@ -14079,12 +13316,10 @@ mod tests {
                 ),
             ],
         );
-
         assert_eq!(queued_plan, expected);
         assert_eq!(block_plan, expected);
         assert_eq!(queued_plan.digest(), block_plan.digest());
     }
-
     #[test]
     fn fx_corridor_full_plan_routes_native_amx_from_governed_policy() {
         let (authority, authority_keypair) = gen_account_in("wonderland");
@@ -14216,7 +13451,6 @@ mod tests {
                 settlement_instruction.clone(),
             ],
         );
-
         let state = blank_state();
         install_router_nexus(&state, &router);
         let mut registry = FxCorridorPolicyRegistry::default();
@@ -14228,7 +13462,6 @@ mod tests {
             );
             world.commit();
         }
-
         let expected = RoutingPlan::native_amx(
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             vec![
@@ -14246,7 +13479,6 @@ mod tests {
                 ),
             ],
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -14289,7 +13521,6 @@ mod tests {
             .expect("world-backed FX plan should resolve"),
             expected
         );
-
         let mut strict_metadata = Metadata::default();
         strict_metadata.insert(
             AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
@@ -14311,7 +13542,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn asset_home_coverage_burn_global_binding_routes_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -14370,7 +13600,6 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -14384,7 +13613,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn asset_home_coverage_modify_asset_metadata_permission_uses_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -14446,7 +13674,6 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -14460,7 +13687,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn asset_home_coverage_unregister_asset_definition_permission_uses_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -14522,7 +13748,6 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -14536,7 +13761,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn asset_home_extra_coverage_mint_permissions_use_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -14588,7 +13812,6 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-
         let permissions = [
             Permission::from(CanMintAssetWithDefinition {
                 asset_definition: asset_definition.clone(),
@@ -14621,7 +13844,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn asset_home_extra_coverage_burn_permission_uses_stored_alias_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -14683,7 +13905,6 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -14697,7 +13918,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn asset_home_more_coverage_modify_definition_metadata_permission_uses_stored_alias_dataspace()
     {
@@ -14760,7 +13980,6 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -14774,7 +13993,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn confidential_policy_permission_uses_exact_asset_definition_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -14836,7 +14054,6 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -14850,7 +14067,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn asset_home_more_coverage_revoke_modify_definition_metadata_permission_uses_stored_alias() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -14912,7 +14128,6 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -14926,7 +14141,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn known_opaque_global_asset_without_home_alias_routes_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -14985,7 +14199,6 @@ mod tests {
             .world
             .account_scope_directory
             .insert(sender_id.clone(), scope_entry);
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
@@ -14993,7 +14206,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn known_opaque_global_asset_mint_without_home_alias_routes_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -15049,7 +14261,6 @@ mod tests {
             .world
             .account_scope_directory
             .insert(sender_id.clone(), scope_entry);
-
         assert_eq!(
             router
                 .try_route_with_state(&tx, &state)
@@ -15057,7 +14268,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn known_opaque_global_asset_mint_with_stored_private_home_alias_routes_to_universal() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -15121,7 +14331,6 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -15135,7 +14344,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn known_opaque_global_asset_mint_ignores_authority_account_rule_override() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -15199,7 +14407,6 @@ mod tests {
             .world
             .account_scope_directory
             .insert(sender_id.clone(), scope_entry);
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -15220,7 +14427,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn known_opaque_global_asset_transfer_ignores_authority_account_rule_override() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -15286,7 +14492,6 @@ mod tests {
             .world
             .account_scope_directory
             .insert(sender_id.clone(), scope_entry);
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -15307,7 +14512,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn known_opaque_global_asset_burn_ignores_authority_account_rule_override() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -15371,7 +14575,6 @@ mod tests {
             .world
             .account_scope_directory
             .insert(sender_id.clone(), scope_entry);
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -15392,7 +14595,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn opaque_asset_transfer_uses_single_lane_legacy_dataspace_fallback() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -15458,7 +14660,6 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
@@ -15466,7 +14667,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, dataspace_id)
         );
     }
-
     #[test]
     fn opaque_asset_transfer_routes_to_sender_single_scope_when_asset_definition_unresolved() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -15506,7 +14706,6 @@ mod tests {
             sender_keypair.private_key(),
             vec![InstructionBox::from(transfer)],
         );
-
         let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
         scope_entry.ensure_dataspace(dataspace_id);
         let state = state_with_account_scope_entries(
@@ -15514,7 +14713,6 @@ mod tests {
             dataspace_catalog,
         );
         state.nexus.write().lane_catalog = lane_catalog;
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -15528,7 +14726,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn opaque_asset_transfer_with_universal_and_private_account_scope_uses_default_route() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -15569,7 +14766,6 @@ mod tests {
             sender_keypair.private_key(),
             vec![InstructionBox::from(transfer)],
         );
-
         let mut state = blank_state();
         state.nexus.write().dataspace_catalog = dataspace_catalog;
         state.nexus.write().lane_catalog = lane_catalog;
@@ -15591,7 +14787,6 @@ mod tests {
         let mut bindings = crate::nexus::space_directory::UaidDataspaceBindings::default();
         bindings.bind_account(dataspace_id, account_id);
         state.world.uaid_dataspaces.insert(uaid, bindings);
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -15605,7 +14800,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn opaque_asset_transfer_with_multiple_private_account_bindings_uses_default_route() {
         let (sender_id, sender_keypair) = gen_account_in("wonderland");
@@ -15648,7 +14842,6 @@ mod tests {
             sender_keypair.private_key(),
             vec![InstructionBox::from(transfer)],
         );
-
         let mut state = blank_state();
         state.nexus.write().dataspace_catalog = dataspace_catalog;
         state.nexus.write().lane_catalog = lane_catalog;
@@ -15671,7 +14864,6 @@ mod tests {
         bindings.bind_account(first_dataspace, account_id.clone());
         bindings.bind_account(second_dataspace, account_id.clone());
         state.world.uaid_dataspaces.insert(uaid, bindings);
-
         assert_eq!(
             state.view().world().dataspace_for_account(&account_id),
             Some(first_dataspace)
@@ -15683,7 +14875,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn explicit_lane_rule_infers_target_dataspace_for_domain_write() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -15715,13 +14906,11 @@ mod tests {
                 DomainId::try_new("merchant", "acme").expect("domain id"),
             )))],
         );
-
         assert_eq!(
             router.try_route(&tx).expect("domain route must resolve"),
             RoutingDecision::new(LaneId::new(3), dataspace_id)
         );
     }
-
     #[test]
     fn mixed_domain_write_targets_across_dataspaces_build_native_amx_plan() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -15752,7 +14941,6 @@ mod tests {
                 ))),
             ],
         );
-
         let plan = router
             .try_route_plan(&tx)
             .expect("mixed domain writes should build a native AMX plan");
@@ -15777,7 +14965,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn mixed_native_and_contract_batch_preserves_all_dataspace_targets() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -15815,14 +15002,12 @@ mod tests {
                 ),
             ],
         );
-
         assert_eq!(
             router
                 .try_route_plan(&tx)
                 .expect("mixed batch must retain native and contract targets"),
             expected
         );
-
         let state = blank_state();
         install_router_nexus(&state, &router);
         let state_view = state.view();
@@ -15837,7 +15022,6 @@ mod tests {
             .expect("world-backed mixed-batch routing must retain every target"),
             expected
         );
-
         let mut metadata = Metadata::default();
         metadata.insert(
             AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
@@ -15859,7 +15043,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn primary_alias_compare_and_set_across_dataspaces_builds_native_amx_plan() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -15890,7 +15073,6 @@ mod tests {
             authority_keypair.private_key(),
             vec![InstructionBox::from(instruction.clone())],
         );
-
         let expected_plan = RoutingPlan::native_amx(
             RoutingDecision::new(LaneId::new(2), first_dataspace),
             vec![
@@ -15910,7 +15092,6 @@ mod tests {
                 .expect("cross-dataspace primary alias change must route through native AMX"),
             expected_plan
         );
-
         let reversed = CompareAndSetPrimaryAccountAlias::new(
             authority_id.clone(),
             Some(replacement),
@@ -15927,7 +15108,6 @@ mod tests {
                 .expect("alias ordering must not change the native AMX route"),
             expected_plan
         );
-
         let state = blank_state();
         install_router_nexus(&state, &router);
         assert_eq!(
@@ -15936,7 +15116,6 @@ mod tests {
                 .expect("world-aware routing must preserve both alias dataspaces"),
             expected_plan
         );
-
         let proved_tx = sample_executable_transaction(
             &authority_id,
             authority_keypair.private_key(),
@@ -15949,7 +15128,6 @@ mod tests {
             expected_plan
         );
     }
-
     #[test]
     fn primary_alias_compare_and_set_same_dataspace_stays_single_route() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -15976,14 +15154,12 @@ mod tests {
             authority_keypair.private_key(),
             vec![InstructionBox::from(instruction)],
         );
-
         assert_eq!(
             router
                 .try_route_plan(&tx)
                 .expect("same-dataspace alias change must remain local"),
             RoutingPlan::single(RoutingDecision::new(LaneId::new(2), dataspace))
         );
-
         let empty = CompareAndSetPrimaryAccountAlias::new(authority_id.clone(), None, None);
         let empty_tx = sample_transaction(
             &authority_id,
@@ -15997,7 +15173,6 @@ mod tests {
             RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL,))
         );
     }
-
     #[test]
     fn strict_amx_policy_rejects_cross_dataspace_primary_alias_compare_and_set() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -16032,7 +15207,6 @@ mod tests {
             vec![InstructionBox::from(instruction)],
             metadata,
         );
-
         assert_eq!(
             router.try_route_plan(&tx),
             Err(
@@ -16043,7 +15217,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn mixed_domain_write_targets_keep_object_dataspaces_over_rule_dataspace() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -16082,7 +15255,6 @@ mod tests {
                 ))),
             ],
         );
-
         let plan = router
             .try_route_plan(&tx)
             .expect("matched rules must not override AMX participant dataspaces");
@@ -16097,7 +15269,6 @@ mod tests {
             vec![first_dataspace, second_dataspace]
         );
     }
-
     #[test]
     fn strict_amx_policy_rejects_mixed_domain_write_targets() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -16134,7 +15305,6 @@ mod tests {
             ],
             metadata,
         );
-
         assert_eq!(
             router.try_route(&tx),
             Err(
@@ -16145,7 +15315,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn strict_amx_policy_rejects_mixed_proved_overlay_write_targets() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -16182,7 +15351,6 @@ mod tests {
             ]),
             metadata,
         );
-
         assert_eq!(
             router.try_route(&tx),
             Err(
@@ -16193,7 +15361,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn strict_amx_policy_value_is_trimmed_and_case_insensitive() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -16230,7 +15397,6 @@ mod tests {
             ],
             metadata,
         );
-
         assert_eq!(
             router.try_route(&tx),
             Err(
@@ -16241,7 +15407,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn strict_amx_policy_rejects_mixed_dataspace_scoped_permissions() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -16288,7 +15453,6 @@ mod tests {
             ],
             metadata,
         );
-
         assert_eq!(
             router.try_route(&tx),
             Err(RoutingResolveError::ConflictingDataspaceScopedPermissions {
@@ -16297,7 +15461,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn mixed_dataspace_scoped_permissions_without_universal_lane_fail_closed() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -16337,7 +15500,6 @@ mod tests {
                 )),
             ],
         );
-
         assert_eq!(
             router.try_route(&tx),
             Err(RoutingResolveError::NoLaneForDataspace {
@@ -16345,7 +15507,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn mixed_domain_write_targets_do_not_require_universal_lane() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -16375,7 +15536,6 @@ mod tests {
                 ))),
             ],
         );
-
         let plan = router
             .try_route_plan(&tx)
             .expect("native AMX should coordinate on a participant route");
@@ -16388,13 +15548,11 @@ mod tests {
         );
         assert_eq!(plan.participants.len(), 2);
     }
-
     #[test]
     fn account_rule_takes_precedence_over_transfer_destination_rule() {
         let (uae_sender_id, uae_sender_keypair) = gen_account_in("uae");
         let (bank_sender_id, bank_sender_keypair) = gen_account_in("banka");
         let (acme_receiver_id, _) = gen_account_in("acme");
-
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
             default_dataspace: DataSpaceId::UNIVERSAL,
@@ -16419,10 +15577,8 @@ mod tests {
                 },
             ],
         };
-
         let lane_catalog = catalog_with_lanes(&[LaneId::SINGLE, LaneId::new(1), LaneId::new(2)]);
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
-
         let asset_definition: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
                 DomainId::try_new("uae", "universal").unwrap(),
@@ -16438,7 +15594,6 @@ mod tests {
             1_u32,
             acme_receiver_id.clone(),
         );
-
         let uae_tx = sample_transaction(
             &uae_sender_id,
             uae_sender_keypair.private_key(),
@@ -16449,7 +15604,6 @@ mod tests {
             bank_sender_keypair.private_key(),
             vec![InstructionBox::from(bank_transfer)],
         );
-
         let catalog = DataSpaceCatalog::default();
         let state = state_with_account_aliases(
             &[
@@ -16474,13 +15628,11 @@ mod tests {
         assert_eq!(uae_decision.lane_id, LaneId::new(2));
         assert_eq!(bank_decision.lane_id, LaneId::new(1));
     }
-
     #[test]
     fn matches_dataspace_root_account_alias_scope_rule() {
         let (dataspace_id, dataspace_keypair) = gen_account_in("wonderland");
         let (domain_id, domain_keypair) = gen_account_in("wonderland");
         let catalog = dataspace_catalog(&[(DataSpaceId::new(10), "paynet")]);
-
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
             default_dataspace: DataSpaceId::UNIVERSAL,
@@ -16494,13 +15646,11 @@ mod tests {
                 },
             }],
         };
-
         let lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(1), DataSpaceId::new(10)),
         ]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog);
-
         let dataspace_tx = sample_transaction(
             &dataspace_id,
             dataspace_keypair.private_key(),
@@ -16515,7 +15665,6 @@ mod tests {
                 DomainId::try_new("banka-no-match", "universal").expect("domain id"),
             )))],
         );
-
         let state = state_with_account_aliases(
             &[
                 (
@@ -16530,7 +15679,6 @@ mod tests {
             catalog,
         );
         install_router_nexus(&state, &router);
-
         assert_eq!(
             router.route_with_view(&dataspace_tx, &state.view()),
             RoutingDecision::new(LaneId::new(1), DataSpaceId::new(10))
@@ -16540,7 +15688,6 @@ mod tests {
             RoutingDecision::new(LaneId::new(1), DataSpaceId::new(10))
         );
     }
-
     #[test]
     fn try_route_with_view_resolves_against_same_state_catalog_snapshot() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
@@ -16551,7 +15698,6 @@ mod tests {
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (lane_id, dataspace_id),
         ]);
-
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
             default_dataspace: DataSpaceId::UNIVERSAL,
@@ -16565,7 +15711,6 @@ mod tests {
                 },
             }],
         };
-
         let stale_router_lane_catalog =
             catalog_with_lane_dataspaces(&[(LaneId::SINGLE, DataSpaceId::UNIVERSAL)]);
         let router = ConfigLaneRouter::new(
@@ -16592,19 +15737,15 @@ mod tests {
             nexus.routing_policy = router.policy.as_ref().clone();
             nexus.lane_catalog = state_lane_catalog;
         }
-
         let decision = router
             .try_route_with_view(&tx, &state.view())
             .expect("state-aware routing must resolve against the same state catalogs it matched");
-
         assert_eq!(decision, RoutingDecision::new(lane_id, dataspace_id));
     }
-
     #[test]
     fn legacy_bare_domain_account_scope_does_not_match() {
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
         let catalog = dataspace_catalog(&[(DataSpaceId::new(10), "paynet")]);
-
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
             default_dataspace: DataSpaceId::UNIVERSAL,
@@ -16618,13 +15759,11 @@ mod tests {
                 },
             }],
         };
-
         let lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (LaneId::new(1), DataSpaceId::new(10)),
         ]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog);
-
         let tx = sample_transaction(
             &authority_id,
             authority_keypair.private_key(),
@@ -16639,13 +15778,11 @@ mod tests {
             )],
             catalog,
         );
-
         assert_eq!(
             router.route_with_view(&tx, &state.view()),
             RoutingDecision::default()
         );
     }
-
     #[test]
     fn resolve_query_routing_decision_matches_authority_rule() {
         let (alice_id, _) = gen_account_in("wonderland");
@@ -16679,7 +15816,6 @@ mod tests {
             },
         ])
         .expect("dataspace catalog");
-
         let decision = resolve_query_routing_decision(
             &policy,
             &lane_catalog,
@@ -16688,13 +15824,11 @@ mod tests {
             None,
         )
         .expect("query route must resolve");
-
         assert_eq!(
             decision,
             RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2))
         );
     }
-
     #[test]
     fn resolve_query_routing_decision_ignores_instruction_matchers() {
         let (alice_id, _) = gen_account_in("wonderland");
@@ -16728,7 +15862,6 @@ mod tests {
             },
         ])
         .expect("dataspace catalog");
-
         let decision = resolve_query_routing_decision(
             &policy,
             &lane_catalog,
@@ -16737,13 +15870,11 @@ mod tests {
             None,
         )
         .expect("query route must resolve");
-
         assert_eq!(
             decision,
             RoutingDecision::new(LaneId::new(0), DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn resolve_query_routing_decision_rejects_autoscale_owned_default_lane_without_state() {
         let (alice_id, _) = gen_account_in("wonderland");
@@ -16756,7 +15887,6 @@ mod tests {
             default_lane_config(),
             autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
         ]);
-
         assert_eq!(
             resolve_query_routing_decision(
                 &policy,
@@ -16771,7 +15901,6 @@ mod tests {
             "state-free query routing must not accept autoscale-owned default lanes"
         );
     }
-
     #[test]
     fn resolve_query_routing_decision_rejects_autoscale_owned_rule_lane_without_state() {
         let (alice_id, _) = gen_account_in("wonderland");
@@ -16792,7 +15921,6 @@ mod tests {
             default_lane_config(),
             autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 7),
         ]);
-
         assert_eq!(
             resolve_query_routing_decision(
                 &policy,
@@ -16807,7 +15935,6 @@ mod tests {
             "state-free query routing must not accept autoscale-owned explicit rule lanes"
         );
     }
-
     #[test]
     fn dataspace_scoped_permission_grant_routes_by_permission_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -16849,13 +15976,10 @@ mod tests {
                 alice_id.clone(),
             ))],
         );
-
         let decision = router
             .try_route(&tx)
             .expect("dataspace-scoped permission should resolve");
-
         assert_eq!(decision, RoutingDecision::new(lane, dataspace));
-
         let uaid_scoped_tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
@@ -16875,7 +15999,6 @@ mod tests {
                 .expect("UAID-scoped permission should resolve"),
             RoutingDecision::new(lane, dataspace),
         );
-
         let domain_scoped_tx = sample_transaction(
             &alice_id,
             alice_keypair.private_key(),
@@ -16893,7 +16016,6 @@ mod tests {
                 .expect("account-domain-scoped permission should resolve"),
             RoutingDecision::new(lane, dataspace),
         );
-
         let role_id: RoleId = "hbl_manifest_publishers".parse().expect("role id");
         let role_scoped_tx = sample_transaction(
             &alice_id,
@@ -16913,7 +16035,6 @@ mod tests {
             Some(RoutingDecision::new(lane, dataspace)),
         );
     }
-
     #[test]
     fn space_directory_manifest_writes_route_by_manifest_dataspace() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -16947,7 +16068,6 @@ mod tests {
             })],
         );
         let expected = RoutingDecision::new(lane, dataspace);
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -16972,7 +16092,6 @@ mod tests {
             expected
         );
     }
-
     #[test]
     fn mixed_activation_followups_plan_routes_space_directory_publish_to_private_lane() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -17011,14 +16130,12 @@ mod tests {
                 InstructionBox::from(PublishSpaceDirectoryManifest { manifest }),
             ],
         );
-
         let plan = router
             .try_route_plan(&tx)
             .expect("mixed activation follow-up plan should resolve");
         let RoutingPlan::NativeAmx(plan) = plan else {
             panic!("mixed universal and SBP follow-ups should build a native AMX plan");
         };
-
         assert_eq!(
             plan.coordinator.route,
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
@@ -17030,7 +16147,6 @@ mod tests {
             "SBP publish leg must be retained in the routing plan"
         );
     }
-
     #[test]
     fn account_permission_grant_routes_by_destination_account_policy() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -17091,17 +16207,14 @@ mod tests {
                 bob_id.clone(),
             ))],
         );
-
         let decision = router
             .try_route(&tx)
             .expect("account permission should route to destination account lane");
-
         assert_eq!(
             decision,
             RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2))
         );
     }
-
     #[test]
     fn asset_definition_permission_grant_routes_by_asset_definition_dataspace_policy() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -17182,24 +16295,20 @@ mod tests {
             router.dataspace_catalog.as_ref().clone(),
             router.lane_catalog.as_ref().clone(),
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
                 .expect("opaque asset-definition permission should defer to state"),
             None
         );
-
         let decision = router
             .try_route_with_view(&tx, &state.view())
             .expect("asset-definition permission should route to the asset-definition dataspace");
-
         assert_eq!(
             decision,
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn asset_definition_permission_revoke_routes_by_asset_definition_dataspace_policy() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -17280,24 +16389,20 @@ mod tests {
             router.dataspace_catalog.as_ref().clone(),
             router.lane_catalog.as_ref().clone(),
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
                 .expect("opaque asset-definition revoke should defer to state"),
             None
         );
-
         let decision = router.try_route_with_view(&tx, &state.view()).expect(
             "asset-definition permission revoke should route to the asset-definition dataspace",
         );
-
         assert_eq!(
             decision,
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn asset_definition_permission_grant_routes_by_named_dataspace_alias() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -17378,24 +16483,20 @@ mod tests {
             router.dataspace_catalog.as_ref().clone(),
             router.lane_catalog.as_ref().clone(),
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
                 .expect("opaque named-dataspace permission should defer to state"),
             None
         );
-
         let decision = router
             .try_route_with_view(&tx, &state.view())
             .expect("named-dataspace asset permission should route to that dataspace");
-
         assert_eq!(
             decision,
             RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2))
         );
     }
-
     #[test]
     fn dataspace_scoped_permission_grant_routes_mixed_dataspaces_to_universal() {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
@@ -17450,7 +16551,6 @@ mod tests {
                 )),
             ],
         );
-
         assert_eq!(
             router
                 .try_route(&tx)
@@ -17458,7 +16558,6 @@ mod tests {
             RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL)
         );
     }
-
     #[test]
     fn account_alias_dataspace_permission_grant_routes_by_scope() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -17489,7 +16588,6 @@ mod tests {
                 permission, holder_id,
             ))],
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -17497,7 +16595,6 @@ mod tests {
             Some(RoutingDecision::new(lane_id, dataspace_id))
         );
     }
-
     #[test]
     fn account_alias_domain_permission_grant_routes_by_scope() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -17530,7 +16627,6 @@ mod tests {
                 permission, holder_id,
             ))],
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -17538,7 +16634,6 @@ mod tests {
             Some(RoutingDecision::new(lane_id, dataspace_id))
         );
     }
-
     #[test]
     fn account_alias_resolution_delegation_routes_by_exact_scope() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -17571,7 +16666,6 @@ mod tests {
                 permission, holder_id,
             ))],
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -17579,14 +16673,12 @@ mod tests {
             Some(RoutingDecision::new(lane_id, dataspace_id))
         );
     }
-
     #[test]
     fn account_scope_directory_scope_matches_destination_account_permission_route() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
         let (holder_id, _) = gen_account_in("wonderland");
         let dataspace_id = DataSpaceId::new(10);
         let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
-
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
             default_dataspace: DataSpaceId::UNIVERSAL,
@@ -17605,7 +16697,6 @@ mod tests {
             (LaneId::new(1), dataspace_id),
         ]);
         let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog);
-
         let permission = Permission::from(CanManageAccountAlias {
             scope: AccountAliasPermissionScope::Domain(
                 DomainId::try_new("hbl", "paynet").expect("domain id"),
@@ -17619,7 +16710,6 @@ mod tests {
                 holder_id.clone(),
             ))],
         );
-
         let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
         scope_entry.ensure_dataspace(dataspace_id);
         scope_entry.bind_domain(
@@ -17644,13 +16734,11 @@ mod tests {
             &holder_id,
             &state_view
         ));
-
         assert_eq!(
             router.route_with_view(&tx, &state_view),
             RoutingDecision::new(LaneId::new(1), dataspace_id)
         );
     }
-
     #[test]
     fn world_validation_routes_account_permission_holder_by_scope() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -17693,7 +16781,6 @@ mod tests {
         state.nexus.write().lane_catalog = lane_catalog.clone();
         let state_view = state.view();
         let expected = RoutingDecision::new(lane_id, dataspace_id);
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state_view)
@@ -17712,7 +16799,6 @@ mod tests {
             expected
         );
     }
-
     #[test]
     fn state_view_routing_uses_committed_nexus_policy_not_cached_router_policy() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -17762,7 +16848,6 @@ mod tests {
             nexus.lane_catalog = lane_catalog;
         }
         let state_view = state.view();
-
         assert_eq!(
             router
                 .try_route_plan_with_view(&tx, &state_view)
@@ -17784,7 +16869,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn account_metadata_write_routes_to_single_scope_dataspace_with_state() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -17813,12 +16897,10 @@ mod tests {
                 "routing".parse().expect("metadata key"),
             ))],
         );
-
         let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
         scope_entry.ensure_dataspace(dataspace_id);
         let state = state_with_account_scope_entries(&[(target_id, scope_entry)], catalog);
         state.nexus.write().lane_catalog = router.lane_catalog.as_ref().clone();
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -17832,7 +16914,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn register_account_with_dataspace_label_routes_without_state() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -17861,7 +16942,6 @@ mod tests {
                     .with_label(Some(account_alias("merchant@restricted", &catalog))),
             ))],
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -17869,7 +16949,6 @@ mod tests {
             Some(RoutingDecision::new(lane_id, dataspace_id))
         );
     }
-
     #[test]
     fn multisig_contract_trigger_proposal_routes_by_immutable_contract_dataspace() {
         let (submitter_id, submitter_keypair) = gen_account_in("submitter");
@@ -17906,7 +16985,6 @@ mod tests {
         state.nexus.write().lane_catalog = lane_catalog;
         let expected_route = RoutingDecision::new(LaneId::new(4), contract_dataspace);
         let expected_plan = RoutingPlan::single(expected_route);
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
@@ -17939,7 +17017,6 @@ mod tests {
             vec![contract_dataspace]
         );
     }
-
     #[test]
     fn multisig_contract_trigger_same_transaction_approval_keeps_contract_route() {
         let (submitter_id, submitter_keypair) = gen_account_in("submitter");
@@ -17978,7 +17055,6 @@ mod tests {
         state.nexus.write().lane_catalog = lane_catalog;
         let expected =
             RoutingPlan::single(RoutingDecision::new(LaneId::new(4), contract_dataspace));
-
         assert_eq!(
             router
                 .try_route_plan_with_view(&tx, &state.view())
@@ -18006,7 +17082,6 @@ mod tests {
             "the sibling approval must not add the multisig account as a participant"
         );
     }
-
     #[test]
     fn multisig_contract_trigger_later_approval_reads_persisted_contract_route() {
         let (submitter_id, submitter_keypair) = gen_account_in("submitter");
@@ -18059,7 +17134,6 @@ mod tests {
         );
         let expected =
             RoutingPlan::single(RoutingDecision::new(LaneId::new(4), contract_dataspace));
-
         assert_eq!(
             router
                 .try_route_plan_with_view(&tx, &state.view())
@@ -18078,7 +17152,6 @@ mod tests {
             expected
         );
     }
-
     #[test]
     fn nested_trigger_instruction_and_proved_overlay_route_to_contract_dataspace() {
         let (submitter_id, submitter_keypair) = gen_account_in("submitter");
@@ -18109,7 +17182,6 @@ mod tests {
             catalog,
         );
         state.nexus.write().lane_catalog = lane_catalog;
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -18123,7 +17195,6 @@ mod tests {
             RoutingDecision::new(LaneId::new(4), contract_dataspace)
         );
     }
-
     #[test]
     fn conflicting_nested_contract_triggers_build_amx_plan_or_fail_strictly() {
         let (submitter_id, submitter_keypair) = gen_account_in("submitter");
@@ -18162,7 +17233,6 @@ mod tests {
             submitter_keypair.private_key(),
             vec![outer.clone()],
         );
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
@@ -18204,7 +17274,6 @@ mod tests {
             ),
             Ok(RoutingPlan::NativeAmx(_))
         ));
-
         let mut strict_metadata = Metadata::default();
         strict_metadata.insert(
             AMX_POLICY_METADATA_KEY.parse().expect("amx policy key"),
@@ -18226,7 +17295,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn non_contract_trigger_keeps_multisig_account_fallback() {
         let (submitter_id, submitter_keypair) = gen_account_in("submitter");
@@ -18259,7 +17327,6 @@ mod tests {
             catalog,
         );
         state.nexus.write().lane_catalog = lane_catalog;
-
         assert_eq!(
             router
                 .try_route_with_view(&tx, &state.view())
@@ -18267,7 +17334,6 @@ mod tests {
             RoutingDecision::new(LaneId::new(3), DataSpaceId::new(8))
         );
     }
-
     #[test]
     fn multisig_propose_routes_by_embedded_instruction_dataspace() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -18302,7 +17368,6 @@ mod tests {
         state.nexus.write().lane_catalog = lane_catalog;
         let expected_route = RoutingDecision::new(lane_id, dataspace_id);
         let expected_plan = RoutingPlan::single(expected_route);
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -18344,7 +17409,6 @@ mod tests {
             expected_plan
         );
     }
-
     #[test]
     fn multisig_propose_plan_prefers_embedded_dataspace_over_multiscope_account() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -18382,7 +17446,6 @@ mod tests {
         state.nexus.write().lane_catalog = lane_catalog;
         let expected_route = RoutingDecision::new(lane_id, dataspace_id);
         let expected_plan = RoutingPlan::single(expected_route);
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -18407,7 +17470,6 @@ mod tests {
             expected_plan
         );
     }
-
     #[test]
     fn multisig_same_transaction_approve_uses_sibling_proposal_route() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -18443,7 +17505,6 @@ mod tests {
         let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
         state.nexus.write().lane_catalog = lane_catalog;
         let expected_plan = RoutingPlan::single(RoutingDecision::new(lane_id, dataspace_id));
-
         assert_eq!(
             router
                 .try_route_plan_with_view(&tx, &state.view())
@@ -18462,7 +17523,6 @@ mod tests {
             expected_plan
         );
     }
-
     #[test]
     fn custom_multisig_propose_defers_and_routes_by_embedded_instruction_dataspace() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -18495,7 +17555,6 @@ mod tests {
         );
         let state = state_with_account_scope_entries(&[], catalog);
         state.nexus.write().lane_catalog = lane_catalog;
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -18520,7 +17579,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn multisig_approve_routes_by_multisig_account_scope() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -18555,7 +17613,6 @@ mod tests {
         scope_entry.ensure_dataspace(dataspace_id);
         let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
         state.nexus.write().lane_catalog = lane_catalog;
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -18580,7 +17637,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn custom_multisig_approve_defers_and_routes_by_multisig_account_scope() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -18616,7 +17672,6 @@ mod tests {
         scope_entry.ensure_dataspace(dataspace_id);
         let state = state_with_account_scope_entries(&[(multisig_id, scope_entry)], catalog);
         state.nexus.write().lane_catalog = lane_catalog;
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -18641,7 +17696,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn multisig_approve_routes_by_persisted_proposal_when_scope_is_missing() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -18689,7 +17743,6 @@ mod tests {
         );
         let expected_route = RoutingDecision::new(lane_id, dataspace_id);
         let expected_plan = RoutingPlan::single(expected_route);
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -18731,7 +17784,6 @@ mod tests {
             expected_plan
         );
     }
-
     #[test]
     fn multisig_approve_ignores_corrupt_proposal_state_and_uses_account_scope() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -18773,7 +17825,6 @@ mod tests {
         );
         let expected_route = RoutingDecision::new(lane_id, dataspace_id);
         let expected_plan = RoutingPlan::single(expected_route);
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -18805,7 +17856,6 @@ mod tests {
             expected_route
         );
     }
-
     #[test]
     fn multisig_approve_ignores_unrelated_persisted_proposal_hash() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -18869,7 +17919,6 @@ mod tests {
         );
         let expected_route = RoutingDecision::new(account_lane, account_dataspace);
         let expected_plan = RoutingPlan::single(expected_route);
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -18901,7 +17950,6 @@ mod tests {
             expected_route
         );
     }
-
     #[test]
     fn multisig_approve_plan_prefers_visible_proposal_over_multiscope_account() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -18953,7 +18001,6 @@ mod tests {
         );
         let expected_route = RoutingDecision::new(lane_id, dataspace_id);
         let expected_plan = RoutingPlan::single(expected_route);
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -18978,7 +18025,6 @@ mod tests {
             expected_plan
         );
     }
-
     #[test]
     fn account_metadata_write_with_multiple_scopes_falls_back_to_default_route() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -19011,13 +18057,11 @@ mod tests {
                 "routing".parse().expect("metadata key"),
             ))],
         );
-
         let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
         scope_entry.ensure_dataspace(first_dataspace);
         scope_entry.ensure_dataspace(second_dataspace);
         let state = state_with_account_scope_entries(&[(target_id, scope_entry)], catalog);
         state.nexus.write().lane_catalog = router.lane_catalog.as_ref().clone();
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -19031,7 +18075,6 @@ mod tests {
             RoutingDecision::default()
         );
     }
-
     #[test]
     fn opaque_asset_definition_unregister_routes_to_resolved_target_dataspace() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -19078,7 +18121,6 @@ mod tests {
             catalog,
             router.lane_catalog.as_ref().clone(),
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -19092,7 +18134,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn opaque_asset_definition_metadata_set_routes_to_resolved_target_dataspace() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -19141,7 +18182,6 @@ mod tests {
             catalog,
             router.lane_catalog.as_ref().clone(),
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -19155,7 +18195,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn opaque_global_asset_definition_metadata_set_uses_stored_alias_dataspace() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -19219,7 +18258,6 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -19233,7 +18271,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn opaque_asset_definition_metadata_remove_routes_to_resolved_target_dataspace() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -19281,7 +18318,6 @@ mod tests {
             catalog,
             router.lane_catalog.as_ref().clone(),
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)
@@ -19295,7 +18331,6 @@ mod tests {
             RoutingDecision::new(lane_id, dataspace_id)
         );
     }
-
     #[test]
     fn opaque_global_asset_definition_unregister_uses_stored_alias_dataspace() {
         let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
@@ -19357,7 +18392,6 @@ mod tests {
                 bound_at_ms: 0,
             },
         );
-
         assert_eq!(
             router
                 .try_route_without_state(&tx)

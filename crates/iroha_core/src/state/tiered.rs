@@ -35,7 +35,6 @@ const DA_CACHE_HIT: &str = "hit";
 const DA_CACHE_MISS: &str = "miss";
 const DA_CHURN_EVICTED: &str = "evicted";
 const DA_CHURN_REHYDRATED: &str = "rehydrated";
-
 /// Lightweight handle describing a hot/cold storage split.
 #[derive(Debug, Clone, Default)]
 pub struct TieredStateBackend {
@@ -68,7 +67,6 @@ pub struct TieredStateBackend {
     /// Optional telemetry sink for DA-backed cold storage activity.
     telemetry: Option<StateTelemetry>,
 }
-
 #[derive(Debug)]
 struct ColdEntryPlan {
     rel_path: PathBuf,
@@ -76,7 +74,6 @@ struct ColdEntryPlan {
     manifest_index: usize,
     reuse_source: Option<PathBuf>,
 }
-
 #[derive(Debug)]
 struct TieredSnapshotPlan {
     root: PathBuf,
@@ -84,42 +81,35 @@ struct TieredSnapshotPlan {
     manifest: TieredSnapshotManifest,
     cold_entries: Vec<ColdEntryPlan>,
 }
-
 #[derive(Default)]
 struct SnapshotPayloadCache {
     payloads: BTreeMap<TieredEntryId, Vec<u8>>,
 }
-
 /// Changed WSV keys captured during a block for incremental snapshotting.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct TieredSnapshotDiff {
     entries: Vec<TieredKeyHandle>,
 }
-
 impl TieredSnapshotDiff {
     /// Record a touched entry.
     pub(crate) fn push(&mut self, entry: TieredKeyHandle) {
         self.entries.push(entry);
     }
-
     /// Read the captured entries.
     #[cfg(test)]
     pub(crate) fn entries(&self) -> &[TieredKeyHandle] {
         &self.entries
     }
 }
-
 /// Changed WSV keys captured with their updated payloads for background snapshots.
 #[derive(Default)]
 pub(crate) struct TieredSnapshotPayload {
     entries: Vec<TieredSnapshotPayloadEntry>,
 }
-
 struct TieredSnapshotPayloadEntry {
     key: TieredKeyHandle,
     value: Option<Box<dyn TieredSnapshotValue>>,
 }
-
 impl TieredSnapshotPayload {
     pub(crate) fn push_value<T>(&mut self, key: TieredKeyHandle, value: Option<T>)
     where
@@ -131,12 +121,10 @@ impl TieredSnapshotPayload {
         });
         self.entries.push(TieredSnapshotPayloadEntry { key, value });
     }
-
     pub(crate) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 }
-
 impl From<&TieredSnapshotPayload> for TieredSnapshotDiff {
     fn from(payload: &TieredSnapshotPayload) -> Self {
         let mut diff = TieredSnapshotDiff::default();
@@ -146,12 +134,10 @@ impl From<&TieredSnapshotPayload> for TieredSnapshotDiff {
         diff
     }
 }
-
 trait TieredSnapshotValue: Send + Sync {
     fn measured_bytes(&self) -> usize;
     fn encode_json(&self) -> Result<Vec<u8>>;
 }
-
 impl<T> TieredSnapshotValue for T
 where
     T: json::JsonSerialize + MeasuredBytes + Send + Sync + 'static,
@@ -159,18 +145,15 @@ where
     fn measured_bytes(&self) -> usize {
         MeasuredBytes::measured_bytes(self)
     }
-
     fn encode_json(&self) -> Result<Vec<u8>> {
         json::to_vec(self).wrap_err("failed to encode snapshot value as JSON")
     }
 }
-
 struct CollectContext<'a> {
     snapshot_idx: u64,
     scores: &'a mut Vec<EntryScore>,
     seen: &'a mut BTreeSet<TieredEntryId>,
 }
-
 impl TieredStateBackend {
     /// Construct a backend with explicit limits.
     #[must_use]
@@ -207,12 +190,10 @@ impl TieredStateBackend {
         }
         backend
     }
-
     /// Attach a telemetry sink for DA-backed cold storage activity.
     pub fn attach_telemetry(&mut self, telemetry: StateTelemetry) {
         self.telemetry = Some(telemetry);
     }
-
     /// Record a snapshot of the current world.
     pub fn record_world_snapshot(&mut self, world: &World) -> Result<()> {
         if let Some(plan) = self.plan_world_snapshot(world)? {
@@ -220,7 +201,6 @@ impl TieredStateBackend {
         }
         Ok(())
     }
-
     /// Record a snapshot using a diff of touched entries.
     pub(crate) fn record_world_snapshot_with_diff(
         &mut self,
@@ -235,7 +215,6 @@ impl TieredStateBackend {
         }
         Ok(())
     }
-
     /// Record a snapshot using a diff payload without accessing the live world.
     pub(crate) fn record_world_snapshot_with_payload(
         &mut self,
@@ -247,13 +226,11 @@ impl TieredStateBackend {
         let Some((root, snapshot_idx, snapshot_dir)) = self.prepare_snapshot()? else {
             return Ok(());
         };
-
         let payload_cache = if payload.is_empty() {
             SnapshotPayloadCache::default()
         } else {
             self.apply_snapshot_payload(snapshot_idx, payload)?
         };
-
         let scores = self.build_scores_from_keys(snapshot_idx);
         let plan = self.build_snapshot_plan(
             root,
@@ -265,18 +242,15 @@ impl TieredStateBackend {
         self.execute_snapshot_plan_with_payload(plan, &payload_cache.payloads)?;
         Ok(())
     }
-
     fn seed_snapshot_counter_if_needed(&mut self) -> Result<()> {
         if self.snapshot_counter_seeded {
             return Ok(());
         }
-
         let roots = self.cold_roots();
         if roots.is_empty() {
             self.snapshot_counter_seeded = true;
             return Ok(());
         }
-
         self.ensure_cold_roots()
             .wrap_err("failed to prepare cold tier root directory")?;
         for root in &roots {
@@ -284,7 +258,6 @@ impl TieredStateBackend {
                 self.recover_snapshot_artifacts(root)?;
             }
         }
-
         let mut max_idx = 0u64;
         for root in roots {
             if !root.exists() {
@@ -306,12 +279,10 @@ impl TieredStateBackend {
                 }
             }
         }
-
         self.snapshot_counter = max_idx;
         self.snapshot_counter_seeded = true;
         Ok(())
     }
-
     #[allow(clippy::unused_self)]
     #[allow(clippy::too_many_lines)]
     fn recover_snapshot_artifacts(&self, root: &Path) -> Result<()> {
@@ -321,9 +292,7 @@ impl TieredStateBackend {
             backup: Option<PathBuf>,
             staging: Option<PathBuf>,
         }
-
         let mut artifacts: BTreeMap<u64, SnapshotArtifacts> = BTreeMap::new();
-
         for entry in fs::read_dir(root).wrap_err_with(|| {
             format!(
                 "failed to read cold tier root {path}",
@@ -360,7 +329,6 @@ impl TieredStateBackend {
                 entry.staging = Some(path);
             }
         }
-
         let mut touched = false;
         for (idx, entry) in artifacts {
             let live_path = root.join(format!("{idx:020}"));
@@ -389,7 +357,6 @@ impl TieredStateBackend {
                 }
                 continue;
             }
-
             if let Some(backup) = entry.backup {
                 match fs::rename(&backup, &live_path) {
                     Ok(()) => {
@@ -410,7 +377,6 @@ impl TieredStateBackend {
                     }
                 }
             }
-
             if let Some(staging) = entry.staging {
                 if let Err(err) = fs::remove_dir_all(&staging) {
                     iroha_logger::warn!(
@@ -423,7 +389,6 @@ impl TieredStateBackend {
                 }
             }
         }
-
         if touched {
             if let Err(err) = Self::sync_dir(root) {
                 iroha_logger::warn!(
@@ -433,26 +398,20 @@ impl TieredStateBackend {
                 );
             }
         }
-
         Ok(())
     }
-
     fn plan_world_snapshot(&mut self, world: &World) -> Result<Option<TieredSnapshotPlan>> {
         let Some((root, snapshot_idx, snapshot_dir)) = self.prepare_snapshot()? else {
             return Ok(None);
         };
-
         let mut scores = Vec::new();
         let mut seen = BTreeSet::new();
-
         self.collect_world_entries(world, snapshot_idx, &mut scores, &mut seen)?;
         self.entries.retain(|id, _| seen.contains(id));
         self.entry_keys.retain(|id, _| seen.contains(id));
-
         let plan = self.build_snapshot_plan(root, snapshot_idx, snapshot_dir, scores, None)?;
         Ok(Some(plan))
     }
-
     fn plan_world_snapshot_with_diff(
         &mut self,
         world: &World,
@@ -461,28 +420,23 @@ impl TieredStateBackend {
         let Some((root, snapshot_idx, snapshot_dir)) = self.prepare_snapshot()? else {
             return Ok(None);
         };
-
         if !diff.entries.is_empty() {
             self.apply_snapshot_diff(world, snapshot_idx, diff)?;
         }
-
         let scores = self.build_scores_from_keys(snapshot_idx);
         let plan = self.build_snapshot_plan(root, snapshot_idx, snapshot_dir, scores, None)?;
         Ok(Some(plan))
     }
-
     fn prepare_snapshot(&mut self) -> Result<Option<(PathBuf, u64, PathBuf)>> {
         if !self.enabled {
             return Ok(None);
         }
-
         if self.hot_retained_keys == 0
             && self.hot_retained_bytes == 0
             && self.primary_cold_root().is_none()
         {
             return Ok(None);
         }
-
         let Some(root) = self.primary_cold_root().cloned() else {
             if self.hot_retained_keys > 0 || self.hot_retained_bytes > 0 {
                 iroha_logger::warn!(
@@ -491,14 +445,12 @@ impl TieredStateBackend {
             }
             return Ok(None);
         };
-
         self.seed_snapshot_counter_if_needed()?;
         self.snapshot_counter = self.snapshot_counter.saturating_add(1);
         let snapshot_idx = self.snapshot_counter;
         let snapshot_dir = root.join(format!("{snapshot_idx:020}"));
         Ok(Some((root, snapshot_idx, snapshot_dir)))
     }
-
     fn build_scores_from_keys(&mut self, snapshot_idx: u64) -> Vec<EntryScore> {
         let mut scores = Vec::with_capacity(self.entry_keys.len());
         for (id, entry_key) in &self.entry_keys {
@@ -508,7 +460,6 @@ impl TieredStateBackend {
         }
         scores
     }
-
     #[allow(clippy::too_many_lines)]
     fn build_snapshot_plan(
         &mut self,
@@ -539,20 +490,17 @@ impl TieredStateBackend {
                 cold_entries: Vec::new(),
             });
         }
-
         scores.sort_by(|a, b| {
             let meta_a = self.entries.get(&a.id).expect("metadata populated");
             let meta_b = self.entries.get(&b.id).expect("metadata populated");
             meta_b.cmp(meta_a).then_with(|| a.id.cmp(&b.id))
         });
-
         let max_keys = if self.hot_retained_keys == 0 {
             usize::MAX
         } else {
             self.hot_retained_keys
         };
         let max_bytes = self.hot_retained_bytes;
-
         #[allow(clippy::too_many_arguments)]
         fn try_select_entry(
             entry: &EntryScore,
@@ -579,11 +527,9 @@ impl TieredStateBackend {
                 hot_list.push(entry.id);
             }
         }
-
         let mut hot_ids = BTreeSet::new();
         let mut hot_list = Vec::new();
         let mut retained_bytes = 0u64;
-
         if self.hot_retained_grace_snapshots > 0 {
             for entry in &scores {
                 let meta = self.entries.get(&entry.id).expect("metadata populated");
@@ -601,7 +547,6 @@ impl TieredStateBackend {
                 }
             }
         }
-
         for entry in &scores {
             if !hot_ids.contains(&entry.id) {
                 try_select_entry(
@@ -616,11 +561,9 @@ impl TieredStateBackend {
                 );
             }
         }
-
         let mut hot_manifest_entries = Vec::with_capacity(hot_list.len());
         let mut cold_manifest_entries = Vec::with_capacity(scores.len());
         let mut cold_plans = Vec::with_capacity(scores.len());
-
         for entry in &scores {
             let meta = self.entries.get(&entry.id).expect("metadata populated");
             if hot_ids.contains(&entry.id) {
@@ -664,7 +607,6 @@ impl TieredStateBackend {
                 });
             }
         }
-
         let mut hot_promotions = 0usize;
         let mut hot_demotions = 0usize;
         for entry in &scores {
@@ -678,7 +620,6 @@ impl TieredStateBackend {
                 hot_promotions = hot_promotions.saturating_add(1);
             }
         }
-
         for id in &hot_list {
             if let Some(meta) = self.entries.get_mut(id) {
                 let was_hot_last = meta.last_hot_snapshot > 0
@@ -690,7 +631,6 @@ impl TieredStateBackend {
                 meta.last_hot_snapshot = snapshot_idx;
             }
         }
-
         let hot_grace_overflow_keys = if self.hot_retained_keys == 0 {
             0
         } else {
@@ -714,7 +654,6 @@ impl TieredStateBackend {
                 "tiered-state: hot tier budget exceeded due to grace retention"
             );
         }
-
         let manifest = TieredSnapshotManifest {
             snapshot_index: snapshot_idx,
             total_entries: scores.len(),
@@ -728,7 +667,6 @@ impl TieredStateBackend {
             hot_grace_overflow_keys,
             hot_grace_overflow_bytes,
         };
-
         Ok(TieredSnapshotPlan {
             root,
             snapshot_dir,
@@ -736,7 +674,6 @@ impl TieredStateBackend {
             cold_entries: cold_plans,
         })
     }
-
     fn apply_snapshot_diff(
         &mut self,
         world: &World,
@@ -750,7 +687,6 @@ impl TieredStateBackend {
                 self.entry_keys.remove(&id);
                 continue;
             };
-
             let meta = self
                 .entries
                 .entry(id)
@@ -770,7 +706,6 @@ impl TieredStateBackend {
         }
         Ok(())
     }
-
     fn apply_snapshot_payload(
         &mut self,
         snapshot_idx: u64,
@@ -784,11 +719,9 @@ impl TieredStateBackend {
                 self.entry_keys.remove(&id);
                 continue;
             };
-
             let payload = value.encode_json()?;
             let value_hash = sha256(&payload);
             let value_size_bytes = value.measured_bytes();
-
             let meta = self
                 .entries
                 .entry(id)
@@ -809,12 +742,10 @@ impl TieredStateBackend {
         }
         Ok(cache)
     }
-
     #[allow(clippy::too_many_lines)]
     fn execute_snapshot_plan(&mut self, mut plan: TieredSnapshotPlan, world: &World) -> Result<()> {
         self.ensure_cold_roots()
             .wrap_err("failed to prepare cold tier root directory")?;
-
         let staging_dir = plan.snapshot_dir.with_extension("staging");
         if staging_dir.exists() {
             fs::remove_dir_all(&staging_dir).wrap_err_with(|| {
@@ -830,7 +761,6 @@ impl TieredStateBackend {
                 path = staging_dir.display()
             )
         })?;
-
         let mut cold_bytes_total: u64 = 0;
         let mut cold_reused_entries: usize = 0;
         let mut cold_reused_bytes: u64 = 0;
@@ -871,7 +801,6 @@ impl TieredStateBackend {
                     }
                 }
             }
-
             let payload_len = if let Some(bytes) = payload_len {
                 bytes
             } else {
@@ -923,11 +852,9 @@ impl TieredStateBackend {
                 dirs_to_sync.insert(dir);
             }
         }
-
         plan.manifest.cold_bytes_total = cold_bytes_total;
         plan.manifest.cold_reused_entries = cold_reused_entries;
         plan.manifest.cold_reused_bytes = cold_reused_bytes;
-
         for dir in dirs_to_sync {
             Self::sync_dir(&dir).wrap_err_with(|| {
                 format!(
@@ -936,7 +863,6 @@ impl TieredStateBackend {
                 )
             })?;
         }
-
         Self::write_manifest(&staging_dir, &plan.manifest)?;
         Self::sync_dir(&staging_dir).wrap_err_with(|| {
             format!(
@@ -944,7 +870,6 @@ impl TieredStateBackend {
                 path = staging_dir.display()
             )
         })?;
-
         let backup = if plan.snapshot_dir.exists() {
             let backup_path = plan.snapshot_dir.with_extension("bak");
             if backup_path.exists() {
@@ -965,14 +890,12 @@ impl TieredStateBackend {
         } else {
             None
         };
-
         fs::rename(&staging_dir, &plan.snapshot_dir).wrap_err_with(|| {
             format!(
                 "failed to promote staging snapshot into place at {path}",
                 path = plan.snapshot_dir.display()
             )
         })?;
-
         Self::sync_dir(&plan.snapshot_dir).wrap_err_with(|| {
             format!(
                 "failed to sync snapshot directory {path}",
@@ -996,14 +919,11 @@ impl TieredStateBackend {
                 );
             }
         }
-
         self.last_manifest = Some(plan.manifest);
         self.prune_old_snapshots(&plan.root)?;
         self.prune_to_cold_bytes(&plan.root)?;
-
         Ok(())
     }
-
     #[allow(clippy::too_many_lines)]
     fn execute_snapshot_plan_with_payload(
         &mut self,
@@ -1012,7 +932,6 @@ impl TieredStateBackend {
     ) -> Result<()> {
         self.ensure_cold_roots()
             .wrap_err("failed to prepare cold tier root directory")?;
-
         let staging_dir = plan.snapshot_dir.with_extension("staging");
         if staging_dir.exists() {
             fs::remove_dir_all(&staging_dir).wrap_err_with(|| {
@@ -1028,7 +947,6 @@ impl TieredStateBackend {
                 path = staging_dir.display()
             )
         })?;
-
         let mut cold_bytes_total: u64 = 0;
         let mut cold_reused_entries: usize = 0;
         let mut cold_reused_bytes: u64 = 0;
@@ -1069,7 +987,6 @@ impl TieredStateBackend {
                     }
                 }
             }
-
             let payload_len = if let Some(bytes) = payload_len {
                 bytes
             } else {
@@ -1118,11 +1035,9 @@ impl TieredStateBackend {
                 dirs_to_sync.insert(dir);
             }
         }
-
         plan.manifest.cold_bytes_total = cold_bytes_total;
         plan.manifest.cold_reused_entries = cold_reused_entries;
         plan.manifest.cold_reused_bytes = cold_reused_bytes;
-
         for dir in dirs_to_sync {
             Self::sync_dir(&dir).wrap_err_with(|| {
                 format!(
@@ -1131,7 +1046,6 @@ impl TieredStateBackend {
                 )
             })?;
         }
-
         Self::write_manifest(&staging_dir, &plan.manifest)?;
         Self::sync_dir(&staging_dir).wrap_err_with(|| {
             format!(
@@ -1139,7 +1053,6 @@ impl TieredStateBackend {
                 path = staging_dir.display()
             )
         })?;
-
         let backup = if plan.snapshot_dir.exists() {
             let backup_path = plan.snapshot_dir.with_extension("bak");
             if backup_path.exists() {
@@ -1160,14 +1073,12 @@ impl TieredStateBackend {
         } else {
             None
         };
-
         fs::rename(&staging_dir, &plan.snapshot_dir).wrap_err_with(|| {
             format!(
                 "failed to promote staging snapshot into place at {path}",
                 path = plan.snapshot_dir.display()
             )
         })?;
-
         Self::sync_dir(&plan.snapshot_dir).wrap_err_with(|| {
             format!(
                 "failed to sync snapshot directory {path}",
@@ -1191,32 +1102,26 @@ impl TieredStateBackend {
                 );
             }
         }
-
         self.last_manifest = Some(plan.manifest);
         self.prune_old_snapshots(&plan.root)?;
         self.prune_to_cold_bytes(&plan.root)?;
-
         Ok(())
     }
-
     /// Returns the currently configured hot key retention limit.
     #[must_use]
     pub fn hot_retained_keys(&self) -> usize {
         self.hot_retained_keys
     }
-
     /// Returns the currently configured hot byte retention limit.
     #[must_use]
     pub fn hot_retained_bytes(&self) -> u64 {
         self.hot_retained_bytes
     }
-
     /// Returns the currently configured cold snapshot byte budget.
     #[must_use]
     pub fn max_cold_bytes(&self) -> u64 {
         self.max_cold_bytes
     }
-
     fn cold_roots(&self) -> Vec<&PathBuf> {
         let mut roots = Vec::new();
         if let Some(root) = self.cold_store_root.as_ref() {
@@ -1229,44 +1134,37 @@ impl TieredStateBackend {
         }
         roots
     }
-
     fn da_store_root_for_offload(&self) -> Option<&PathBuf> {
         match (&self.cold_store_root, &self.da_store_root) {
             (Some(cold_root), Some(da_root)) if cold_root != da_root => Some(da_root),
             _ => None,
         }
     }
-
     fn primary_cold_root(&self) -> Option<&PathBuf> {
         self.cold_store_root
             .as_ref()
             .or(self.da_store_root.as_ref())
     }
-
     /// Returns true when tiering is enabled and a cold tier is configured.
     #[must_use]
     pub fn is_cold_tier_enabled(&self) -> bool {
         self.enabled && self.primary_cold_root().is_some()
     }
-
     /// Returns whether tiering is enabled.
     #[must_use]
     pub fn enabled(&self) -> bool {
         self.enabled
     }
-
     /// Returns whether the backend has been seeded with at least one entry.
     #[must_use]
     pub(crate) fn has_entries(&self) -> bool {
         !self.entries.is_empty()
     }
-
     /// Returns the cached manifest of the latest snapshot, if any.
     #[must_use]
     pub fn last_manifest(&self) -> Option<&TieredSnapshotManifest> {
         self.last_manifest.as_ref()
     }
-
     /// Return the total cold-tier bytes currently stored on disk.
     pub fn cold_store_bytes(&self) -> Result<Option<u64>> {
         let Some(root) = self.primary_cold_root() else {
@@ -1293,7 +1191,6 @@ impl TieredStateBackend {
         }
         Ok(Some(total))
     }
-
     /// Load a cold payload from the configured cold roots.
     pub fn read_cold_payload(
         &self,
@@ -1322,7 +1219,6 @@ impl TieredStateBackend {
                 }
             }
         }
-
         let da_root = self.da_store_root.as_ref();
         let same_root = match (cold_root, da_root) {
             (Some(cold), Some(da)) => cold == da,
@@ -1362,7 +1258,6 @@ impl TieredStateBackend {
         }
         Ok(None)
     }
-
     fn try_rehydrate_cold_payload(
         &self,
         snapshot_index: u64,
@@ -1441,13 +1336,11 @@ impl TieredStateBackend {
         }
         Ok(Some(u64::try_from(payload.len()).unwrap_or(u64::MAX)))
     }
-
     fn record_da_cache(&self, outcome: &'static str) {
         if let Some(telemetry) = self.telemetry.as_ref() {
             telemetry.inc_storage_da_cache(WSV_COLD_COMPONENT, outcome);
         }
     }
-
     fn record_da_churn(&self, event: &'static str, bytes: u64) {
         if bytes == 0 {
             return;
@@ -1456,7 +1349,6 @@ impl TieredStateBackend {
             telemetry.add_storage_da_churn_bytes(WSV_COLD_COMPONENT, event, bytes);
         }
     }
-
     /// Update configuration knobs at runtime.
     #[allow(clippy::too_many_arguments)]
     pub fn reconfigure(
@@ -1505,7 +1397,6 @@ impl TieredStateBackend {
             }
         }
     }
-
     /// Validate lane snapshot geometry changes that can fail without mutating tiered state.
     ///
     /// # Errors
@@ -1521,12 +1412,10 @@ impl TieredStateBackend {
         if !self.enabled {
             return Ok(());
         }
-
         let Some(root) = self.primary_cold_root().cloned() else {
             return Ok(());
         };
         self.preflight_cold_roots()?;
-
         let mut previous_map = BTreeMap::new();
         for entry in previous.entries() {
             previous_map.insert(entry.lane_id, entry);
@@ -1539,10 +1428,8 @@ impl TieredStateBackend {
             .iter()
             .map(|(_, current)| current.lane_id)
             .collect();
-
         let lanes_root = root.join("lanes");
         Self::preflight_dir_path(&lanes_root)?;
-
         for (id, entry) in &current_map {
             let dir = lane_snapshot_dir(&lanes_root, entry);
             let replaced = replacement_ids.contains(id);
@@ -1570,7 +1457,6 @@ impl TieredStateBackend {
             }
             Self::preflight_dir_path(&dir)?;
         }
-
         let retired_root = root.join("retired").join("lanes");
         for (id, entry) in &previous_map {
             if current_map.contains_key(id) && !replacement_ids.contains(id) {
@@ -1581,7 +1467,6 @@ impl TieredStateBackend {
                 Self::preflight_dir_path(&retired_root)?;
             }
         }
-
         for (previous, current) in relabelled {
             let old_dir = lane_snapshot_dir(&lanes_root, previous);
             let new_dir = lane_snapshot_dir(&lanes_root, current);
@@ -1599,10 +1484,8 @@ impl TieredStateBackend {
             }
             Self::preflight_dir_path(&new_dir)?;
         }
-
         Ok(())
     }
-
     /// Ensure tiered snapshot directories reflect the configured lane geometry.
     pub fn reconcile_lane_geometry(
         &mut self,
@@ -1613,12 +1496,10 @@ impl TieredStateBackend {
         if !self.enabled {
             return Ok(());
         }
-
         let Some(root) = self.primary_cold_root().cloned() else {
             return Ok(());
         };
         self.ensure_cold_roots()?;
-
         let mut previous_map = BTreeMap::new();
         for entry in previous.entries() {
             previous_map.insert(entry.lane_id, entry);
@@ -1631,7 +1512,6 @@ impl TieredStateBackend {
             .iter()
             .map(|(_, current)| current.lane_id)
             .collect();
-
         let added: Vec<&LaneConfigEntry> = current_map
             .iter()
             .filter(|(id, _)| !previous_map.contains_key(id) && !replacement_ids.contains(id))
@@ -1642,7 +1522,6 @@ impl TieredStateBackend {
             .filter(|(id, _)| !current_map.contains_key(id) && !replacement_ids.contains(id))
             .map(|(_, entry)| *entry)
             .collect();
-
         let lanes_root = root.join("lanes");
         fs::create_dir_all(&lanes_root).wrap_err_with(|| {
             format!(
@@ -1650,15 +1529,12 @@ impl TieredStateBackend {
                 path = lanes_root.display()
             )
         })?;
-
         for (previous, _) in replacements {
             self.retire_lane_snapshot_dir(&root, &lanes_root, previous)?;
         }
-
         for entry in added {
             self.ensure_lane_snapshot_dir(&lanes_root, entry)?;
         }
-
         for entry in current.entries() {
             if replacement_ids.contains(&entry.lane_id) {
                 continue;
@@ -1675,18 +1551,14 @@ impl TieredStateBackend {
             }
             self.ensure_lane_snapshot_dir(&lanes_root, entry)?;
         }
-
         for (_, current) in replacements {
             self.ensure_lane_snapshot_dir(&lanes_root, current)?;
         }
-
         for entry in retired {
             self.retire_lane_snapshot_dir(&root, &lanes_root, entry)?;
         }
-
         Ok(())
     }
-
     /// Relabel snapshot directories when lane aliases (and therefore slugs) change.
     #[allow(clippy::too_many_lines)]
     pub fn relabel_lane_geometry(
@@ -1709,7 +1581,6 @@ impl TieredStateBackend {
                 path = lanes_root.display()
             )
         })?;
-
         for (previous, current) in migrations {
             let old_dir = lane_snapshot_dir(&lanes_root, previous);
             let new_dir = lane_snapshot_dir(&lanes_root, current);
@@ -1795,10 +1666,8 @@ impl TieredStateBackend {
                 "tiered-state: lane snapshot directory relabelled"
             );
         }
-
         Ok(())
     }
-
     fn ensure_cold_roots(&self) -> Result<()> {
         for root in self.cold_store_root.iter().chain(self.da_store_root.iter()) {
             fs::create_dir_all(root).wrap_err_with(|| {
@@ -1810,14 +1679,12 @@ impl TieredStateBackend {
         }
         Ok(())
     }
-
     fn preflight_cold_roots(&self) -> Result<()> {
         for root in self.cold_store_root.iter().chain(self.da_store_root.iter()) {
             Self::preflight_dir_path(root)?;
         }
         Ok(())
     }
-
     fn preflight_dir_path(path: &Path) -> Result<()> {
         if path.exists() && !path.is_dir() {
             return Err(eyre::eyre!(
@@ -1827,7 +1694,6 @@ impl TieredStateBackend {
         }
         Ok(())
     }
-
     #[allow(clippy::unused_self)]
     fn ensure_lane_snapshot_dir(&self, lanes_root: &Path, entry: &LaneConfigEntry) -> Result<()> {
         let dir = lane_snapshot_dir(lanes_root, entry);
@@ -1845,7 +1711,6 @@ impl TieredStateBackend {
         );
         Ok(())
     }
-
     #[allow(clippy::unused_self)]
     fn retire_lane_snapshot_dir(
         &mut self,
@@ -1857,7 +1722,6 @@ impl TieredStateBackend {
         if !dir.exists() {
             return Ok(());
         }
-
         let retired_root = root.join("retired").join("lanes");
         // Replay rollback can provision the same empty lane image that an earlier
         // rollback already archived. Retain the first durable archive and remove
@@ -1930,7 +1794,6 @@ impl TieredStateBackend {
         );
         Ok(())
     }
-
     #[allow(clippy::too_many_lines)]
     fn collect_world_entries(
         &mut self,
@@ -1953,7 +1816,6 @@ impl TieredStateBackend {
                 }
             }};
         }
-
         collect_map!(TieredSegment::Domains, Domain, world.domains);
         collect_map!(TieredSegment::Accounts, Account, world.accounts);
         collect_map!(
@@ -2181,10 +2043,8 @@ impl TieredStateBackend {
             DirectLaneBlockApplicationMarker,
             world.direct_lane_block_application_markers
         );
-
         Ok(())
     }
-
     fn collect_entry<K, V>(
         &mut self,
         segment: TieredSegment,
@@ -2200,7 +2060,6 @@ impl TieredStateBackend {
         let key_encoded = norito::codec::Encode::encode(key);
         self.collect_entry_with_encoded_key(segment, key_handle, key_encoded, value, ctx)
     }
-
     fn collect_entry_with_encoded_key<V>(
         &mut self,
         segment: TieredSegment,
@@ -2214,12 +2073,10 @@ impl TieredStateBackend {
     {
         let key_hash = sha256(&key_encoded);
         let id = TieredEntryId::new(segment, key_hash);
-
         let (value_hash, _json_len) =
             compute_json_hash(value).wrap_err("failed to encode value for tiered snapshot")?;
         let value_size_bytes =
             compute_hot_bytes(value).wrap_err("failed to compute WSV hot-tier size estimate")?;
-
         let meta = self
             .entries
             .entry(id)
@@ -2238,17 +2095,14 @@ impl TieredStateBackend {
             },
         );
         ctx.seen.insert(id);
-
         ctx.scores.push(EntryScore {
             id,
             segment,
             key: key_handle.clone(),
             key_encoded,
         });
-
         Ok(())
     }
-
     fn write_manifest(snapshot_dir: &Path, manifest: &TieredSnapshotManifest) -> Result<()> {
         let manifest_bytes = norito::json::to_vec_pretty(manifest)
             .wrap_err("failed to serialize tiered state manifest")?;
@@ -2290,7 +2144,6 @@ impl TieredStateBackend {
             )
         })
     }
-
     /// Prune cold snapshots to fit within an explicit byte budget.
     pub(crate) fn prune_cold_snapshots_to_bytes(&self, max_bytes: u64) -> Result<()> {
         let Some(root) = self.primary_cold_root().cloned() else {
@@ -2301,12 +2154,10 @@ impl TieredStateBackend {
         }
         self.prune_snapshots_to_bytes(&root, max_bytes)
     }
-
     fn prune_old_snapshots(&self, root: &Path) -> Result<()> {
         if self.max_snapshots == 0 {
             return Ok(());
         }
-
         let mut pruned = false;
         let mut entries = fs::read_dir(root)
             .wrap_err_with(|| {
@@ -2348,19 +2199,16 @@ impl TieredStateBackend {
         }
         Ok(())
     }
-
     fn prune_to_cold_bytes(&self, root: &Path) -> Result<()> {
         if self.max_cold_bytes == 0 {
             return Ok(());
         }
         self.prune_snapshots_to_bytes(root, self.max_cold_bytes)
     }
-
     fn prune_snapshots_to_bytes(&self, root: &Path, max_bytes: u64) -> Result<()> {
         if max_bytes == 0 && !root.exists() {
             return Ok(());
         }
-
         let mut entries = Vec::new();
         for entry in fs::read_dir(root).wrap_err_with(|| {
             format!(
@@ -2377,9 +2225,7 @@ impl TieredStateBackend {
                 entries.push((idx, entry.path()));
             }
         }
-
         entries.sort_by_key(|(idx, _)| *idx);
-
         let mut total_bytes = 0u64;
         let mut sizes = Vec::with_capacity(entries.len());
         for (idx, path) in entries {
@@ -2387,7 +2233,6 @@ impl TieredStateBackend {
             total_bytes = total_bytes.saturating_add(size);
             sizes.push((idx, path, size));
         }
-
         let mut pruned = false;
         while total_bytes > max_bytes && sizes.len() > 1 {
             let (idx, path, size) = sizes.remove(0);
@@ -2405,7 +2250,6 @@ impl TieredStateBackend {
             total_bytes = total_bytes.saturating_sub(size);
             pruned = true;
         }
-
         if total_bytes > max_bytes && sizes.len() == 1 {
             let (_, path, size) = &sizes[0];
             iroha_logger::warn!(
@@ -2415,7 +2259,6 @@ impl TieredStateBackend {
                 "tiered-state: cold snapshot exceeds configured byte budget"
             );
         }
-
         if pruned {
             Self::sync_dir(root).wrap_err_with(|| {
                 format!(
@@ -2426,7 +2269,6 @@ impl TieredStateBackend {
         }
         Ok(())
     }
-
     fn snapshot_dir_size(path: &Path) -> Result<u64> {
         let mut total = 0u64;
         for entry in fs::read_dir(path).wrap_err_with(|| {
@@ -2446,7 +2288,6 @@ impl TieredStateBackend {
         }
         Ok(total)
     }
-
     fn copy_dir_recursive(source: &Path, dest: &Path) -> Result<()> {
         fs::create_dir_all(dest).wrap_err_with(|| {
             format!(
@@ -2488,7 +2329,6 @@ impl TieredStateBackend {
         }
         Ok(())
     }
-
     fn is_cross_device_link(err: &std::io::Error) -> bool {
         #[cfg(unix)]
         {
@@ -2504,7 +2344,6 @@ impl TieredStateBackend {
             false
         }
     }
-
     fn offload_snapshot_dir(source: &Path, dest_root: &Path, idx: u64) -> Result<()> {
         fs::create_dir_all(dest_root).wrap_err_with(|| {
             format!(
@@ -2521,7 +2360,6 @@ impl TieredStateBackend {
                 )
             })?;
         }
-
         match fs::rename(source, &dest) {
             Ok(()) => {}
             Err(err) if Self::is_cross_device_link(&err) => {
@@ -2557,7 +2395,6 @@ impl TieredStateBackend {
                 });
             }
         }
-
         if let Some(parent) = dest.parent() {
             Self::sync_dir(parent).wrap_err_with(|| {
                 format!(
@@ -2574,10 +2411,8 @@ impl TieredStateBackend {
                 )
             })?;
         }
-
         Ok(())
     }
-
     fn try_reuse_cold_payload(source: &Path, dest: &Path) -> Result<Option<u64>> {
         let metadata = match fs::metadata(source) {
             Ok(meta) => meta,
@@ -2648,7 +2483,6 @@ impl TieredStateBackend {
             }
         }
     }
-
     fn parse_snapshot_dir_name(name: &std::ffi::OsStr) -> Option<u64> {
         let name = name.to_str()?;
         if name.len() != 20 || !name.as_bytes().iter().all(u8::is_ascii_digit) {
@@ -2656,7 +2490,6 @@ impl TieredStateBackend {
         }
         name.parse::<u64>().ok()
     }
-
     fn sync_dir(path: &Path) -> Result<()> {
         let file = fs::File::open(path).wrap_err_with(|| {
             format!(
@@ -2668,23 +2501,19 @@ impl TieredStateBackend {
             .wrap_err_with(|| format!("failed to sync directory {path}", path = path.display()))
     }
 }
-
 fn sha256(bytes: &[u8]) -> [u8; 32] {
     let mut out = [0_u8; 32];
     out.copy_from_slice(&Sha256::digest(bytes));
     out
 }
-
 fn compute_json_hash(value: &impl json::JsonSerialize) -> Result<([u8; 32], usize)> {
     let encoded = json::to_vec(value).wrap_err("failed to encode snapshot value as JSON")?;
     Ok((sha256(&encoded), encoded.len()))
 }
-
 /// Deterministic byte estimate for hot-tier sizing.
 pub(crate) trait MeasuredBytes {
     /// Return the total measured byte footprint used for hot-tier budgeting.
     fn measured_bytes(&self) -> usize;
-
     /// Return bytes beyond the stack size of the value.
     fn measured_bytes_extra(&self) -> usize
     where
@@ -2694,7 +2523,6 @@ pub(crate) trait MeasuredBytes {
             .saturating_sub(std::mem::size_of::<Self>())
     }
 }
-
 #[allow(clippy::unnecessary_wraps)]
 fn compute_hot_bytes(value: &impl MeasuredBytes) -> Result<usize> {
     Ok(value.measured_bytes())
@@ -2807,7 +2635,6 @@ mod measured_bytes_impls {
             ZkAssetVerifierBinding,
         },
     };
-
     macro_rules! impl_measured_bytes_copy {
         ($($ty:ty),+ $(,)?) => {
             $(
@@ -2819,7 +2646,6 @@ mod measured_bytes_impls {
             )+
         };
     }
-
     fn slice_bytes<T: MeasuredBytes>(slice: &[T]) -> usize {
         let mut total = slice.len().saturating_mul(size_of::<T>());
         for item in slice {
@@ -2827,7 +2653,6 @@ mod measured_bytes_impls {
         }
         total
     }
-
     impl_measured_bytes_copy!(
         (),
         bool,
@@ -2882,7 +2707,6 @@ mod measured_bytes_impls {
         PrivacyRootProvenanceV1,
         PrivacyStateItemRecordV1,
     );
-
     impl<T: MeasuredBytes, const N: usize> MeasuredBytes for [T; N] {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<[T; N]>();
@@ -2892,7 +2716,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl<T: MeasuredBytes> MeasuredBytes for Option<T> {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<Option<T>>();
@@ -2902,13 +2725,11 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl<T: MeasuredBytes> MeasuredBytes for Owned<T> {
         fn measured_bytes(&self) -> usize {
             size_of::<Owned<T>>().saturating_add(self.0.measured_bytes_extra())
         }
     }
-
     impl<T: MeasuredBytes> MeasuredBytes for Vec<T> {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<Vec<T>>();
@@ -2919,7 +2740,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl<T: MeasuredBytes> MeasuredBytes for VecDeque<T> {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<VecDeque<T>>();
@@ -2930,7 +2750,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl<K: MeasuredBytes, V: MeasuredBytes> MeasuredBytes for BTreeMap<K, V> {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<BTreeMap<K, V>>();
@@ -2943,7 +2762,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl<T: MeasuredBytes> MeasuredBytes for BTreeSet<T> {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<BTreeSet<T>>();
@@ -2954,19 +2772,16 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl<T: MeasuredBytes> MeasuredBytes for Box<T> {
         fn measured_bytes(&self) -> usize {
             size_of::<Box<T>>().saturating_add((**self).measured_bytes())
         }
     }
-
     impl<T: MeasuredBytes> MeasuredBytes for Arc<T> {
         fn measured_bytes(&self) -> usize {
             size_of::<Arc<T>>().saturating_add((**self).measured_bytes())
         }
     }
-
     impl<T: MeasuredBytes> MeasuredBytes for ConstVec<T> {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ConstVec<T>>();
@@ -2977,7 +2792,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ConstString {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ConstString>();
@@ -2987,43 +2801,36 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ContractAddress {
         fn measured_bytes(&self) -> usize {
             size_of::<ContractAddress>().saturating_add(self.as_ref().len())
         }
     }
-
     impl MeasuredBytes for ContractSubjectBinding {
         fn measured_bytes(&self) -> usize {
             size_of::<ContractSubjectBinding>().saturating_add(self.subject.measured_bytes_extra())
         }
     }
-
     impl MeasuredBytes for AssetDefinitionAliasBindingRecord {
         fn measured_bytes(&self) -> usize {
             size_of::<AssetDefinitionAliasBindingRecord>().saturating_add(self.alias.as_ref().len())
         }
     }
-
     impl MeasuredBytes for ContractAliasBindingRecord {
         fn measured_bytes(&self) -> usize {
             size_of::<ContractAliasBindingRecord>().saturating_add(self.alias.as_ref().len())
         }
     }
-
     impl MeasuredBytes for String {
         fn measured_bytes(&self) -> usize {
             size_of::<String>().saturating_add(self.capacity())
         }
     }
-
     impl MeasuredBytes for Json {
         fn measured_bytes(&self) -> usize {
             size_of::<Json>().saturating_add(self.get().capacity())
         }
     }
-
     impl MeasuredBytes for BigInt {
         fn measured_bytes(&self) -> usize {
             let bits = self.bit_len();
@@ -3031,31 +2838,26 @@ mod measured_bytes_impls {
             size_of::<BigInt>().saturating_add(bytes)
         }
     }
-
     impl MeasuredBytes for Numeric {
         fn measured_bytes(&self) -> usize {
             size_of::<Numeric>().saturating_add(self.mantissa().measured_bytes_extra())
         }
     }
-
     impl MeasuredBytes for Quantity {
         fn measured_bytes(&self) -> usize {
             size_of::<Quantity>().saturating_add(self.mantissa().measured_bytes_extra())
         }
     }
-
     impl<T> MeasuredBytes for HashOf<T> {
         fn measured_bytes(&self) -> usize {
             size_of::<HashOf<T>>()
         }
     }
-
     impl MeasuredBytes for DirectLaneBlockApplicationKey {
         fn measured_bytes(&self) -> usize {
             size_of::<DirectLaneBlockApplicationKey>()
         }
     }
-
     impl MeasuredBytes for DirectLaneBlockApplicationMarker {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<DirectLaneBlockApplicationMarker>();
@@ -3066,38 +2868,32 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for Hash {
         fn measured_bytes(&self) -> usize {
             size_of::<Hash>()
         }
     }
-
     impl MeasuredBytes for OpaqueAccountId {
         fn measured_bytes(&self) -> usize {
             size_of::<OpaqueAccountId>()
         }
     }
-
     impl MeasuredBytes for PublicKey {
         fn measured_bytes(&self) -> usize {
             let payload_len = self.to_bytes().1.len();
             size_of::<PublicKey>().saturating_add(payload_len)
         }
     }
-
     impl MeasuredBytes for Signature {
         fn measured_bytes(&self) -> usize {
             size_of::<Signature>().saturating_add(self.payload().len())
         }
     }
-
     impl<T> MeasuredBytes for SignatureOf<T> {
         fn measured_bytes(&self) -> usize {
             size_of::<SignatureOf<T>>().saturating_add((**self).measured_bytes_extra())
         }
     }
-
     impl<T> MeasuredBytes for MerkleProof<T> {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<MerkleProof<T>>();
@@ -3109,7 +2905,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl<T> MeasuredBytes for MerkleTree<T> {
         fn measured_bytes(&self) -> usize {
             let depth = self.depth();
@@ -3122,43 +2917,36 @@ mod measured_bytes_impls {
                 .saturating_add(nodes.saturating_mul(size_of::<Option<HashOf<T>>>()))
         }
     }
-
     impl MeasuredBytes for Name {
         fn measured_bytes(&self) -> usize {
             size_of::<Name>().saturating_add(self.as_ref().len())
         }
     }
-
     impl MeasuredBytes for TriggerId {
         fn measured_bytes(&self) -> usize {
             size_of::<TriggerId>().saturating_add(self.name.measured_bytes_extra())
         }
     }
-
     impl MeasuredBytes for IpfsPath {
         fn measured_bytes(&self) -> usize {
             size_of::<IpfsPath>().saturating_add(self.as_ref().len())
         }
     }
-
     impl MeasuredBytes for SorafsUri {
         fn measured_bytes(&self) -> usize {
             size_of::<SorafsUri>().saturating_add(self.as_ref().len())
         }
     }
-
     impl MeasuredBytes for DomainId {
         fn measured_bytes(&self) -> usize {
             size_of::<DomainId>().saturating_add(self.name.measured_bytes_extra())
         }
     }
-
     impl MeasuredBytes for AccountAliasDomain {
         fn measured_bytes(&self) -> usize {
             size_of::<AccountAliasDomain>().saturating_add(self.0.measured_bytes_extra())
         }
     }
-
     impl MeasuredBytes for AccountAlias {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AccountAlias>();
@@ -3167,13 +2955,11 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for UniversalAccountId {
         fn measured_bytes(&self) -> usize {
             size_of::<UniversalAccountId>()
         }
     }
-
     impl MeasuredBytes for AccountController {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AccountController>();
@@ -3188,13 +2974,11 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for MultisigMember {
         fn measured_bytes(&self) -> usize {
             size_of::<MultisigMember>().saturating_add(self.public_key().measured_bytes_extra())
         }
     }
-
     impl MeasuredBytes for MultisigPolicy {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<MultisigPolicy>();
@@ -3202,7 +2986,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for AccountId {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AccountId>();
@@ -3210,13 +2993,11 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for AssetDefinitionId {
         fn measured_bytes(&self) -> usize {
             size_of::<AssetDefinitionId>()
         }
     }
-
     impl MeasuredBytes for AssetId {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AssetId>();
@@ -3225,19 +3006,16 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for RoleId {
         fn measured_bytes(&self) -> usize {
             size_of::<RoleId>().saturating_add(self.name.measured_bytes_extra())
         }
     }
-
     impl MeasuredBytes for PeerId {
         fn measured_bytes(&self) -> usize {
             size_of::<PeerId>().saturating_add(self.public_key.measured_bytes_extra())
         }
     }
-
     impl MeasuredBytes for Metadata {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<Metadata>();
@@ -3250,13 +3028,11 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for EventFilterBox {
         fn measured_bytes(&self) -> usize {
             size_of::<EventFilterBox>()
         }
     }
-
     impl MeasuredBytes for Permission {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<Permission>();
@@ -3265,7 +3041,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for AccountDetails {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AccountDetails>();
@@ -3276,7 +3051,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for AccountRekeyRecord {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AccountRekeyRecord>();
@@ -3288,7 +3062,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for RecoveryGuardian {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<RecoveryGuardian>();
@@ -3296,7 +3069,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for AccountRecoveryPolicy {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AccountRecoveryPolicy>();
@@ -3304,13 +3076,11 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for AccountRecoveryStatus {
         fn measured_bytes(&self) -> usize {
             size_of::<AccountRecoveryStatus>()
         }
     }
-
     impl MeasuredBytes for AccountRecoveryRequest {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AccountRecoveryRequest>();
@@ -3323,7 +3093,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for AssetConfidentialPolicy {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AssetConfidentialPolicy>();
@@ -3335,7 +3104,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for AssetDefinition {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AssetDefinition>();
@@ -3350,7 +3118,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for Domain {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<Domain>();
@@ -3361,7 +3128,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for NftData {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<NftData>();
@@ -3370,7 +3136,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for RwaParentRef {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<RwaParentRef>();
@@ -3379,7 +3144,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for RwaId {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<RwaId>();
@@ -3388,7 +3152,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for RwaControlPolicy {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<RwaControlPolicy>();
@@ -3397,7 +3160,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for RwaData {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<RwaData>();
@@ -3414,7 +3176,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for Role {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<Role>();
@@ -3424,7 +3185,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for VerifyingKeyId {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<VerifyingKeyId>();
@@ -3433,7 +3193,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for VerifyingKeyBox {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<VerifyingKeyBox>();
@@ -3442,7 +3201,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for VerifyingKeyRecord {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<VerifyingKeyRecord>();
@@ -3465,7 +3223,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ProofBox {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ProofBox>();
@@ -3474,7 +3231,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ProofId {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ProofId>();
@@ -3483,7 +3239,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for BridgeIcsProof {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<BridgeIcsProof>();
@@ -3495,7 +3250,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for BridgeTransparentProof {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<BridgeTransparentProof>();
@@ -3505,7 +3259,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for BridgeNativeProtocolProofV1 {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<BridgeNativeProtocolProofV1>();
@@ -3515,7 +3268,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for BridgeSccpDestinationProofV1 {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<BridgeSccpDestinationProofV1>();
@@ -3525,7 +3277,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for BridgeProofPayload {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<BridgeProofPayload>();
@@ -3546,13 +3297,11 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for BridgeProofRange {
         fn measured_bytes(&self) -> usize {
             size_of::<BridgeProofRange>()
         }
     }
-
     impl MeasuredBytes for BridgeProof {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<BridgeProof>();
@@ -3561,7 +3310,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for BridgeProofRecord {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<BridgeProofRecord>();
@@ -3571,7 +3319,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for SccpOutboundPendingMessageRecordV1 {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<SccpOutboundPendingMessageRecordV1>();
@@ -3581,19 +3328,16 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for SccpOutboundMessageKeyV1 {
         fn measured_bytes(&self) -> usize {
             size_of::<SccpOutboundMessageKeyV1>()
         }
     }
-
     impl MeasuredBytes for SccpOutboundProofRecordV1 {
         fn measured_bytes(&self) -> usize {
             size_of::<SccpOutboundProofRecordV1>()
         }
     }
-
     impl MeasuredBytes for SccpInboundMessageRecordV1 {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<SccpInboundMessageRecordV1>();
@@ -3608,7 +3352,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ProofRecord {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ProofRecord>();
@@ -3621,7 +3364,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for RuntimeUpgradeSbomDigest {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<RuntimeUpgradeSbomDigest>();
@@ -3630,7 +3372,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for RuntimeUpgradeManifest {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<RuntimeUpgradeManifest>();
@@ -3648,7 +3389,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for RuntimeUpgradeRecord {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<RuntimeUpgradeRecord>();
@@ -3659,7 +3399,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for AccessSetHints {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AccessSetHints>();
@@ -3670,7 +3409,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for DynamicAccessHint {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<DynamicAccessHint>();
@@ -3680,7 +3418,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for TriggerCallback {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<TriggerCallback>();
@@ -3689,7 +3426,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for TriggerDescriptor {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<TriggerDescriptor>();
@@ -3702,7 +3438,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for EntrypointDescriptor {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<EntrypointDescriptor>();
@@ -3719,7 +3454,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for EntrypointParamDescriptor {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<EntrypointParamDescriptor>();
@@ -3728,7 +3462,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for StateDescriptor {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<StateDescriptor>();
@@ -3737,7 +3470,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ContractErrorCodeDescriptor {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ContractErrorCodeDescriptor>();
@@ -3746,7 +3478,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for KotobaTranslation {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<KotobaTranslation>();
@@ -3755,7 +3486,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for KotobaTranslationEntry {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<KotobaTranslationEntry>();
@@ -3764,7 +3494,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ManifestProvenance {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ManifestProvenance>();
@@ -3773,7 +3502,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ContractManifest {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ContractManifest>();
@@ -3791,13 +3519,11 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for SmartContractCodeUploadDescriptor {
         fn measured_bytes(&self) -> usize {
             size_of::<Self>()
         }
     }
-
     impl MeasuredBytes for QcAggregate {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<QcAggregate>();
@@ -3806,7 +3532,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for Qc {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<Qc>();
@@ -3826,7 +3551,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ZkAssetVerifierBinding {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ZkAssetVerifierBinding>();
@@ -3835,13 +3559,11 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for FrontierCheckpoint {
         fn measured_bytes(&self) -> usize {
             size_of::<FrontierCheckpoint>()
         }
     }
-
     impl MeasuredBytes for ZkAssetState {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ZkAssetState>();
@@ -3857,7 +3579,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ElectionState {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ElectionState>();
@@ -3877,7 +3598,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for DeployContractProposal {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<DeployContractProposal>();
@@ -3889,7 +3609,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for RuntimeUpgradeProposal {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<RuntimeUpgradeProposal>();
@@ -3897,7 +3616,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for SccpRouteGovernanceProposal {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<SccpRouteGovernanceProposal>();
@@ -3905,14 +3623,12 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for SorafsProviderGovernanceProposal {
         fn measured_bytes(&self) -> usize {
             size_of::<SorafsProviderGovernanceProposal>()
                 .saturating_add(norito::codec::Encode::encode(&self.action).len())
         }
     }
-
     impl MeasuredBytes for ValidationFeePolicyProposal {
         fn measured_bytes(&self) -> usize {
             size_of::<ValidationFeePolicyProposal>()
@@ -3920,7 +3636,6 @@ mod measured_bytes_impls {
                 .saturating_add(norito::codec::Encode::encode(&self.plain_electorate_rules).len())
         }
     }
-
     impl MeasuredBytes for ValidationFeePayoutLifecycleProposal {
         fn measured_bytes(&self) -> usize {
             size_of::<ValidationFeePayoutLifecycleProposal>()
@@ -3928,7 +3643,6 @@ mod measured_bytes_impls {
                 .saturating_add(norito::codec::Encode::encode(&self.plain_electorate_rules).len())
         }
     }
-
     impl MeasuredBytes for ProposalKind {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ProposalKind>();
@@ -3958,7 +3672,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for GovernanceStageApproval {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceStageApproval>();
@@ -3968,7 +3681,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for GovernanceStageRecord {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceStageRecord>();
@@ -3980,7 +3692,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for GovernanceStageApprovals {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceStageApprovals>();
@@ -3992,7 +3703,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ValidationFeePlainElectorateMemberV1 {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ValidationFeePlainElectorateMemberV1>();
@@ -4001,7 +3711,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ValidationFeePlainElectorateSnapshotV1 {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ValidationFeePlainElectorateSnapshotV1>();
@@ -4010,7 +3719,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for GovernancePipeline {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernancePipeline>();
@@ -4018,7 +3726,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for GovernanceParliamentSnapshot {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceParliamentSnapshot>();
@@ -4029,7 +3736,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for GovernanceProposalRecord {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceProposalRecord>();
@@ -4042,19 +3748,16 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalAction {
         fn measured_bytes(&self) -> usize {
             size_of::<iroha_data_model::ministry::AgendaProposalAction>()
         }
     }
-
     impl MeasuredBytes for iroha_data_model::ministry::AgendaEvidenceKind {
         fn measured_bytes(&self) -> usize {
             size_of::<iroha_data_model::ministry::AgendaEvidenceKind>()
         }
     }
-
     impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalSummary {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<iroha_data_model::ministry::AgendaProposalSummary>();
@@ -4064,7 +3767,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalTarget {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<iroha_data_model::ministry::AgendaProposalTarget>();
@@ -4075,7 +3777,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for iroha_data_model::ministry::AgendaEvidenceAttachment {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<iroha_data_model::ministry::AgendaEvidenceAttachment>();
@@ -4086,7 +3787,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalSubmitter {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<iroha_data_model::ministry::AgendaProposalSubmitter>();
@@ -4097,7 +3797,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalV1 {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<iroha_data_model::ministry::AgendaProposalV1>();
@@ -4115,7 +3814,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalRecordV1 {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<iroha_data_model::ministry::AgendaProposalRecordV1>();
@@ -4126,7 +3824,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for GovernanceReferendumRecord {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceReferendumRecord>();
@@ -4137,7 +3834,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for GovernanceLockRecord {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceLockRecord>();
@@ -4151,7 +3847,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for GovernanceLockCustody {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceLockCustody>();
@@ -4162,7 +3857,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for GovernanceLocksForReferendum {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceLocksForReferendum>();
@@ -4170,13 +3864,11 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for GovernanceSlashEntry {
         fn measured_bytes(&self) -> usize {
             size_of::<GovernanceSlashEntry>()
         }
     }
-
     impl MeasuredBytes for GovernanceSlashLedger {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<GovernanceSlashLedger>();
@@ -4184,7 +3876,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ParliamentRoster {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ParliamentRoster>();
@@ -4197,7 +3888,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ParliamentBodies {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ParliamentBodies>();
@@ -4206,7 +3896,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ParliamentTerm {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ParliamentTerm>();
@@ -4218,7 +3907,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ProofAttachment {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ProofAttachment>();
@@ -4231,7 +3919,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for ProofAttachmentList {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<ProofAttachmentList>();
@@ -4243,7 +3930,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for LanePrivacyMerkleWitness {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<LanePrivacyMerkleWitness>();
@@ -4252,7 +3938,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for LanePrivacyWitness {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<LanePrivacyWitness>();
@@ -4264,7 +3949,6 @@ mod measured_bytes_impls {
             total
         }
     }
-
     impl MeasuredBytes for LanePrivacyProof {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<LanePrivacyProof>();
@@ -4274,11 +3958,9 @@ mod measured_bytes_impls {
         }
     }
 }
-
 fn lane_snapshot_dir(root: &Path, entry: &LaneConfigEntry) -> PathBuf {
     root.join(&entry.kura_segment)
 }
-
 fn lane_snapshot_dir_is_empty(path: &Path) -> Result<bool> {
     Ok(fs::read_dir(path)
         .wrap_err_with(|| {
@@ -4297,7 +3979,6 @@ fn lane_snapshot_dir_is_empty(path: &Path) -> Result<bool> {
         })?
         .is_none())
 }
-
 fn has_matching_empty_retired_lane_snapshot(retired_root: &Path, stem: &str) -> Result<bool> {
     if !retired_root.exists() {
         return Ok(false);
@@ -4352,7 +4033,6 @@ fn has_matching_empty_retired_lane_snapshot(retired_root: &Path, stem: &str) -> 
     }
     Ok(false)
 }
-
 fn unique_retired_lane_path(base: &Path, stem: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -4372,7 +4052,6 @@ fn unique_retired_lane_path(base: &Path, stem: &str) -> PathBuf {
         counter = counter.saturating_add(1);
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum TieredSegment {
     Domains,
@@ -4429,7 +4108,6 @@ enum TieredSegment {
     KagemushaReplayKeys,
     DirectLaneBlockApplicationMarkers,
 }
-
 impl TieredSegment {
     fn dir_name(self) -> &'static str {
         match self {
@@ -4491,13 +4169,11 @@ impl TieredSegment {
         }
     }
 }
-
 impl norito::json::JsonSerialize for TieredSegment {
     fn json_serialize(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.dir_name(), out);
     }
 }
-
 impl norito::json::JsonDeserialize for TieredSegment {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -4569,19 +4245,16 @@ impl norito::json::JsonDeserialize for TieredSegment {
         Ok(segment)
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct TieredEntryId {
     segment: TieredSegment,
     key_hash: [u8; 32],
 }
-
 impl TieredEntryId {
     fn new(segment: TieredSegment, key_hash: [u8; 32]) -> Self {
         Self { segment, key_hash }
     }
 }
-
 impl fmt::Display for TieredEntryId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -4592,7 +4265,6 @@ impl fmt::Display for TieredEntryId {
         )
     }
 }
-
 #[derive(Debug, Clone)]
 struct EntryMetadata {
     last_present_snapshot: u64,
@@ -4604,7 +4276,6 @@ struct EntryMetadata {
     last_value_hash: [u8; 32],
     value_size_bytes: usize,
 }
-
 impl EntryMetadata {
     fn new(snapshot_idx: u64, value_hash: [u8; 32], value_size_bytes: usize) -> Self {
         Self {
@@ -4619,7 +4290,6 @@ impl EntryMetadata {
         }
     }
 }
-
 impl PartialEq for EntryMetadata {
     fn eq(&self, other: &Self) -> bool {
         self.last_present_snapshot == other.last_present_snapshot
@@ -4632,15 +4302,12 @@ impl PartialEq for EntryMetadata {
             && self.value_size_bytes == other.value_size_bytes
     }
 }
-
 impl Eq for EntryMetadata {}
-
 impl PartialOrd for EntryMetadata {
     fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl Ord for EntryMetadata {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         self.last_mutated_snapshot
@@ -4651,13 +4318,11 @@ impl Ord for EntryMetadata {
             .then_with(|| other.value_size_bytes.cmp(&self.value_size_bytes))
     }
 }
-
 #[derive(Debug, Clone)]
 struct EntryKey {
     key: TieredKeyHandle,
     key_encoded: Vec<u8>,
 }
-
 impl EntryKey {
     fn score(&self, id: TieredEntryId) -> EntryScore {
         EntryScore {
@@ -4668,7 +4333,6 @@ impl EntryKey {
         }
     }
 }
-
 #[derive(Debug, Clone)]
 struct EntryScore {
     id: TieredEntryId,
@@ -4676,7 +4340,6 @@ struct EntryScore {
     key: TieredKeyHandle,
     key_encoded: Vec<u8>,
 }
-
 impl EntryScore {
     fn manifest_entry(
         &self,
@@ -4699,7 +4362,6 @@ impl EntryScore {
             spill_bytes,
         }
     }
-
     fn relative_payload_path(&self, snapshot_idx: u64) -> PathBuf {
         let mut path = PathBuf::from(self.segment.dir_name());
         path.push(format!(
@@ -4709,12 +4371,10 @@ impl EntryScore {
         ));
         path
     }
-
     fn encode_value(&self, world: &World) -> Result<Vec<u8>> {
         self.key.encode_value(world)
     }
 }
-
 /// Key handle for tiered snapshot entries.
 #[derive(Debug, Clone)]
 pub(crate) enum TieredKeyHandle {
@@ -4772,7 +4432,6 @@ pub(crate) enum TieredKeyHandle {
     KagemushaReplayKey(iroha_crypto::Hash),
     DirectLaneBlockApplicationMarker(super::DirectLaneBlockApplicationKey),
 }
-
 impl TieredKeyHandle {
     fn segment(&self) -> TieredSegment {
         match self {
@@ -4839,7 +4498,6 @@ impl TieredKeyHandle {
             }
         }
     }
-
     fn encode_key(&self) -> Result<Vec<u8>> {
         match self {
             TieredKeyHandle::ContractInstance(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4907,13 +4565,11 @@ impl TieredKeyHandle {
             }
         }
     }
-
     fn entry_id(&self) -> Result<(TieredEntryId, Vec<u8>)> {
         let key_encoded = self.encode_key()?;
         let key_hash = sha256(&key_encoded);
         Ok((TieredEntryId::new(self.segment(), key_hash), key_encoded))
     }
-
     fn measure_value(&self, world: &World) -> Result<Option<([u8; 32], usize)>> {
         macro_rules! fetch {
             ($storage:expr, $key:expr) => {{
@@ -4928,7 +4584,6 @@ impl TieredKeyHandle {
                 Ok(Some((value_hash, value_size_bytes)))
             }};
         }
-
         match self {
             TieredKeyHandle::Domain(id) => fetch!(world.domains, id),
             TieredKeyHandle::Account(id) => fetch!(world.accounts, id),
@@ -5015,7 +4670,6 @@ impl TieredKeyHandle {
             }
         }
     }
-
     fn encode_value(&self, world: &World) -> Result<Vec<u8>> {
         macro_rules! fetch {
             ($storage:expr, $key:expr) => {{
@@ -5029,7 +4683,6 @@ impl TieredKeyHandle {
                 Ok(bytes)
             }};
         }
-
         match self {
             TieredKeyHandle::Domain(id) => fetch!(world.domains, id),
             TieredKeyHandle::Account(id) => fetch!(world.accounts, id),
@@ -5117,7 +4770,6 @@ impl TieredKeyHandle {
         }
     }
 }
-
 impl fmt::Display for TieredKeyHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -5258,7 +4910,6 @@ impl fmt::Display for TieredKeyHandle {
         }
     }
 }
-
 /// Snapshot manifest describing hot/cold partitioning for a single capture.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct TieredSnapshotManifest {
@@ -5285,7 +4936,6 @@ pub struct TieredSnapshotManifest {
     /// Hot-tier byte budget overflow caused by grace retention.
     pub hot_grace_overflow_bytes: u64,
 }
-
 /// Per-entry metadata persisted in manifests.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize)]
 pub struct TieredManifestEntry {
@@ -5299,7 +4949,6 @@ pub struct TieredManifestEntry {
     spill_path: Option<PathBuf>,
     spill_bytes: Option<u64>,
 }
-
 impl TieredManifestEntry {
     /// Returns the deterministic payload size for the entry.
     #[must_use]
@@ -5307,7 +4956,6 @@ impl TieredManifestEntry {
         self.value_size_bytes
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::{fs, num::NonZeroU32};
@@ -5363,7 +5011,6 @@ mod tests {
         };
         (key, record)
     }
-
     fn sccp_outbound_proof_fixture() -> (SccpOutboundMessageKeyV1, SccpOutboundProofRecordV1) {
         let key = SccpOutboundMessageKeyV1::new(
             SccpLaneIdV1 {
@@ -5386,7 +5033,6 @@ mod tests {
         assert!(record.is_well_formed_for_key(&key));
         (key, record)
     }
-
     #[test]
     fn streamed_hash_matches_canonical_json() {
         let value: norito::json::Value = norito::json::from_str(
@@ -5410,7 +5056,6 @@ mod tests {
         assert_eq!(stream_len, encoded.len());
         assert_eq!(stream_hash, sha256(&encoded));
     }
-
     #[test]
     fn hot_bytes_account_for_vec_capacity() {
         let mut value = Vec::with_capacity(12);
@@ -5420,7 +5065,6 @@ mod tests {
         let measured = compute_hot_bytes(&value).expect("hot byte measurement");
         assert_eq!(measured, expected);
     }
-
     #[test]
     fn measured_bytes_account_for_proof_attachment_list_capacity() {
         let attachment = ProofAttachment::new_ref(
@@ -5434,7 +5078,6 @@ mod tests {
         reserved.push(attachment);
         let compact = ProofAttachmentList::try_from(compact).expect("valid compact list");
         let reserved = ProofAttachmentList::try_from(reserved).expect("valid reserved list");
-
         assert_eq!(compact.as_slice(), reserved.as_slice());
         let capacity_delta = reserved
             .capacity()
@@ -5449,7 +5092,6 @@ mod tests {
             capacity_delta.saturating_mul(std::mem::size_of::<ProofAttachment>())
         );
     }
-
     #[test]
     fn measured_bytes_track_governance_approval_sizes() {
         use std::collections::BTreeSet;
@@ -5480,7 +5122,6 @@ mod tests {
             ));
         let filled_bytes = MeasuredBytes::measured_bytes(&approval);
         assert!(filled_bytes >= empty_bytes);
-
         let mut approvals = crate::state::GovernanceStageApprovals::default();
         let base_bytes = MeasuredBytes::measured_bytes(&approvals);
         approvals.stages.insert(
@@ -5490,18 +5131,15 @@ mod tests {
         let updated_bytes = MeasuredBytes::measured_bytes(&approvals);
         assert!(updated_bytes >= base_bytes);
     }
-
     #[test]
     fn measured_bytes_cover_trigger_filters() {
         use iroha_data_model::{
             events::{EventFilterBox, data::DataEventFilter},
             trigger::{TriggerId, action::Repeats},
         };
-
         let trigger_id: TriggerId = "audit_trigger".parse().expect("trigger id");
         let repeats = Repeats::Exactly(1);
         let filter = EventFilterBox::Data(DataEventFilter::Any);
-
         assert!(MeasuredBytes::measured_bytes(&trigger_id) >= std::mem::size_of::<TriggerId>());
         assert_eq!(
             MeasuredBytes::measured_bytes(&repeats),
@@ -5509,7 +5147,6 @@ mod tests {
         );
         assert!(MeasuredBytes::measured_bytes(&filter) >= std::mem::size_of::<EventFilterBox>());
     }
-
     #[test]
     fn measured_bytes_cover_opaque_account_id() {
         let opaque = OpaqueAccountId::from_hash(Hash::new([7_u8; 32]));
@@ -5518,7 +5155,6 @@ mod tests {
             std::mem::size_of::<OpaqueAccountId>()
         );
     }
-
     #[test]
     fn measured_bytes_cover_opaque_asset_definition_id() {
         use iroha_data_model::asset::AssetDefinitionId;
@@ -5533,7 +5169,6 @@ mod tests {
             std::mem::size_of::<AssetDefinitionId>()
         );
     }
-
     fn dummy_qc(seed: u8) -> Qc {
         let validator_set: Vec<PeerId> = Vec::new();
         Qc {
@@ -5559,18 +5194,15 @@ mod tests {
             },
         }
     }
-
     #[test]
     fn snapshot_failure_leaves_existing_snapshot_intact() {
         let temp = tempdir().expect("tmpdir");
         let root = temp.path().to_path_buf();
         let mut backend = TieredStateBackend::new(true, 0, 0, 0, Some(root.clone()), None, 0, 0);
-
         let existing_dir = root.join(format!("{:020}", 1_u64));
         fs::create_dir_all(&existing_dir).expect("create existing snapshot");
         let marker = existing_dir.join("marker.txt");
         fs::write(&marker, b"keep me").expect("write marker");
-
         let plan = TieredSnapshotPlan {
             root: root.clone(),
             snapshot_dir: existing_dir.clone(),
@@ -5589,10 +5221,8 @@ mod tests {
             },
             cold_entries: Vec::new(),
         };
-
         let staging_path = plan.snapshot_dir.with_extension("staging");
         fs::write(&staging_path, b"block staging dir creation").expect("write staging file");
-
         let result = backend.execute_snapshot_plan(plan, &World::default());
         assert!(
             result.is_err(),
@@ -5603,7 +5233,6 @@ mod tests {
             "existing snapshot directory should remain when staging fails"
         );
     }
-
     #[test]
     fn partial_contract_upload_roundtrips_through_cold_tier_disk() {
         let temp = tempdir().expect("tmpdir");
@@ -5612,7 +5241,6 @@ mod tests {
         // persisted cold tier, so the assertions below cannot read in-memory values.
         let mut backend = TieredStateBackend::new(true, 0, 1, 0, Some(root.clone()), None, 0, 0);
         let mut world = World::default();
-
         let keypair = iroha_crypto::KeyPair::try_from_seed(
             b"tiered partial contract upload".to_vec(),
             iroha_crypto::Algorithm::Ed25519,
@@ -5638,7 +5266,6 @@ mod tests {
         world
             .contract_code_upload_chunks
             .insert(chunk_key.clone(), final_chunk.clone());
-
         backend
             .record_world_snapshot(&world)
             .expect("persist partial upload snapshot");
@@ -5647,7 +5274,6 @@ mod tests {
             .expect("snapshot manifest recorded")
             .snapshot_index;
         drop(backend);
-
         let snapshot_dir = root.join(format!("{snapshot_index:020}"));
         let manifest_bytes =
             fs::read(snapshot_dir.join("manifest.json")).expect("read persisted tiered manifest");
@@ -5673,7 +5299,6 @@ mod tests {
             norito::codec::Encode::encode(&chunk_key),
             "chunk key must retain the out-of-order index"
         );
-
         let reader = TieredStateBackend::new(true, 0, 1, 0, Some(root), None, 0, 0);
         let restored_descriptor_bytes = reader
             .read_cold_payload(snapshot_index, descriptor_entry)
@@ -5682,7 +5307,6 @@ mod tests {
         let restored_descriptor: crate::state::SmartContractCodeUploadDescriptor =
             json::from_slice(&restored_descriptor_bytes).expect("decode descriptor cold payload");
         assert_eq!(restored_descriptor, descriptor);
-
         let restored_chunk_bytes = reader
             .read_cold_payload(snapshot_index, chunk_entry)
             .expect("read chunk cold payload")
@@ -5690,7 +5314,6 @@ mod tests {
         let restored_chunk: Vec<u8> =
             json::from_slice(&restored_chunk_bytes).expect("decode chunk cold payload");
         assert_eq!(restored_chunk, final_chunk);
-
         let legacy_descriptor_without_chunk_count = format!(r#"{{"total_size":{total_size}}}"#);
         assert!(
             json::from_str::<crate::state::SmartContractCodeUploadDescriptor>(
@@ -5700,14 +5323,12 @@ mod tests {
             "first-release persistence must not default or migrate missing descriptor fields"
         );
     }
-
     #[test]
     fn alias_binding_records_roundtrip_through_cold_tier_disk() {
         let temp = tempdir().expect("tmpdir");
         let root = temp.path().to_path_buf();
         let mut backend = TieredStateBackend::new(true, 0, 1, 0, Some(root.clone()), None, 0, 0);
         let mut world = World::default();
-
         let definition_id = iroha_data_model::asset::AssetDefinitionId::from_uuid_bytes([
             0x31, 0x42, 0x53, 0x64, 0x75, 0x86, 0x47, 0x98, 0x80, 0x19, 0x2a, 0x3b, 0x4c, 0x5d,
             0x6e, 0x7f,
@@ -5722,7 +5343,6 @@ mod tests {
         world
             .asset_definition_alias_bindings
             .insert(definition_id.clone(), asset_binding.clone());
-
         let keypair = iroha_crypto::KeyPair::try_from_seed(
             b"tiered contract alias binding".to_vec(),
             iroha_crypto::Algorithm::Ed25519,
@@ -5749,7 +5369,6 @@ mod tests {
         world
             .contract_alias_bindings
             .insert(contract_address.clone(), contract_binding.clone());
-
         backend
             .record_world_snapshot(&world)
             .expect("persist alias binding snapshot");
@@ -5758,7 +5377,6 @@ mod tests {
             .expect("snapshot manifest recorded")
             .snapshot_index;
         drop(backend);
-
         let snapshot_dir = root.join(format!("{snapshot_index:020}"));
         let manifest_bytes =
             fs::read(snapshot_dir.join("manifest.json")).expect("read persisted manifest");
@@ -5782,7 +5400,6 @@ mod tests {
             contract_entry.key_payload,
             norito::codec::Encode::encode(&contract_address)
         );
-
         let reader = TieredStateBackend::new(true, 0, 1, 0, Some(root), None, 0, 0);
         let restored_asset_bytes = reader
             .read_cold_payload(snapshot_index, asset_entry)
@@ -5791,7 +5408,6 @@ mod tests {
         let restored_asset: crate::state::AssetDefinitionAliasBindingRecord =
             json::from_slice(&restored_asset_bytes).expect("decode asset alias binding");
         assert_eq!(restored_asset, asset_binding);
-
         let restored_contract_bytes = reader
             .read_cold_payload(snapshot_index, contract_entry)
             .expect("read contract alias binding")
@@ -5800,19 +5416,16 @@ mod tests {
             json::from_slice(&restored_contract_bytes).expect("decode contract alias binding");
         assert_eq!(restored_contract, contract_binding);
     }
-
     #[test]
     fn persists_cold_entries_and_prunes_old_snapshots() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
             TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 1, 0);
         let mut world = World::default();
-
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
         world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
         world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
-
         backend
             .record_world_snapshot(&world)
             .expect("first snapshot");
@@ -5823,7 +5436,6 @@ mod tests {
         assert!(manifest.hot_entries[0].value_size_bytes() > 0);
         assert!(manifest.cold_bytes_total > 0);
         assert!(manifest.cold_entries[0].spill_bytes.is_some());
-
         let cold_entry = &manifest.cold_entries[0];
         let snapshot_dir = temp
             .path()
@@ -5844,14 +5456,12 @@ mod tests {
         let encoded = fs::read(&payload_path).expect("payload read");
         let decoded: Qc = json::from_slice(&encoded).expect("cold payload decodes");
         assert!(decoded == qc1 || decoded == qc2);
-
         // Mutate the other record so the hot entry flips on the next snapshot.
         let mut updated = qc2.clone();
         updated.view = 99;
         world
             .commit_qcs
             .insert(updated.subject_block_hash, updated.clone());
-
         backend
             .record_world_snapshot(&world)
             .expect("second snapshot");
@@ -5866,19 +5476,16 @@ mod tests {
         assert_eq!(retained, 1);
         assert_eq!(manifest2.snapshot_index, 2);
     }
-
     #[test]
     fn record_world_snapshot_with_diff_updates_touched_entries() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
             TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
         world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
         world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
-
         backend
             .record_world_snapshot(&world)
             .expect("initial snapshot");
@@ -5886,26 +5493,21 @@ mod tests {
             .last_manifest()
             .expect("manifest recorded")
             .snapshot_index;
-
         let mut qc1_updated = qc1.clone();
         qc1_updated.view = qc1_updated.view.saturating_add(1);
         world.commit_qcs.insert(qc1.subject_block_hash, qc1_updated);
-
         let mut diff = TieredSnapshotDiff::default();
         diff.push(TieredKeyHandle::CommitQc(qc1.subject_block_hash));
-
         backend
             .record_world_snapshot_with_diff(&world, &diff)
             .expect("diff snapshot");
         let manifest = backend.last_manifest().expect("manifest recorded");
-
         let qc1_key = TieredKeyHandle::CommitQc(qc1.subject_block_hash)
             .encode_key()
             .expect("qc1 key encode");
         let qc2_key = TieredKeyHandle::CommitQc(qc2.subject_block_hash)
             .encode_key()
             .expect("qc2 key encode");
-
         let mut entries = manifest.hot_entries.iter().chain(&manifest.cold_entries);
         let entry1 = entries
             .clone()
@@ -5914,11 +5516,9 @@ mod tests {
         let entry2 = entries
             .find(|entry| entry.key_payload == qc2_key)
             .expect("qc2 entry present");
-
         assert_eq!(entry1.last_mutated_snapshot, manifest.snapshot_index);
         assert_eq!(entry2.last_mutated_snapshot, snapshot1);
     }
-
     #[test]
     fn record_world_snapshot_includes_sccp_outbound_pending_messages() {
         let temp = tempdir().expect("tmpdir");
@@ -5946,7 +5546,6 @@ mod tests {
             .sccp_outbound_pending_messages
             .insert(key.clone(), record);
         world.sccp_outbound_pending_usage = mv::cell::Cell::new(usage);
-
         backend
             .record_world_snapshot(&world)
             .expect("snapshot with SCCP outbound outbox");
@@ -5963,11 +5562,9 @@ mod tests {
                     && entry.key_payload == key_payload
             })
             .expect("SCCP outbound replay key should be snapshotted");
-
         assert_eq!(entry.last_present_snapshot, manifest.snapshot_index);
         assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
     }
-
     #[test]
     fn record_world_snapshot_includes_exact_lane_sccp_outbound_proofs() {
         let temp = tempdir().expect("tmpdir");
@@ -5976,7 +5573,6 @@ mod tests {
         let mut world = World::default();
         let (key, record) = sccp_outbound_proof_fixture();
         world.sccp_outbound_proofs.insert(key, record);
-
         backend
             .record_world_snapshot(&world)
             .expect("snapshot with SCCP outbound proof replay entry");
@@ -5993,7 +5589,6 @@ mod tests {
                     && entry.key_payload == key_payload
             })
             .expect("SCCP outbound proof replay key should be snapshotted");
-
         assert_eq!(entry.last_present_snapshot, manifest.snapshot_index);
         assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
         assert_eq!(
@@ -6001,7 +5596,6 @@ mod tests {
             MeasuredBytes::measured_bytes(&record)
         );
     }
-
     #[test]
     fn payload_snapshot_updates_and_removes_sccp_outbound_proofs() {
         let temp = tempdir().expect("tmpdir");
@@ -6013,7 +5607,6 @@ mod tests {
         backend
             .record_world_snapshot(&world)
             .expect("initial outbound proof snapshot");
-
         let updated = SccpOutboundProofRecordV1 {
             destination_proof_commitment: [0xB7; 32],
             accepted_at_height: record.accepted_at_height.saturating_add(1),
@@ -6025,7 +5618,6 @@ mod tests {
         backend
             .record_world_snapshot_with_payload(&payload)
             .expect("updated outbound proof payload snapshot");
-
         let key_payload = TieredKeyHandle::SccpOutboundProof(key)
             .encode_key()
             .expect("outbound proof key encodes");
@@ -6042,7 +5634,6 @@ mod tests {
         let expected_payload =
             norito::json::to_vec(&updated).expect("updated proof record encodes");
         assert_eq!(entry.value_hash_hex, hex::encode(sha256(&expected_payload)));
-
         let mut removal = TieredSnapshotPayload::default();
         removal
             .push_value::<SccpOutboundProofRecordV1>(TieredKeyHandle::SccpOutboundProof(key), None);
@@ -6062,7 +5653,6 @@ mod tests {
             "removed outbound proof entry must leave the tiered manifest"
         );
     }
-
     #[test]
     fn record_world_snapshot_includes_exact_lane_sccp_inbound_messages() {
         let temp = tempdir().expect("tmpdir");
@@ -6071,7 +5661,6 @@ mod tests {
         let mut world = World::default();
         let (key, record) = sccp_inbound_fixture();
         world.sccp_inbound_messages.insert(key, record);
-
         backend
             .record_world_snapshot(&world)
             .expect("snapshot with SCCP inbound replay entry");
@@ -6088,7 +5677,6 @@ mod tests {
                     && entry.key_payload == key_payload
             })
             .expect("SCCP inbound replay key should be snapshotted");
-
         assert_eq!(entry.last_present_snapshot, manifest.snapshot_index);
         assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
         assert_eq!(
@@ -6096,7 +5684,6 @@ mod tests {
             MeasuredBytes::measured_bytes(&record)
         );
     }
-
     #[test]
     fn payload_snapshot_updates_and_removes_sccp_inbound_entries() {
         let temp = tempdir().expect("tmpdir");
@@ -6108,7 +5695,6 @@ mod tests {
         backend
             .record_world_snapshot(&world)
             .expect("initial inbound snapshot");
-
         let updated = SccpInboundMessageRecordV1 {
             anchor_interval_height: record.anchor_interval_height + 1,
             source_finality_height: record.source_finality_height + 1,
@@ -6122,7 +5708,6 @@ mod tests {
         backend
             .record_world_snapshot_with_payload(&payload)
             .expect("updated inbound payload snapshot");
-
         let manifest = backend.last_manifest().expect("updated manifest");
         let key_payload = TieredKeyHandle::SccpInboundMessage(key)
             .encode_key()
@@ -6139,7 +5724,6 @@ mod tests {
         let expected_payload = norito::json::to_vec(&updated).expect("updated record encodes");
         assert_eq!(entry.value_hash_hex, hex::encode(sha256(&expected_payload)));
         assert_eq!(entry.last_mutated_snapshot, manifest.snapshot_index);
-
         let mut removal = TieredSnapshotPayload::default();
         removal.push_value::<SccpInboundMessageRecordV1>(
             TieredKeyHandle::SccpInboundMessage(key),
@@ -6161,19 +5745,16 @@ mod tests {
             "removed inbound replay entry must leave the tiered manifest"
         );
     }
-
     #[test]
     fn record_world_snapshot_with_payload_updates_touched_entries() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
             TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
         world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
         world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
-
         backend
             .record_world_snapshot(&world)
             .expect("initial snapshot");
@@ -6181,31 +5762,26 @@ mod tests {
             .last_manifest()
             .expect("manifest recorded")
             .snapshot_index;
-
         let mut qc1_updated = qc1.clone();
         qc1_updated.view = qc1_updated.view.saturating_add(1);
         world
             .commit_qcs
             .insert(qc1.subject_block_hash, qc1_updated.clone());
-
         let mut payload = TieredSnapshotPayload::default();
         payload.push_value(
             TieredKeyHandle::CommitQc(qc1.subject_block_hash),
             Some(qc1_updated),
         );
-
         backend
             .record_world_snapshot_with_payload(&payload)
             .expect("payload snapshot");
         let manifest = backend.last_manifest().expect("manifest recorded");
-
         let qc1_key = TieredKeyHandle::CommitQc(qc1.subject_block_hash)
             .encode_key()
             .expect("qc1 key encode");
         let qc2_key = TieredKeyHandle::CommitQc(qc2.subject_block_hash)
             .encode_key()
             .expect("qc2 key encode");
-
         let mut entries = manifest.hot_entries.iter().chain(&manifest.cold_entries);
         let entry1 = entries
             .clone()
@@ -6214,62 +5790,49 @@ mod tests {
         let entry2 = entries
             .find(|entry| entry.key_payload == qc2_key)
             .expect("qc2 entry present");
-
         assert_eq!(entry1.last_mutated_snapshot, manifest.snapshot_index);
         assert_eq!(entry2.last_mutated_snapshot, snapshot1);
     }
-
     #[test]
     fn record_world_snapshot_with_payload_keeps_unspillable_entries_hot() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
             TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-
         let qc1 = dummy_qc(1);
         world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
-
         backend
             .record_world_snapshot(&world)
             .expect("initial snapshot");
-
         let qc2 = dummy_qc(2);
         world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
-
         let mut payload = TieredSnapshotPayload::default();
         payload.push_value(TieredKeyHandle::CommitQc(qc2.subject_block_hash), Some(qc2));
-
         backend
             .record_world_snapshot_with_payload(&payload)
             .expect("payload snapshot");
         let manifest = backend.last_manifest().expect("manifest recorded");
-
         assert_eq!(manifest.hot_entries.len(), 2);
         assert!(manifest.cold_entries.is_empty());
     }
-
     #[test]
     fn da_store_root_used_when_cold_root_missing() {
         let temp = tempdir().expect("tmpdir");
         let da_root = temp.path().join("da");
         let mut backend = TieredStateBackend::new(true, 1, 0, 0, None, Some(da_root.clone()), 0, 0);
         let mut world = World::default();
-
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
         world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
         world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
-
         backend
             .record_world_snapshot(&world)
             .expect("snapshot recorded");
         let manifest = backend.last_manifest().expect("manifest recorded");
         assert_eq!(manifest.total_entries, 2);
         assert_eq!(manifest.cold_entries.len(), 1);
-
         let snapshot_dir = da_root.join(format!("{:020}", manifest.snapshot_index));
         assert!(snapshot_dir.exists(), "snapshot directory should exist");
-
         let cold_entry = &manifest.cold_entries[0];
         let spill_path = cold_entry
             .spill_path
@@ -6280,7 +5843,6 @@ mod tests {
             payload_path.exists(),
             "cold payload should be stored under da root"
         );
-
         let encoded = backend
             .read_cold_payload(manifest.snapshot_index, cold_entry)
             .expect("read cold payload")
@@ -6288,7 +5850,6 @@ mod tests {
         let decoded: Qc = json::from_slice(&encoded).expect("cold payload decodes");
         assert!(decoded == qc1 || decoded == qc2);
     }
-
     #[test]
     fn cold_snapshots_offload_to_da_root_and_rehydrate_on_read() {
         let temp = tempdir().expect("tmpdir");
@@ -6305,12 +5866,10 @@ mod tests {
             1,
         );
         let mut world = World::default();
-
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
         world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
         world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
-
         backend
             .record_world_snapshot(&world)
             .expect("first snapshot");
@@ -6320,11 +5879,9 @@ mod tests {
             "expected cold entries in first snapshot"
         );
         let first_index = manifest1.snapshot_index;
-
         let mut updated = qc2.clone();
         updated.view = 99;
         world.commit_qcs.insert(updated.subject_block_hash, updated);
-
         backend
             .record_world_snapshot(&world)
             .expect("second snapshot");
@@ -6333,7 +5890,6 @@ mod tests {
             .expect("manifest recorded")
             .snapshot_index;
         assert_ne!(first_index, second_index);
-
         let cold_dir = cold_root.join(format!("{first_index:020}"));
         assert!(
             !cold_dir.exists(),
@@ -6344,7 +5900,6 @@ mod tests {
             da_dir.exists(),
             "offloaded snapshot should exist in DA root"
         );
-
         let cold_entry = &manifest1.cold_entries[0];
         let spill_path = cold_entry
             .spill_path
@@ -6356,7 +5911,6 @@ mod tests {
             .expect("payload present");
         let decoded: Qc = json::from_slice(&encoded).expect("cold payload decodes");
         assert!(decoded == qc1 || decoded == qc2);
-
         let rehydrated_path = cold_root
             .join(format!("{first_index:020}"))
             .join(spill_path);
@@ -6365,7 +5919,6 @@ mod tests {
             "expected rehydrated cold payload in cold root"
         );
     }
-
     #[test]
     fn da_cold_payload_rehydrates_into_primary_root() {
         let temp = tempdir().expect("tmpdir");
@@ -6382,14 +5935,12 @@ mod tests {
             0,
         );
         let mut world = World::default();
-
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
         let qc1_hash = qc1.subject_block_hash;
         let qc2_hash = qc2.subject_block_hash;
         world.commit_qcs.insert(qc1_hash, qc1);
         world.commit_qcs.insert(qc2_hash, qc2);
-
         backend
             .record_world_snapshot(&world)
             .expect("snapshot recorded");
@@ -6399,11 +5950,9 @@ mod tests {
             .spill_path
             .as_ref()
             .expect("cold entry has spill path");
-
         let snapshot_dir = cold_root.join(format!("{:020}", manifest.snapshot_index));
         let cold_payload_path = snapshot_dir.join(spill_path);
         assert!(cold_payload_path.exists(), "cold payload written");
-
         let da_snapshot_dir = da_root.join(format!("{:020}", manifest.snapshot_index));
         let da_payload_path = da_snapshot_dir.join(spill_path);
         if let Some(parent) = da_payload_path.parent() {
@@ -6411,7 +5960,6 @@ mod tests {
         }
         fs::copy(&cold_payload_path, &da_payload_path).expect("cold payload copied to DA root");
         fs::remove_file(&cold_payload_path).expect("cold payload evicted");
-
         let encoded = backend
             .read_cold_payload(manifest.snapshot_index, cold_entry)
             .expect("read cold payload")
@@ -6423,19 +5971,16 @@ mod tests {
             "cold payload rehydrated into primary root"
         );
     }
-
     #[test]
     fn hot_byte_budget_demotes_entries_to_cold() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
             TieredStateBackend::new(true, 0, 1, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
         world.commit_qcs.insert(qc1.subject_block_hash, qc1);
         world.commit_qcs.insert(qc2.subject_block_hash, qc2);
-
         backend
             .record_world_snapshot(&world)
             .expect("snapshot recorded");
@@ -6446,25 +5991,21 @@ mod tests {
             "byte budget should force some entries into cold tier"
         );
     }
-
     #[test]
     fn hot_grace_snapshots_keep_recent_hot_entry() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
             TieredStateBackend::new(true, 1, 0, 1, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
         world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
         world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
-
         backend
             .record_world_snapshot(&world)
             .expect("first snapshot");
         let manifest = backend.last_manifest().expect("manifest recorded");
         assert_eq!(manifest.hot_entries.len(), 1);
-
         let qc1_hash = hex::encode(sha256(&norito::codec::Encode::encode(
             &qc1.subject_block_hash,
         )));
@@ -6472,7 +6013,6 @@ mod tests {
             &qc2.subject_block_hash,
         )));
         let hot_hash = manifest.hot_entries[0].key_hash_hex.clone();
-
         assert!(
             hot_hash == qc1_hash || hot_hash == qc2_hash,
             "hot entry should match one of the recent QC hashes"
@@ -6481,42 +6021,34 @@ mod tests {
         let mut updated = mutate.clone();
         updated.view = 99;
         world.commit_qcs.insert(updated.subject_block_hash, updated);
-
         backend
             .record_world_snapshot(&world)
             .expect("second snapshot");
         let manifest2 = backend.last_manifest().expect("manifest recorded");
         let hot_hash2 = manifest2.hot_entries[0].key_hash_hex.clone();
-
         assert_eq!(hot_hash2, hot_hash, "hot grace should preserve hot entry");
     }
-
     #[test]
     fn hot_grace_allows_budget_overflow_for_previous_hot_entries() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
             TieredStateBackend::new(true, 2, 0, 1, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
         world.commit_qcs.insert(qc1.subject_block_hash, qc1);
         world.commit_qcs.insert(qc2.subject_block_hash, qc2);
-
         backend
             .record_world_snapshot(&world)
             .expect("first snapshot");
-
         backend.reconfigure(true, 1, 0, 1, Some(temp.path().to_path_buf()), None, 0, 0);
         backend
             .record_world_snapshot(&world)
             .expect("second snapshot");
-
         let manifest = backend.last_manifest().expect("manifest recorded");
         assert_eq!(manifest.hot_entries.len(), 2);
         assert_eq!(manifest.hot_grace_overflow_keys, 1);
     }
-
     #[test]
     fn tiered_backend_reports_budget_limits_and_cold_bytes() {
         let temp = tempdir().expect("tmpdir");
@@ -6530,16 +6062,13 @@ mod tests {
             0,
             512,
         );
-
         assert_eq!(backend.hot_retained_bytes(), 256);
         assert_eq!(backend.max_cold_bytes(), 512);
-
         let mut world = World::default();
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
         world.commit_qcs.insert(qc1.subject_block_hash, qc1);
         world.commit_qcs.insert(qc2.subject_block_hash, qc2);
-
         backend
             .record_world_snapshot(&world)
             .expect("snapshot recorded");
@@ -6553,25 +6082,21 @@ mod tests {
             "cold store usage should cover cold payload bytes"
         );
     }
-
     #[test]
     fn cold_payload_reuse_is_recorded_for_unchanged_entries() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
             TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 0, 0);
         let mut world = World::default();
-
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
         world.commit_qcs.insert(qc1.subject_block_hash, qc1);
         world.commit_qcs.insert(qc2.subject_block_hash, qc2);
-
         backend
             .record_world_snapshot(&world)
             .expect("first snapshot");
         let manifest = backend.last_manifest().expect("manifest recorded");
         assert_eq!(manifest.cold_reused_entries, 0);
-
         backend
             .record_world_snapshot(&world)
             .expect("second snapshot");
@@ -6579,7 +6104,6 @@ mod tests {
         assert_eq!(manifest2.cold_reused_entries, 1);
         assert!(manifest2.cold_reused_bytes > 0);
     }
-
     #[cfg(unix)]
     #[test]
     fn cold_payload_reuse_prefers_hard_links_when_supported() {
@@ -6591,36 +6115,30 @@ mod tests {
             return;
         }
         fs::remove_file(&probe_dest).expect("cleanup probe link");
-
         let source = temp.path().join("source");
         let dest = temp.path().join("dest");
         let payload = b"cold payload";
         fs::write(&source, payload).expect("write source");
-
         let bytes = TieredStateBackend::try_reuse_cold_payload(&source, &dest)
             .expect("reuse payload")
             .expect("reuse should return bytes");
         assert_eq!(bytes, payload.len() as u64);
-
         let source_meta = fs::metadata(&source).expect("source metadata");
         let dest_meta = fs::metadata(&dest).expect("dest metadata");
         assert_eq!(source_meta.len(), dest_meta.len());
         assert_eq!(source_meta.nlink(), 2);
         assert_eq!(dest_meta.nlink(), 2);
     }
-
     #[test]
     fn prune_snapshots_to_cold_byte_budget() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
             TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 0, 1);
         let mut world = World::default();
-
         let qc1 = dummy_qc(1);
         let qc2 = dummy_qc(2);
         world.commit_qcs.insert(qc1.subject_block_hash, qc1.clone());
         world.commit_qcs.insert(qc2.subject_block_hash, qc2.clone());
-
         backend
             .record_world_snapshot(&world)
             .expect("first snapshot");
@@ -6628,11 +6146,9 @@ mod tests {
             .last_manifest()
             .expect("manifest recorded")
             .snapshot_index;
-
         let mut updated = qc2.clone();
         updated.view = 99;
         world.commit_qcs.insert(updated.subject_block_hash, updated);
-
         backend
             .record_world_snapshot(&world)
             .expect("second snapshot");
@@ -6640,7 +6156,6 @@ mod tests {
             .last_manifest()
             .expect("manifest recorded")
             .snapshot_index;
-
         let mut snapshots = fs::read_dir(temp.path())
             .unwrap()
             .filter_map(|entry| {
@@ -6652,24 +6167,20 @@ mod tests {
         assert_eq!(snapshots, vec![second_index]);
         assert_ne!(first_index, second_index);
     }
-
     #[test]
     fn prune_cold_snapshots_to_bytes_prunes_oldest_first() {
         let temp = tempdir().expect("tmpdir");
         let cold_root = temp.path().join("cold");
         fs::create_dir_all(&cold_root).expect("create cold root");
-
         for idx in 1..=3u64 {
             let dir = cold_root.join(format!("{idx:020}"));
             fs::create_dir_all(&dir).expect("create snapshot dir");
             fs::write(dir.join("payload.norito"), vec![0u8; 50]).expect("write snapshot payload");
         }
-
         let backend = TieredStateBackend::new(true, 0, 0, 0, Some(cold_root.clone()), None, 0, 0);
         backend
             .prune_cold_snapshots_to_bytes(80)
             .expect("prune snapshots to budget");
-
         let mut snapshots = fs::read_dir(&cold_root)
             .unwrap()
             .filter_map(|entry| {
@@ -6680,7 +6191,6 @@ mod tests {
         snapshots.sort_unstable();
         assert_eq!(snapshots, vec![3]);
     }
-
     #[test]
     fn snapshot_counter_seeds_from_existing_dirs() {
         let temp = tempdir().expect("tmpdir");
@@ -6689,72 +6199,58 @@ mod tests {
         fs::create_dir_all(&snapshot_dir).expect("seed snapshot");
         fs::create_dir_all(root.join("lanes")).expect("lanes dir");
         fs::create_dir_all(root.join("retired")).expect("retired dir");
-
         let mut backend = TieredStateBackend::new(true, 0, 0, 0, Some(root.clone()), None, 0, 0);
         let world = World::default();
-
         backend.record_world_snapshot(&world).expect("snapshot");
         let manifest = backend.last_manifest().expect("manifest recorded");
         assert_eq!(manifest.snapshot_index, 8);
         let new_dir = root.join(format!("{:020}", manifest.snapshot_index));
         assert!(new_dir.exists(), "expected seeded snapshot directory");
     }
-
     #[test]
     fn snapshot_counter_seeds_from_da_root_dirs() {
         let temp = tempdir().expect("tmpdir");
         let da_root = temp.path().join("da");
         let snapshot_dir = da_root.join(format!("{:020}", 5_u64));
         fs::create_dir_all(&snapshot_dir).expect("seed snapshot");
-
         let mut backend = TieredStateBackend::new(true, 0, 0, 0, None, Some(da_root.clone()), 0, 0);
         let world = World::default();
-
         backend.record_world_snapshot(&world).expect("snapshot");
         let manifest = backend.last_manifest().expect("manifest recorded");
         assert_eq!(manifest.snapshot_index, 6);
         let new_dir = da_root.join(format!("{:020}", manifest.snapshot_index));
         assert!(new_dir.exists(), "expected seeded snapshot directory");
     }
-
     #[test]
     fn recover_snapshot_artifacts_restores_backups_and_cleans_staging() {
         let temp = tempdir().expect("tmpdir");
         let root = temp.path().to_path_buf();
-
         let live_dir = root.join(format!("{:020}", 1_u64));
         fs::create_dir_all(&live_dir).expect("live dir");
         let live_marker = live_dir.join("marker.txt");
         fs::write(&live_marker, b"live").expect("live marker");
-
         let live_backup = live_dir.with_extension("bak");
         fs::create_dir_all(&live_backup).expect("live backup");
         fs::write(live_backup.join("marker.txt"), b"backup").expect("backup marker");
         let live_staging = live_dir.with_extension("staging");
         fs::create_dir_all(&live_staging).expect("live staging");
         fs::write(live_staging.join("marker.txt"), b"staging").expect("staging marker");
-
         let backup_only = root.join(format!("{:020}.bak", 2_u64));
         fs::create_dir_all(&backup_only).expect("backup only");
         fs::write(backup_only.join("marker.txt"), b"backup only").expect("backup only marker");
-
         let staging_only = root.join(format!("{:020}.staging", 3_u64));
         fs::create_dir_all(&staging_only).expect("staging only");
         fs::write(staging_only.join("marker.txt"), b"staging only").expect("staging only marker");
-
         let lanes_root = root.join("lanes");
         fs::create_dir_all(&lanes_root).expect("lanes dir");
-
         let backend = TieredStateBackend::new(false, 0, 0, 0, None, None, 0, 0);
         backend
             .recover_snapshot_artifacts(&root)
             .expect("recover artifacts");
-
         assert!(live_dir.exists(), "live dir should remain");
         assert!(live_marker.exists(), "live marker should remain");
         assert!(!live_backup.exists(), "live backup should be cleaned");
         assert!(!live_staging.exists(), "live staging should be cleaned");
-
         let restored = root.join(format!("{:020}", 2_u64));
         assert!(restored.exists(), "backup should be restored");
         assert!(
@@ -6762,11 +6258,9 @@ mod tests {
             "backup contents should be preserved on restore"
         );
         assert!(!backup_only.exists(), "backup directory should be renamed");
-
         assert!(!staging_only.exists(), "staging-only dir should be removed");
         assert!(lanes_root.exists(), "lanes dir should be preserved");
     }
-
     #[test]
     fn reconfigure_clears_entries_on_cold_root_change() {
         let temp = tempdir().expect("tmpdir");
@@ -6775,12 +6269,10 @@ mod tests {
         let mut world = World::default();
         let qc = dummy_qc(1);
         world.commit_qcs.insert(qc.subject_block_hash, qc);
-
         backend
             .record_world_snapshot(&world)
             .expect("snapshot recorded");
         assert!(!backend.entries.is_empty());
-
         let new_root = tempdir().expect("tmpdir");
         backend.reconfigure(
             true,
@@ -6792,12 +6284,10 @@ mod tests {
             0,
             0,
         );
-
         assert!(backend.entries.is_empty());
         assert_eq!(backend.snapshot_counter, 0);
         assert!(backend.last_manifest().is_none());
     }
-
     #[test]
     fn reconfigure_clears_entries_on_da_root_change() {
         let temp = tempdir().expect("tmpdir");
@@ -6806,12 +6296,10 @@ mod tests {
         let mut world = World::default();
         let qc = dummy_qc(1);
         world.commit_qcs.insert(qc.subject_block_hash, qc);
-
         backend
             .record_world_snapshot(&world)
             .expect("snapshot recorded");
         assert!(!backend.entries.is_empty());
-
         let new_root = tempdir().expect("tmpdir");
         backend.reconfigure(
             true,
@@ -6823,23 +6311,19 @@ mod tests {
             0,
             0,
         );
-
         assert!(backend.entries.is_empty());
         assert_eq!(backend.snapshot_counter, 0);
         assert!(backend.last_manifest().is_none());
     }
-
     #[test]
     fn prune_old_snapshots_ignores_lane_and_retired_dirs() {
         let temp = tempdir().expect("tmpdir");
         let backend =
             TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 1, 0);
-
         let snapshot1 = temp.path().join(format!("{:020}", 1_u64));
         let snapshot2 = temp.path().join(format!("{:020}", 2_u64));
         fs::create_dir_all(&snapshot1).expect("snapshot1");
         fs::create_dir_all(&snapshot2).expect("snapshot2");
-
         let lanes_root = temp.path().join("lanes");
         let retired_root = temp.path().join("retired");
         fs::create_dir_all(&lanes_root).expect("lanes dir");
@@ -6848,11 +6332,9 @@ mod tests {
         let retired_marker = retired_root.join("marker.txt");
         fs::write(&lanes_marker, b"lanes").expect("lanes marker");
         fs::write(&retired_marker, b"retired").expect("retired marker");
-
         backend
             .prune_old_snapshots(temp.path())
             .expect("prune snapshots");
-
         assert!(!snapshot1.exists(), "oldest snapshot should be pruned");
         assert!(snapshot2.exists(), "latest snapshot should remain");
         assert!(lanes_root.exists(), "lanes directory should remain");
@@ -6860,13 +6342,11 @@ mod tests {
         assert!(lanes_marker.exists(), "lanes contents should remain");
         assert!(retired_marker.exists(), "retired contents should remain");
     }
-
     #[test]
     fn reconcile_lane_geometry_manages_lane_directories() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
             TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 4, 0);
-
         let lane_count = NonZeroU32::new(4).expect("lane count");
         let lane0 = LaneConfig::default();
         let lane1 = LaneConfig {
@@ -6877,7 +6357,6 @@ mod tests {
         let initial_catalog =
             LaneCatalog::new(lane_count, vec![lane0.clone(), lane1.clone()]).expect("catalog");
         let initial_cfg = RuntimeLaneConfig::from_catalog(&initial_catalog);
-
         let lane2 = LaneConfig {
             id: LaneId::from(2),
             alias: "gamma".to_string(),
@@ -6889,11 +6368,9 @@ mod tests {
         )
         .expect("catalog");
         let extended_cfg = RuntimeLaneConfig::from_catalog(&extended_catalog);
-
         backend
             .reconcile_lane_geometry(&initial_cfg, &extended_cfg, &[])
             .expect("lane add reconcile");
-
         let lanes_root = temp.path().join("lanes");
         let lane2_entry = extended_cfg.entry(LaneId::from(2)).expect("lane 2 entry");
         let lane2_path = lanes_root.join(&lane2_entry.kura_segment);
@@ -6901,11 +6378,9 @@ mod tests {
             lane2_path.exists(),
             "expected lane 2 snapshot directory provisioned"
         );
-
         backend
             .reconcile_lane_geometry(&extended_cfg, &initial_cfg, &[])
             .expect("lane retire reconcile");
-
         assert!(
             !lane2_path.exists(),
             "expected lane 2 snapshot directory to be retired"
@@ -6920,13 +6395,11 @@ mod tests {
             "expected retired lane snapshot archive"
         );
     }
-
     #[test]
     fn repeated_empty_lane_retirement_reuses_exact_archive() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
             TieredStateBackend::new(true, 1, 0, 0, Some(temp.path().to_path_buf()), None, 4, 0);
-
         let lane = LaneConfig {
             id: LaneId::from(1),
             alias: "retry".to_string(),
@@ -6942,7 +6415,6 @@ mod tests {
         let lanes_root = temp.path().join("lanes");
         let live_dir = lane_snapshot_dir(&lanes_root, lane_entry);
         let retired_root = temp.path().join("retired").join("lanes");
-
         backend
             .reconcile_lane_geometry(&baseline_cfg, &expanded_cfg, &[])
             .expect("provision lane");
@@ -6954,7 +6426,6 @@ mod tests {
             .map(|entry| entry.expect("retired lane entry").file_name())
             .collect::<BTreeSet<_>>();
         assert_eq!(initial_archives.len(), 1);
-
         backend
             .reconcile_lane_geometry(&baseline_cfg, &expanded_cfg, &[])
             .expect("reprovision lane");
@@ -6970,7 +6441,6 @@ mod tests {
             "an exact empty retry must not create a rollback-only archive"
         );
         assert!(!live_dir.exists());
-
         backend
             .reconcile_lane_geometry(&baseline_cfg, &expanded_cfg, &[])
             .expect("reprovision populated lane");
@@ -6994,13 +6464,11 @@ mod tests {
             "the populated retirement archive must preserve lane state"
         );
     }
-
     #[test]
     fn lane_snapshot_dirs_relabel_on_alias_change() {
         let temp = tempdir().expect("tmpdir");
         let mut backend =
             TieredStateBackend::new(true, 0, 0, 0, Some(temp.path().to_path_buf()), None, 1, 0);
-
         let initial_catalog = LaneCatalog::new(
             nonzero!(1_u32),
             vec![LaneConfig {
@@ -7013,7 +6481,6 @@ mod tests {
         backend
             .reconcile_lane_geometry(&RuntimeLaneConfig::default(), &initial_cfg, &[])
             .expect("provision initial snapshot");
-
         let old_entry = initial_cfg
             .entry(LaneId::SINGLE)
             .expect("initial lane entry");
@@ -7027,7 +6494,6 @@ mod tests {
             old_dir.exists(),
             "expected snapshot directory for initial alias"
         );
-
         let updated_catalog = LaneCatalog::new(
             nonzero!(1_u32),
             vec![LaneConfig {
@@ -7040,11 +6506,9 @@ mod tests {
         let new_entry = updated_cfg
             .entry(LaneId::SINGLE)
             .expect("updated lane entry");
-
         backend
             .relabel_lane_geometry(&[(old_entry, new_entry)])
             .expect("relabel snapshot directories");
-
         let new_dir = lane_snapshot_dir(&lanes_root, new_entry);
         assert!(
             new_dir.exists(),
@@ -7055,6 +6519,5 @@ mod tests {
             "old snapshot directory should be moved away"
         );
     }
-
     include!("tiered_preflight_lane_tests.rs");
 }

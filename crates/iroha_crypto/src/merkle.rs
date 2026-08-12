@@ -15,28 +15,22 @@ use thiserror::Error;
 use crate::{Hash, HashOf};
 
 const COMPACT_MERKLE_PROOF_MAX_DEPTH: u8 = 32;
-
 /// Maximum number of leaves addressable by the canonical `u32` proof index.
 const MERKLE_PROOF_MAX_LEAF_COUNT: u64 = 1_u64 << u32::BITS;
-
 /// Maximum number of canonical leaves accepted by the V1 serialized tree.
 ///
 /// Persisted application trees are block-scoped; 65,536 leaves is already far
 /// above the practical block envelope while keeping reconstruction memory
 /// bounded independently of attacker-selected cached-node counts.
 const SERIALIZED_MERKLE_TREE_MAX_LEAVES_V1: usize = 1 << 16;
-
 const MERKLE_HASH_SCHEME_APPLICATION_V1: u8 = 1;
 const MERKLE_HASH_SCHEME_SHA256_V1: u8 = 2;
-
 /// Domain tag for canonical application Merkle leaf nodes.
 const TAG_MERKLE_LEAF_V1: &[u8] = b"iroha:merkle:leaf:v1\x00";
-
 /// Domain tag for canonical application Merkle internal nodes.
 ///
 /// The trailing NUL prevents concatenation ambiguity with future domain tags.
 const TAG_MERKLE_INTERNAL_V1: &[u8] = b"iroha:merkle:internal:v1\x00";
-
 /// Array representation of [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree)
 /// for verifying elements of type `T`.
 ///
@@ -52,13 +46,11 @@ pub struct MerkleTree<T> {
     hash_scheme: MerkleHashScheme,
     nodes: Vec<Option<HashOf<T>>>,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum MerkleHashScheme {
     ApplicationV1,
     Sha256V1,
 }
-
 impl MerkleHashScheme {
     const fn wire_id(self) -> u8 {
         match self {
@@ -66,7 +58,6 @@ impl MerkleHashScheme {
             Self::Sha256V1 => MERKLE_HASH_SCHEME_SHA256_V1,
         }
     }
-
     fn from_wire_id(scheme: u8) -> Result<Self, MerkleError> {
         match scheme {
             MERKLE_HASH_SCHEME_APPLICATION_V1 => Ok(Self::ApplicationV1),
@@ -75,7 +66,6 @@ impl MerkleHashScheme {
         }
     }
 }
-
 /// Authenticated commitment to a Merkle tree root and its exact leaf count.
 ///
 /// A root alone does not authenticate the proof depth or the geometry of a
@@ -87,35 +77,29 @@ pub struct MerkleTreeCommitment<T> {
     root: HashOf<MerkleTree<T>>,
     leaf_count: NonZeroU64,
 }
-
 impl<T> Clone for MerkleTreeCommitment<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
-
 impl<T> Copy for MerkleTreeCommitment<T> {}
-
 impl<T> MerkleTreeCommitment<T> {
     /// Construct a commitment from an authenticated root and non-zero count.
     #[must_use]
     pub const fn new(root: HashOf<MerkleTree<T>>, leaf_count: NonZeroU64) -> Self {
         Self { root, leaf_count }
     }
-
     /// Borrow the authenticated root hash.
     #[must_use]
     pub const fn root(&self) -> &HashOf<MerkleTree<T>> {
         &self.root
     }
-
     /// Return the authenticated number of leaves.
     #[must_use]
     pub const fn leaf_count(&self) -> NonZeroU64 {
         self.leaf_count
     }
 }
-
 /// Errors returned by Merkle tree helpers.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum MerkleError {
@@ -157,7 +141,6 @@ pub enum MerkleError {
     #[error("merkle tree cached nodes are inconsistent with its retained hash scheme and leaves")]
     InconsistentCachedNodes,
 }
-
 #[cfg(feature = "json")]
 impl<T> JsonSerialize for MerkleTreeCommitment<T> {
     fn json_serialize(&self, out: &mut String) {
@@ -171,7 +154,6 @@ impl<T> JsonSerialize for MerkleTreeCommitment<T> {
         self.leaf_count.get().json_serialize(out);
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -186,13 +168,11 @@ impl<T> JsonSerialize for MerkleTreeCommitment<T> {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl<T> JsonDeserialize for MerkleTreeCommitment<T> {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parser.skip_ws();
         parser.consume_char(b'{')?;
-
         let mut root = None;
         let mut leaf_count = None;
         loop {
@@ -226,18 +206,15 @@ impl<T> JsonDeserialize for MerkleTreeCommitment<T> {
             parser.consume_char(b'}')?;
             break;
         }
-
         Ok(Self {
             root: root.ok_or_else(|| json::Error::missing_field("root"))?,
             leaf_count: leaf_count.ok_or_else(|| json::Error::missing_field("leaf_count"))?,
         })
     }
 }
-
 fn proof_depth_for_leaf_count(leaf_count: NonZeroU64) -> usize {
     (u64::BITS - leaf_count.get().saturating_sub(1).leading_zeros()) as usize
 }
-
 fn proof_shape_is_canonical<T>(
     leaf_index: u32,
     audit_path: &[Option<HashOf<T>>],
@@ -251,7 +228,6 @@ fn proof_shape_is_canonical<T>(
     {
         return false;
     }
-
     for sibling in audit_path {
         let sibling_must_exist = !index.is_multiple_of(2) || index + 1 < width;
         if sibling.is_some() != sibling_must_exist {
@@ -260,10 +236,8 @@ fn proof_shape_is_canonical<T>(
         index >>= 1;
         width = width.div_ceil(2);
     }
-
     index == 0 && width == 1
 }
-
 fn validate_chunk_size(chunk: usize) -> Result<(), MerkleError> {
     if (1..=32).contains(&chunk) {
         Ok(())
@@ -271,7 +245,6 @@ fn validate_chunk_size(chunk: usize) -> Result<(), MerkleError> {
         Err(MerkleError::InvalidChunkSize { chunk })
     }
 }
-
 crate::ffi::ffi_item! {
     /// A Merkle proof: index of a leaf among all leaves, and the shortest list of additional nodes to recompute the root.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
@@ -282,7 +255,6 @@ crate::ffi::ffi_item! {
         audit_path: Vec<Option<HashOf<T>>>,
     }
 }
-
 /// Compact Merkle proof using a direction bitset and sibling nodes.
 ///
 /// - `depth`: number of levels used (<= 32 for `dirs` to cover)
@@ -294,7 +266,6 @@ pub struct CompactMerkleProof<T> {
     dirs: u32,
     siblings: Vec<Option<HashOf<T>>>,
 }
-
 impl<T> norito::core::NoritoSerialize for MerkleTree<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let (hash_scheme, leaves) = self
@@ -302,33 +273,27 @@ impl<T> norito::core::NoritoSerialize for MerkleTree<T> {
             .map_err(|error| norito::core::Error::Message(error.to_string()))?;
         norito::core::NoritoSerialize::serialize(&(hash_scheme, leaves), writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         let (hash_scheme, leaves) = self.serialized_parts().ok()?;
         norito::core::NoritoSerialize::encoded_len_hint(&(hash_scheme, leaves))
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         let (hash_scheme, leaves) = self.serialized_parts().ok()?;
         norito::core::NoritoSerialize::encoded_len_exact(&(hash_scheme, leaves))
     }
 }
-
 // -------------------------------
 // Shielded commitments (ZK) helpers
 // -------------------------------
-
 /// Domain tag for shielded commitment leaves (Merkle leaves for ZK shielded pools).
 /// Kept stable across platforms; trailing NUL disambiguates from adjacent tags.
 const TAG_ZK_SHIELD_CM_V1: &[u8] = b"iroha:zk:shield:cm:v1\x00";
-
 impl MerkleTree<[u8; 32]> {
     /// Compute a domain‑tagged leaf hash for a 32‑byte commitment using Blake2b‑32.
     /// The tag is `b"iroha:zk:shield:cm:v1\0"` and is concatenated with the commitment bytes.
     pub fn shielded_leaf_from_commitment(cm: [u8; 32]) -> HashOf<[u8; 32]> {
         HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[TAG_ZK_SHIELD_CM_V1, &cm]))
     }
-
     /// Explicit empty‑tree root for a fixed height `depth` (binary tree).
     ///
     /// Construction:
@@ -347,12 +312,10 @@ impl MerkleTree<[u8; 32]> {
         h.into()
     }
 }
-
 impl<'de, T> norito::core::NoritoDeserialize<'de> for MerkleTree<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("MerkleTree decode")
     }
-
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -365,7 +328,6 @@ impl<'de, T> norito::core::NoritoDeserialize<'de> for MerkleTree<T> {
         Ok(tree)
     }
 }
-
 impl<'de, T> norito::core::DecodeFromSlice<'de> for MerkleTree<T> {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (scheme_len, scheme_header) = norito::core::read_len_dyn_slice(bytes)?;
@@ -381,7 +343,6 @@ impl<'de, T> norito::core::DecodeFromSlice<'de> for MerkleTree<T> {
         if scheme_used != scheme_field.len() {
             return Err(norito::core::Error::LengthMismatch);
         }
-
         let remaining = bytes
             .get(scheme_end..)
             .ok_or(norito::core::Error::LengthMismatch)?;
@@ -395,7 +356,6 @@ impl<'de, T> norito::core::DecodeFromSlice<'de> for MerkleTree<T> {
         let leaves_field = bytes
             .get(leaves_start..used)
             .ok_or(norito::core::Error::LengthMismatch)?;
-
         // Inspect and reject the element count before `Vec` allocates. The
         // ordinary Norito sequence decoder still performs global resource
         // accounting when it subsequently materializes an accepted vector.
@@ -412,7 +372,6 @@ impl<'de, T> norito::core::DecodeFromSlice<'de> for MerkleTree<T> {
         Ok((tree, used))
     }
 }
-
 #[cfg(feature = "json")]
 impl<T> JsonSerialize for MerkleTree<T> {
     fn json_serialize(&self, out: &mut String) {
@@ -433,7 +392,6 @@ impl<T> JsonSerialize for MerkleTree<T> {
         leaves.json_serialize(out);
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -467,13 +425,11 @@ impl<T> JsonSerialize for MerkleTree<T> {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl<T> JsonDeserialize for MerkleTree<T> {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parser.skip_ws();
         parser.consume_char(b'{')?;
-
         let mut hash_scheme = None;
         let mut leaves = None;
         loop {
@@ -504,7 +460,6 @@ impl<T> JsonDeserialize for MerkleTree<T> {
             parser.consume_char(b'}')?;
             break;
         }
-
         Self::from_serialized_parts(
             hash_scheme.ok_or_else(|| json::Error::missing_field("hash_scheme"))?,
             leaves.ok_or_else(|| json::Error::missing_field("leaves"))?,
@@ -512,7 +467,6 @@ impl<T> JsonDeserialize for MerkleTree<T> {
         .map_err(|error| json::Error::Message(error.to_string()))
     }
 }
-
 #[cfg(feature = "json")]
 impl<T> MerkleTree<T> {
     fn deserialize_json_leaves_bounded(
@@ -525,7 +479,6 @@ impl<T> MerkleTree<T> {
         if parser.try_consume_char(b']')? {
             return Ok(leaves);
         }
-
         loop {
             if leaves.len() == SERIALIZED_MERKLE_TREE_MAX_LEAVES_V1 {
                 return Err(json::Error::Message(
@@ -547,23 +500,18 @@ impl<T> MerkleTree<T> {
         Ok(leaves)
     }
 }
-
 struct NoritoRef<'a, T>(&'a T);
-
 impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize for NoritoRef<'_, T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(self.0, writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         norito::core::NoritoSerialize::encoded_len_hint(self.0)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         norito::core::NoritoSerialize::encoded_len_exact(self.0)
     }
 }
-
 impl<T> norito::core::NoritoSerialize for MerkleProof<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::NoritoSerialize::serialize(
@@ -571,14 +519,12 @@ impl<T> norito::core::NoritoSerialize for MerkleProof<T> {
             writer,
         )
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         norito::core::NoritoSerialize::encoded_len_hint(&(
             NoritoRef(&self.leaf_index),
             NoritoRef(&self.audit_path),
         ))
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         norito::core::NoritoSerialize::encoded_len_exact(&(
             NoritoRef(&self.leaf_index),
@@ -586,12 +532,10 @@ impl<T> norito::core::NoritoSerialize for MerkleProof<T> {
         ))
     }
 }
-
 impl<'de, T> norito::core::NoritoDeserialize<'de> for MerkleProof<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("MerkleProof decode")
     }
-
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
@@ -604,7 +548,6 @@ impl<'de, T> norito::core::NoritoDeserialize<'de> for MerkleProof<T> {
         Ok(proof)
     }
 }
-
 impl<'de, T> norito::core::DecodeFromSlice<'de> for MerkleProof<T> {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), norito::core::Error> {
         let ((leaf_index, audit_path), used) =
@@ -620,7 +563,6 @@ impl<'de, T> norito::core::DecodeFromSlice<'de> for MerkleProof<T> {
         ))
     }
 }
-
 #[cfg(feature = "json")]
 impl<T> JsonSerialize for MerkleProof<T> {
     fn json_serialize(&self, out: &mut String) {
@@ -634,7 +576,6 @@ impl<T> JsonSerialize for MerkleProof<T> {
         json::JsonSerialize::json_serialize(&self.audit_path, out);
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -649,22 +590,18 @@ impl<T> JsonSerialize for MerkleProof<T> {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl<T> JsonDeserialize for MerkleProof<T> {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parser.skip_ws();
         parser.consume_char(b'{')?;
-
         let mut leaf_index: Option<u32> = None;
         let mut audit_path: Option<Vec<Option<HashOf<T>>>> = None;
-
         loop {
             parser.skip_ws();
             if parser.try_consume_char(b'}')? {
                 break;
             }
-
             let key = parser.parse_key()?;
             match key.as_str() {
                 "leaf_index" => {
@@ -681,7 +618,6 @@ impl<T> JsonDeserialize for MerkleProof<T> {
                 }
                 _ => parser.skip_value()?,
             }
-
             parser.skip_ws();
             if parser.try_consume_char(b',')? {
                 continue;
@@ -689,60 +625,48 @@ impl<T> JsonDeserialize for MerkleProof<T> {
             parser.consume_char(b'}')?;
             break;
         }
-
         Ok(MerkleProof {
             leaf_index: leaf_index.ok_or_else(|| json::Error::missing_field("leaf_index"))?,
             audit_path: audit_path.ok_or_else(|| json::Error::missing_field("audit_path"))?,
         })
     }
 }
-
 /// Iterator over the leaf hashes of a [`MerkleTree`], yielding each leaf in left-to-right order.
 pub struct LeafHashIterator<'a, T> {
     tree: &'a MerkleTree<T>,
     index: usize,
     index_back: usize,
 }
-
 /// A complete binary tree supporting indexed access to nodes in breadth-first order.
 trait CompleteBinaryTree {
     /// The type of value stored in each node.
     type NodeValue;
-
     /// Returns the total number of nodes in the tree.
     fn len(&self) -> usize;
-
     /// Returns a reference to the node value at `index`, in breadth-first order from the root.
     fn get(&self, index: usize) -> Option<&Self::NodeValue>;
-
     /// Returns a reference to the leaf node value at `index`, in left-to-right order among leaves.
     fn get_leaf(&self, index: usize) -> Option<&Self::NodeValue> {
         let offset = (1 << self.height()) - 1_usize;
         offset.checked_add(index).and_then(|i| self.get(i))
     }
-
     /// Returns the height of the tree, defined as the number of edges from root to any leaf.
     fn height(&self) -> u32 {
         (usize::BITS - self.len().leading_zeros()).saturating_sub(1)
     }
-
     /// Returns the height of a complete binary tree with the given number of leaves.
     fn height_from_n_leaves(n: usize) -> u32 {
         usize::BITS - n.saturating_sub(1).leading_zeros()
     }
-
     /// Returns the maximum number of nodes the tree can contain without increasing its height.
     fn capacity(&self) -> usize {
         (1 << (self.height() + 1)) - 1
     }
-
     /// Returns the index of the given leaf, in breadth-first order from the root.
     fn index_in_tree(&self, leaf_index: usize) -> Option<usize> {
         let index = Self::index_in_tree_unchecked(leaf_index, self.height() as usize);
-
         (index < self.len()).then_some(index)
     }
-
     /// Returns the index of the given leaf, in breadth-first order from the root.
     ///
     /// Does not check if the result is within bounds.
@@ -750,7 +674,6 @@ trait CompleteBinaryTree {
         let offset = (1 << height) - 1_usize;
         offset.saturating_add(leaf_index)
     }
-
     /// Returns the index of the parent of the node at `index`, or `None` if the node is the root.
     fn parent_index(&self, index: usize) -> Option<usize> {
         if 0 == index {
@@ -759,19 +682,16 @@ trait CompleteBinaryTree {
         let index = (index - 1) >> 1;
         (index < self.len()).then_some(index)
     }
-
     /// Returns the index of the left child of the node at `index`, if it exists.
     fn l_child_index(&self, index: usize) -> Option<usize> {
         let index = (index << 1) + 1;
         (index < self.len()).then_some(index)
     }
-
     /// Returns the index of the right child of the node at `index`, if it exists.
     fn r_child_index(&self, index: usize) -> Option<usize> {
         let index = (index << 1) + 2;
         (index < self.len()).then_some(index)
     }
-
     /// Returns the index of the sibling node of the node at `index`, if it exists.
     fn sibling_index(&self, index: usize) -> Option<usize> {
         if index.is_multiple_of(2) {
@@ -780,36 +700,29 @@ trait CompleteBinaryTree {
             (index < self.len() - 1).then(|| index + 1)
         }
     }
-
     /// Returns a reference to the left child of the node at `index`, if it exists.
     fn get_l_child(&self, index: usize) -> Option<&Self::NodeValue> {
         self.l_child_index(index).and_then(|i| self.get(i))
     }
-
     /// Returns a reference to the right child of the node at `index`, if it exists.
     fn get_r_child(&self, index: usize) -> Option<&Self::NodeValue> {
         self.r_child_index(index).and_then(|i| self.get(i))
     }
 }
-
 impl<T> CompleteBinaryTree for MerkleTree<T> {
     type NodeValue = HashOf<T>;
-
     fn len(&self) -> usize {
         self.nodes.len()
     }
-
     fn get(&self, index: usize) -> Option<&Self::NodeValue> {
         self.nodes.get(index).and_then(|opt| opt.as_ref())
     }
 }
-
 impl<T> FromIterator<HashOf<T>> for MerkleTree<T> {
     fn from_iter<I: IntoIterator<Item = HashOf<T>>>(iter: I) -> Self {
         Self::from_application_leaf_nodes(iter.into_iter().map(|leaf| Self::leaf_hash(&leaf)))
     }
 }
-
 // NOTE: Leaf nodes in the order of insertion
 impl<T: IntoSchema> IntoSchema for MerkleTree<T> {
     fn type_name() -> String {
@@ -831,7 +744,6 @@ impl<T: IntoSchema> IntoSchema for MerkleTree<T> {
         }
     }
 }
-
 impl<T> Default for MerkleTree<T> {
     fn default() -> Self {
         Self {
@@ -840,7 +752,6 @@ impl<T> Default for MerkleTree<T> {
         }
     }
 }
-
 impl<T> MerkleTree<T> {
     fn ensure_serialized_leaf_count(leaf_count: usize) -> Result<(), MerkleError> {
         if leaf_count > SERIALIZED_MERKLE_TREE_MAX_LEAVES_V1 {
@@ -851,7 +762,6 @@ impl<T> MerkleTree<T> {
         }
         Ok(())
     }
-
     fn from_leaf_nodes_with<I, F>(hash_scheme: MerkleHashScheme, leaves: I, pair_hash: F) -> Self
     where
         I: IntoIterator<Item = HashOf<T>>,
@@ -863,7 +773,6 @@ impl<T> MerkleTree<T> {
         for _ in 0..n_complement {
             queue.push_back(None);
         }
-
         let mut tree = Vec::with_capacity(1 << (height + 1));
         while let Some(r_node) = queue.pop_back() {
             if let Some(l_node) = queue.pop_back() {
@@ -884,21 +793,18 @@ impl<T> MerkleTree<T> {
             nodes: tree,
         }
     }
-
     fn from_application_leaf_nodes<I>(leaves: I) -> Self
     where
         I: IntoIterator<Item = HashOf<T>>,
     {
         Self::from_leaf_nodes_with(MerkleHashScheme::ApplicationV1, leaves, Self::pair_hash)
     }
-
     fn from_sha256_leaf_nodes<I>(leaves: I) -> Self
     where
         I: IntoIterator<Item = HashOf<T>>,
     {
         Self::from_leaf_nodes_with(MerkleHashScheme::Sha256V1, leaves, Self::pair_hash_sha256)
     }
-
     fn from_serialized_parts(hash_scheme: u8, leaves: Vec<HashOf<T>>) -> Result<Self, MerkleError> {
         Self::ensure_serialized_leaf_count(leaves.len())?;
         match MerkleHashScheme::from_wire_id(hash_scheme)? {
@@ -906,7 +812,6 @@ impl<T> MerkleTree<T> {
             MerkleHashScheme::Sha256V1 => Ok(Self::from_sha256_leaf_nodes(leaves)),
         }
     }
-
     fn serialized_parts(&self) -> Result<(u8, Vec<HashOf<T>>), MerkleError> {
         Self::validate_nodes(&self.nodes)?;
         let leaf_count = self.leaf_count();
@@ -915,7 +820,6 @@ impl<T> MerkleTree<T> {
         if leaves.len() != leaf_count {
             return Err(MerkleError::InconsistentCachedNodes);
         }
-
         let rebuilt = match self.hash_scheme {
             MerkleHashScheme::ApplicationV1 => {
                 Self::from_application_leaf_nodes(leaves.iter().copied())
@@ -927,14 +831,12 @@ impl<T> MerkleTree<T> {
         }
         Ok((self.hash_scheme.wire_id(), leaves))
     }
-
     /// Validate the retained cache and expose its canonical leaves without
     /// cloning the response-sized leaf set.
     fn serialized_view(&self) -> Result<(u8, LeafHashIterator<'_, T>), MerkleError> {
         Self::validate_nodes(&self.nodes)?;
         let leaf_count = self.leaf_count();
         Self::ensure_serialized_leaf_count(leaf_count)?;
-
         if !self.nodes.is_empty() {
             let height = (usize::BITS - self.nodes.len().leading_zeros()).saturating_sub(1);
             let offset = (1usize << height) - 1;
@@ -947,10 +849,8 @@ impl<T> MerkleTree<T> {
                 }
             }
         }
-
         Ok((self.hash_scheme.wire_id(), self.leaves()))
     }
-
     fn validate_nodes(nodes: &[Option<HashOf<T>>]) -> Result<(), MerkleError> {
         if nodes.is_empty() {
             return Ok(());
@@ -1011,14 +911,12 @@ impl<T> MerkleTree<T> {
         }
         Ok(())
     }
-
     /// Return the depth (number of edges from root to any leaf) of the complete tree.
     #[must_use]
     pub fn depth(&self) -> u32 {
         <Self as CompleteBinaryTree>::height(self)
     }
 }
-
 impl<'a, T> MerkleTree<T> {
     /// Canonical leaf-node hashes of this Merkle tree.
     ///
@@ -1029,18 +927,15 @@ impl<'a, T> MerkleTree<T> {
         LeafHashIterator::new(self)
     }
 }
-
 impl<T> MerkleTree<T> {
     #[inline]
     fn leaf_hash(leaf: &HashOf<T>) -> HashOf<T> {
         HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[TAG_MERKLE_LEAF_V1, leaf.as_ref()]))
     }
-
     /// Returns the hash of the root node, or `None` if the tree has no nodes.
     pub fn root(&self) -> Option<HashOf<Self>> {
         self.get(0).copied().map(HashOf::transmute)
     }
-
     /// Compute the canonical application-tree root with logarithmic memory.
     ///
     /// This has the same leaf and internal-node domain separation and ragged
@@ -1068,7 +963,6 @@ impl<T> MerkleTree<T> {
                 }
             }
         }
-
         let mut right = None;
         for left in frontier.into_iter().flatten() {
             right = Some(match right {
@@ -1078,7 +972,6 @@ impl<T> MerkleTree<T> {
         }
         right.map(HashOf::transmute)
     }
-
     /// Return the exact number of leaves represented by this tree.
     #[must_use]
     pub fn leaf_count(&self) -> usize {
@@ -1088,7 +981,6 @@ impl<T> MerkleTree<T> {
         let leaf_offset = (1usize << self.height()) - 1;
         self.nodes.len() - leaf_offset
     }
-
     /// Validate the cached tree against the canonical logical leaf hashes.
     ///
     /// Unlike rebuilding a [`MerkleTree`] from the iterator, this walks the
@@ -1100,7 +992,6 @@ impl<T> MerkleTree<T> {
         I: IntoIterator<Item = HashOf<T>>,
     {
         Self::validate_nodes(&self.nodes)?;
-
         let mut supplied = leaves.into_iter();
         let mut retained = self.leaves();
         loop {
@@ -1118,7 +1009,6 @@ impl<T> MerkleTree<T> {
                 _ => return Err(MerkleError::InconsistentCachedNodes),
             }
         }
-
         let leaf_offset = (1usize << self.height()) - 1;
         for index in (0..leaf_offset).rev() {
             let expected =
@@ -1129,7 +1019,6 @@ impl<T> MerkleTree<T> {
         }
         Ok(())
     }
-
     /// Return the canonical root-and-count commitment, or `None` for an empty tree.
     #[must_use]
     pub fn commitment(&self) -> Option<MerkleTreeCommitment<T>> {
@@ -1140,24 +1029,20 @@ impl<T> MerkleTree<T> {
             NonZeroU64::new(leaf_count)?,
         ))
     }
-
     /// Constructs a Merkle proof for the leaf at the given index among all leaves.
     pub fn get_proof(&self, leaf_index: u32) -> Option<MerkleProof<T>> {
         let mut index = self.index_in_tree(leaf_index as usize)?;
         let mut audit_path = Vec::new();
-
         while let Some(parent_index) = self.parent_index(index) {
             let sibling = self.sibling_index(index).and_then(|i| self.get(i));
             audit_path.push(sibling.copied());
             index = parent_index;
         }
-
         Some(MerkleProof {
             leaf_index,
             audit_path,
         })
     }
-
     /// Incrementally update the leaf at `leaf_index` and recompute parents
     /// using this tree's retained hashing scheme.
     ///
@@ -1175,7 +1060,6 @@ impl<T> MerkleTree<T> {
             self.update(index);
         }
     }
-
     /// Appends a leaf hash and updates parents using the retained hash scheme.
     ///
     /// Application trees domain-separate the typed hash as a leaf. SHA-256
@@ -1196,7 +1080,6 @@ impl<T> MerkleTree<T> {
             new_array.append(&mut array);
             self.nodes = new_array;
         }
-
         let leaf_node = match self.hash_scheme {
             MerkleHashScheme::ApplicationV1 => Self::leaf_hash(&hash),
             MerkleHashScheme::Sha256V1 => hash,
@@ -1204,7 +1087,6 @@ impl<T> MerkleTree<T> {
         self.nodes.push(Some(leaf_node));
         self.update(self.len() - 1);
     }
-
     /// Recomputes hashes along the path from the leaf at `index` up to the root.
     fn update(&mut self, mut index: usize) {
         let mut node = self.get(index).copied();
@@ -1223,7 +1105,6 @@ impl<T> MerkleTree<T> {
             node = parent_node;
         }
     }
-
     /// Combines two child hashes into a parent hash.
     ///
     /// Pre-hash processing:
@@ -1244,14 +1125,12 @@ impl<T> MerkleTree<T> {
             }
             (None, None) => return None,
         };
-
         Some(HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
             TAG_MERKLE_INTERNAL_V1,
             l_hash.as_ref(),
             r_hash.as_ref(),
         ])))
     }
-
     #[inline]
     fn pair_hash_sha256(
         l_node: Option<&HashOf<T>>,
@@ -1268,7 +1147,6 @@ impl<T> MerkleTree<T> {
         let digest: [u8; Hash::LENGTH] = Sha256::digest(input).into();
         Some(HashOf::from_untyped_unchecked(Hash::prehashed(digest)))
     }
-
     #[inline]
     fn pair_hash_for_scheme(
         &self,
@@ -1280,7 +1158,6 @@ impl<T> MerkleTree<T> {
             MerkleHashScheme::Sha256V1 => Self::pair_hash_sha256(l_node, r_node),
         }
     }
-
     /// Parallel builder from typed leaf hashes using canonical pair-hash
     /// semantics. This constructs the complete BFS array bottom-up, computing
     /// parents in parallel per level. Semantics match the sequential
@@ -1295,24 +1172,20 @@ impl<T> MerkleTree<T> {
         if leaves_vec.is_empty() {
             return Self::default();
         }
-
         let n = leaves_vec.len();
         let height = Self::height_from_n_leaves(n);
         let pow2 = 1usize << height;
         let capacity = (1usize << (height + 1)) - 1;
         let offset = pow2 - 1; // index of first leaf in BFS layout
-
         // Initialize BFS node array with None, then place leaves.
         let mut nodes: Vec<Option<HashOf<T>>> = vec![None; capacity];
         for (i, leaf) in leaves_vec.into_iter().enumerate() {
             nodes[offset + i] = Some(Self::leaf_hash(&leaf));
         }
-
         // Compute parents bottom-up, in parallel per level.
         for lvl in (0..height).rev() {
             let start = (1usize << lvl) - 1;
             let end = (1usize << (lvl + 1)) - 1; // exclusive upper bound
-
             for i in start..end {
                 let li = (i << 1) + 1;
                 let ri = li + 1;
@@ -1321,19 +1194,16 @@ impl<T> MerkleTree<T> {
                 nodes[i] = Self::pair_hash(l, r);
             }
         }
-
         let complement = pow2 - n;
         if complement > 0 {
             nodes.truncate(nodes.len() - complement);
         }
-
         Self {
             hash_scheme: MerkleHashScheme::ApplicationV1,
             nodes,
         }
     }
 }
-
 impl<T> MerkleProof<T> {
     /// Construct a Merkle proof from a leaf index and an audit path.
     ///
@@ -1356,7 +1226,6 @@ impl<T> MerkleProof<T> {
         if !proof_shape_is_canonical(self.leaf_index, &self.audit_path, commitment.leaf_count) {
             return false;
         }
-
         let mut index = u64::from(self.leaf_index);
         let committed_leaf = MerkleTree::<T>::leaf_hash(leaf);
         let Some(computed_root) =
@@ -1374,10 +1243,8 @@ impl<T> MerkleProof<T> {
         else {
             return false;
         };
-
         commitment.root == computed_root.transmute()
     }
-
     /// Borrow the audit path (list of sibling nodes) for this proof.
     pub fn audit_path(&self) -> &[Option<HashOf<T>>] {
         &self.audit_path
@@ -1391,7 +1258,6 @@ impl<T> MerkleProof<T> {
         self.leaf_index
     }
 }
-
 impl<T> CompactMerkleProof<T> {
     /// Construct a compact proof from raw parts. Depth is limited to 32 by
     /// the encoding used in VM syscalls, and `siblings.len()` should be equal
@@ -1446,7 +1312,6 @@ impl<T> CompactMerkleProof<T> {
             siblings: full.audit_path,
         })
     }
-
     /// Expand a canonical compact proof into its full representation.
     ///
     /// The direction bitset is the leaf index. Bits above `depth` must be zero
@@ -1461,7 +1326,6 @@ impl<T> CompactMerkleProof<T> {
         }
         Ok(MerkleProof::from_audit_path(self.dirs, self.siblings))
     }
-
     fn has_canonical_encoding(&self) -> bool {
         if self.depth > COMPACT_MERKLE_PROOF_MAX_DEPTH
             || self.siblings.len() != usize::from(self.depth)
@@ -1477,7 +1341,6 @@ impl<T> CompactMerkleProof<T> {
         };
         self.dirs & !used_mask == 0
     }
-
     /// Verify this compact proof against an authenticated commitment.
     #[must_use]
     pub fn verify(&self, leaf: &HashOf<T>, commitment: &MerkleTreeCommitment<T>) -> bool {
@@ -1488,7 +1351,6 @@ impl<T> CompactMerkleProof<T> {
         full.verify(leaf, commitment)
     }
 }
-
 #[cfg(feature = "json")]
 impl<T> JsonSerialize for CompactMerkleProof<T> {
     fn json_serialize(&self, out: &mut String) {
@@ -1506,7 +1368,6 @@ impl<T> JsonSerialize for CompactMerkleProof<T> {
         json::JsonSerialize::json_serialize(&self.siblings, out);
         out.push('}');
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -1523,23 +1384,19 @@ impl<T> JsonSerialize for CompactMerkleProof<T> {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl<T> JsonDeserialize for CompactMerkleProof<T> {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         parser.skip_ws();
         parser.consume_char(b'{')?;
-
         let mut depth: Option<u8> = None;
         let mut dirs: Option<u32> = None;
         let mut siblings: Option<Vec<Option<HashOf<T>>>> = None;
-
         loop {
             parser.skip_ws();
             if parser.try_consume_char(b'}')? {
                 break;
             }
-
             let key = parser.parse_key()?;
             match key.as_str() {
                 "depth" => {
@@ -1562,7 +1419,6 @@ impl<T> JsonDeserialize for CompactMerkleProof<T> {
                 }
                 _ => parser.skip_value()?,
             }
-
             parser.skip_ws();
             if parser.try_consume_char(b',')? {
                 continue;
@@ -1570,7 +1426,6 @@ impl<T> JsonDeserialize for CompactMerkleProof<T> {
             parser.consume_char(b'}')?;
             break;
         }
-
         Ok(CompactMerkleProof {
             depth: depth.ok_or_else(|| json::Error::missing_field("depth"))?,
             dirs: dirs.ok_or_else(|| json::Error::missing_field("dirs"))?,
@@ -1578,7 +1433,6 @@ impl<T> JsonDeserialize for CompactMerkleProof<T> {
         })
     }
 }
-
 impl CompactMerkleProof<[u8; 32]> {
     /// Compute the SHA-256 root of this proof's path fragment.
     ///
@@ -1596,7 +1450,6 @@ impl CompactMerkleProof<[u8; 32]> {
         MerkleProof::from_audit_path(self.dirs, self.siblings.clone())
             .compute_partial_root_sha256(leaf, usize::from(self.depth))
     }
-
     /// Verify a compact proof where inner nodes are combined using SHA-256 of
     /// left||right and leaves are SHA-256 digests.
     ///
@@ -1614,7 +1467,6 @@ impl CompactMerkleProof<[u8; 32]> {
         full.verify_sha256(leaf, commitment)
     }
 }
-
 // Specialized helpers for byte-oriented Merkle trees using SHA-256 as the
 // node-combining hash. These helpers build a MerkleTree<[u8;32]> whose internal
 // nodes store HashOf<[u8;32]>. The underlying bytes for each node are the
@@ -1636,7 +1488,6 @@ impl MerkleTree<[u8; 32]> {
             .map(|digest| HashOf::from_untyped_unchecked(Hash::prehashed(digest)));
         Self::from_sha256_leaf_nodes(leaf_nodes)
     }
-
     /// Build a Merkle tree from raw bytes by splitting them into `chunk`-sized
     /// pieces and hashing each zero-padded chunk with SHA-256. The final chunk,
     /// if shorter, is padded with zeros up to `chunk` bytes before hashing.
@@ -1647,7 +1498,6 @@ impl MerkleTree<[u8; 32]> {
     /// Returns [`MerkleError::InvalidChunkSize`] when `chunk` is outside `1..=32`.
     pub fn from_byte_chunks(data: &[u8], chunk: usize) -> Result<Self, MerkleError> {
         validate_chunk_size(chunk)?;
-
         let mut leaves = Vec::new();
         let mut exact = data.chunks_exact(chunk);
         for c in &mut exact {
@@ -1673,10 +1523,8 @@ impl MerkleTree<[u8; 32]> {
             arr.copy_from_slice(&digest);
             leaves.push(arr);
         }
-
         Ok(Self::from_hashed_leaves_sha256(leaves))
     }
-
     /// Build a Merkle tree from an owned vector of pre-hashed 32-byte leaves,
     /// computing internal nodes in parallel. Semantics match
     /// `from_hashed_leaves_sha256` exactly and remain deterministic. Empty input
@@ -1690,18 +1538,15 @@ impl MerkleTree<[u8; 32]> {
         let pow2 = 1usize << height;
         let capacity = (1usize << (height + 1)) - 1;
         let offset = pow2 - 1; // index of first leaf in BFS layout
-
         // Initialize BFS node array with None, then place leaves.
         let mut nodes: Vec<Option<[u8; 32]>> = vec![None; capacity];
         for (i, leaf) in leaves.into_iter().enumerate() {
             nodes[offset + i] = Some(leaf);
         }
-
         // Compute parents bottom-up, level by level, in parallel per level.
         for lvl in (0..height).rev() {
             let start = (1usize << lvl) - 1;
             let end = (1usize << (lvl + 1)) - 1; // exclusive upper bound
-
             for i in start..end {
                 let li = (i << 1) + 1;
                 let ri = li + 1;
@@ -1725,12 +1570,10 @@ impl MerkleTree<[u8; 32]> {
                 };
             }
         }
-
         let complement = pow2 - n;
         if complement > 0 {
             nodes.truncate(nodes.len() - complement);
         }
-
         // Wrap raw digests into HashOf<[u8;32]> (using Hash::prehashed)
         let inner = nodes
             .into_iter()
@@ -1741,7 +1584,6 @@ impl MerkleTree<[u8; 32]> {
             nodes: inner,
         }
     }
-
     /// Parallel variant of `from_byte_chunks` guarded by the `rayon` feature.
     ///
     /// # Errors
@@ -1749,7 +1591,6 @@ impl MerkleTree<[u8; 32]> {
     #[cfg(feature = "rayon")]
     pub fn from_chunked_bytes_parallel(data: &[u8], chunk: usize) -> Result<Self, MerkleError> {
         validate_chunk_size(chunk)?;
-
         let num_chunks = data.len().div_ceil(chunk);
         let mut leaves = vec![[0u8; 32]; num_chunks.max(1)];
         leaves.par_iter_mut().enumerate().for_each(|(i, slot)| {
@@ -1773,7 +1614,6 @@ impl MerkleTree<[u8; 32]> {
         });
         Ok(Self::from_hashed_leaves_sha256_parallel(leaves))
     }
-
     /// Incrementally update the leaf at `leaf_index` with a new SHA-256 digest
     /// and recompute parent nodes up to the root using SHA-256(left||right)
     /// semantics with left-promotion.
@@ -1797,7 +1637,6 @@ impl MerkleTree<[u8; 32]> {
         self.update(idx);
     }
 }
-
 impl MerkleProof<[u8; 32]> {
     /// Compute a partial Merkle root using SHA-256(left || right) semantics.
     ///
@@ -1821,7 +1660,6 @@ impl MerkleProof<[u8; 32]> {
         }
         let mut index = u64::from(self.leaf_index);
         let mut acc_bytes: [u8; 32] = *leaf.as_ref();
-
         for sibling in &self.audit_path {
             let (l_opt, r_opt) = if index.is_multiple_of(2) {
                 (
@@ -1835,7 +1673,6 @@ impl MerkleProof<[u8; 32]> {
                 )
             };
             index >>= 1;
-
             let combined = match (l_opt, r_opt) {
                 (Some(lh), Some(rh)) => {
                     let mut buf = [0u8; 64];
@@ -1851,12 +1688,10 @@ impl MerkleProof<[u8; 32]> {
             };
             acc_bytes = combined;
         }
-
         Some(HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(
             Hash::prehashed(acc_bytes),
         ))
     }
-
     /// Verify a proof where internal nodes are SHA-256(left || right).
     ///
     /// Exact path depth, leaf-index range, and ragged sibling geometry are
@@ -1903,7 +1738,6 @@ impl MerkleProof<[u8; 32]> {
             HashOf::<MerkleTree<[u8; 32]>>::from_untyped_unchecked(Hash::prehashed(acc_bytes));
         commitment.root == computed
     }
-
     /// Construct a SHA-256 proof from raw sibling bytes.
     ///
     /// Conventions:
@@ -1926,10 +1760,8 @@ impl MerkleProof<[u8; 32]> {
         }
     }
 }
-
 impl<T> Iterator for LeafHashIterator<'_, T> {
     type Item = HashOf<T>;
-
     fn next(&mut self) -> Option<Self::Item> {
         if self.index_back <= self.index {
             return None;
@@ -1943,7 +1775,6 @@ impl<T> Iterator for LeafHashIterator<'_, T> {
         Some(leaf)
     }
 }
-
 impl<T> DoubleEndedIterator for LeafHashIterator<'_, T> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.index_back <= self.index {
@@ -1958,18 +1789,15 @@ impl<T> DoubleEndedIterator for LeafHashIterator<'_, T> {
         Some(leaf)
     }
 }
-
 impl<T> ExactSizeIterator for LeafHashIterator<'_, T> {
     fn len(&self) -> usize {
         self.index_back - self.index
     }
 }
-
 impl<'a, T> LeafHashIterator<'a, T> {
     fn new(tree: &'a MerkleTree<T>) -> Self {
         let offset = (1 << tree.height()) - 1;
         let n_leaves = tree.len() - offset;
-
         Self {
             tree,
             index: 0,
@@ -1977,7 +1805,6 @@ impl<'a, T> LeafHashIterator<'a, T> {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1995,21 +1822,18 @@ mod tests {
         }
         chosen
     }
-
     fn test_hashes(n_hashes: u8) -> Vec<HashOf<()>> {
         (0..n_hashes)
             .map(|i| Hash::prehashed([i; Hash::LENGTH]))
             .map(HashOf::from_untyped_unchecked)
             .collect()
     }
-
     fn raw_application_tree<T>(nodes: Vec<Option<HashOf<T>>>) -> MerkleTree<T> {
         MerkleTree {
             hash_scheme: MerkleHashScheme::ApplicationV1,
             nodes,
         }
     }
-
     #[test]
     fn merkle_proof_lengths_and_wire_match_owned_tuple_for_all_supported_layouts() {
         use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
@@ -2043,12 +1867,10 @@ mod tests {
             let mut actual = Vec::new();
             norito::core::serialize_to_buffer(&proof, &mut actual)
                 .expect("serialize borrowed Merkle-proof tuple");
-
             let owned = (proof.leaf_index(), proof.audit_path().to_vec());
             let mut expected = Vec::new();
             norito::core::serialize_to_buffer(&owned, &mut expected)
                 .expect("serialize historical owned Merkle-proof tuple");
-
             assert_eq!(actual, expected, "wire changed for flags 0x{flags:02x}");
             assert_eq!(
                 norito::core::NoritoSerialize::encoded_len_hint(&proof),
@@ -2063,7 +1885,6 @@ mod tests {
         }
         norito::core::reset_decode_state();
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn merkle_proof_json_ignores_unknown_members_and_rejects_duplicates() {
@@ -2078,7 +1899,6 @@ mod tests {
         .expect("additive Merkle proof members must be ignored");
         assert_eq!(proof.leaf_index(), 7);
         assert_eq!(proof.audit_path(), &[None]);
-
         for json in [
             r#"{"leaf_index":1,"leaf_index":2,"audit_path":[]}"#,
             r#"{"leaf_index":1,"audit_path":[],"audit_path":[null]}"#,
@@ -2088,7 +1908,6 @@ mod tests {
             assert!(err.to_string().contains("duplicate field"));
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn compact_merkle_proof_json_ignores_unknown_members_and_rejects_duplicates() {
@@ -2104,7 +1923,6 @@ mod tests {
         assert_eq!(proof.depth(), 1);
         assert_eq!(proof.dirs(), 0);
         assert_eq!(proof.siblings(), &[None]);
-
         for json in [
             r#"{"depth":1,"depth":2,"dirs":0,"siblings":[]}"#,
             r#"{"depth":1,"dirs":0,"dirs":1,"siblings":[]}"#,
@@ -2115,7 +1933,6 @@ mod tests {
             assert!(err.to_string().contains("duplicate field"));
         }
     }
-
     #[test]
     fn builds_tree_from_hashes() {
         let tree: MerkleTree<_> = test_hashes(5).into_iter().collect();
@@ -2135,7 +1952,6 @@ mod tests {
         assert!(tree.get(11).is_some());
         assert!(tree.get(12).is_none());
     }
-
     #[test]
     fn iterates_over_leaves() {
         let hashes = test_hashes(5);
@@ -2143,7 +1959,6 @@ mod tests {
         let leaves: Vec<_> = tree.leaves().collect();
         let committed: Vec<_> = hashes.iter().map(MerkleTree::leaf_hash).collect();
         assert_eq!(committed, leaves);
-
         let mut leaves_iter = tree.leaves();
         assert_eq!(leaves_iter.len(), 5);
         assert_eq!(leaves_iter.next(), Some(leaves[0]));
@@ -2157,26 +1972,22 @@ mod tests {
         assert_eq!(leaves_iter.next(), None);
         assert_eq!(leaves_iter.len(), 0);
     }
-
     #[test]
     fn validates_retained_tree_without_rebuilding_it() {
         let hashes = test_hashes(5);
         let tree: MerkleTree<_> = hashes.iter().copied().collect();
         tree.validate_leaves(hashes.iter().copied())
             .expect("canonical retained tree");
-
         assert_eq!(
             tree.validate_leaves(hashes[..4].iter().copied()),
             Err(MerkleError::InconsistentCachedNodes)
         );
-
         let mut wrong_hashes = hashes.clone();
         wrong_hashes[2] = HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
         assert_eq!(
             tree.validate_leaves(wrong_hashes),
             Err(MerkleError::InconsistentCachedNodes)
         );
-
         let mut corrupt = tree;
         corrupt.nodes[0] = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
             [0xBB; Hash::LENGTH],
@@ -2186,7 +1997,6 @@ mod tests {
             Err(MerkleError::InconsistentCachedNodes)
         );
     }
-
     #[test]
     fn streaming_root_matches_retained_tree_for_ragged_layouts() {
         for count in 0_u8..=31 {
@@ -2199,68 +2009,54 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn leaf_iterator_stops_on_missing_front_leaf() {
         let leaf = test_hashes(1)[0];
         let bad_tree = raw_application_tree(vec![Some(leaf), None, Some(leaf)]);
         let mut leaves_iter = bad_tree.leaves();
-
         assert_eq!(leaves_iter.len(), 2);
         assert_eq!(leaves_iter.next(), None);
         assert_eq!(leaves_iter.len(), 0);
         assert_eq!(leaves_iter.next_back(), None);
     }
-
     #[test]
     fn leaf_iterator_stops_on_missing_back_leaf() {
         let leaf = test_hashes(1)[0];
         let bad_tree = raw_application_tree(vec![Some(leaf), Some(leaf), None]);
         let mut leaves_iter = bad_tree.leaves();
-
         assert_eq!(leaves_iter.len(), 2);
         assert_eq!(leaves_iter.next_back(), None);
         assert_eq!(leaves_iter.len(), 0);
         assert_eq!(leaves_iter.next(), None);
     }
-
     #[test]
     fn update_stops_on_missing_parent_slot() {
         let mut tree = raw_application_tree::<()>(vec![None]);
-
         tree.update(3);
-
         assert_eq!(tree.nodes, vec![None]);
     }
-
     #[test]
     fn grows_incrementally_and_matches_prebuilt_tree() {
         let leaves = test_hashes(5);
         let tree: MerkleTree<_> = leaves.clone().into_iter().collect();
-
         let mut growing_tree = MerkleTree::default();
         for leaf in leaves {
             growing_tree.add(leaf);
         }
-
         assert_eq!(growing_tree.root(), tree.root());
         assert_eq!(growing_tree, tree);
     }
-
     #[test]
     fn provides_and_verifies_inclusion_proofs() {
         let leaves = test_hashes(5);
         let tree: MerkleTree<_> = leaves.clone().into_iter().collect();
         let commitment = tree.commitment().expect("non-empty tree");
-
         // Generate proofs.
         let mut proofs: Vec<_> = (0..5).map(|i| tree.get_proof(i).unwrap()).collect();
-
         // Verify: valid proofs should succeed.
         for (leaf, proof) in leaves.iter().zip(proofs.clone()) {
             assert!(proof.verify(leaf, &commitment));
         }
-
         // Mirror the leaf index to invalidate proofs.
         let mirror_index = |index: usize| {
             let height = MerkleTree::<()>::height_from_n_leaves(5);
@@ -2269,37 +2065,31 @@ mod tests {
             println!("mirroring index from {index} to {mirrored}");
             u32::try_from(mirrored).unwrap()
         };
-
         // Corrupt each proof by modifying its leaf index.
         for (i, proof) in proofs.iter_mut().enumerate() {
             proof.leaf_index = mirror_index(i);
         }
-
         // Verify: corrupted proofs should fail.
         for (leaf, proof) in leaves.iter().zip(proofs) {
             assert!(!proof.verify(leaf, &commitment));
         }
     }
-
     #[test]
     fn singleton_commitment_domains_the_leaf_and_authenticates_count() {
         let leaf = test_hashes(1)[0];
         let tree: MerkleTree<()> = [leaf].into_iter().collect();
         let commitment = tree.commitment().expect("singleton commitment");
         let proof = tree.get_proof(0).expect("singleton proof");
-
         assert_eq!(commitment.leaf_count().get(), 1);
         assert_eq!(
             commitment.root(),
             &MerkleTree::<()>::leaf_hash(&leaf).transmute()
         );
         assert!(proof.verify(&leaf, &commitment));
-
         let wrong_count =
             MerkleTreeCommitment::new(*commitment.root(), NonZeroU64::new(2).expect("non-zero"));
         assert!(!proof.verify(&leaf, &wrong_count));
     }
-
     #[test]
     fn ragged_proof_requires_exact_some_none_geometry() {
         let leaves = test_hashes(5);
@@ -2315,17 +2105,14 @@ mod tests {
             vec![false, false, true]
         );
         assert!(proof.verify(&leaves[4], &commitment));
-
         let bogus = HashOf::from_untyped_unchecked(Hash::prehashed([0x44; Hash::LENGTH]));
         let mut filled_padding = proof.clone();
         filled_padding.audit_path[0] = Some(bogus);
         assert!(!filled_padding.verify(&leaves[4], &commitment));
-
         let mut missing_real_sibling = proof;
         missing_real_sibling.audit_path[2] = None;
         assert!(!missing_real_sibling.verify(&leaves[4], &commitment));
     }
-
     #[test]
     fn shielded_empty_root_matches_generic_leaf_and_internal_domains() {
         let raw_leaf = MerkleTree::<[u8; 32]>::shielded_leaf_from_commitment([0; 32]);
@@ -2334,14 +2121,12 @@ mod tests {
             singleton.root().expect("singleton root").as_ref(),
             &MerkleTree::<[u8; 32]>::shielded_empty_root(0)
         );
-
         let pair: MerkleTree<[u8; 32]> = [raw_leaf, raw_leaf].into_iter().collect();
         assert_eq!(
             pair.root().expect("pair root").as_ref(),
             &MerkleTree::<[u8; 32]>::shielded_empty_root(1)
         );
     }
-
     #[test]
     fn merkle_tree_roundtrip() {
         let tree: MerkleTree<_> = test_hashes(3).into_iter().collect();
@@ -2350,7 +2135,6 @@ mod tests {
         let decoded = norito::core::NoritoDeserialize::deserialize(archived);
         assert_eq!(tree, decoded);
     }
-
     #[test]
     fn merkle_proof_roundtrip() {
         let leaves = test_hashes(3);
@@ -2361,16 +2145,13 @@ mod tests {
         let decoded = norito::core::NoritoDeserialize::deserialize(archived);
         assert_eq!(proof, decoded);
     }
-
     #[test]
     fn merkle_proof_try_deserialize_rejects_malformed_archive_without_panicking() {
         struct MalformedMerkleProof;
-
         impl norito::core::NoritoSerialize for MalformedMerkleProof {
             fn schema_hash() -> [u8; 16] {
                 <MerkleProof<()> as norito::core::NoritoSerialize>::schema_hash()
             }
-
             fn serialize(
                 &self,
                 writer: &mut norito::core::Encoder<'_>,
@@ -2382,14 +2163,12 @@ mod tests {
                 Ok(())
             }
         }
-
         let bytes = norito::to_bytes(&MalformedMerkleProof).expect("encode malformed fixture");
         let archived =
             norito::from_bytes::<MerkleProof<()>>(&bytes).expect("validate outer archive");
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             <MerkleProof<()> as norito::core::NoritoDeserialize>::try_deserialize(archived)
         }));
-
         let error = outcome
             .expect("fallible Merkle proof decoding must not unwind")
             .expect_err("malformed Merkle proof must be rejected");
@@ -2400,7 +2179,6 @@ mod tests {
                 | norito::core::Error::AllocationFailed { .. }
         ));
     }
-
     #[cfg(feature = "rayon")]
     #[test]
     fn generic_parallel_equals_sequential() {
@@ -2408,7 +2186,6 @@ mod tests {
         let seq: MerkleTree<()> = leaves.clone().into_iter().collect();
         let par: MerkleTree<()> = MerkleTree::from_typed_leaves_parallel(leaves);
         assert_eq!(seq.root(), par.root());
-
         // Compare a few proofs for equality as well
         for &idx in &[0u32, 4, 9, 16] {
             let p1 = seq.get_proof(idx).expect("proof");
@@ -2416,7 +2193,6 @@ mod tests {
             assert_eq!(p1.audit_path(), p2.audit_path());
         }
     }
-
     #[test]
     fn into_audit_path_returns_path() {
         let tree: MerkleTree<_> = test_hashes(3).into_iter().collect();
@@ -2424,13 +2200,11 @@ mod tests {
         let expected = proof.audit_path.clone();
         assert_eq!(proof.into_audit_path(), expected);
     }
-
     #[test]
     fn byte_tree_from_chunks_matches_manual() {
         // 35 bytes -> 2 leaves for chunk=32 (padded final chunk)
         let data: Vec<u8> = (0..35u8).collect();
         let chunk = 32;
-
         // Manual leaves: hash first 32 bytes, then hash zero-padded remainder
         let mut l0 = [0u8; 32];
         l0.copy_from_slice(&sha2::Sha256::digest(&data[..chunk]));
@@ -2439,14 +2213,11 @@ mod tests {
         let mut l1 = [0u8; 32];
         l1.copy_from_slice(&sha2::Sha256::digest(&buf[..chunk]));
         let manual: MerkleTree<[u8; 32]> = MerkleTree::from_hashed_leaves_sha256([l0, l1]);
-
         // Helper-based build
         let via_helper =
             MerkleTree::<[u8; 32]>::from_byte_chunks(&data, chunk).expect("valid chunk");
-
         assert_eq!(manual.root(), via_helper.root());
     }
-
     #[cfg(feature = "rayon")]
     #[test]
     fn byte_tree_parallel_equals_sequential() {
@@ -2456,20 +2227,17 @@ mod tests {
             MerkleTree::<[u8; 32]>::from_chunked_bytes_parallel(&data, 32).expect("valid chunk");
         assert_eq!(a.root(), b.root());
     }
-
     #[test]
     fn hashed_leaves_sha256_empty_tree_has_no_root() {
         let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(Vec::new());
         assert!(tree.root().is_none());
     }
-
     #[cfg(feature = "rayon")]
     #[test]
     fn hashed_leaves_sha256_parallel_empty_tree_has_no_root() {
         let tree = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256_parallel(Vec::new());
         assert!(tree.root().is_none());
     }
-
     #[test]
     fn byte_proof_verify_sha256() {
         let data: Vec<u8> = (0..90u32).map(|i| (i % 200) as u8).collect();
@@ -2479,13 +2247,11 @@ mod tests {
         let proof = tree.get_proof(idx).expect("proof");
         let leaf = tree.leaves().nth(idx as usize).unwrap();
         assert!(proof.verify_sha256(&leaf, &commitment));
-
         // Corrupt the leaf index to invalidate
         let mut bad = proof;
         bad.leaf_index = idx + 1;
         assert!(!bad.verify_sha256(&leaf, &commitment));
     }
-
     #[test]
     fn byte_proof_rejects_out_of_range_leaf_index_sha256() {
         let data: Vec<u8> = (0..90u32).map(|i| (i % 200) as u8).collect();
@@ -2500,7 +2266,6 @@ mod tests {
         assert!(proof.compute_partial_root_sha256(&leaf, height).is_none());
         assert!(!proof.verify_sha256(&leaf, &commitment));
     }
-
     #[test]
     fn byte_proof_compute_partial_root_sha256_matches_root() {
         let data: Vec<u8> = (0..64u32).map(|i| (i % 251) as u8).collect();
@@ -2514,7 +2279,6 @@ mod tests {
             .expect("computed root");
         assert_eq!(root, computed);
     }
-
     #[test]
     fn compact_proof_roundtrip_and_verify() {
         let leaves = test_hashes(10);
@@ -2523,23 +2287,19 @@ mod tests {
         let idx = 7u32;
         let leaf = leaves[idx as usize];
         let full = tree.get_proof(idx).expect("proof");
-
         // Compact conversion + verify
         let compact = CompactMerkleProof::try_from_full(full.clone()).expect("compact proof");
         assert!(compact.verify(&leaf, &commitment));
-
         // Expand back to full and compare the authenticated index and audit path.
         let expanded = compact.try_into_full().expect("canonical compact proof");
         assert_eq!(expanded.leaf_index(), idx);
         assert_eq!(full.audit_path(), expanded.audit_path());
     }
-
     #[test]
     fn compact_proof_dirs_match_leaf_index_bits() {
         let leaves = test_hashes(8);
         let tree: MerkleTree<_> = leaves.clone().into_iter().collect();
         let commitment = tree.commitment().expect("commitment");
-
         for idx in 0..8u32 {
             let leaf = leaves[idx as usize];
             let full = tree.get_proof(idx).expect("proof");
@@ -2554,7 +2314,6 @@ mod tests {
             assert!(compact.verify(&leaf, &commitment));
         }
     }
-
     #[test]
     fn compact_proof_sha256_dirs_match_leaf_index_bits() {
         let data: Vec<u8> = (0..128u32).map(|i| (i % 251) as u8).collect();
@@ -2569,7 +2328,6 @@ mod tests {
         assert_eq!(u64::from(compact.dirs()), u64::from(idx) & mask);
         assert!(compact.verify_sha256(&leaf, &commitment));
     }
-
     #[test]
     fn compact_proof_computes_explicit_partial_sha256_root() {
         let data: Vec<u8> = (0..128u32).map(|i| (i % 251) as u8).collect();
@@ -2580,13 +2338,11 @@ mod tests {
             tree.get_proof(idx).expect("proof for an existing leaf"),
         )
         .expect("compact proof");
-
         assert_eq!(
             compact.compute_partial_root_sha256(&leaf),
             tree.root(),
             "a complete compact path reconstructs the tree root"
         );
-
         let noncanonical = CompactMerkleProof::from_parts(
             compact.depth(),
             compact.dirs() | (1_u32 << u32::from(compact.depth())),
@@ -2594,7 +2350,6 @@ mod tests {
         );
         assert!(noncanonical.compute_partial_root_sha256(&leaf).is_none());
     }
-
     #[test]
     fn compact_proof_rejects_sibling_length_mismatch() {
         let leaves = test_hashes(8);
@@ -2607,7 +2362,6 @@ mod tests {
         compact.siblings.pop();
         assert!(!compact.verify(&leaf, &commitment));
     }
-
     #[test]
     fn compact_proof_rejects_unused_direction_bits() {
         let leaves = test_hashes(5);
@@ -2617,14 +2371,12 @@ mod tests {
         let mut compact = CompactMerkleProof::try_from_full(tree.get_proof(idx).expect("proof"))
             .expect("compact proof");
         compact.dirs |= 1u32 << u32::from(compact.depth);
-
         assert!(!compact.verify(&leaves[idx as usize], &commitment));
         assert!(matches!(
             compact.try_into_full(),
             Err(MerkleError::NonCanonicalCompactProof)
         ));
     }
-
     #[test]
     fn compact_proof_max_depth_matches_direction_bit_width() {
         assert_eq!(
@@ -2633,7 +2385,6 @@ mod tests {
             "compact proof depth must match the u32 direction bitset width"
         );
     }
-
     #[test]
     fn compact_proof_rejects_audit_path_over_depth_limit() {
         let sibling: HashOf<()> =
@@ -2645,7 +2396,6 @@ mod tests {
             MerkleError::CompactProofTooDeep { depth: 40, .. }
         ));
     }
-
     #[test]
     fn compact_proof_rejects_depth_over_32() {
         let leaves = test_hashes(6);
@@ -2661,7 +2411,6 @@ mod tests {
         }
         assert!(!compact.verify(&leaf, &commitment));
     }
-
     #[test]
     fn compact_proof_sha256_rejects_sibling_length_mismatch() {
         let data: Vec<u8> = (0..96u32).map(|i| (i % 251) as u8).collect();
@@ -2674,7 +2423,6 @@ mod tests {
         compact.siblings.pop();
         assert!(!compact.verify_sha256(&leaf, &commitment));
     }
-
     #[test]
     fn compact_proof_sha256_rejects_depth_over_32() {
         let data: Vec<u8> = (0..96u32).map(|i| (i % 251) as u8).collect();
@@ -2690,7 +2438,6 @@ mod tests {
         }
         assert!(!compact.verify_sha256(&leaf, &commitment));
     }
-
     #[test]
     fn byte_proof_tamper_audit_path_fails_sha256() {
         let data: Vec<u8> = (0..120u32).map(|i| (i % 251) as u8).collect();
@@ -2700,7 +2447,6 @@ mod tests {
         let mut proof = tree.get_proof(idx).expect("proof");
         let leaf = tree.leaves().nth(idx as usize).unwrap();
         assert!(proof.verify_sha256(&leaf, &commitment));
-
         // Tamper with the first sibling (if any), otherwise set first path element.
         if let Some(slot) = proof.audit_path.iter_mut().find(|s| s.is_some()) {
             *slot = Some(HashOf::from_untyped_unchecked(Hash::prehashed(
@@ -2713,7 +2459,6 @@ mod tests {
         }
         assert!(!proof.verify_sha256(&leaf, &commitment));
     }
-
     #[test]
     fn proof_truncated_path_fails() {
         let leaves = test_hashes(7);
@@ -2726,7 +2471,6 @@ mod tests {
         proof.audit_path.pop();
         assert!(!proof.verify(&leaf, &commitment));
     }
-
     #[test]
     fn proof_rejects_out_of_range_leaf_index() {
         let leaves = test_hashes(6);
@@ -2740,7 +2484,6 @@ mod tests {
         proof.leaf_index = 1u32 << height_u32;
         assert!(!proof.verify(&leaf, &commitment));
     }
-
     #[test]
     fn proof_extended_path_fails() {
         let leaves = test_hashes(6);
@@ -2757,7 +2500,6 @@ mod tests {
             ))));
         assert!(!proof.verify(&leaf, &commitment));
     }
-
     #[test]
     fn byte_proof_reversed_order_fails_sha256() {
         let data: Vec<u8> = (0..120u32).map(|i| (i % 251) as u8).collect();
@@ -2770,7 +2512,6 @@ mod tests {
         proof.audit_path.reverse();
         assert!(!proof.verify_sha256(&leaf, &commitment));
     }
-
     #[test]
     fn proof_right_only_child_fails() {
         let leaves = test_hashes(5);
@@ -2785,7 +2526,6 @@ mod tests {
         }
         assert!(!proof.verify(&leaf, &commitment));
     }
-
     #[test]
     fn byte_proof_right_only_child_fails_sha256() {
         let data: Vec<u8> = (0..96u32).map(|i| (i % 251) as u8).collect();
@@ -2799,14 +2539,12 @@ mod tests {
         }
         assert!(!proof.verify_sha256(&leaf, &commitment));
     }
-
     #[test]
     fn proof_right_only_child_deeper_fails() {
         // Build a tree with enough height to have deeper steps
         let leaves = test_hashes(9);
         let tree: MerkleTree<_> = leaves.clone().into_iter().collect();
         let commitment = tree.commitment().expect("commitment");
-
         // Pick an index that has an even step at depth > 0; try candidates
         let mut picked = None;
         for idx in 0..u32::try_from(leaves.len()).expect("leaves length fits in u32") {
@@ -2822,7 +2560,6 @@ mod tests {
         proof.audit_path[step] = None;
         assert!(!proof.verify(&leaf, &commitment));
     }
-
     #[test]
     fn typed_incremental_update_matches_rebuild() {
         // Build initial tree from typed leaves
@@ -2832,21 +2569,17 @@ mod tests {
             .collect();
         let mut tree: MerkleTree<()> = leaves.clone().into_iter().collect();
         let baseline_root = tree.root().expect("root");
-
         // Apply two updates using incremental typed API
         let new_a = HashOf::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
         let new_b = HashOf::from_untyped_unchecked(Hash::prehashed([0xBB; Hash::LENGTH]));
         tree.update_typed_leaf(3, new_a);
         tree.update_typed_leaf(11, new_b);
-
         // Build a fresh tree from updated leaves for conformance
         leaves[3] = new_a;
         leaves[11] = new_b;
         let rebuilt: MerkleTree<()> = leaves.clone().into_iter().collect();
-
         assert_ne!(baseline_root, rebuilt.root().expect("root"));
         assert_eq!(tree.root(), rebuilt.root());
-
         // Compare proofs at a few indices
         for &idx in &[0u32, 3, 7, 11, 15] {
             let p1 = tree.get_proof(idx).expect("proof");
@@ -2854,7 +2587,6 @@ mod tests {
             assert_eq!(p1.audit_path(), p2.audit_path());
         }
     }
-
     #[test]
     fn sha256_incremental_update_preserves_scheme_and_cache() {
         let mut leaves = [[0x11; 32], [0x22; 32], [0x33; 32], [0x44; 32]];
@@ -2862,7 +2594,6 @@ mod tests {
         leaves[2] = [0xAA; 32];
         tree.update_hashed_leaf_sha256(2, leaves[2]);
         let rebuilt = MerkleTree::<[u8; 32]>::from_hashed_leaves_sha256(leaves);
-
         assert_eq!(tree, rebuilt);
         assert_eq!(tree.hash_scheme, MerkleHashScheme::Sha256V1);
         assert_eq!(
@@ -2870,13 +2601,11 @@ mod tests {
             MERKLE_HASH_SCHEME_SHA256_V1
         );
     }
-
     #[test]
     fn byte_proof_right_only_child_deeper_fails_sha256() {
         let data: Vec<u8> = (0..320u32).map(|i| (i % 251) as u8).collect();
         let tree = MerkleTree::<[u8; 32]>::from_byte_chunks(&data, 32).expect("valid chunk");
         let commitment = tree.commitment().expect("commitment");
-
         let n = data.len().div_ceil(32);
         let mut picked = None;
         for idx in 0..u32::try_from(n).expect("n fits in u32") {
@@ -2891,7 +2620,6 @@ mod tests {
         proof.audit_path[step] = None;
         assert!(!proof.verify_sha256(&leaf, &commitment));
     }
-
     #[test]
     fn proof_rejects_wrong_committed_leaf_count() {
         let leaves = test_hashes(5);
@@ -2903,7 +2631,6 @@ mod tests {
         let wrong_count = MerkleTreeCommitment::new(root, NonZeroU64::new(8).unwrap());
         assert!(!proof.verify(&leaf, &wrong_count));
     }
-
     #[test]
     fn proof_rejects_commitment_beyond_u32_index_space() {
         let leaf = test_hashes(1)[0];
@@ -2919,13 +2646,11 @@ mod tests {
             NonZeroU64::new(MERKLE_PROOF_MAX_LEAF_COUNT + 1).expect("non-zero count"),
         );
         let proof = MerkleProof::from_audit_path(0, audit_path);
-
         assert!(
             !proof.verify(&leaf, &commitment),
             "a u32-indexed proof must not authenticate a larger tree"
         );
     }
-
     #[test]
     fn byte_proof_rejects_wrong_committed_leaf_count_sha256() {
         let data: Vec<u8> = (0..96u32).map(|i| (i % 251) as u8).collect();
@@ -2937,7 +2662,6 @@ mod tests {
         let wrong_count = MerkleTreeCommitment::new(root, NonZeroU64::new(4).unwrap());
         assert!(!proof.verify_sha256(&leaf, &wrong_count));
     }
-
     #[test]
     fn from_byte_chunks_rejects_invalid_chunk_size() {
         let data = [0u8; 4];
@@ -2950,7 +2674,6 @@ mod tests {
             Err(MerkleError::InvalidChunkSize { .. })
         ));
     }
-
     #[cfg(feature = "rayon")]
     #[test]
     fn from_chunked_bytes_parallel_rejects_invalid_chunk_size() {
@@ -2960,7 +2683,6 @@ mod tests {
             Err(MerkleError::InvalidChunkSize { .. })
         ));
     }
-
     #[test]
     fn merkle_proof_verify_rejects_oversized_height() {
         let leaf = HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH]));
@@ -2970,7 +2692,6 @@ mod tests {
         let proof = MerkleProof::from_audit_path(0, vec![None; usize::BITS as usize]);
         assert!(!proof.verify(&leaf, &commitment));
     }
-
     #[test]
     fn merkle_tree_encode_rejects_invalid_layout() {
         let bad_leaf: HashOf<()> =
@@ -2979,14 +2700,12 @@ mod tests {
         let err = norito::to_bytes(&bad_tree).expect_err("invalid merkle layout should fail");
         assert!(matches!(err, norito::Error::Message(_)));
     }
-
     #[test]
     fn merkle_tree_encode_rejects_missing_nodes() {
         let bad_tree = raw_application_tree::<()>(vec![None]);
         let err = norito::to_bytes(&bad_tree).expect_err("missing nodes should fail");
         assert!(matches!(err, norito::Error::Message(_)));
     }
-
     #[test]
     fn merkle_tree_encode_rejects_missing_parent() {
         let leaf: HashOf<()> =
@@ -3003,7 +2722,6 @@ mod tests {
         let err = norito::to_bytes(&bad_tree).expect_err("missing parent should fail");
         assert!(matches!(err, norito::Error::Message(_)));
     }
-
     #[test]
     fn merkle_tree_wire_omits_cached_nodes_and_rebuilds_them() {
         let leaves = test_hashes(5);
@@ -3017,21 +2735,18 @@ mod tests {
                 .any(|window| window == root.as_ref()),
             "the cached root must not be present in the tree payload"
         );
-
         let bytes = norito::to_bytes(&tree).expect("encode canonical tree");
         let decoded = norito::decode_from_bytes::<MerkleTree<()>>(&bytes)
             .expect("decode and rebuild canonical tree");
         assert_eq!(decoded, tree);
         assert_eq!(decoded.root(), Some(root));
     }
-
     #[test]
     fn merkle_tree_decode_rejects_legacy_cached_node_vector() {
         let tree: MerkleTree<()> = test_hashes(5).into_iter().collect();
         let mut legacy_payload = Vec::new();
         norito::core::serialize_to_buffer(&tree.nodes, &mut legacy_payload)
             .expect("encode legacy cached-node vector fixture");
-
         let error =
             <MerkleTree<()> as norito::core::DecodeFromSlice>::decode_from_slice(&legacy_payload)
                 .expect_err("cached parents and root must never be accepted from the wire");
@@ -3041,28 +2756,23 @@ mod tests {
             "legacy cached-node wire must fail with a concrete decode error"
         );
     }
-
     #[test]
     fn merkle_tree_encode_rejects_tampered_cached_root() {
         let mut tree: MerkleTree<()> = test_hashes(4).into_iter().collect();
         tree.nodes[0] = Some(HashOf::from_untyped_unchecked(Hash::new(
             b"attacker supplied cached root",
         )));
-
         let error = norito::to_bytes(&tree).expect_err("tampered cache must not serialize");
         assert!(error.to_string().contains("cached nodes"));
     }
-
     #[test]
     fn merkle_tree_encode_validates_cache_against_retained_scheme() {
         let mut tree: MerkleTree<()> = test_hashes(4).into_iter().collect();
         tree.hash_scheme = MerkleHashScheme::Sha256V1;
-
         let error = norito::to_bytes(&tree)
             .expect_err("application cache must not serialize under the SHA-256 scheme");
         assert!(error.to_string().contains("cached nodes"));
     }
-
     #[test]
     fn merkle_tree_sha256_wire_roundtrip_preserves_hash_scheme() {
         let leaves = [[0x11; 32], [0x22; 32], [0x33; 32]];
@@ -3070,11 +2780,9 @@ mod tests {
         let bytes = norito::to_bytes(&tree).expect("encode SHA-256 tree leaves");
         let decoded = norito::decode_from_bytes::<MerkleTree<[u8; 32]>>(&bytes)
             .expect("decode SHA-256 tree leaves");
-
         assert_eq!(decoded, tree);
         assert_eq!(decoded.root(), tree.root());
     }
-
     #[test]
     fn merkle_tree_sha256_ambiguous_shapes_retain_their_scheme() {
         for tree in [
@@ -3093,7 +2801,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn merkle_tree_json_carries_only_scheme_and_leaves() {
@@ -3113,11 +2820,9 @@ mod tests {
             !json.contains("\"root\""),
             "cached root must not be serialized"
         );
-
         let decoded: MerkleTree<()> =
             norito::json::from_str(&json).expect("decode and rebuild tree JSON");
         assert_eq!(decoded, tree);
-
         let unsupported = r#"{"hash_scheme":255,"leaves":[]}"#;
         let error = norito::json::from_str::<MerkleTree<()>>(unsupported)
             .expect_err("unknown JSON scheme must fail");
@@ -3126,7 +2831,6 @@ mod tests {
                 .to_string()
                 .contains("unsupported merkle tree hash scheme")
         );
-
         let invalid = raw_application_tree::<()>(vec![None]);
         let fallback = norito::json::to_json(&invalid).expect("serialize invalid tree fallback");
         assert_eq!(fallback, r#"{"hash_scheme":0,"leaves":[]}"#);
@@ -3136,7 +2840,6 @@ mod tests {
             fallback
         );
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn merkle_tree_json_leaf_decode_is_bounded() {
@@ -3151,12 +2854,10 @@ mod tests {
             json.push_str(&leaf_json);
         }
         json.push_str("]}");
-
         let error = norito::json::from_str::<MerkleTree<()>>(&json)
             .expect_err("oversized JSON leaf set must fail at the tree bound");
         assert!(error.to_string().contains("maximum is"));
     }
-
     #[test]
     fn merkle_tree_decode_rejects_unknown_hash_scheme() {
         let leaves = vec![test_hashes(1)[0]];
@@ -3171,7 +2872,6 @@ mod tests {
                 .contains("unsupported merkle tree hash scheme")
         );
     }
-
     #[test]
     fn merkle_tree_decode_rejects_oversized_count_before_leaf_allocation() {
         let mut payload = Vec::new();
@@ -3180,7 +2880,6 @@ mod tests {
             &mut payload,
         )
         .expect("encode empty tree wire fixture");
-
         let (scheme_len, scheme_header) =
             norito::core::read_len_dyn_slice(&payload).expect("read scheme field length");
         let leaves_field_header = scheme_header + scheme_len;
@@ -3191,7 +2890,6 @@ mod tests {
             .expect("leaf cap fits u64")
             .to_le_bytes();
         payload[count_offset..count_offset + 8].copy_from_slice(&oversized_count);
-
         let error = <MerkleTree<()> as norito::core::DecodeFromSlice>::decode_from_slice(&payload)
             .expect_err("oversized tree must fail");
         assert!(error.to_string().contains("maximum is"));

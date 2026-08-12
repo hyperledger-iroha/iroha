@@ -1,0 +1,13 @@
+
+            seiyaku C {
+                struct Ledger { int counter; bool flag; }
+                state Ledger ledger;
+
+                hajimari() { ledger = Ledger { counter: 0, flag: false }; }
+
+                fn main() {
+                    let snapshot = ledger;
+                    let _ = snapshot.counter;
+                }
+            }
+        

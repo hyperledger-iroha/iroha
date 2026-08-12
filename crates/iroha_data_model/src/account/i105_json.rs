@@ -39,17 +39,17 @@ pub(super) fn write_bounded(
     if encoder.canonical_bytes != canonical_len || encoder.initialized_limbs().is_empty() {
         return Err(BoundedJsonError::LengthMismatch);
     }
-    let checksum = encoder.checksum.finish();
-
     output.push('"')?;
     write_sentinel(super::address::chain_discriminant(), output)?;
     write_base105_limbs(encoder.initialized_limbs(), output)?;
+    let checksum = encoder.checksum.finish();
     for digit in checksum {
         write_i105_symbol(digit, output)?;
     }
     output.push('"')
 }
 
+#[allow(unsafe_code)]
 fn try_allocate_exact_limbs(length: usize) -> Result<Box<[MaybeUninit<u64>]>, BoundedJsonError> {
     let layout = Layout::array::<MaybeUninit<u64>>(length)
         .map_err(|_| BoundedJsonError::AllocationFailed)?;
@@ -231,6 +231,7 @@ impl I105Encoder {
         Ok(())
     }
 
+    #[allow(unsafe_code)]
     fn initialized_limbs(&self) -> &[u64] {
         // SAFETY: `push_limb` initializes every slot below
         // `initialized_limbs`, and no initialized value is subsequently moved
@@ -240,6 +241,7 @@ impl I105Encoder {
         }
     }
 
+    #[allow(unsafe_code)]
     fn initialized_limbs_mut(&mut self) -> &mut [u64] {
         // SAFETY: identical initialization invariant to
         // `initialized_limbs`; the mutable borrow of `self` is exclusive.

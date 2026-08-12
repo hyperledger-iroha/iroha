@@ -1,0 +1,11 @@
+
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:sese.024.001.10">
+  <SctiesSttlmTxStsAdvc>
+    <TxId>SETTLEMENT-123</TxId>
+    <SttlmTxSts>
+      <Sts><Cd>SETT</Cd></Sts>
+      <Rsn><Cd>NARR</Cd></Rsn>
+      <AddtlInf>settled in CSD</AddtlInf>
+    </SttlmTxSts>
+  </SctiesSttlmTxStsAdvc>
+</Document>

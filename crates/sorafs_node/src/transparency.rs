@@ -101,7 +101,6 @@ pub struct TransparencyLedgerSourceEntry {
     /// Public key/value metadata. Keys must be unique and sorted.
     pub metadata: Vec<ModerationLedgerMetadataV1>,
 }
-
 impl TransparencyLedgerSourceEntry {
     pub(crate) fn validate(&self) -> Result<(), TransparencyLedgerIngestError> {
         require_transparency_public_text("event_id", &self.event_id)?;
@@ -123,7 +122,6 @@ impl TransparencyLedgerSourceEntry {
         }
         validate_transparency_metadata(&self.metadata)
     }
-
     fn to_ledger_entry(
         &self,
         cycle_id: [u8; 16],
@@ -156,7 +154,6 @@ impl TransparencyLedgerSourceEntry {
         Ok(entry)
     }
 }
-
 /// Errors raised while deriving transparency source entries from typed SoraFS payloads.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum TransparencySourceEntryAdapterError {
@@ -211,7 +208,6 @@ pub enum TransparencySourceEntryAdapterError {
         message: String,
     },
 }
-
 /// Derive a transparency source entry from a GAR enforcement receipt.
 ///
 /// # Errors
@@ -264,7 +260,6 @@ pub fn gar_enforcement_receipt_source_entry(
     };
     validate_adapter_source_entry(entry)
 }
-
 /// Derive a transparency source entry from a moderation ballot governance event.
 ///
 /// # Errors
@@ -329,7 +324,6 @@ pub fn moderation_ballot_governance_event_source_entry(
     };
     validate_adapter_source_entry(entry)
 }
-
 /// Derive a transparency source entry from an appeal finance report.
 ///
 /// # Errors
@@ -394,7 +388,6 @@ pub fn appeal_finance_report_source_entry(
     };
     validate_adapter_source_entry(entry)
 }
-
 /// Derive a transparency source entry from an appeal finance settlement receipt.
 ///
 /// # Errors
@@ -473,7 +466,6 @@ pub fn appeal_finance_settlement_receipt_source_entry(
     };
     validate_adapter_source_entry(entry)
 }
-
 /// Derive a transparency source entry from a payload-free evidence-viewer audit report.
 ///
 /// # Errors
@@ -604,7 +596,6 @@ pub fn moderation_evidence_viewer_audit_report_source_entry(
     };
     validate_adapter_source_entry(entry)
 }
-
 /// Derive a transparency source entry from one typed committed reserve-ledger event.
 ///
 /// The finalized event cursor, rather than a process-local sequence or wall
@@ -642,7 +633,6 @@ pub fn reserve_finalized_event_source_entry(
     )?;
     let occurred_at_unix = unix_ms_to_secs(*record.event.occurred_at_unix_ms())
         .map_err(reserve_finalized_event_source_error)?;
-
     let event_kind = *record.event.kind();
     let operation_required = matches!(
         event_kind,
@@ -698,7 +688,6 @@ pub fn reserve_finalized_event_source_entry(
             }
         }
     }
-
     let event_kind_label = reserve_ledger_event_kind_label(event_kind);
     let block_hash_hex = hex::encode(record.block_hash);
     let policy_digest_hex = hex::encode(record.event.policy_digest());
@@ -714,7 +703,6 @@ pub fn reserve_finalized_event_source_entry(
         || format!("reserve-policy:{policy_digest_hex}"),
         |provider_id| format!("reserve-provider:{provider_id}"),
     );
-
     let mut metadata = BTreeMap::new();
     metadata.insert("block_hash_hex".to_string(), block_hash_hex.clone());
     metadata.insert("block_height".to_string(), record.block_height.to_string());
@@ -786,7 +774,6 @@ pub fn reserve_finalized_event_source_entry(
     };
     validate_adapter_source_entry(entry)
 }
-
 /// One source metric observed for a privacy aggregate event.
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PrivacyAggregateSourceMetric {
@@ -797,13 +784,11 @@ pub struct PrivacyAggregateSourceMetric {
     /// Unit label for the metric.
     pub unit: String,
 }
-
 impl std::fmt::Debug for PrivacyAggregateSourceMetric {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("PrivacyAggregateSourceMetric(<redacted>)")
     }
 }
-
 /// One source event admitted into the local SFM-4c aggregate worker.
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PrivacyAggregateSourceEvent {
@@ -824,13 +809,11 @@ pub struct PrivacyAggregateSourceEvent {
     /// Server-derived canonical account and ingress that admitted this event.
     pub provenance: Option<GovernanceSubmissionProvenanceV1>,
 }
-
 impl std::fmt::Debug for PrivacyAggregateSourceEvent {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("PrivacyAggregateSourceEvent(<redacted>)")
     }
 }
-
 impl PrivacyAggregateSourceEvent {
     pub(crate) fn validate(&self) -> Result<(), PrivacyAggregateWorkerError> {
         require_public_text("event_id", &self.event_id)?;
@@ -850,7 +833,6 @@ impl PrivacyAggregateSourceEvent {
         }
         validate_source_metrics(&self.metrics)
     }
-
     pub(crate) fn canonical_digest(&self) -> Result<[u8; 32], PrivacyAggregateWorkerError> {
         self.validate()?;
         let mut hasher = blake3::Hasher::new();
@@ -881,20 +863,17 @@ impl PrivacyAggregateSourceEvent {
         Ok(*hasher.finalize().as_bytes())
     }
 }
-
 /// Durable canonical identity retained for every admitted source event.
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct PrivacySourceEventReceiptV1 {
     pub(crate) event_id: String,
     pub(crate) canonical_digest: [u8; 32],
 }
-
 impl std::fmt::Debug for PrivacySourceEventReceiptV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("PrivacySourceEventReceiptV1(<redacted>)")
     }
 }
-
 /// Idempotent outcome of recording one privacy source event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrivacySourceEventRecordOutcomeV1 {
@@ -903,7 +882,6 @@ pub enum PrivacySourceEventRecordOutcomeV1 {
     /// The exact canonical event was already admitted or processed.
     AlreadyRecorded,
 }
-
 /// One governed public population bucket in a fixed privacy query.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PrivacyAggregatePopulationV1 {
@@ -912,7 +890,6 @@ pub struct PrivacyAggregatePopulationV1 {
     /// Nonzero digest of the exact governed population selector.
     pub digest: [u8; 32],
 }
-
 /// One governed public metric coordinate in a fixed privacy query.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PrivacyAggregateMetricSchemaV1 {
@@ -921,7 +898,6 @@ pub struct PrivacyAggregateMetricSchemaV1 {
     /// Stable public unit label.
     pub unit: String,
 }
-
 /// Configuration used to build one aggregate publication cycle from source events.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrivacyAggregateCycleConfig {
@@ -944,7 +920,6 @@ pub struct PrivacyAggregateCycleConfig {
     /// Public metadata copied into every generated aggregate.
     pub metadata: Vec<ModerationLedgerMetadataV1>,
 }
-
 /// Governed pure-DP composition budget for one policy lineage.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -959,7 +934,6 @@ pub struct PrivacyCompositionBudgetPolicyV1 {
     /// Maximum publication charges retained under this policy.
     pub max_publications: u64,
 }
-
 impl PrivacyCompositionBudgetPolicyV1 {
     pub(crate) fn validate(&self) -> Result<(), PrivacyCompositionBudgetError> {
         if self.budget_id.iter().all(|byte| *byte == 0) {
@@ -978,7 +952,6 @@ impl PrivacyCompositionBudgetPolicyV1 {
         Ok(())
     }
 }
-
 /// One hash-chained durable composition-budget charge.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PrivacyCompositionBudgetChargeV1 {
@@ -1001,7 +974,6 @@ pub struct PrivacyCompositionBudgetChargeV1 {
     /// Domain-separated digest of this exact charge.
     pub charge_digest: [u8; 32],
 }
-
 /// One governed policy lineage in the durable composition-budget ledger.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PrivacyCompositionBudgetChainV1 {
@@ -1010,7 +982,6 @@ pub struct PrivacyCompositionBudgetChainV1 {
     /// Ordered, hash-chained publication charges.
     pub charges: Vec<PrivacyCompositionBudgetChargeV1>,
 }
-
 /// Durable multi-policy composition-budget ledger.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PrivacyCompositionBudgetLedgerV1 {
@@ -1019,7 +990,6 @@ pub struct PrivacyCompositionBudgetLedgerV1 {
     /// Policy lineages sorted by budget id.
     pub chains: Vec<PrivacyCompositionBudgetChainV1>,
 }
-
 /// Finalized external head of one stable privacy-query release chain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrivacyReleaseAnchorHeadV1 {
@@ -1029,7 +999,6 @@ pub struct PrivacyReleaseAnchorHeadV1 {
     record_digest: [u8; 32],
     latest_publication_block_hash: Option<[u8; 32]>,
 }
-
 impl PrivacyReleaseAnchorHeadV1 {
     /// Construct the mandatory nonzero genesis head for a governed query.
     ///
@@ -1051,7 +1020,6 @@ impl PrivacyReleaseAnchorHeadV1 {
             latest_publication_block_hash: None,
         }
     }
-
     /// Reconstruct a checked finalized head returned by an external anchor.
     ///
     /// # Errors
@@ -1079,7 +1047,6 @@ impl PrivacyReleaseAnchorHeadV1 {
             Err(PrivacyReleaseAnchorErrorV1::InvalidState)
         }
     }
-
     pub(crate) fn from_record(record: &PrivacyReleaseRecordV1) -> Self {
         Self {
             query_id: record.query_id,
@@ -1091,37 +1058,31 @@ impl PrivacyReleaseAnchorHeadV1 {
                 .or(record.previous_publication_block_hash),
         }
     }
-
     /// Return the governed stable query identity.
     #[must_use]
     pub const fn query_id(&self) -> [u8; 32] {
         self.query_id
     }
-
     /// Return the monotonic release sequence, or zero for genesis.
     #[must_use]
     pub const fn sequence(&self) -> u64 {
         self.sequence
     }
-
     /// Return the stable release id, or zero for genesis.
     #[must_use]
     pub const fn release_id(&self) -> [u8; 16] {
         self.release_id
     }
-
     /// Return the exact release-record digest, or the query-specific genesis digest.
     #[must_use]
     pub const fn record_digest(&self) -> [u8; 32] {
         self.record_digest
     }
-
     /// Return the latest finalized public transparency block hash, if any.
     #[must_use]
     pub const fn latest_publication_block_hash(&self) -> Option<[u8; 32]> {
         self.latest_publication_block_hash
     }
-
     pub(crate) fn validate(&self) -> bool {
         self.query_id != [0; 32]
             && self
@@ -1134,7 +1095,6 @@ impl PrivacyReleaseAnchorHeadV1 {
             }
     }
 }
-
 /// Durable terminal state of one stable privacy query window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) enum PrivacyReleaseStatusV1 {
@@ -1143,7 +1103,6 @@ pub(crate) enum PrivacyReleaseStatusV1 {
     /// Suppression-only policy omitted every governed population.
     Suppressed,
 }
-
 /// Internal append-only record binding one privacy release to its private input.
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct PrivacyReleaseRecordV1 {
@@ -1172,7 +1131,6 @@ pub(crate) struct PrivacyReleaseRecordV1 {
     pub(crate) previous_record_digest: Option<[u8; 32]>,
     pub(crate) record_digest: [u8; 32],
 }
-
 impl std::fmt::Debug for PrivacyReleaseRecordV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -1216,14 +1174,12 @@ impl std::fmt::Debug for PrivacyReleaseRecordV1 {
             .finish()
     }
 }
-
 /// Internal hash-chained privacy release ledger persisted with the outbox.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct PrivacyReleaseLedgerV1 {
     pub(crate) version: u8,
     pub(crate) records: Vec<PrivacyReleaseRecordV1>,
 }
-
 impl Default for PrivacyReleaseLedgerV1 {
     fn default() -> Self {
         Self {
@@ -1232,7 +1188,6 @@ impl Default for PrivacyReleaseLedgerV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub(crate) enum PrivacyReleaseLedgerErrorV1 {
     #[error("privacy release ledger version is unsupported")]
@@ -1244,7 +1199,6 @@ pub(crate) enum PrivacyReleaseLedgerErrorV1 {
     #[error("privacy release record is invalid")]
     InvalidRecord,
 }
-
 impl PrivacyReleaseLedgerV1 {
     pub(crate) fn validate(&self) -> Result<(), PrivacyReleaseLedgerErrorV1> {
         if self.version != PRIVACY_RELEASE_LEDGER_VERSION_V1 {
@@ -1379,7 +1333,6 @@ impl PrivacyReleaseLedgerV1 {
         }
         Ok(())
     }
-
     pub(crate) fn append(
         &mut self,
         mut record: PrivacyReleaseRecordV1,
@@ -1407,7 +1360,6 @@ impl PrivacyReleaseLedgerV1 {
         *self = candidate;
         Ok(record)
     }
-
     pub(crate) fn head(
         &self,
         query_id: [u8; 32],
@@ -1426,7 +1378,6 @@ impl PrivacyReleaseLedgerV1 {
         ))
     }
 }
-
 impl Default for PrivacyCompositionBudgetLedgerV1 {
     fn default() -> Self {
         Self {
@@ -1435,7 +1386,6 @@ impl Default for PrivacyCompositionBudgetLedgerV1 {
         }
     }
 }
-
 /// Fail-closed composition-budget ledger errors.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum PrivacyCompositionBudgetError {
@@ -1482,7 +1432,6 @@ pub enum PrivacyCompositionBudgetError {
     #[error("privacy composition budget ledger exceeds V1 bounds")]
     CollectionTooLarge,
 }
-
 impl PrivacyCompositionBudgetLedgerV1 {
     /// Validate every retained policy lineage and hash-chain link.
     pub(crate) fn validate(&self) -> Result<(), PrivacyCompositionBudgetError> {
@@ -1513,7 +1462,6 @@ impl PrivacyCompositionBudgetLedgerV1 {
         }
         Ok(())
     }
-
     /// Append one cycle charge after proving the composed epsilon stays in budget.
     pub(crate) fn charge(
         &mut self,
@@ -1535,7 +1483,6 @@ impl PrivacyCompositionBudgetLedgerV1 {
         *self = candidate;
         Ok(charge)
     }
-
     fn charge_in_place(
         &mut self,
         policy: PrivacyCompositionBudgetPolicyV1,
@@ -1562,7 +1509,6 @@ impl PrivacyCompositionBudgetLedgerV1 {
         {
             return Err(PrivacyCompositionBudgetError::DuplicateCycle);
         }
-
         let chain_index = match self
             .chains
             .binary_search_by_key(&policy.budget_id, |chain| chain.policy.budget_id)
@@ -1642,7 +1588,6 @@ impl PrivacyCompositionBudgetLedgerV1 {
         Ok(charge)
     }
 }
-
 fn validate_budget_charge_chain(
     chain: &PrivacyCompositionBudgetChainV1,
     all_cycles: &mut BTreeSet<[u8; 16]>,
@@ -1694,7 +1639,6 @@ fn validate_budget_charge_chain(
     }
     Ok(())
 }
-
 fn budget_charge_digest(
     budget_id: [u8; 32],
     charge: &PrivacyCompositionBudgetChargeV1,
@@ -1720,7 +1664,6 @@ fn budget_charge_digest(
     }
     *hasher.finalize().as_bytes()
 }
-
 fn privacy_release_record_digest(record: &PrivacyReleaseRecordV1) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(PRIVACY_RELEASE_RECORD_DOMAIN_V1);
@@ -1752,7 +1695,6 @@ fn privacy_release_record_digest(record: &PrivacyReleaseRecordV1) -> [u8; 32] {
     hash_option_digest(&mut hasher, record.previous_record_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn hash_option_digest(hasher: &mut blake3::Hasher, value: Option<[u8; 32]>) {
     match value {
         Some(digest) => {
@@ -1764,14 +1706,12 @@ fn hash_option_digest(hasher: &mut blake3::Hasher, value: Option<[u8; 32]>) {
         }
     }
 }
-
 fn require_reduced_positive_rational(numerator: u64, denominator: u64) -> Result<(), ()> {
     if numerator == 0 || denominator == 0 || gcd_u64(numerator, denominator) != 1 {
         return Err(());
     }
     Ok(())
 }
-
 fn add_rationals(
     left_numerator: u64,
     left_denominator: u64,
@@ -1801,7 +1741,6 @@ fn add_rationals(
             .map_err(|_| PrivacyCompositionBudgetError::ArithmeticOverflow)?,
     ))
 }
-
 fn rational_greater_than(
     left_numerator: u64,
     left_denominator: u64,
@@ -1819,7 +1758,6 @@ fn rational_greater_than(
         .ok_or(PrivacyCompositionBudgetError::ArithmeticOverflow)?;
     Ok(left > right)
 }
-
 const fn gcd_u64(mut left: u64, mut right: u64) -> u64 {
     while right != 0 {
         let remainder = left % right;
@@ -1828,7 +1766,6 @@ const fn gcd_u64(mut left: u64, mut right: u64) -> u64 {
     }
     left
 }
-
 const fn gcd_u128(mut left: u128, mut right: u128) -> u128 {
     while right != 0 {
         let remainder = left % right;
@@ -1837,7 +1774,6 @@ const fn gcd_u128(mut left: u128, mut right: u128) -> u128 {
     }
     left
 }
-
 impl PrivacyAggregateCycleConfig {
     pub(crate) fn validate(&self) -> Result<(), PrivacyAggregateWorkerError> {
         require_nonzero32("query_id", &self.query_id)?;
@@ -1906,7 +1842,6 @@ impl PrivacyAggregateCycleConfig {
         }
         Ok(())
     }
-
     /// Validate one event against this already-validated governed query.
     pub(crate) fn validate_source_event(
         &self,
@@ -1928,7 +1863,6 @@ impl PrivacyAggregateCycleConfig {
         Ok(())
     }
 }
-
 fn validate_population_inventory(
     populations: &[PrivacyAggregatePopulationV1],
 ) -> Result<(), PrivacyAggregateWorkerError> {
@@ -1957,7 +1891,6 @@ fn validate_population_inventory(
     }
     Ok(())
 }
-
 fn validate_metric_schema(
     metrics: &[PrivacyAggregateMetricSchemaV1],
 ) -> Result<(), PrivacyAggregateWorkerError> {
@@ -1981,7 +1914,6 @@ fn validate_metric_schema(
     }
     Ok(())
 }
-
 fn privacy_vector_sensitivity(
     config: &PrivacyAggregateCycleConfig,
 ) -> Result<Option<u64>, PrivacyAggregateWorkerError> {
@@ -2018,7 +1950,6 @@ fn privacy_vector_sensitivity(
         .map(Some)
         .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)
 }
-
 /// Digest the exact fixed public population universe for PRF/release binding.
 #[must_use]
 pub fn privacy_population_inventory_digest(
@@ -2033,7 +1964,6 @@ pub fn privacy_population_inventory_digest(
     }
     *hasher.finalize().as_bytes()
 }
-
 /// Digest the exact fixed public metric universe for PRF/release binding.
 #[must_use]
 pub fn privacy_metric_schema_digest(metrics: &[PrivacyAggregateMetricSchemaV1]) -> [u8; 32] {
@@ -2046,7 +1976,6 @@ pub fn privacy_metric_schema_digest(metrics: &[PrivacyAggregateMetricSchemaV1]) 
     }
     *hasher.finalize().as_bytes()
 }
-
 /// Schedule used by the local aggregate worker to choose due publication windows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PrivacyAggregateScheduleConfig {
@@ -2057,7 +1986,6 @@ pub struct PrivacyAggregateScheduleConfig {
     /// Delay after a cycle closes before it becomes eligible for publication.
     pub publish_delay_seconds: u64,
 }
-
 impl PrivacyAggregateScheduleConfig {
     pub(crate) fn validate(&self) -> Result<(), PrivacyAggregateWorkerError> {
         if self.first_cycle_start_unix == 0 {
@@ -2090,7 +2018,6 @@ impl PrivacyAggregateScheduleConfig {
         }
         Ok(())
     }
-
     pub(crate) fn due_window(
         &self,
         now_unix: u64,
@@ -2130,7 +2057,6 @@ impl PrivacyAggregateScheduleConfig {
                 })?,
         }))
     }
-
     pub(crate) fn event_window(
         &self,
         occurred_at_unix: u64,
@@ -2165,7 +2091,6 @@ impl PrivacyAggregateScheduleConfig {
         })
     }
 }
-
 /// One due privacy aggregate publication window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PrivacyAggregateCycleWindow {
@@ -2176,10 +2101,8 @@ pub struct PrivacyAggregateCycleWindow {
     /// Timestamp at which the window becomes eligible for publication.
     pub due_at_unix: u64,
 }
-
 /// Canonical version of the runtime threshold-PRF request contract.
 pub const PRIVACY_CYCLE_PRF_REQUEST_VERSION_V1: u16 = 1;
-
 /// Runtime-only threshold-PRF request bound to one governed publication window.
 ///
 /// The provider must evaluate the request as a single domain-separated input.
@@ -2196,7 +2119,6 @@ pub struct PrivacyCyclePrfRequestV1 {
     cycle_end_unix: u64,
     binding_digest: [u8; 32],
 }
-
 impl PrivacyCyclePrfRequestV1 {
     /// Construct the canonical request for one exact governed cycle.
     ///
@@ -2253,62 +2175,52 @@ impl PrivacyCyclePrfRequestV1 {
             binding_digest: *hasher.finalize().as_bytes(),
         })
     }
-
     /// Return the contract version.
     #[must_use]
     pub const fn version(&self) -> u16 {
         self.version
     }
-
     /// Return the stable governed query identity.
     #[must_use]
     pub const fn query_id(&self) -> [u8; 32] {
         self.query_id
     }
-
     /// Return the governed privacy-policy digest.
     #[must_use]
     pub const fn policy_digest(&self) -> [u8; 32] {
         self.policy_digest
     }
-
     /// Return the bound fixed-population inventory digest.
     #[must_use]
     pub const fn population_inventory_digest(&self) -> [u8; 32] {
         self.population_inventory_digest
     }
-
     /// Return the bound fixed-metric schema digest.
     #[must_use]
     pub const fn metric_schema_digest(&self) -> [u8; 32] {
         self.metric_schema_digest
     }
-
     /// Return the deterministic cycle identifier.
     #[must_use]
     pub const fn cycle_id(&self) -> [u8; 16] {
         self.cycle_id
     }
-
     /// Return the inclusive cycle start timestamp.
     #[must_use]
     pub const fn cycle_start_unix(&self) -> u64 {
         self.cycle_start_unix
     }
-
     /// Return the exclusive cycle end timestamp.
     #[must_use]
     pub const fn cycle_end_unix(&self) -> u64 {
         self.cycle_end_unix
     }
-
     /// Return the canonical domain-separated request binding.
     #[must_use]
     pub const fn binding_digest(&self) -> [u8; 32] {
         self.binding_digest
     }
 }
-
 /// Errors constructing a canonical threshold-PRF request.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum PrivacyCyclePrfRequestErrorV1 {
@@ -2328,7 +2240,6 @@ pub enum PrivacyCyclePrfRequestErrorV1 {
     #[error("privacy cycle PRF request window is invalid")]
     InvalidWindow,
 }
-
 /// Public, non-secret qualification for a transparency runtime provider.
 ///
 /// `revision` identifies the deployment-owned adapter and public policy
@@ -2340,7 +2251,6 @@ pub struct TransparencyRuntimeProviderQualificationV1 {
     revision: u64,
     policy_digest: [u8; 32],
 }
-
 impl TransparencyRuntimeProviderQualificationV1 {
     /// Construct one provider qualification observation.
     ///
@@ -2352,24 +2262,20 @@ impl TransparencyRuntimeProviderQualificationV1 {
             policy_digest,
         }
     }
-
     /// Return the non-zero deployment adapter/policy revision.
     #[must_use]
     pub const fn revision(self) -> u64 {
         self.revision
     }
-
     /// Return the non-zero digest of the public provider policy.
     #[must_use]
     pub const fn policy_digest(self) -> [u8; 32] {
         self.policy_digest
     }
-
     fn is_valid(self) -> bool {
         self.revision != 0 && self.policy_digest != [0; 32]
     }
 }
-
 /// Exact non-secret runtime-provider identity and public-policy pin.
 ///
 /// Launchers construct this value only from reviewed `iroha_config` fields.
@@ -2380,7 +2286,6 @@ pub struct TransparencyRuntimeProviderBindingV1 {
     handle: String,
     qualification: TransparencyRuntimeProviderQualificationV1,
 }
-
 impl TransparencyRuntimeProviderBindingV1 {
     /// Validate one exact configured production-provider binding.
     ///
@@ -2407,20 +2312,17 @@ impl TransparencyRuntimeProviderBindingV1 {
             qualification,
         })
     }
-
     /// Return the stable opaque deployment-owned handle.
     #[must_use]
     pub fn handle(&self) -> &str {
         &self.handle
     }
-
     /// Return the exact configured revision and public-policy digest.
     #[must_use]
     pub const fn qualification(&self) -> TransparencyRuntimeProviderQualificationV1 {
         self.qualification
     }
 }
-
 /// Stable, payload-free failures while qualifying a transparency provider.
 ///
 /// Provider diagnostics can contain credentials, key-share identifiers, or
@@ -2471,7 +2373,6 @@ pub enum TransparencyRuntimeProviderQualificationErrorV1 {
     #[error("transparency runtime provider identity or policy changed after qualification")]
     IdentityOrPolicyChanged,
 }
-
 /// Stable identity and qualification exposed by a production transparency provider.
 ///
 /// Implementations own all credentials, key shares, and authentication
@@ -2481,7 +2382,6 @@ pub enum TransparencyRuntimeProviderQualificationErrorV1 {
 pub trait ProductionTransparencyRuntimeProviderV1: Send + Sync {
     /// Return the stable opaque deployment handle for this provider.
     fn handle(&self) -> &str;
-
     /// Qualify the active adapter and its public policy revision.
     ///
     /// Implementations must fail when the provider is unavailable, revoked,
@@ -2489,18 +2389,15 @@ pub trait ProductionTransparencyRuntimeProviderV1: Send + Sync {
     /// redact the returned diagnostic string.
     fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String>;
 }
-
 /// Production qualification extension for a threshold-PRF provider.
 pub trait ProductionPrivacyCyclePrfProviderV1:
     PrivacyCyclePrfProviderV1 + ProductionTransparencyRuntimeProviderV1
 {
 }
-
 impl<T> ProductionPrivacyCyclePrfProviderV1 for T where
     T: PrivacyCyclePrfProviderV1 + ProductionTransparencyRuntimeProviderV1 + ?Sized
 {
 }
-
 /// Production qualification extension for a finalized release anchor.
 ///
 /// Implementations own DAG authentication and quorum credentials. The handle
@@ -2510,12 +2407,10 @@ pub trait ProductionPrivacyReleaseAnchorV1:
     PrivacyReleaseAnchorV1 + ProductionTransparencyRuntimeProviderV1
 {
 }
-
 impl<T> ProductionPrivacyReleaseAnchorV1 for T where
     T: PrivacyReleaseAnchorV1 + ProductionTransparencyRuntimeProviderV1 + ?Sized
 {
 }
-
 /// Stable, payload-free threshold-PRF provider failure classes.
 ///
 /// Implementations must retain vendor diagnostics inside their own protected
@@ -2535,7 +2430,6 @@ pub enum PrivacyCyclePrfProviderErrorV1 {
     #[error("threshold PRF provider internal failure")]
     Internal,
 }
-
 /// Stable, payload-free failures returned by the external finalized release anchor.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum PrivacyReleaseAnchorErrorV1 {
@@ -2555,7 +2449,6 @@ pub enum PrivacyReleaseAnchorErrorV1 {
     #[error("privacy release anchor internal failure")]
     Internal,
 }
-
 /// Runtime-only finalized-head service for the privacy release hash chain.
 ///
 /// Production implementations are expected to read and advance a
@@ -2571,7 +2464,6 @@ pub trait PrivacyReleaseAnchorV1: Send + Sync {
         &self,
         query_id: [u8; 32],
     ) -> Result<PrivacyReleaseAnchorHeadV1, PrivacyReleaseAnchorErrorV1>;
-
     /// Atomically advance `expected` to its direct successor `next`.
     fn compare_and_set_finalized_head(
         &self,
@@ -2580,7 +2472,6 @@ pub trait PrivacyReleaseAnchorV1: Send + Sync {
         lease: &TransparencyLeaderLeaseGrantV1,
     ) -> Result<(), PrivacyReleaseAnchorErrorV1>;
 }
-
 /// Startup-qualified, rotation-aware finalized release-anchor boundary.
 ///
 /// Construction validates the configured handle and pins the provider's exact
@@ -2598,7 +2489,6 @@ pub struct QualifiedPrivacyReleaseAnchorV1 {
     binding: TransparencyRuntimeProviderBindingV1,
     provider: Arc<dyn ProductionPrivacyReleaseAnchorV1>,
 }
-
 impl QualifiedPrivacyReleaseAnchorV1 {
     /// Qualify one exact production anchor without reading application state.
     ///
@@ -2624,25 +2514,21 @@ impl QualifiedPrivacyReleaseAnchorV1 {
         }
         Ok(Self { binding, provider })
     }
-
     /// Return the pinned stable opaque provider handle.
     #[must_use]
     pub fn handle(&self) -> &str {
         self.binding.handle()
     }
-
     /// Return the pinned public provider qualification.
     #[must_use]
     pub const fn qualification(&self) -> TransparencyRuntimeProviderQualificationV1 {
         self.binding.qualification()
     }
-
     /// Return the exact configured provider binding retained by this wrapper.
     #[must_use]
     pub const fn binding(&self) -> &TransparencyRuntimeProviderBindingV1 {
         &self.binding
     }
-
     /// Revalidate the pinned provider identity and public policy.
     ///
     /// # Errors
@@ -2657,7 +2543,6 @@ impl QualifiedPrivacyReleaseAnchorV1 {
         )
     }
 }
-
 impl std::fmt::Debug for QualifiedPrivacyReleaseAnchorV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -2667,7 +2552,6 @@ impl std::fmt::Debug for QualifiedPrivacyReleaseAnchorV1 {
             .finish()
     }
 }
-
 impl PrivacyReleaseAnchorV1 for QualifiedPrivacyReleaseAnchorV1 {
     fn finalized_head(
         &self,
@@ -2687,7 +2571,6 @@ impl PrivacyReleaseAnchorV1 for QualifiedPrivacyReleaseAnchorV1 {
         }
         Ok(head)
     }
-
     fn compare_and_set_finalized_head(
         &self,
         expected: PrivacyReleaseAnchorHeadV1,
@@ -2717,10 +2600,8 @@ impl PrivacyReleaseAnchorV1 for QualifiedPrivacyReleaseAnchorV1 {
         result
     }
 }
-
 /// Non-copying, redacted runtime wrapper for one hidden threshold-PRF output.
 pub struct PrivacyCyclePrfOutputV1([u8; 32]);
-
 impl PrivacyCyclePrfOutputV1 {
     /// Wrap a provider output after rejecting the forbidden all-zero value.
     ///
@@ -2733,7 +2614,6 @@ impl PrivacyCyclePrfOutputV1 {
         }
         Ok(Self(output))
     }
-
     /// Copy the hidden output into a runtime-only authenticated transport.
     ///
     /// This narrow escape hatch exists for the local runtime-provider broker.
@@ -2743,25 +2623,21 @@ impl PrivacyCyclePrfOutputV1 {
     pub fn runtime_transport_bytes(&self) -> [u8; 32] {
         self.0
     }
-
     fn expose(&self) -> &[u8; 32] {
         &self.0
     }
 }
-
 impl std::fmt::Debug for PrivacyCyclePrfOutputV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("PrivacyCyclePrfOutputV1(<redacted>)")
     }
 }
-
 impl Drop for PrivacyCyclePrfOutputV1 {
     fn drop(&mut self) {
         self.0.fill(0);
         std::hint::black_box(&mut self.0);
     }
 }
-
 /// Runtime-only provider for hidden threshold-PRF cycle outputs.
 ///
 /// Implementations must bind evaluation to [`PrivacyCyclePrfRequestV1`] and
@@ -2777,7 +2653,6 @@ pub trait PrivacyCyclePrfProviderV1: Send + Sync {
         request: &PrivacyCyclePrfRequestV1,
     ) -> Result<PrivacyCyclePrfOutputV1, PrivacyCyclePrfProviderErrorV1>;
 }
-
 /// Startup-qualified, rotation-aware threshold-PRF provider boundary.
 ///
 /// Construction validates the configured handle and pins the provider's exact
@@ -2789,7 +2664,6 @@ pub struct QualifiedPrivacyCyclePrfProviderV1 {
     binding: TransparencyRuntimeProviderBindingV1,
     provider: Arc<dyn ProductionPrivacyCyclePrfProviderV1>,
 }
-
 impl QualifiedPrivacyCyclePrfProviderV1 {
     /// Qualify one exact production threshold-PRF provider without deriving output.
     ///
@@ -2815,25 +2689,21 @@ impl QualifiedPrivacyCyclePrfProviderV1 {
         }
         Ok(Self { binding, provider })
     }
-
     /// Return the pinned stable opaque provider handle.
     #[must_use]
     pub fn handle(&self) -> &str {
         self.binding.handle()
     }
-
     /// Return the pinned public provider qualification.
     #[must_use]
     pub const fn qualification(&self) -> TransparencyRuntimeProviderQualificationV1 {
         self.binding.qualification()
     }
-
     /// Return the exact configured provider binding retained by this wrapper.
     #[must_use]
     pub const fn binding(&self) -> &TransparencyRuntimeProviderBindingV1 {
         &self.binding
     }
-
     /// Revalidate the pinned provider identity and public policy.
     ///
     /// # Errors
@@ -2848,7 +2718,6 @@ impl QualifiedPrivacyCyclePrfProviderV1 {
         )
     }
 }
-
 impl std::fmt::Debug for QualifiedPrivacyCyclePrfProviderV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -2858,7 +2727,6 @@ impl std::fmt::Debug for QualifiedPrivacyCyclePrfProviderV1 {
             .finish()
     }
 }
-
 impl PrivacyCyclePrfProviderV1 for QualifiedPrivacyCyclePrfProviderV1 {
     fn derive_cycle_output(
         &self,
@@ -2872,10 +2740,8 @@ impl PrivacyCyclePrfProviderV1 for QualifiedPrivacyCyclePrfProviderV1 {
         result
     }
 }
-
 /// Canonical version of the external transparency leader-lease contract.
 pub const TRANSPARENCY_LEADER_LEASE_VERSION_V1: u16 = 1;
-
 /// Stable, payload-free external leader-lease provider failures.
 ///
 /// Except for [`Self::Ambiguous`], implementations must return an error only
@@ -2903,7 +2769,6 @@ pub enum TransparencyLeaderLeaseProviderErrorV1 {
     #[error("transparency leader lease provider internal failure")]
     Internal,
 }
-
 /// Stable, payload-free leader-lease boundary failures.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum TransparencyLeaderLeaseErrorV1 {
@@ -2956,7 +2821,6 @@ pub enum TransparencyLeaderLeaseErrorV1 {
     #[error("transparency leader lease state is unavailable")]
     StateUnavailable,
 }
-
 /// Exact public query, cycle, and holder identity covered by one leader lease.
 ///
 /// `holder_identity` is a public, deployment-stable identity digest. It must
@@ -2971,7 +2835,6 @@ pub struct TransparencyLeaderLeaseScopeV1 {
     due_at_unix: u64,
     holder_identity: [u8; 32],
 }
-
 impl TransparencyLeaderLeaseScopeV1 {
     /// Construct the canonical scope for one governed publication cycle.
     ///
@@ -2998,19 +2861,16 @@ impl TransparencyLeaderLeaseScopeV1 {
         scope.validate()?;
         Ok(scope)
     }
-
     /// Return the stable governed query identity.
     #[must_use]
     pub const fn query_id(self) -> [u8; 32] {
         self.query_id
     }
-
     /// Return the deterministic cycle identity.
     #[must_use]
     pub const fn cycle_id(self) -> [u8; 16] {
         self.cycle_id
     }
-
     /// Return the exact governed cycle window.
     #[must_use]
     pub const fn window(self) -> PrivacyAggregateCycleWindow {
@@ -3020,13 +2880,11 @@ impl TransparencyLeaderLeaseScopeV1 {
             due_at_unix: self.due_at_unix,
         }
     }
-
     /// Return the public deployment-stable holder identity digest.
     #[must_use]
     pub const fn holder_identity(self) -> [u8; 32] {
         self.holder_identity
     }
-
     fn validate(self) -> Result<(), TransparencyLeaderLeaseErrorV1> {
         if self.query_id == [0; 32]
             || self.holder_identity == [0; 32]
@@ -3045,7 +2903,6 @@ impl TransparencyLeaderLeaseScopeV1 {
         Ok(())
     }
 }
-
 /// Exact request to atomically acquire one external transparency leader lease.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransparencyLeaderLeaseAcquireRequestV1 {
@@ -3055,7 +2912,6 @@ pub struct TransparencyLeaderLeaseAcquireRequestV1 {
     fencing_floor: u64,
     provider_binding: TransparencyRuntimeProviderBindingV1,
 }
-
 impl TransparencyLeaderLeaseAcquireRequestV1 {
     /// Reconstruct one checked acquisition request from its exact public fields.
     ///
@@ -3089,38 +2945,32 @@ impl TransparencyLeaderLeaseAcquireRequestV1 {
             provider_binding,
         })
     }
-
     /// Return the exact query, cycle, and holder scope requested.
     #[must_use]
     pub const fn scope(&self) -> TransparencyLeaderLeaseScopeV1 {
         self.scope
     }
-
     /// Return the caller-supplied acquisition observation time.
     #[must_use]
     pub const fn acquire_at_unix(&self) -> u64 {
         self.acquire_at_unix
     }
-
     /// Return the requested exclusive lease expiry.
     #[must_use]
     pub const fn expires_at_unix(&self) -> u64 {
         self.expires_at_unix
     }
-
     /// Return the last fencing token durably accepted by the caller.
     #[must_use]
     pub const fn fencing_floor(&self) -> u64 {
         self.fencing_floor
     }
-
     /// Return the exact configured provider identity and public-policy pin.
     #[must_use]
     pub const fn provider_binding(&self) -> &TransparencyRuntimeProviderBindingV1 {
         &self.provider_binding
     }
 }
-
 /// Public, non-secret grant returned by an external leader-lease provider.
 ///
 /// The grant is runtime coordination metadata. It contains no credential,
@@ -3135,7 +2985,6 @@ pub struct TransparencyLeaderLeaseGrantV1 {
     expires_at_unix: u64,
     provider_binding: TransparencyRuntimeProviderBindingV1,
 }
-
 impl TransparencyLeaderLeaseGrantV1 {
     /// Construct one external provider grant.
     ///
@@ -3163,49 +3012,41 @@ impl TransparencyLeaderLeaseGrantV1 {
         grant.validate()?;
         Ok(grant)
     }
-
     /// Return the lease contract version.
     #[must_use]
     pub const fn version(&self) -> u16 {
         self.version
     }
-
     /// Return the provider-issued public lease identity.
     #[must_use]
     pub const fn lease_id(&self) -> [u8; 32] {
         self.lease_id
     }
-
     /// Return the exact query, cycle, and holder scope.
     #[must_use]
     pub const fn scope(&self) -> TransparencyLeaderLeaseScopeV1 {
         self.scope
     }
-
     /// Return the strictly monotonic external fencing token.
     #[must_use]
     pub const fn fencing_token(&self) -> u64 {
         self.fencing_token
     }
-
     /// Return the caller-supplied observation time bound into the grant.
     #[must_use]
     pub const fn issued_at_unix(&self) -> u64 {
         self.issued_at_unix
     }
-
     /// Return the exclusive lease expiry.
     #[must_use]
     pub const fn expires_at_unix(&self) -> u64 {
         self.expires_at_unix
     }
-
     /// Return the exact provider identity and public-policy qualification.
     #[must_use]
     pub const fn provider_binding(&self) -> &TransparencyRuntimeProviderBindingV1 {
         &self.provider_binding
     }
-
     /// Validate every public grant binding before an external fenced use.
     ///
     /// # Errors
@@ -3229,7 +3070,6 @@ impl TransparencyLeaderLeaseGrantV1 {
         Ok(())
     }
 }
-
 /// Exact request to atomically renew one active external leader lease.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransparencyLeaderLeaseRenewRequestV1 {
@@ -3238,7 +3078,6 @@ pub struct TransparencyLeaderLeaseRenewRequestV1 {
     expires_at_unix: u64,
     fencing_floor: u64,
 }
-
 impl TransparencyLeaderLeaseRenewRequestV1 {
     /// Reconstruct one checked renewal request from its exact public fields.
     ///
@@ -3272,39 +3111,33 @@ impl TransparencyLeaderLeaseRenewRequestV1 {
             fencing_floor,
         })
     }
-
     /// Return the exact currently accepted grant.
     #[must_use]
     pub const fn current_grant(&self) -> &TransparencyLeaderLeaseGrantV1 {
         &self.current_grant
     }
-
     /// Return the caller-supplied renewal observation time.
     #[must_use]
     pub const fn renew_at_unix(&self) -> u64 {
         self.renew_at_unix
     }
-
     /// Return the requested new exclusive expiry.
     #[must_use]
     pub const fn expires_at_unix(&self) -> u64 {
         self.expires_at_unix
     }
-
     /// Return the last fencing token durably accepted by the caller.
     #[must_use]
     pub const fn fencing_floor(&self) -> u64 {
         self.fencing_floor
     }
 }
-
 /// Exact request to atomically release one active external leader lease.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransparencyLeaderLeaseReleaseRequestV1 {
     current_grant: TransparencyLeaderLeaseGrantV1,
     release_at_unix: u64,
 }
-
 impl TransparencyLeaderLeaseReleaseRequestV1 {
     /// Reconstruct one checked release request from its exact public fields.
     ///
@@ -3329,20 +3162,17 @@ impl TransparencyLeaderLeaseReleaseRequestV1 {
             release_at_unix,
         })
     }
-
     /// Return the exact currently accepted grant.
     #[must_use]
     pub const fn current_grant(&self) -> &TransparencyLeaderLeaseGrantV1 {
         &self.current_grant
     }
-
     /// Return the caller-supplied release observation time.
     #[must_use]
     pub const fn release_at_unix(&self) -> u64 {
         self.release_at_unix
     }
 }
-
 /// Public, non-secret receipt proving an exact leader-lease release response.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransparencyLeaderLeaseReleaseReceiptV1 {
@@ -3353,7 +3183,6 @@ pub struct TransparencyLeaderLeaseReleaseReceiptV1 {
     released_at_unix: u64,
     provider_binding: TransparencyRuntimeProviderBindingV1,
 }
-
 impl TransparencyLeaderLeaseReleaseReceiptV1 {
     /// Construct one external provider release receipt.
     ///
@@ -3379,43 +3208,36 @@ impl TransparencyLeaderLeaseReleaseReceiptV1 {
         receipt.validate()?;
         Ok(receipt)
     }
-
     /// Return the lease contract version.
     #[must_use]
     pub const fn version(&self) -> u16 {
         self.version
     }
-
     /// Return the released public lease identity.
     #[must_use]
     pub const fn lease_id(&self) -> [u8; 32] {
         self.lease_id
     }
-
     /// Return the exact released query, cycle, and holder scope.
     #[must_use]
     pub const fn scope(&self) -> TransparencyLeaderLeaseScopeV1 {
         self.scope
     }
-
     /// Return the released fencing token.
     #[must_use]
     pub const fn fencing_token(&self) -> u64 {
         self.fencing_token
     }
-
     /// Return the caller-supplied release observation time.
     #[must_use]
     pub const fn released_at_unix(&self) -> u64 {
         self.released_at_unix
     }
-
     /// Return the exact provider identity and public-policy qualification.
     #[must_use]
     pub const fn provider_binding(&self) -> &TransparencyRuntimeProviderBindingV1 {
         &self.provider_binding
     }
-
     fn validate(&self) -> Result<(), TransparencyLeaderLeaseErrorV1> {
         self.scope.validate()?;
         if self.version != TRANSPARENCY_LEADER_LEASE_VERSION_V1
@@ -3432,7 +3254,6 @@ impl TransparencyLeaderLeaseReleaseReceiptV1 {
         Ok(())
     }
 }
-
 /// Runtime-only external CAS boundary for transparency publisher leadership.
 ///
 /// Implementations must atomically serialize acquisition, renewal, and release
@@ -3453,7 +3274,6 @@ pub trait TransparencyLeaderLeaseProviderV1: Send + Sync {
         &self,
         request: &TransparencyLeaderLeaseAcquireRequestV1,
     ) -> Result<TransparencyLeaderLeaseGrantV1, TransparencyLeaderLeaseProviderErrorV1>;
-
     /// Atomically renew the exact active lease and advance its fencing token.
     ///
     /// # Errors
@@ -3463,7 +3283,6 @@ pub trait TransparencyLeaderLeaseProviderV1: Send + Sync {
         &self,
         request: &TransparencyLeaderLeaseRenewRequestV1,
     ) -> Result<TransparencyLeaderLeaseGrantV1, TransparencyLeaderLeaseProviderErrorV1>;
-
     /// Atomically release the exact active lease.
     ///
     /// # Errors
@@ -3474,7 +3293,6 @@ pub trait TransparencyLeaderLeaseProviderV1: Send + Sync {
         request: &TransparencyLeaderLeaseReleaseRequestV1,
     ) -> Result<TransparencyLeaderLeaseReleaseReceiptV1, TransparencyLeaderLeaseProviderErrorV1>;
 }
-
 /// Production qualification extension for an external leader-lease provider.
 ///
 /// The deployment must seal qualification revisions monotonically and never
@@ -3483,12 +3301,10 @@ pub trait ProductionTransparencyLeaderLeaseProviderV1:
     TransparencyLeaderLeaseProviderV1 + ProductionTransparencyRuntimeProviderV1
 {
 }
-
 impl<T> ProductionTransparencyLeaderLeaseProviderV1 for T where
     T: TransparencyLeaderLeaseProviderV1 + ProductionTransparencyRuntimeProviderV1 + ?Sized
 {
 }
-
 #[derive(Debug)]
 struct TransparencyLeaderLeaseStateV1 {
     active: Option<TransparencyLeaderLeaseGrantV1>,
@@ -3497,7 +3313,6 @@ struct TransparencyLeaderLeaseStateV1 {
     indeterminate_until_unix: Option<u64>,
     provider_lineage_poisoned: bool,
 }
-
 impl TransparencyLeaderLeaseStateV1 {
     fn observe(&mut self, observed_at_unix: u64) -> Result<(), TransparencyLeaderLeaseErrorV1> {
         if observed_at_unix == 0 {
@@ -3516,26 +3331,22 @@ impl TransparencyLeaderLeaseStateV1 {
         }
         Ok(())
     }
-
     const fn reject_indeterminate(&self) -> Result<(), TransparencyLeaderLeaseErrorV1> {
         if self.indeterminate_until_unix.is_some() {
             return Err(TransparencyLeaderLeaseErrorV1::IndeterminateState);
         }
         Ok(())
     }
-
     const fn reject_poisoned_lineage(&self) -> Result<(), TransparencyLeaderLeaseErrorV1> {
         if self.provider_lineage_poisoned {
             return Err(TransparencyLeaderLeaseErrorV1::ProviderLineagePoisoned);
         }
         Ok(())
     }
-
     fn poison_provider_lineage(&mut self) {
         self.provider_lineage_poisoned = true;
         self.active = None;
     }
-
     fn quarantine_until(&mut self, expires_at_unix: u64) {
         self.active = None;
         self.indeterminate_until_unix = Some(
@@ -3544,7 +3355,6 @@ impl TransparencyLeaderLeaseStateV1 {
         );
     }
 }
-
 /// Qualification-pinned, rollback-aware transparency leader-lease boundary.
 ///
 /// Construction pins one exact production handle, revision, and public-policy
@@ -3567,7 +3377,6 @@ pub struct QualifiedTransparencyLeaderLeaseProviderV1 {
     provider: Arc<dyn ProductionTransparencyLeaderLeaseProviderV1>,
     state: Mutex<TransparencyLeaderLeaseStateV1>,
 }
-
 impl QualifiedTransparencyLeaderLeaseProviderV1 {
     /// Qualify one exact production provider and seed its durable fencing floor.
     ///
@@ -3607,25 +3416,21 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
             }),
         })
     }
-
     /// Return the pinned stable opaque provider handle.
     #[must_use]
     pub fn handle(&self) -> &str {
         self.binding.handle()
     }
-
     /// Return the pinned public provider qualification.
     #[must_use]
     pub const fn qualification(&self) -> TransparencyRuntimeProviderQualificationV1 {
         self.binding.qualification()
     }
-
     /// Return the exact configured provider binding retained by this boundary.
     #[must_use]
     pub const fn binding(&self) -> &TransparencyRuntimeProviderBindingV1 {
         &self.binding
     }
-
     /// Revalidate the pinned provider identity and public policy.
     ///
     /// # Errors
@@ -3639,7 +3444,6 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
             .map_err(|_| TransparencyLeaderLeaseErrorV1::StateUnavailable)?;
         self.revalidate_provider(&mut state)
     }
-
     /// Return the highest fencing token accepted by this boundary.
     ///
     /// The caller must durably checkpoint this public value before treating a
@@ -3655,7 +3459,6 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
             .map_err(|_| TransparencyLeaderLeaseErrorV1::StateUnavailable)?
             .fencing_floor)
     }
-
     /// Restore the last durably accepted fencing floor before the first use.
     ///
     /// This is a startup-only operation. It fails after any lease observation
@@ -3688,7 +3491,6 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
         state.fencing_floor = fencing_floor;
         Ok(())
     }
-
     /// Atomically acquire one exact query/cycle lease.
     ///
     /// `acquire_at_unix` and `expires_at_unix` are externally observed public
@@ -3752,7 +3554,6 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
         state.active = Some(grant.clone());
         Ok(grant)
     }
-
     /// Atomically renew the exact active lease.
     ///
     /// Every accepted renewal must strictly extend expiry and advance the
@@ -3820,7 +3621,6 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
         state.active = Some(grant.clone());
         Ok(grant)
     }
-
     /// Atomically release the exact active lease.
     ///
     /// # Errors
@@ -3878,7 +3678,6 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
         state.active = None;
         Ok(receipt)
     }
-
     /// Revalidate and return the exact active grant for one security-sensitive use.
     ///
     /// The caller must pass the returned fencing token to the external
@@ -3929,7 +3728,6 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
         self.revalidate_provider(&mut state)?;
         Ok(active)
     }
-
     fn revalidate_provider(
         &self,
         state: &mut TransparencyLeaderLeaseStateV1,
@@ -3945,7 +3743,6 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
         }
         Ok(())
     }
-
     fn validate_acquired_grant(
         &self,
         request: &TransparencyLeaderLeaseAcquireRequestV1,
@@ -3966,7 +3763,6 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
         }
         Ok(())
     }
-
     fn validate_renewed_grant(
         &self,
         request: &TransparencyLeaderLeaseRenewRequestV1,
@@ -3990,7 +3786,6 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
         }
         Ok(())
     }
-
     fn validate_release_receipt(
         &self,
         request: &TransparencyLeaderLeaseReleaseRequestV1,
@@ -4010,7 +3805,6 @@ impl QualifiedTransparencyLeaderLeaseProviderV1 {
         Ok(())
     }
 }
-
 impl std::fmt::Debug for QualifiedTransparencyLeaderLeaseProviderV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -4021,7 +3815,6 @@ impl std::fmt::Debug for QualifiedTransparencyLeaderLeaseProviderV1 {
             .finish()
     }
 }
-
 fn validate_transparency_runtime_provider_handle(
     handle: &str,
     configured: bool,
@@ -4041,7 +3834,6 @@ fn validate_transparency_runtime_provider_handle(
         }
     })
 }
-
 fn qualify_transparency_runtime_provider<P: ProductionTransparencyRuntimeProviderV1 + ?Sized>(
     expected_handle: &str,
     provider: &P,
@@ -4064,7 +3856,6 @@ fn qualify_transparency_runtime_provider<P: ProductionTransparencyRuntimeProvide
     }
     Ok(qualification)
 }
-
 fn assert_transparency_runtime_provider_qualification<
     P: ProductionTransparencyRuntimeProviderV1 + ?Sized,
 >(
@@ -4086,7 +3877,6 @@ fn assert_transparency_runtime_provider_qualification<
     }
     Ok(())
 }
-
 /// Runtime-only, request-bound threshold-PRF material for one DP cycle.
 ///
 /// The hidden output is deliberately not serializable and its `Debug`
@@ -4097,7 +3887,6 @@ pub struct PrivacyCyclePrfInputV1 {
     output: PrivacyCyclePrfOutputV1,
     commitment: ModerationPrivacyThresholdPrfCommitmentV1,
 }
-
 impl PrivacyCyclePrfInputV1 {
     /// Bind a hidden threshold-PRF output to the exact authenticated request.
     ///
@@ -4111,7 +3900,6 @@ impl PrivacyCyclePrfInputV1 {
             commitment,
         }
     }
-
     /// Return the opaque public commitment to this hidden cycle output.
     ///
     /// V1 treats this nonzero value as external threshold-attestation
@@ -4121,11 +3909,9 @@ impl PrivacyCyclePrfInputV1 {
     pub const fn commitment(&self) -> ModerationPrivacyThresholdPrfCommitmentV1 {
         self.commitment
     }
-
     pub(crate) const fn request(&self) -> PrivacyCyclePrfRequestV1 {
         self.request
     }
-
     fn validate_for_release(
         &self,
         config: &PrivacyAggregateCycleConfig,
@@ -4149,12 +3935,10 @@ impl PrivacyCyclePrfInputV1 {
         }
         Ok(())
     }
-
     fn output(&self) -> &[u8; 32] {
         self.output.expose()
     }
 }
-
 impl std::fmt::Debug for PrivacyCyclePrfInputV1 {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -4165,7 +3949,6 @@ impl std::fmt::Debug for PrivacyCyclePrfInputV1 {
             .finish()
     }
 }
-
 /// Errors constructing runtime-only threshold-PRF cycle input.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
 pub enum PrivacyCyclePrfInputErrorV1 {
@@ -4173,7 +3956,6 @@ pub enum PrivacyCyclePrfInputErrorV1 {
     #[error("threshold PRF provider returned an invalid output")]
     ZeroOutput,
 }
-
 /// Derive the canonical deterministic identity for one governed query window.
 #[must_use]
 pub fn privacy_aggregate_cycle_id(
@@ -4191,7 +3973,6 @@ pub fn privacy_aggregate_cycle_id(
     cycle_id.copy_from_slice(&digest.as_bytes()[..16]);
     cycle_id
 }
-
 /// Errors raised by local transparency ledger source-entry ingestion.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum TransparencyLedgerIngestError {
@@ -4258,7 +4039,6 @@ pub enum TransparencyLedgerIngestError {
         message: String,
     },
 }
-
 pub(crate) fn build_transparency_ledger_entries_from_source_events(
     cycle_id: [u8; 16],
     cycle_start_unix: u64,
@@ -4281,7 +4061,6 @@ pub(crate) fn build_transparency_ledger_entries_from_source_events(
     if events.is_empty() {
         return Err(TransparencyLedgerIngestError::NoSourceEntries);
     }
-
     let mut seen_events = BTreeSet::new();
     let mut sorted = Vec::with_capacity(events.len());
     for event in events {
@@ -4306,7 +4085,6 @@ pub(crate) fn build_transparency_ledger_entries_from_source_events(
             .then_with(|| left.payload_digest.cmp(&right.payload_digest))
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
-
     sorted
         .iter()
         .enumerate()
@@ -4321,7 +4099,6 @@ pub(crate) fn build_transparency_ledger_entries_from_source_events(
         })
         .collect()
 }
-
 pub(crate) fn transparency_ledger_source_entry_id(
     cycle_id: [u8; 16],
     event: &TransparencyLedgerSourceEntry,
@@ -4337,7 +4114,6 @@ pub(crate) fn transparency_ledger_source_entry_id(
     entry_id.copy_from_slice(&digest.as_bytes()[..16]);
     entry_id
 }
-
 /// Errors raised while converting issued proof-token frames into transparency records.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum ProofTokenIssuanceIngestError {
@@ -4369,7 +4145,6 @@ pub enum ProofTokenIssuanceIngestError {
         message: String,
     },
 }
-
 /// Convert an issued `SFGT` proof-token frame into a public transparency record.
 ///
 /// The frame signature is verified against `signer_key`, and only public token
@@ -4397,7 +4172,6 @@ pub fn proof_token_issuance_from_frame(
             message: err.to_string(),
         }
     })?;
-
     let issued_at_unix = system_time_to_unix_secs(
         token
             .checked_issued_at()
@@ -4408,7 +4182,6 @@ pub fn proof_token_issuance_from_frame(
         .checked_expires_at()
         .map(|time| system_time_to_unix_secs(time, "expires_at"))
         .transpose()?;
-
     let issuance = ProofTokenIssuanceV1 {
         version: PROOF_TOKEN_ISSUANCE_VERSION_V1,
         token_id: token.token_id(),
@@ -4430,7 +4203,6 @@ pub fn proof_token_issuance_from_frame(
         })?;
     Ok(issuance)
 }
-
 /// Convert a URL-safe base64 `SFGT` proof-token frame into a transparency record.
 ///
 /// # Errors
@@ -4456,7 +4228,6 @@ pub fn proof_token_issuance_from_base64(
         metadata,
     )
 }
-
 /// Errors raised by local privacy aggregate worker preparation.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 pub enum PrivacyAggregateWorkerError {
@@ -4631,7 +4402,6 @@ pub enum PrivacyAggregateWorkerError {
     #[error("generated privacy aggregate is invalid")]
     InvalidAggregate,
 }
-
 pub(crate) fn build_privacy_aggregates_from_source_events(
     cycle_start_unix: u64,
     cycle_end_unix: u64,
@@ -4662,7 +4432,6 @@ pub(crate) fn build_privacy_aggregates_from_source_events(
             field: "cycle_window",
         });
     }
-
     let mut seen_events = BTreeSet::new();
     let mut subject_populations = BTreeMap::<[u8; 32], PopulationKey>::new();
     let mut groups = config
@@ -4700,7 +4469,6 @@ pub(crate) fn build_privacy_aggregates_from_source_events(
         }
         bucket.push(event.clone());
     }
-
     let private_source_digest =
         canonical_private_source_digest(cycle_start_unix, cycle_end_unix, config, events)?;
     let suppression_threshold = config.privacy.suppression_threshold.unwrap_or(0);
@@ -4738,13 +4506,11 @@ pub(crate) fn build_privacy_aggregates_from_source_events(
     aggregates.sort_by(|left, right| left.aggregate_id.cmp(&right.aggregate_id));
     Ok(aggregates)
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct PopulationKey {
     label: String,
     digest: [u8; 32],
 }
-
 struct PopulationAggregateBuildContext<'a> {
     cycle_start_unix: u64,
     cycle_end_unix: u64,
@@ -4753,7 +4519,6 @@ struct PopulationAggregateBuildContext<'a> {
     vector_sensitivity: Option<u64>,
     private_source_digest: [u8; 32],
 }
-
 fn build_population_aggregate(
     context: &PopulationAggregateBuildContext<'_>,
     population: PopulationKey,
@@ -4790,7 +4555,6 @@ fn build_population_aggregate(
             })
         })
         .collect::<Result<Vec<_>, PrivacyAggregateWorkerError>>()?;
-
     let noise_source = context
         .cycle_prf_input
         .map_or(ModerationPrivacyNoiseSourceV1::SuppressionOnly, |input| {
@@ -4816,7 +4580,6 @@ fn build_population_aggregate(
         .map_err(|_| PrivacyAggregateWorkerError::InvalidAggregate)?;
     Ok(aggregate)
 }
-
 fn distinct_subject_count(events: &[PrivacyAggregateSourceEvent]) -> u64 {
     events
         .iter()
@@ -4824,7 +4587,6 @@ fn distinct_subject_count(events: &[PrivacyAggregateSourceEvent]) -> u64 {
         .collect::<BTreeSet<_>>()
         .len() as u64
 }
-
 fn event_metrics_match_schema(
     metrics: &[PrivacyAggregateSourceMetric],
     schema: &[PrivacyAggregateMetricSchemaV1],
@@ -4835,7 +4597,6 @@ fn event_metrics_match_schema(
             .zip(schema)
             .all(|(metric, expected)| metric.key == expected.key && metric.unit == expected.unit)
 }
-
 fn clipped_population_metrics(
     events: &[PrivacyAggregateSourceEvent],
     schema: &[PrivacyAggregateMetricSchemaV1],
@@ -4857,7 +4618,6 @@ fn clipped_population_metrics(
             };
         }
     }
-
     let mut totals = schema
         .iter()
         .map(|metric| (metric.key.clone(), (metric.unit.clone(), 0_u128)))
@@ -4875,7 +4635,6 @@ fn clipped_population_metrics(
     }
     Ok(totals)
 }
-
 fn zero_metric_vector(
     schema: &[PrivacyAggregateMetricSchemaV1],
 ) -> BTreeMap<String, (String, u128)> {
@@ -4884,7 +4643,6 @@ fn zero_metric_vector(
         .map(|metric| (metric.key.clone(), (metric.unit.clone(), 0)))
         .collect()
 }
-
 fn apply_metric_noise(
     value: u128,
     config: &PrivacyAggregateCycleConfig,
@@ -4922,11 +4680,9 @@ fn apply_metric_noise(
         sensitivity,
     )
 }
-
 struct ExactNoiseSampler {
     reader: blake3::OutputReader,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ExactDiscreteLaplaceLaw {
     continuation_numerator: u128,
@@ -4934,12 +4690,10 @@ struct ExactDiscreteLaplaceLaw {
     zero_numerator: u128,
     zero_denominator: u128,
 }
-
 impl ExactNoiseSampler {
     fn new(reader: blake3::OutputReader) -> Self {
         Self { reader }
     }
-
     fn apply_discrete_laplace(
         &mut self,
         value: u64,
@@ -4986,7 +4740,6 @@ impl ExactNoiseSampler {
             }
         }
     }
-
     fn uniform_below(
         &mut self,
         upper_exclusive: u128,
@@ -5009,7 +4762,6 @@ impl ExactNoiseSampler {
         }
     }
 }
-
 fn exact_discrete_laplace_law(
     epsilon_numerator: u64,
     epsilon_denominator: u64,
@@ -5032,7 +4784,6 @@ fn exact_discrete_laplace_law(
         zero_denominator,
     })
 }
-
 fn validate_discrete_laplace_parameters(
     epsilon_numerator: u64,
     epsilon_denominator: u64,
@@ -5059,7 +4810,6 @@ fn validate_discrete_laplace_parameters(
     }
     Ok(())
 }
-
 fn validate_release_noise_complexity(
     population_count: usize,
     metric_count: usize,
@@ -5108,7 +4858,6 @@ fn validate_release_noise_complexity(
     }
     Ok(())
 }
-
 fn noise_randomness_commitment(request_binding: [u8; 32], prf_output: &[u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(NOISE_RANDOMNESS_COMMITMENT_DOMAIN_V1);
@@ -5116,7 +4865,6 @@ fn noise_randomness_commitment(request_binding: [u8; 32], prf_output: &[u8; 32])
     hasher.update(prf_output);
     *hasher.finalize().as_bytes()
 }
-
 pub(crate) fn canonical_private_source_digest(
     cycle_start_unix: u64,
     cycle_end_unix: u64,
@@ -5155,7 +4903,6 @@ pub(crate) fn canonical_private_source_digest(
             return Err(PrivacyAggregateWorkerError::SubjectPopulationOverlap);
         }
     }
-
     let mut hasher = blake3::Hasher::new();
     hasher.update(PRIVATE_SOURCE_DIGEST_DOMAIN_V1);
     hasher.update(&config.query_id);
@@ -5177,7 +4924,6 @@ pub(crate) fn canonical_private_source_digest(
     }
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn hash_privacy_parameters(hasher: &mut blake3::Hasher, privacy: ModerationPrivacyParametersV1) {
     hasher.update(&privacy.version.to_le_bytes());
     hasher.update(privacy_mode_label(privacy.mode).as_bytes());
@@ -5187,7 +4933,6 @@ fn hash_privacy_parameters(hasher: &mut blake3::Hasher, privacy: ModerationPriva
     hash_option_u64(hasher, privacy.per_subject_metric_cap);
     hash_option_u64(hasher, privacy.suppression_threshold);
 }
-
 fn hash_option_u64(hasher: &mut blake3::Hasher, value: Option<u64>) {
     match value {
         Some(value) => {
@@ -5199,7 +4944,6 @@ fn hash_option_u64(hasher: &mut blake3::Hasher, value: Option<u64>) {
         }
     };
 }
-
 fn aggregate_id(prefix: &str, population: &PopulationKey) -> String {
     let digest_prefix = hex::encode(&population.digest[..8]);
     format!(
@@ -5209,7 +4953,6 @@ fn aggregate_id(prefix: &str, population: &PopulationKey) -> String {
         digest_prefix
     )
 }
-
 fn validate_source_metrics(
     metrics: &[PrivacyAggregateSourceMetric],
 ) -> Result<(), PrivacyAggregateWorkerError> {
@@ -5239,7 +4982,6 @@ fn validate_source_metrics(
     }
     Ok(())
 }
-
 fn validate_metadata(
     metadata: &[ModerationLedgerMetadataV1],
 ) -> Result<(), PrivacyAggregateWorkerError> {
@@ -5260,7 +5002,6 @@ fn validate_metadata(
     }
     Ok(())
 }
-
 fn require_nonzero32(
     field: &'static str,
     value: &[u8; 32],
@@ -5270,7 +5011,6 @@ fn require_nonzero32(
     }
     Ok(())
 }
-
 fn require_public_text(
     field: &'static str,
     value: &str,
@@ -5286,12 +5026,10 @@ fn require_public_text(
     }
     Ok(())
 }
-
 fn hash_text(hasher: &mut blake3::Hasher, value: &str) {
     hasher.update(&(value.len() as u64).to_le_bytes());
     hasher.update(value.as_bytes());
 }
-
 fn sanitize_label(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for ch in value.chars() {
@@ -5307,7 +5045,6 @@ fn sanitize_label(value: &str) -> String {
         out
     }
 }
-
 fn proof_token_moderation_action_code(action: ProofTokenModerationAction) -> u8 {
     match action {
         ProofTokenModerationAction::Block => 0,
@@ -5317,7 +5054,6 @@ fn proof_token_moderation_action_code(action: ProofTokenModerationAction) -> u8 
         ProofTokenModerationAction::Custom(code) => code,
     }
 }
-
 fn validate_gar_enforcement_receipt(
     receipt: &GarEnforcementReceiptV1,
 ) -> Result<(), TransparencySourceEntryAdapterError> {
@@ -5370,7 +5106,6 @@ fn validate_gar_enforcement_receipt(
     }
     Ok(())
 }
-
 fn validate_adapter_source_entry(
     entry: TransparencyLedgerSourceEntry,
 ) -> Result<TransparencyLedgerSourceEntry, TransparencySourceEntryAdapterError> {
@@ -5381,7 +5116,6 @@ fn validate_adapter_source_entry(
     )?;
     Ok(entry)
 }
-
 fn canonical_payload_digest<T: NoritoEncode>(
     payload_kind: &'static str,
     value: &T,
@@ -5394,7 +5128,6 @@ fn canonical_payload_digest<T: NoritoEncode>(
     })?;
     Ok(*blake3::hash(&encoded).as_bytes())
 }
-
 fn source_subject_digest(payload_kind: &str, subject: &str, payload_digest: &[u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(SOURCE_ENTRY_SUBJECT_DIGEST_DOMAIN_V1);
@@ -5403,7 +5136,6 @@ fn source_subject_digest(payload_kind: &str, subject: &str, payload_digest: &[u8
     hasher.update(payload_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn source_summary_digest(payload_kind: &str, metadata: &[ModerationLedgerMetadataV1]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(SOURCE_ENTRY_SUMMARY_DIGEST_DOMAIN_V1);
@@ -5415,14 +5147,12 @@ fn source_summary_digest(payload_kind: &str, metadata: &[ModerationLedgerMetadat
     }
     *hasher.finalize().as_bytes()
 }
-
 fn metadata_vec(metadata: BTreeMap<String, String>) -> Vec<ModerationLedgerMetadataV1> {
     metadata
         .into_iter()
         .map(|(key, value)| ModerationLedgerMetadataV1 { key, value })
         .collect()
 }
-
 fn reserve_source_payload_digest(payload_kind: &str, parts: &[(&str, &[u8])]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(RESERVE_SOURCE_PAYLOAD_DIGEST_DOMAIN_V1);
@@ -5435,7 +5165,6 @@ fn reserve_source_payload_digest(payload_kind: &str, parts: &[(&str, &[u8])]) ->
     }
     *hasher.finalize().as_bytes()
 }
-
 fn reserve_private_field_digest_hex(label: &str, value: &[u8]) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(RESERVE_PRIVATE_FIELD_DIGEST_DOMAIN_V1);
@@ -5444,7 +5173,6 @@ fn reserve_private_field_digest_hex(label: &str, value: &[u8]) -> String {
     hasher.update(value);
     hex::encode(hasher.finalize().as_bytes())
 }
-
 fn validate_reserve_source_id(
     field: &'static str,
     value: &[u8; 32],
@@ -5455,7 +5183,6 @@ fn validate_reserve_source_id(
     }
     Ok(())
 }
-
 fn reserve_finalized_event_source_error(
     message: impl Into<String>,
 ) -> TransparencySourceEntryAdapterError {
@@ -5463,7 +5190,6 @@ fn reserve_finalized_event_source_error(
         message: message.into(),
     }
 }
-
 fn reserve_lifecycle_stage_label(stage: ReserveLifecycleStage) -> &'static str {
     match stage {
         ReserveLifecycleStage::Active => "active",
@@ -5473,7 +5199,6 @@ fn reserve_lifecycle_stage_label(stage: ReserveLifecycleStage) -> &'static str {
         ReserveLifecycleStage::Default => "default",
     }
 }
-
 fn reserve_ledger_event_kind_label(kind: SorafsReserveLedgerEventKind) -> &'static str {
     match kind {
         SorafsReserveLedgerEventKind::PolicyActivated => "policy_activated",
@@ -5490,7 +5215,6 @@ fn reserve_ledger_event_kind_label(kind: SorafsReserveLedgerEventKind) -> &'stat
         SorafsReserveLedgerEventKind::AppealRejected => "appeal_rejected",
     }
 }
-
 fn unix_ms_to_secs(unix_ms: u64) -> Result<u64, String> {
     let unix = unix_ms / 1_000;
     if unix == 0 {
@@ -5498,7 +5222,6 @@ fn unix_ms_to_secs(unix_ms: u64) -> Result<u64, String> {
     }
     Ok(unix)
 }
-
 fn gar_enforcement_action_label(action: &GarEnforcementActionV1) -> &'static str {
     match action {
         GarEnforcementActionV1::PurgeStaticZone => "purge_static_zone",
@@ -5512,7 +5235,6 @@ fn gar_enforcement_action_label(action: &GarEnforcementActionV1) -> &'static str
         GarEnforcementActionV1::Custom(_) => "custom",
     }
 }
-
 fn validate_transparency_kind(
     kind: &ModerationLedgerEntryKindV1,
 ) -> Result<(), TransparencyLedgerIngestError> {
@@ -5521,7 +5243,6 @@ fn validate_transparency_kind(
     }
     Ok(())
 }
-
 fn validate_transparency_metadata(
     metadata: &[ModerationLedgerMetadataV1],
 ) -> Result<(), TransparencyLedgerIngestError> {
@@ -5544,7 +5265,6 @@ fn validate_transparency_metadata(
     }
     Ok(())
 }
-
 fn require_transparency_nonzero16(
     field: &'static str,
     value: &[u8; 16],
@@ -5554,7 +5274,6 @@ fn require_transparency_nonzero16(
     }
     Ok(())
 }
-
 fn require_transparency_nonzero32(
     field: &'static str,
     value: &[u8; 32],
@@ -5564,7 +5283,6 @@ fn require_transparency_nonzero32(
     }
     Ok(())
 }
-
 fn require_transparency_public_text(
     field: &'static str,
     value: &str,
@@ -5574,7 +5292,6 @@ fn require_transparency_public_text(
     }
     Ok(())
 }
-
 fn privacy_mode_label(mode: ModerationPrivacyModeV1) -> &'static str {
     match mode {
         ModerationPrivacyModeV1::DifferentialPrivacy => "differential_privacy",
@@ -5584,7 +5301,6 @@ fn privacy_mode_label(mode: ModerationPrivacyModeV1) -> &'static str {
         }
     }
 }
-
 fn system_time_to_unix_secs(
     time: SystemTime,
     field: &'static str,
@@ -5593,7 +5309,6 @@ fn system_time_to_unix_secs(
         .map_err(|_| ProofTokenIssuanceIngestError::TimestampOutOfRange { field })
         .map(|duration| duration.as_secs())
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5601,15 +5316,12 @@ mod tests {
         Barrier,
         atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering},
     };
-
     fn xor(value: &str) -> sorafs_manifest::deal::XorQuantity {
         value.parse().expect("canonical XOR quantity")
     }
-
     const VALID_PROOF_TOKEN_SIGNER_HEX: &str =
         "f4bfda67d38a409557e4a910dbdf0a862ee5aa6cf6c2284aa38b0b82c4f16532";
     const VALID_PROOF_TOKEN_B64: &str = "U0ZHVAEBAgAAAABrSdIeAAAAAGtLI55hYWFhYWFhYWFhYWFhYWFhAAIAD2RlbnlsaXN0L2dsb2JhbAANZ2FyL3BvbGljeS80MmRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkAEDHmshANx2cvkpmh1mCkrE94PJ6hL0A0qX4vQ-T3rWyTUKZG6uGoYM2sXbL36cYTahpsgcQ35z4R9bb1owinokB";
-
     fn transparency_source_entry(
         event_id: &str,
         occurred_at_unix: u64,
@@ -5639,14 +5351,12 @@ mod tests {
             ],
         }
     }
-
     fn valid_signer_key() -> [u8; 32] {
         hex::decode(VALID_PROOF_TOKEN_SIGNER_HEX)
             .expect("valid signer hex")
             .try_into()
             .expect("signer key length")
     }
-
     fn gar_operator_account() -> iroha_data_model::account::AccountId {
         iroha_data_model::account::AccountId::parse_encoded(
             "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE",
@@ -5654,7 +5364,6 @@ mod tests {
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .expect("account id")
     }
-
     #[derive(Clone, norito::derive::Encode)]
     struct ReserveLedgerEventWireFixture {
         kind: SorafsReserveLedgerEventKind,
@@ -5666,7 +5375,6 @@ mod tests {
         authority: iroha_data_model::account::AccountId,
         occurred_at_unix_ms: u64,
     }
-
     fn reserve_ledger_event_wire_fixture(
         kind: SorafsReserveLedgerEventKind,
     ) -> ReserveLedgerEventWireFixture {
@@ -5692,7 +5400,6 @@ mod tests {
             occurred_at_unix_ms: 1_800_000_123_000,
         }
     }
-
     fn decode_reserve_ledger_event_fixture(
         fixture: &ReserveLedgerEventWireFixture,
     ) -> iroha_data_model::events::data::sorafs::SorafsReserveLedgerEvent {
@@ -5709,7 +5416,6 @@ mod tests {
         );
         event
     }
-
     fn reserve_finalized_event_from_wire_fixture(
         fixture: &ReserveLedgerEventWireFixture,
     ) -> ReserveFinalizedEventV1 {
@@ -5721,13 +5427,11 @@ mod tests {
             event: decode_reserve_ledger_event_fixture(fixture),
         }
     }
-
     fn reserve_finalized_event_fixture(
         kind: SorafsReserveLedgerEventKind,
     ) -> ReserveFinalizedEventV1 {
         reserve_finalized_event_from_wire_fixture(&reserve_ledger_event_wire_fixture(kind))
     }
-
     fn gar_receipt_fixture(action: GarEnforcementActionV1) -> GarEnforcementReceiptV1 {
         GarEnforcementReceiptV1 {
             receipt_id: *b"gar-receipt-0001",
@@ -5745,14 +5449,12 @@ mod tests {
             labels: vec!["guardian-freeze".to_string(), "sfm4c".to_string()],
         }
     }
-
     fn moderation_governance_event_fixture() -> SoraFsModerationBallotGovernanceEventV1 {
         use sorafs_manifest::{
             SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
             SoraFsModerationBallotGovernanceEventKindV1, SoraFsModerationBallotGovernanceTallyV1,
             SoraFsModerationVoteChoiceV1, SoraFsModerationVoteCountsV1,
         };
-
         SoraFsModerationBallotGovernanceEventV1 {
             version: SORAFS_MODERATION_BALLOT_GOVERNANCE_EVENT_VERSION_V1,
             sequence: 7,
@@ -5782,13 +5484,11 @@ mod tests {
             challenge: None,
         }
     }
-
     fn appeal_finance_report_fixture() -> SoraFsAppealFinanceReportV1 {
         use sorafs_manifest::{
             SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SoraFsAppealFinanceAccountFlowV1,
             SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1,
         };
-
         SoraFsAppealFinanceReportV1 {
             version: SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1,
             report_id: [0x42; 16],
@@ -5832,12 +5532,10 @@ mod tests {
             no_show_juror_ids: vec!["juror-c".to_string()],
         }
     }
-
     fn appeal_finance_settlement_receipt_fixture() -> SoraFsAppealFinanceSettlementReceiptV1 {
         use sorafs_manifest::{
             SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1, SoraFsAppealFinanceOutcomeV1,
         };
-
         SoraFsAppealFinanceSettlementReceiptV1 {
             version: SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
             receipt_id: [0x52; 16],
@@ -5869,7 +5567,6 @@ mod tests {
             configured_signer_count: 2,
         }
     }
-
     fn privacy_config() -> PrivacyAggregateCycleConfig {
         PrivacyAggregateCycleConfig {
             query_id: [0xB0; 32],
@@ -5901,7 +5598,6 @@ mod tests {
             }],
         }
     }
-
     fn privacy_prf_input(output: [u8; 32]) -> PrivacyCyclePrfInputV1 {
         let config = privacy_config();
         let request = privacy_prf_request(&config);
@@ -5910,7 +5606,6 @@ mod tests {
             PrivacyCyclePrfOutputV1::new(output).expect("valid test PRF output"),
         )
     }
-
     fn privacy_prf_request(config: &PrivacyAggregateCycleConfig) -> PrivacyCyclePrfRequestV1 {
         PrivacyCyclePrfRequestV1::new(
             config.query_id,
@@ -5925,22 +5620,18 @@ mod tests {
         )
         .expect("canonical test PRF request")
     }
-
     const TEST_PRF_PROVIDER_HANDLE: &str = "threshold-prf:transparency:primary";
     const TEST_RELEASE_ANCHOR_HANDLE: &str = "governance-dag:transparency:primary";
     const TEST_LEADER_LEASE_PROVIDER_HANDLE: &str = "sealed-cas:transparency:primary";
     const TEST_LEADER_LEASE_PROVIDER_POLICY_DIGEST: [u8; 32] = [0xE7; 32];
-
     fn test_prf_provider_binding() -> TransparencyRuntimeProviderBindingV1 {
         TransparencyRuntimeProviderBindingV1::try_new(TEST_PRF_PROVIDER_HANDLE, 1, [0xC7; 32])
             .expect("valid threshold-PRF provider binding")
     }
-
     fn test_release_anchor_binding() -> TransparencyRuntimeProviderBindingV1 {
         TransparencyRuntimeProviderBindingV1::try_new(TEST_RELEASE_ANCHOR_HANDLE, 1, [0xD7; 32])
             .expect("valid release-anchor provider binding")
     }
-
     fn test_leader_lease_binding(revision: u64) -> TransparencyRuntimeProviderBindingV1 {
         TransparencyRuntimeProviderBindingV1::try_new(
             TEST_LEADER_LEASE_PROVIDER_HANDLE,
@@ -5949,7 +5640,6 @@ mod tests {
         )
         .expect("valid leader-lease provider binding")
     }
-
     fn test_leader_lease_scope(holder_seed: u8) -> TransparencyLeaderLeaseScopeV1 {
         TransparencyLeaderLeaseScopeV1::try_new(
             privacy_config().query_id,
@@ -5962,7 +5652,6 @@ mod tests {
         )
         .expect("valid leader-lease scope")
     }
-
     fn qualify_test_leader_lease_provider(
         provider: &Arc<QualifiedTestLeaderLeaseProvider>,
         revision: u64,
@@ -5976,13 +5665,11 @@ mod tests {
         )
         .expect("qualify test leader-lease provider")
     }
-
     #[derive(Default)]
     struct TestLeaderLeaseProviderState {
         next_fencing_token: u64,
         active: Option<TransparencyLeaderLeaseGrantV1>,
     }
-
     struct QualifiedTestLeaderLeaseProvider {
         handle: &'static str,
         substituted: AtomicBool,
@@ -5998,7 +5685,6 @@ mod tests {
         forced_fencing_token: AtomicU64,
         state: Mutex<TestLeaderLeaseProviderState>,
     }
-
     impl QualifiedTestLeaderLeaseProvider {
         fn new(handle: &'static str) -> Self {
             Self {
@@ -6017,7 +5703,6 @@ mod tests {
                 state: Mutex::new(TestLeaderLeaseProviderState::default()),
             }
         }
-
         fn provider_binding(&self) -> TransparencyRuntimeProviderBindingV1 {
             TransparencyRuntimeProviderBindingV1::try_new(
                 self.handle,
@@ -6026,7 +5711,6 @@ mod tests {
             )
             .expect("test provider exposes a valid production-style binding")
         }
-
         fn next_fencing_token(
             &self,
             state: &mut TestLeaderLeaseProviderState,
@@ -6043,19 +5727,16 @@ mod tests {
                 .expect("test fencing token");
             state.next_fencing_token
         }
-
         fn lease_id(fencing_token: u64) -> [u8; 32] {
             let mut lease_id = [0xA5; 32];
             lease_id[..8].copy_from_slice(&fencing_token.to_le_bytes());
             lease_id
         }
-
         fn maybe_drift(&self) {
             if self.drift_during_operation.swap(false, Ordering::SeqCst) {
                 self.revision.fetch_add(1, Ordering::SeqCst);
             }
         }
-
         fn finish_grant_operation(
             &self,
             operation: u8,
@@ -6072,7 +5753,6 @@ mod tests {
             Ok(grant)
         }
     }
-
     impl ProductionTransparencyRuntimeProviderV1 for QualifiedTestLeaderLeaseProvider {
         fn handle(&self) -> &str {
             if self.substituted.load(Ordering::SeqCst) {
@@ -6081,7 +5761,6 @@ mod tests {
                 self.handle
             }
         }
-
         fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
             self.qualification_calls.fetch_add(1, Ordering::SeqCst);
             if self.qualification_error.load(Ordering::SeqCst) {
@@ -6093,7 +5772,6 @@ mod tests {
             ))
         }
     }
-
     impl TransparencyLeaderLeaseProviderV1 for QualifiedTestLeaderLeaseProvider {
         fn acquire(
             &self,
@@ -6125,7 +5803,6 @@ mod tests {
             drop(state);
             self.finish_grant_operation(1, grant)
         }
-
         fn renew(
             &self,
             request: &TransparencyLeaderLeaseRenewRequestV1,
@@ -6159,7 +5836,6 @@ mod tests {
             drop(state);
             self.finish_grant_operation(2, grant)
         }
-
         fn release(
             &self,
             request: &TransparencyLeaderLeaseReleaseRequestV1,
@@ -6199,7 +5875,6 @@ mod tests {
             Ok(receipt)
         }
     }
-
     struct QualifiedTestPrfProvider {
         handle: &'static str,
         substituted: AtomicBool,
@@ -6209,7 +5884,6 @@ mod tests {
         derive_calls: AtomicUsize,
         drift_during_derive: AtomicBool,
     }
-
     impl QualifiedTestPrfProvider {
         fn new(handle: &'static str) -> Self {
             Self {
@@ -6223,7 +5897,6 @@ mod tests {
             }
         }
     }
-
     impl PrivacyCyclePrfProviderV1 for QualifiedTestPrfProvider {
         fn derive_cycle_output(
             &self,
@@ -6237,7 +5910,6 @@ mod tests {
                 .map_err(|_| PrivacyCyclePrfProviderErrorV1::Internal)
         }
     }
-
     impl ProductionTransparencyRuntimeProviderV1 for QualifiedTestPrfProvider {
         fn handle(&self) -> &str {
             if self.substituted.load(Ordering::SeqCst) {
@@ -6246,7 +5918,6 @@ mod tests {
                 self.handle
             }
         }
-
         fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
             self.qualification_calls.fetch_add(1, Ordering::SeqCst);
             if self.qualification_error.load(Ordering::SeqCst) {
@@ -6258,7 +5929,6 @@ mod tests {
             ))
         }
     }
-
     struct QualifiedTestReleaseAnchor {
         handle: &'static str,
         substituted: AtomicBool,
@@ -6269,7 +5939,6 @@ mod tests {
         compare_and_set_calls: AtomicUsize,
         drift_during_operation: AtomicBool,
     }
-
     impl QualifiedTestReleaseAnchor {
         fn new(handle: &'static str) -> Self {
             Self {
@@ -6283,14 +5952,12 @@ mod tests {
                 drift_during_operation: AtomicBool::new(false),
             }
         }
-
         fn maybe_drift(&self) {
             if self.drift_during_operation.swap(false, Ordering::SeqCst) {
                 self.revision.fetch_add(1, Ordering::SeqCst);
             }
         }
     }
-
     impl PrivacyReleaseAnchorV1 for QualifiedTestReleaseAnchor {
         fn finalized_head(
             &self,
@@ -6300,7 +5967,6 @@ mod tests {
             self.maybe_drift();
             Ok(PrivacyReleaseAnchorHeadV1::genesis(query_id))
         }
-
         fn compare_and_set_finalized_head(
             &self,
             _expected: PrivacyReleaseAnchorHeadV1,
@@ -6312,7 +5978,6 @@ mod tests {
             Ok(())
         }
     }
-
     impl ProductionTransparencyRuntimeProviderV1 for QualifiedTestReleaseAnchor {
         fn handle(&self) -> &str {
             if self.substituted.load(Ordering::SeqCst) {
@@ -6321,7 +5986,6 @@ mod tests {
                 self.handle
             }
         }
-
         fn qualification(&self) -> Result<TransparencyRuntimeProviderQualificationV1, String> {
             self.qualification_calls.fetch_add(1, Ordering::SeqCst);
             if self.qualification_error.load(Ordering::SeqCst) {
@@ -6333,7 +5997,6 @@ mod tests {
             ))
         }
     }
-
     fn privacy_event(event_id: &str, occurred_at_unix: u64) -> PrivacyAggregateSourceEvent {
         PrivacyAggregateSourceEvent {
             event_id: event_id.to_string(),
@@ -6350,7 +6013,6 @@ mod tests {
             provenance: None,
         }
     }
-
     #[test]
     fn qualified_prf_provider_rejects_missing_substituted_test_and_stale_adapters() {
         let error = QualifiedPrivacyCyclePrfProviderV1::try_new(test_prf_provider_binding(), None)
@@ -6359,7 +6021,6 @@ mod tests {
             error,
             TransparencyRuntimeProviderQualificationErrorV1::MissingProvider
         );
-
         let substituted = Arc::new(QualifiedTestPrfProvider::new(
             "threshold-prf:transparency:secondary",
         ));
@@ -6375,7 +6036,6 @@ mod tests {
         );
         assert_eq!(substituted.qualification_calls.load(Ordering::SeqCst), 0);
         assert_eq!(substituted.derive_calls.load(Ordering::SeqCst), 0);
-
         let test_marked = Arc::new(QualifiedTestPrfProvider::new("test:threshold-prf:primary"));
         let injected: Arc<dyn ProductionPrivacyCyclePrfProviderV1> = test_marked.clone();
         let error = QualifiedPrivacyCyclePrfProviderV1::try_new(
@@ -6389,7 +6049,6 @@ mod tests {
         );
         assert_eq!(test_marked.qualification_calls.load(Ordering::SeqCst), 0);
         assert_eq!(test_marked.derive_calls.load(Ordering::SeqCst), 0);
-
         let stale = Arc::new(QualifiedTestPrfProvider::new(TEST_PRF_PROVIDER_HANDLE));
         stale.qualification_error.store(true, Ordering::SeqCst);
         let injected: Arc<dyn ProductionPrivacyCyclePrfProviderV1> = stale.clone();
@@ -6405,7 +6064,6 @@ mod tests {
         assert!(!error.to_string().contains("must-never-escape"));
         assert!(!format!("{error:?}").contains("must-never-escape"));
         assert_eq!(stale.derive_calls.load(Ordering::SeqCst), 0);
-
         let invalid = Arc::new(QualifiedTestPrfProvider::new(TEST_PRF_PROVIDER_HANDLE));
         invalid.revision.store(0, Ordering::SeqCst);
         let injected: Arc<dyn ProductionPrivacyCyclePrfProviderV1> = invalid.clone();
@@ -6419,7 +6077,6 @@ mod tests {
             TransparencyRuntimeProviderQualificationErrorV1::InvalidQualification
         );
         assert!(!TransparencyRuntimeProviderQualificationV1::new(1, [0; 32]).is_valid());
-
         let mismatched = Arc::new(QualifiedTestPrfProvider::new(TEST_PRF_PROVIDER_HANDLE));
         mismatched.revision.store(2, Ordering::SeqCst);
         let injected: Arc<dyn ProductionPrivacyCyclePrfProviderV1> = mismatched.clone();
@@ -6434,7 +6091,6 @@ mod tests {
         );
         assert_eq!(mismatched.derive_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn qualified_prf_provider_revalidates_before_and_after_every_derivation() {
         let provider = Arc::new(QualifiedTestPrfProvider::new(TEST_PRF_PROVIDER_HANDLE));
@@ -6447,7 +6103,6 @@ mod tests {
         assert_eq!(qualified.handle(), TEST_PRF_PROVIDER_HANDLE);
         assert_eq!(qualified.qualification().revision(), 1);
         assert_eq!(provider.qualification_calls.load(Ordering::SeqCst), 1);
-
         let request = privacy_prf_request(&privacy_config());
         let output = qualified
             .derive_cycle_output(&request)
@@ -6455,7 +6110,6 @@ mod tests {
         assert_eq!(format!("{output:?}"), "PrivacyCyclePrfOutputV1(<redacted>)");
         assert_eq!(provider.derive_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider.qualification_calls.load(Ordering::SeqCst), 3);
-
         provider.revision.store(2, Ordering::SeqCst);
         let error = qualified
             .derive_cycle_output(&request)
@@ -6466,7 +6120,6 @@ mod tests {
             qualified.revalidate(),
             Err(TransparencyRuntimeProviderQualificationErrorV1::IdentityOrPolicyChanged)
         );
-
         let provider = Arc::new(QualifiedTestPrfProvider::new(TEST_PRF_PROVIDER_HANDLE));
         let injected: Arc<dyn ProductionPrivacyCyclePrfProviderV1> = provider.clone();
         let qualified = QualifiedPrivacyCyclePrfProviderV1::try_new(
@@ -6485,7 +6138,6 @@ mod tests {
         assert!(debug.contains("provider: \"<runtime-only>\""));
         assert!(!debug.contains("must-never-escape"));
     }
-
     #[test]
     fn qualified_release_anchor_rejects_invalid_adapters_before_state_access() {
         let error = QualifiedPrivacyReleaseAnchorV1::try_new(test_release_anchor_binding(), None)
@@ -6494,7 +6146,6 @@ mod tests {
             error,
             TransparencyRuntimeProviderQualificationErrorV1::MissingProvider
         );
-
         let test_marked = Arc::new(QualifiedTestReleaseAnchor::new(
             "mock:governance-dag:primary",
         ));
@@ -6509,7 +6160,6 @@ mod tests {
         assert_eq!(test_marked.qualification_calls.load(Ordering::SeqCst), 0);
         assert_eq!(test_marked.head_calls.load(Ordering::SeqCst), 0);
         assert_eq!(test_marked.compare_and_set_calls.load(Ordering::SeqCst), 0);
-
         let stale = Arc::new(QualifiedTestReleaseAnchor::new(TEST_RELEASE_ANCHOR_HANDLE));
         stale.qualification_error.store(true, Ordering::SeqCst);
         let injected: Arc<dyn ProductionPrivacyReleaseAnchorV1> = stale.clone();
@@ -6523,7 +6173,6 @@ mod tests {
         assert!(!error.to_string().contains("must-never-escape"));
         assert!(!format!("{error:?}").contains("must-never-escape"));
         assert_eq!(stale.head_calls.load(Ordering::SeqCst), 0);
-
         let mismatched = Arc::new(QualifiedTestReleaseAnchor::new(TEST_RELEASE_ANCHOR_HANDLE));
         mismatched.revision.store(2, Ordering::SeqCst);
         let injected: Arc<dyn ProductionPrivacyReleaseAnchorV1> = mismatched.clone();
@@ -6536,7 +6185,6 @@ mod tests {
         );
         assert_eq!(mismatched.head_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn qualified_release_anchor_revalidates_head_and_cas_operations() {
         let query_id = [0xB0; 32];
@@ -6551,7 +6199,6 @@ mod tests {
         assert_eq!(genesis, PrivacyReleaseAnchorHeadV1::genesis(query_id));
         assert_eq!(provider.head_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider.qualification_calls.load(Ordering::SeqCst), 3);
-
         let lease = TransparencyLeaderLeaseGrantV1::try_new(
             [0x21; 32],
             test_leader_lease_scope(0xE1),
@@ -6574,14 +6221,12 @@ mod tests {
             .expect("qualified finalized-head CAS");
         assert_eq!(provider.compare_and_set_calls.load(Ordering::SeqCst), 1);
         assert_eq!(provider.qualification_calls.load(Ordering::SeqCst), 5);
-
         provider.substituted.store(true, Ordering::SeqCst);
         let error = qualified
             .finalized_head(query_id)
             .expect_err("substitution before head read must fail closed");
         assert_eq!(error, PrivacyReleaseAnchorErrorV1::Unavailable);
         assert_eq!(provider.head_calls.load(Ordering::SeqCst), 1);
-
         let provider = Arc::new(QualifiedTestReleaseAnchor::new(TEST_RELEASE_ANCHOR_HANDLE));
         let injected: Arc<dyn ProductionPrivacyReleaseAnchorV1> = provider.clone();
         let qualified =
@@ -6601,7 +6246,6 @@ mod tests {
             Err(TransparencyRuntimeProviderQualificationErrorV1::IdentityOrPolicyChanged)
         );
     }
-
     #[test]
     fn transparency_runtime_provider_handles_are_bounded_and_not_test_marked() {
         assert_eq!(
@@ -6657,7 +6301,6 @@ mod tests {
         )
         .expect("test markers are matched as exact handle components");
     }
-
     #[test]
     fn qualified_leader_lease_provider_rejects_absent_substituted_and_test_marked_adapters() {
         let error = QualifiedTransparencyLeaderLeaseProviderV1::try_new(
@@ -6672,7 +6315,6 @@ mod tests {
                 TransparencyRuntimeProviderQualificationErrorV1::MissingProvider
             )
         );
-
         let substituted = Arc::new(QualifiedTestLeaderLeaseProvider::new(
             "sealed-cas:transparency:secondary",
         ));
@@ -6691,7 +6333,6 @@ mod tests {
         );
         assert_eq!(substituted.qualification_calls.load(Ordering::SeqCst), 0);
         assert_eq!(substituted.acquire_calls.load(Ordering::SeqCst), 0);
-
         let test_marked = Arc::new(QualifiedTestLeaderLeaseProvider::new(
             "mock:sealed-cas:transparency",
         ));
@@ -6711,7 +6352,6 @@ mod tests {
         assert_eq!(test_marked.qualification_calls.load(Ordering::SeqCst), 0);
         assert_eq!(test_marked.acquire_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn qualified_leader_lease_provider_rejects_stale_or_mismatched_qualification() {
         let stale = Arc::new(QualifiedTestLeaderLeaseProvider::new(
@@ -6734,7 +6374,6 @@ mod tests {
         assert!(!error.to_string().contains("must-never-escape"));
         assert!(!format!("{error:?}").contains("must-never-escape"));
         assert_eq!(stale.acquire_calls.load(Ordering::SeqCst), 0);
-
         let mismatched = Arc::new(QualifiedTestLeaderLeaseProvider::new(
             TEST_LEADER_LEASE_PROVIDER_HANDLE,
         ));
@@ -6754,7 +6393,6 @@ mod tests {
         );
         assert_eq!(mismatched.acquire_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn qualified_leader_lease_provider_exposes_only_public_binding_and_fencing_floor() {
         let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
@@ -6771,14 +6409,12 @@ mod tests {
         assert!(!debug.contains("must-never-escape"));
         assert_eq!(provider.acquire_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn qualified_leader_lease_provider_restores_floor_only_before_first_use() {
         let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
             TEST_LEADER_LEASE_PROVIDER_HANDLE,
         ));
         let qualified = qualify_test_leader_lease_provider(&provider, 1, 0);
-
         qualified
             .restore_fencing_floor(41)
             .expect("restore durable fencing floor before first use");
@@ -6794,7 +6430,6 @@ mod tests {
             TransparencyLeaderLeaseErrorV1::NonMonotonicFencingToken
         );
     }
-
     #[test]
     fn qualified_leader_lease_provider_rejects_an_unadvanceable_fencing_floor() {
         let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
@@ -6813,7 +6448,6 @@ mod tests {
         );
         assert_eq!(provider.qualification_calls.load(Ordering::SeqCst), 0);
     }
-
     #[test]
     fn leader_lease_binds_query_window_cycle_and_holder_exactly() {
         let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
@@ -6821,7 +6455,6 @@ mod tests {
         ));
         let qualified = qualify_test_leader_lease_provider(&provider, 1, 7);
         let scope = test_leader_lease_scope(0x11);
-
         let acquired = qualified
             .acquire(scope, 220, 260)
             .expect("acquire exact leader lease");
@@ -6844,7 +6477,6 @@ mod tests {
             Err(TransparencyLeaderLeaseErrorV1::ActiveLeaseExists)
         );
         assert_eq!(provider.acquire_calls.load(Ordering::SeqCst), 1);
-
         let wrong_holder = test_leader_lease_scope(0x12);
         assert_eq!(
             qualified.validate_for_use(wrong_holder, 222),
@@ -6891,7 +6523,6 @@ mod tests {
             Err(TransparencyLeaderLeaseErrorV1::ObservationTimeRollback)
         );
     }
-
     #[test]
     fn leader_lease_renews_monotonically_and_releases_exactly() {
         let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
@@ -6915,7 +6546,6 @@ mod tests {
         assert_eq!(renewed.issued_at_unix(), 230);
         assert_eq!(renewed.expires_at_unix(), 300);
         assert_eq!(qualified.fencing_floor().expect("renewed floor"), 9);
-
         let wrong_holder = test_leader_lease_scope(0x12);
         assert_eq!(
             qualified.release(wrong_holder, 240),
@@ -6940,7 +6570,6 @@ mod tests {
         );
         assert_eq!(provider.release_calls.load(Ordering::SeqCst), 1);
     }
-
     #[test]
     fn leader_lease_expiry_and_fencing_replay_fail_closed() {
         let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
@@ -6948,7 +6577,6 @@ mod tests {
         ));
         let qualified = qualify_test_leader_lease_provider(&provider, 1, 0);
         let scope = test_leader_lease_scope(0x21);
-
         let first = qualified.acquire(scope, 220, 250).expect("first lease");
         assert_eq!(
             qualified.validate_for_use(scope, 250),
@@ -6981,7 +6609,6 @@ mod tests {
             .expect("recover only after the rejected replay grant expires");
         assert!(recovered.fencing_token() > renewed.fencing_token());
     }
-
     #[test]
     fn leader_lease_ambiguous_and_malformed_results_quarantine_until_expiry() {
         let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
@@ -6989,7 +6616,6 @@ mod tests {
         ));
         let qualified = qualify_test_leader_lease_provider(&provider, 1, 0);
         let scope = test_leader_lease_scope(0x31);
-
         provider.ambiguous_operation.store(1, Ordering::SeqCst);
         assert_eq!(
             qualified.acquire(scope, 220, 260),
@@ -7008,7 +6634,6 @@ mod tests {
         let after_ambiguous = qualified
             .acquire(scope, 260, 300)
             .expect("recover after ambiguous acquisition expiry");
-
         provider
             .invalid_response_operation
             .store(2, Ordering::SeqCst);
@@ -7025,7 +6650,6 @@ mod tests {
             .expect("recover after malformed renewal response expiry");
         assert!(after_malformed.fencing_token() > after_ambiguous.fencing_token());
     }
-
     #[test]
     fn leader_lease_provider_rotation_terminally_poisons_the_old_lineage() {
         let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
@@ -7047,7 +6671,6 @@ mod tests {
             Err(TransparencyLeaderLeaseErrorV1::ProviderLineagePoisoned)
         );
         provider.revision.store(2, Ordering::SeqCst);
-
         let rotated = qualify_test_leader_lease_provider(&provider, 2, original.fencing_token());
         assert_eq!(
             rotated.acquire(scope, 231, 270),
@@ -7060,7 +6683,6 @@ mod tests {
             .expect("fail over after prior-revision lease expiry");
         assert!(post_rotation.fencing_token() > original.fencing_token());
     }
-
     #[test]
     fn leader_lease_ambiguous_or_malformed_release_quarantines_use() {
         let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
@@ -7096,7 +6718,6 @@ mod tests {
             .acquire(scope, 260, 300)
             .expect("recover only after an ambiguously released lease expires");
         assert!(after_ambiguous_release.fencing_token() > original.fencing_token());
-
         provider
             .invalid_response_operation
             .store(3, Ordering::SeqCst);
@@ -7113,7 +6734,6 @@ mod tests {
             .expect("recover after malformed release receipt expiry");
         assert!(recovered.fencing_token() > after_ambiguous_release.fencing_token());
     }
-
     #[test]
     fn leader_lease_drift_during_operation_terminally_poisons_the_wrapper() {
         let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
@@ -7136,7 +6756,6 @@ mod tests {
             Err(TransparencyLeaderLeaseErrorV1::ProviderLineagePoisoned)
         );
     }
-
     #[test]
     fn leader_lease_two_replica_race_and_failover_are_fenced() {
         let provider = Arc::new(QualifiedTestLeaderLeaseProvider::new(
@@ -7163,7 +6782,6 @@ mod tests {
         let scope_a = test_leader_lease_scope(0x41);
         let scope_b = test_leader_lease_scope(0x42);
         let barrier = Arc::new(Barrier::new(2));
-
         let barrier_a = barrier.clone();
         let replica_a_thread = replica_a.clone();
         let attempt_a = std::thread::spawn(move || {
@@ -7178,7 +6796,6 @@ mod tests {
         });
         let result_a = attempt_a.join().expect("replica A join");
         let result_b = attempt_b.join().expect("replica B join");
-
         let (winner, winner_scope, winner_grant, loser, loser_scope) = match (result_a, result_b) {
             (Ok(grant), Err(error)) => {
                 assert_eq!(
@@ -7213,7 +6830,6 @@ mod tests {
             winner_scope.holder_identity()
         );
     }
-
     #[test]
     fn exact_discrete_laplace_is_deterministic_and_context_bound() {
         fn sample(context: &[u8]) -> i128 {
@@ -7227,7 +6843,6 @@ mod tests {
                     .expect("exact sample"),
             ) - i128::from(center)
         }
-
         let sample_a = sample(b"aggregate-a/metric-a");
         assert_eq!(sample_a, sample(b"aggregate-a/metric-a"));
         assert_ne!(
@@ -7239,11 +6854,9 @@ mod tests {
             "independent contexts must not collapse to one repeated sample pair"
         );
     }
-
     #[test]
     fn exact_discrete_laplace_normalizes_zero_before_sampling_sign() {
         let law = exact_discrete_laplace_law(1, 1, 1).expect("representable exact law");
-
         // q = 1/2 gives P(0) = (1-q)/(1+q) = 1/3, followed by a
         // conditional fair sign and P(|Z|=k | Z!=0) = (1-q)q^(k-1).
         // Sampling a sign after a geometric magnitude starting at zero would
@@ -7260,7 +6873,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn exact_discrete_laplace_has_symmetric_geometric_tail_structure() {
         let mut zero = 0_u64;
@@ -7271,7 +6883,6 @@ mod tests {
         let mut tail_three = 0_u64;
         let mut signed_sum = 0_i128;
         const SAMPLE_COUNT: u64 = 8_192;
-
         for sample_index in 0..SAMPLE_COUNT {
             let mut hasher = blake3::Hasher::new_keyed(&[0xA5; 32]);
             hasher.update(DISCRETE_LAPLACE_NOISE_DOMAIN_V1);
@@ -7293,7 +6904,6 @@ mod tests {
             tail_two += u64::from(magnitude >= 2);
             tail_three += u64::from(magnitude >= 3);
         }
-
         assert_eq!(zero + positive + negative, SAMPLE_COUNT);
         assert!((2_000..=3_500).contains(&zero));
         assert!((2_000..=3_500).contains(&positive));
@@ -7302,7 +6912,6 @@ mod tests {
         assert!(tail_one > tail_two && tail_two > tail_three && tail_three > 0);
         assert!(signed_sum.unsigned_abs() < u128::from(SAMPLE_COUNT / 4));
     }
-
     #[test]
     fn exact_discrete_laplace_folds_only_at_the_public_integer_boundary() {
         fn sample(sample_index: u64, value: u64) -> u64 {
@@ -7313,7 +6922,6 @@ mod tests {
                 .apply_discrete_laplace(value, 1, 1, 1)
                 .expect("exact sample")
         }
-
         let center = u64::MAX / 2;
         let positive_context = (0..1_024)
             .find(|index| sample(*index, center) > center)
@@ -7321,7 +6929,6 @@ mod tests {
         let negative_context = (0..1_024)
             .find(|index| sample(*index, center) < center)
             .expect("deterministic corpus contains negative noise");
-
         assert_eq!(sample(positive_context, u64::MAX), u64::MAX);
         assert_eq!(sample(negative_context, 0), 0);
         let law = exact_discrete_laplace_law(1, 1, 1).expect("representable exact law");
@@ -7331,7 +6938,6 @@ mod tests {
             "every finite latent tail length has nonzero probability"
         );
     }
-
     #[test]
     fn privacy_release_noise_complexity_is_globally_bounded() {
         fn dimensioned_config(dimension: usize) -> PrivacyAggregateCycleConfig {
@@ -7350,7 +6956,6 @@ mod tests {
                 .collect();
             config
         }
-
         dimensioned_config(32)
             .validate()
             .expect("bounded whole-release sampler workload");
@@ -7359,7 +6964,6 @@ mod tests {
             Err(PrivacyAggregateWorkerError::NoiseReleaseComplexityExceedsResourceLimit { .. })
         ));
     }
-
     #[test]
     fn privacy_metrics_clip_each_subject_before_population_sum() {
         let mut first = privacy_event("event-a", 110);
@@ -7369,7 +6973,6 @@ mod tests {
         repeated_subject.metrics[0].value = 8;
         let mut second_subject = privacy_event("event-c", 130);
         second_subject.metrics[0].value = 7;
-
         let metrics = clipped_population_metrics(
             &[first, repeated_subject, second_subject],
             &privacy_config().metrics,
@@ -7381,7 +6984,6 @@ mod tests {
             Some(&("count".to_string(), 17))
         );
     }
-
     #[test]
     fn dp_k_emits_fixed_bucket_when_distinct_subjects_are_below_threshold() {
         let first = privacy_event("event-a", 110);
@@ -7399,7 +7001,6 @@ mod tests {
         assert_eq!(aggregates[0].population_label, "jurisdiction-a");
         assert_eq!(aggregates[0].metrics.len(), 1);
     }
-
     #[test]
     fn dp_k_emits_the_same_fixed_bucket_schema_for_an_empty_cycle() {
         let config = privacy_config();
@@ -7411,7 +7012,6 @@ mod tests {
             &[],
         )
         .expect("DP+k must publish every governed bucket for an empty cycle");
-
         assert_eq!(aggregates.len(), config.populations.len());
         assert_eq!(aggregates[0].population_label, "jurisdiction-a");
         assert_eq!(
@@ -7423,7 +7023,6 @@ mod tests {
             vec![("moderation_actions", "count")]
         );
     }
-
     #[test]
     fn privacy_cycle_rejects_replay_overlap_and_metric_schema_differencing() {
         let event = privacy_event("event-a", 110);
@@ -7437,7 +7036,6 @@ mod tests {
             ),
             Err(PrivacyAggregateWorkerError::DuplicateSourceEvent)
         ));
-
         let mut overlap_config = privacy_config();
         overlap_config
             .populations
@@ -7476,7 +7074,6 @@ mod tests {
             ),
             Err(PrivacyAggregateWorkerError::SubjectPopulationOverlap)
         ));
-
         let mut mismatched_schema = privacy_event("event-b", 120);
         mismatched_schema
             .metrics
@@ -7496,7 +7093,6 @@ mod tests {
             Err(PrivacyAggregateWorkerError::MetricSchemaMismatch)
         ));
     }
-
     #[test]
     fn privacy_cycle_bounds_source_events_before_grouping() {
         let events = (0..=PRIVACY_AGGREGATE_MAX_SOURCE_EVENTS_V1)
@@ -7516,7 +7112,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn privacy_source_event_requires_subject_digest() {
         let mut event = privacy_event("event-a", 110);
@@ -7528,7 +7123,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn privacy_source_event_rejects_provenance_from_another_ingress() {
         let mut event = privacy_event("event-a", 110);
@@ -7536,13 +7130,11 @@ mod tests {
             gar_operator_account(),
             crate::GovernanceSubmissionOriginV1::AppealFinanceReport,
         ));
-
         assert_eq!(
             event.validate(),
             Err(PrivacyAggregateWorkerError::InvalidSourceEventProvenance)
         );
     }
-
     #[test]
     fn public_source_commitment_binds_authenticated_event_provenance() {
         let config = privacy_config();
@@ -7565,7 +7157,6 @@ mod tests {
         .pop()
         .expect("one population aggregate");
         assert_eq!(aggregate.source_commitment, source_commitment);
-
         let mut without_provenance = event;
         without_provenance.provenance = None;
         let changed_commitment = canonical_private_source_digest(
@@ -7580,7 +7171,6 @@ mod tests {
             "authenticated ingress identity must be part of the public source commitment"
         );
     }
-
     #[test]
     fn privacy_source_event_enforces_text_and_metric_bounds() {
         let mut event = privacy_event("event-a", 110);
@@ -7592,7 +7182,6 @@ mod tests {
                 max: MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1,
             })
         );
-
         let mut event = privacy_event("event-a", 110);
         event.metrics = (0..=MODERATION_PRIVACY_MAX_METRICS_V1)
             .map(|index| PrivacyAggregateSourceMetric {
@@ -7609,7 +7198,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn privacy_metric_overflow_fails_closed() {
         let mut config = privacy_config();
@@ -7627,13 +7215,11 @@ mod tests {
         first.metrics[0].value = u64::MAX;
         let mut second = privacy_event("event-b", 120);
         second.metrics[0].value = u64::MAX;
-
         assert_eq!(
             build_privacy_aggregates_from_source_events(100, 200, &config, None, &[first, second],),
             Err(PrivacyAggregateWorkerError::MetricArithmeticOverflow)
         );
     }
-
     #[test]
     fn privacy_noise_uses_joint_metric_vector_sensitivity() {
         let mut config = privacy_config();
@@ -7665,7 +7251,6 @@ mod tests {
                 unit: "count".to_string(),
             },
         );
-
         assert_eq!(
             build_privacy_aggregates_from_source_events(
                 100,
@@ -7683,7 +7268,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn privacy_noise_clamps_wide_internal_sums_before_integer_post_processing() {
         let config = privacy_config();
@@ -7709,10 +7293,8 @@ mod tests {
             &private_source_digest,
         )
         .expect("wide sum is deterministically clamped");
-
         assert_eq!(above_u64_max, at_u64_max);
     }
-
     fn privacy_budget_policy() -> PrivacyCompositionBudgetPolicyV1 {
         PrivacyCompositionBudgetPolicyV1 {
             budget_id: [0xD0; 32],
@@ -7721,7 +7303,6 @@ mod tests {
             max_publications: 4,
         }
     }
-
     #[test]
     fn privacy_composition_budget_is_durable_hash_chained_and_fail_closed() {
         let mut ledger = PrivacyCompositionBudgetLedgerV1::default();
@@ -7742,13 +7323,11 @@ mod tests {
             (1, 1)
         );
         ledger.validate().expect("ledger validates");
-
         let encoded = norito::to_bytes(&ledger).expect("budget ledger encodes");
         let decoded: PrivacyCompositionBudgetLedgerV1 =
             norito::decode_from_bytes(&encoded).expect("budget ledger decodes");
         assert_eq!(decoded, ledger);
         decoded.validate().expect("restored ledger validates");
-
         let before = ledger.clone();
         assert_eq!(
             ledger.charge(privacy_budget_policy(), [0x03; 16], 202, 1, 2),
@@ -7756,7 +7335,6 @@ mod tests {
         );
         assert_eq!(ledger, before, "failed charges must be atomic");
     }
-
     #[test]
     fn privacy_composition_budget_rejects_replay_conflict_and_tampering() {
         let mut ledger = PrivacyCompositionBudgetLedgerV1::default();
@@ -7769,7 +7347,6 @@ mod tests {
             Err(PrivacyCompositionBudgetError::DuplicateCycle)
         );
         assert_eq!(ledger, before);
-
         let mut conflicting_policy = privacy_budget_policy();
         conflicting_policy.max_publications = 3;
         assert_eq!(
@@ -7777,7 +7354,6 @@ mod tests {
             Err(PrivacyCompositionBudgetError::PolicyConflict)
         );
         assert_eq!(ledger, before);
-
         let mut tampered = ledger.clone();
         tampered.chains[0].charges[0].cumulative_epsilon_numerator = 2;
         assert_eq!(
@@ -7790,7 +7366,6 @@ mod tests {
             tampered.validate(),
             Err(PrivacyCompositionBudgetError::InvalidChargeChain)
         );
-
         let mut truncated =
             norito::to_bytes(&before).expect("encode valid privacy budget checkpoint");
         truncated.pop();
@@ -7799,7 +7374,6 @@ mod tests {
             "truncated privacy budget checkpoint must fail closed"
         );
     }
-
     fn privacy_release_record(
         cycle_start_unix: u64,
         cycle_end_unix: u64,
@@ -7850,7 +7424,6 @@ mod tests {
             record_digest: [0; 32],
         }
     }
-
     #[test]
     fn privacy_release_ledger_is_append_only_hash_chained_and_redacts_private_input() {
         let mut ledger = PrivacyReleaseLedgerV1::default();
@@ -7865,7 +7438,6 @@ mod tests {
                 first.publication_block_hash,
             ))
             .expect("append second release");
-
         assert_eq!(first.sequence, 1);
         assert_eq!(second.sequence, 2);
         assert_eq!(second.previous_record_digest, Some(first.record_digest));
@@ -7876,7 +7448,6 @@ mod tests {
                 .expect("decode release ledger");
         assert_eq!(restored, ledger);
         assert!(!format!("{:?}", ledger.records[0]).contains(&hex::encode([0x41; 32])));
-
         let mut delay_ledger = PrivacyReleaseLedgerV1::default();
         let delay_first = delay_ledger
             .append(privacy_release_record(100, 200, 0x41, None))
@@ -7891,7 +7462,6 @@ mod tests {
                 .expect_err("publish delay is immutable for a query lineage"),
             PrivacyReleaseLedgerErrorV1::InvalidRecord
         );
-
         let mut tampered = ledger;
         tampered.records[0].private_source_digest[0] ^= 1;
         assert_eq!(
@@ -7899,7 +7469,6 @@ mod tests {
             Err(PrivacyReleaseLedgerErrorV1::InvalidRecord)
         );
     }
-
     #[test]
     fn privacy_cycle_prf_request_binds_policy_and_exact_window() {
         let config = privacy_config();
@@ -7918,7 +7487,6 @@ mod tests {
             window,
         )
         .expect("canonical PRF request");
-
         assert_eq!(request.version(), PRIVACY_CYCLE_PRF_REQUEST_VERSION_V1);
         assert_eq!(request.query_id(), config.query_id);
         assert_eq!(request.policy_digest(), [0xC0; 32]);
@@ -7928,7 +7496,6 @@ mod tests {
         );
         assert_eq!(request.cycle_start_unix(), 100);
         assert_eq!(request.cycle_end_unix(), 200);
-
         let other_policy = PrivacyCyclePrfRequestV1::new(
             config.query_id,
             [0xC1; 32],
@@ -7976,12 +7543,10 @@ mod tests {
             Err(PrivacyCyclePrfRequestErrorV1::MissingQueryId)
         );
     }
-
     #[test]
     fn privacy_aggregate_publishes_commitment_not_runtime_noise_material() {
         let events = vec![privacy_event("event-a", 110), privacy_event("event-b", 120)];
         let config = privacy_config();
-
         let first = build_privacy_aggregates_from_source_events(
             100,
             200,
@@ -7998,7 +7563,6 @@ mod tests {
             &events,
         )
         .expect("rebuild aggregate");
-
         assert_eq!(first, second);
         assert_eq!(first.len(), 1);
         let aggregate = &first[0];
@@ -8020,7 +7584,6 @@ mod tests {
                 .any(|window| window == [0x5A; 32].as_slice()),
             "runtime threshold-PRF output must not enter the public aggregate"
         );
-
         let changed = build_privacy_aggregates_from_source_events(
             100,
             200,
@@ -8034,7 +7597,6 @@ mod tests {
             "the opaque public commitment must bind the runtime PRF output"
         );
     }
-
     #[test]
     fn privacy_cycle_rejects_wrong_prf_binding_and_commitment_without_logging_output() {
         let events = vec![privacy_event("event-a", 110), privacy_event("event-b", 120)];
@@ -8065,7 +7627,6 @@ mod tests {
             ),
             Err(PrivacyAggregateWorkerError::CyclePrfBindingMismatch)
         );
-
         let mut wrong_commitment = privacy_prf_input([0x5A; 32]);
         wrong_commitment.commitment.commitment[0] ^= 1;
         assert_eq!(
@@ -8078,7 +7639,6 @@ mod tests {
             ),
             Err(PrivacyAggregateWorkerError::CyclePrfCommitmentMismatch)
         );
-
         let input = privacy_prf_input([0x5A; 32]);
         let debug = format!("{input:?}");
         assert!(debug.contains("output: \"<redacted>\""));
@@ -8087,7 +7647,6 @@ mod tests {
             "runtime threshold-PRF output must not enter Debug/log output"
         );
     }
-
     #[test]
     fn privacy_aggregate_is_byte_identical_across_input_orderings() {
         let events = vec![
@@ -8113,14 +7672,12 @@ mod tests {
             &reversed,
         )
         .expect("build second replica output");
-
         assert_eq!(first, second);
         assert_eq!(
             norito::to_bytes(&first).expect("encode first replica output"),
             norito::to_bytes(&second).expect("encode second replica output")
         );
     }
-
     #[test]
     fn suppression_only_release_has_no_randomness_commitment() {
         let mut config = privacy_config();
@@ -8148,13 +7705,11 @@ mod tests {
             ModerationPrivacyNoiseSourceV1::SuppressionOnly
         );
     }
-
     #[test]
     fn privacy_aggregate_rejects_sampler_resource_exhaustion_policy() {
         let mut config = privacy_config();
         config.privacy.epsilon_numerator = Some(1);
         config.privacy.epsilon_denominator = Some(10_000);
-
         let error = build_privacy_aggregates_from_source_events(
             100,
             200,
@@ -8163,7 +7718,6 @@ mod tests {
             &[privacy_event("event-a", 110), privacy_event("event-b", 120)],
         )
         .expect_err("unbounded expected sampler work must fail");
-
         assert_eq!(
             error,
             PrivacyAggregateWorkerError::NoiseParametersExceedResourceLimit {
@@ -8173,7 +7727,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn privacy_aggregate_rejects_caller_supplied_randomness_commitment() {
         let mut config = privacy_config();
@@ -8181,7 +7734,6 @@ mod tests {
             key: MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1.to_string(),
             value: hex::encode([0x11; 32]),
         }];
-
         let error = config
             .validate()
             .expect_err("worker-owned commitment key must be reserved");
@@ -8191,7 +7743,6 @@ mod tests {
                 key: MODERATION_PRIVACY_RANDOMNESS_COMMITMENT_METADATA_KEY_V1,
             }
         );
-
         let mut missing_policy = privacy_config();
         missing_policy.policy_digest = [0; 32];
         assert_eq!(
@@ -8201,7 +7752,6 @@ mod tests {
             })
         );
     }
-
     #[test]
     fn concrete_source_entry_adapters_derive_valid_entries() {
         let gar_receipt = gar_receipt_fixture(GarEnforcementActionV1::LegalHold);
@@ -8216,7 +7766,6 @@ mod tests {
             *blake3::hash(&norito::to_bytes(&gar_receipt).expect("encode gar")).as_bytes()
         );
         gar_entry.validate().expect("gar entry validates");
-
         let moderation_event = moderation_governance_event_fixture();
         let moderation_entry = moderation_ballot_governance_event_source_entry(&moderation_event)
             .expect("moderation source entry");
@@ -8234,7 +7783,6 @@ mod tests {
         moderation_entry
             .validate()
             .expect("moderation entry validates");
-
         let report = appeal_finance_report_fixture();
         let report_entry =
             appeal_finance_report_source_entry(&report).expect("appeal report source entry");
@@ -8247,7 +7795,6 @@ mod tests {
         report_entry
             .validate()
             .expect("appeal report entry validates");
-
         let receipt = appeal_finance_settlement_receipt_fixture();
         let receipt_entry = appeal_finance_settlement_receipt_source_entry(&receipt)
             .expect("appeal settlement source entry");
@@ -8281,7 +7828,6 @@ mod tests {
         receipt_entry
             .validate()
             .expect("appeal settlement entry validates");
-
         let mut tampered_receipt = receipt.clone();
         tampered_receipt.appeal_finance_policy_digest[0] ^= 0x01;
         let tampered_entry = appeal_finance_settlement_receipt_source_entry(&tampered_receipt)
@@ -8289,7 +7835,6 @@ mod tests {
         assert_ne!(tampered_entry.policy_digest, receipt_entry.policy_digest);
         assert_ne!(tampered_entry.payload_digest, receipt_entry.payload_digest);
         assert_ne!(tampered_entry.summary_digest, receipt_entry.summary_digest);
-
         let mut changed_height_receipt = receipt.clone();
         changed_height_receipt.finalized_block_height += 1;
         let changed_height_entry =
@@ -8304,7 +7849,6 @@ mod tests {
             changed_height_entry.summary_digest,
             receipt_entry.summary_digest
         );
-
         let mut changed_hash_receipt = receipt;
         changed_hash_receipt.finalized_block_hash[0] ^= 0x01;
         let changed_hash_entry =
@@ -8320,7 +7864,6 @@ mod tests {
             receipt_entry.summary_digest
         );
     }
-
     #[test]
     fn finalized_reserve_event_adapter_binds_exact_committed_cursor_and_payload() {
         let event = reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::MovementApproved);
@@ -8335,7 +7878,6 @@ mod tests {
                 .expect("provider transition")
                 .as_bytes(),
         );
-
         assert_eq!(
             entry.event_id,
             format!(
@@ -8394,7 +7936,6 @@ mod tests {
             )
         );
         entry.validate().expect("derived entry validates");
-
         let replica =
             reserve_finalized_event_source_entry(&event).expect("second replica source entry");
         assert_eq!(replica, entry);
@@ -8403,7 +7944,6 @@ mod tests {
             entry.encode(),
             "replicas must emit byte-identical source entries"
         );
-
         let mut competing_fork = event.clone();
         competing_fork.block_hash[0] ^= 0xFF;
         let competing_entry = reserve_finalized_event_source_entry(&competing_fork)
@@ -8411,7 +7951,6 @@ mod tests {
         assert_ne!(competing_entry.event_id, entry.event_id);
         assert_ne!(competing_entry.payload_digest, entry.payload_digest);
     }
-
     #[test]
     fn finalized_reserve_event_adapter_maps_policy_and_appeal_kinds() {
         let policy = reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::PolicyActivated);
@@ -8428,7 +7967,6 @@ mod tests {
                 hex::encode(policy.event.policy_digest())
             )
         );
-
         for kind in [
             SorafsReserveLedgerEventKind::AppealAccepted,
             SorafsReserveLedgerEventKind::AppealRejected,
@@ -8442,12 +7980,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn finalized_reserve_event_adapter_rejects_malformed_native_invariants() {
         let base = reserve_finalized_event_fixture(SorafsReserveLedgerEventKind::MovementApproved);
         let mut malformed = Vec::new();
-
         let mut zero_sequence = base.clone();
         zero_sequence.sequence = 0;
         malformed.push(zero_sequence);
@@ -8457,66 +7993,55 @@ mod tests {
         let mut zero_hash = base.clone();
         zero_hash.block_hash = [0; 32];
         malformed.push(zero_hash);
-
         let mut zero_policy =
             reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
         zero_policy.policy_digest = [0; 32];
         malformed.push(reserve_finalized_event_from_wire_fixture(&zero_policy));
-
         let mut sub_second_timestamp =
             reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
         sub_second_timestamp.occurred_at_unix_ms = 999;
         malformed.push(reserve_finalized_event_from_wire_fixture(
             &sub_second_timestamp,
         ));
-
         let mut missing_provider =
             reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
         missing_provider.provider_id = None;
         malformed.push(reserve_finalized_event_from_wire_fixture(&missing_provider));
-
         let mut zero_provider =
             reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
         zero_provider.provider_id =
             Some(iroha_data_model::sorafs::capacity::ProviderId::new([0; 32]));
         malformed.push(reserve_finalized_event_from_wire_fixture(&zero_provider));
-
         let mut zero_revision =
             reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
         zero_revision.provider_revision = 0;
         malformed.push(reserve_finalized_event_from_wire_fixture(&zero_revision));
-
         let mut missing_stage =
             reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
         missing_stage.resulting_lifecycle_stage = None;
         malformed.push(reserve_finalized_event_from_wire_fixture(&missing_stage));
-
         let mut missing_operation =
             reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
         missing_operation.operation_id = None;
         malformed.push(reserve_finalized_event_from_wire_fixture(
             &missing_operation,
         ));
-
         let mut zero_operation =
             reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::MovementApproved);
         zero_operation.operation_id = Some([0; 32]);
         malformed.push(reserve_finalized_event_from_wire_fixture(&zero_operation));
-
         let mut unexpected_operation =
             reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::RentCharged);
         unexpected_operation.operation_id = Some([0xE5; 32]);
         malformed.push(reserve_finalized_event_from_wire_fixture(
             &unexpected_operation,
         ));
-
         let mut malformed_policy =
             reserve_ledger_event_wire_fixture(SorafsReserveLedgerEventKind::PolicyActivated);
         malformed_policy.provider_id = Some(iroha_data_model::sorafs::capacity::ProviderId::new(
             [0xF6; 32],
         ));
         malformed.push(reserve_finalized_event_from_wire_fixture(&malformed_policy));
-
         for event in malformed {
             assert!(
                 matches!(
@@ -8527,7 +8052,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn concrete_source_entry_adapters_reject_invalid_sources() {
         let mut receipt = gar_receipt_fixture(GarEnforcementActionV1::GeoFence);
@@ -8538,7 +8062,6 @@ mod tests {
             err,
             TransparencySourceEntryAdapterError::InvalidGarReceipt { .. }
         ));
-
         let mut event = moderation_governance_event_fixture();
         event.tally = None;
         let err = moderation_ballot_governance_event_source_entry(&event)
@@ -8547,7 +8070,6 @@ mod tests {
             err,
             TransparencySourceEntryAdapterError::InvalidModerationEvent { .. }
         ));
-
         let mut report = appeal_finance_report_fixture();
         report.report_id = [0; 16];
         let err = appeal_finance_report_source_entry(&report)
@@ -8556,7 +8078,6 @@ mod tests {
             err,
             TransparencySourceEntryAdapterError::InvalidAppealFinanceReport { .. }
         ));
-
         let mut zero_height = appeal_finance_settlement_receipt_fixture();
         zero_height.finalized_block_height = 0;
         let mut zero_hash = appeal_finance_settlement_receipt_fixture();
@@ -8570,7 +8091,6 @@ mod tests {
             ));
         }
     }
-
     #[test]
     fn transparency_ledger_source_entries_build_sorted_ledger_entries() {
         let cycle_id = *b"cycle-src-test01";
@@ -8611,7 +8131,6 @@ mod tests {
             ],
         )
         .expect("build source ledger entries");
-
         assert_eq!(entries.len(), 4);
         assert_eq!(
             entries
@@ -8646,6 +8165,5 @@ mod tests {
         assert_eq!(ids.len(), entries.len());
         assert!(!ids.contains(&[0; 16]));
     }
-
     include!("transparency_proof_token_tests.rs");
 }

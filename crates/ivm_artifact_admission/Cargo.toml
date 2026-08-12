@@ -8,7 +8,7 @@ license = "Apache-2.0"
 repository.workspace = true
 
 [lib]
-crate-type = ["rlib", "cdylib"]
+crate-type = ["rlib"]
 
 [dependencies]
 hex = { workspace = true, features = ["alloc"] }
@@ -19,9 +19,8 @@ kotodama_lang = { path = "../kotodama_lang" }
 norito = { path = "../norito", default-features = false, features = ["node-codec"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# `ivm_abi` reaches getrandom 0.2 through the data-model crypto surface. The
-# admission path itself never samples randomness, but wasm32-unknown-unknown
-# still needs the browser backend selected for that transitive crate to link.
+# These declarations remain lock-constrained until the workspace lockfile is
+# intentionally regenerated; native builds do not select them.
 getrandom = { version = "0.2.17", features = ["js"] }
 getrandom_03 = { package = "getrandom", version = "0.3.4", features = ["wasm_js"] }
 getrandom_04 = { package = "getrandom", version = "0.4.3", features = ["wasm_js"] }

@@ -195,12 +195,8 @@ impl PredicateJson {
     }
 
     fn sort_in_place(&mut self) {
-        stable_insertion_sort_by(&mut self.equals, |left, right| {
-            left.field.cmp(&right.field)
-        });
-        stable_insertion_sort_by(&mut self.r#in, |left, right| {
-            left.field.cmp(&right.field)
-        });
+        stable_insertion_sort_by(&mut self.equals, |left, right| left.field.cmp(&right.field));
+        stable_insertion_sort_by(&mut self.r#in, |left, right| left.field.cmp(&right.field));
         stable_insertion_sort_by(&mut self.exists, |left, right| left.cmp(right));
     }
 
@@ -380,9 +376,7 @@ impl PredicateJson {
 fn stable_insertion_sort_by<T>(values: &mut [T], compare: impl Fn(&T, &T) -> core::cmp::Ordering) {
     for index in 1..values.len() {
         let mut current = index;
-        while current > 0
-            && compare(&values[current], &values[current - 1]).is_lt()
-        {
+        while current > 0 && compare(&values[current], &values[current - 1]).is_lt() {
             values.swap(current, current - 1);
             current -= 1;
         }
@@ -719,9 +713,8 @@ mod tests {
         let denied = norito::core::with_decode_limits(
             norito::DecodeLimits::new(64, 4 * 1_024, 256, 1, 16),
             || {
-                PredicateJson::try_from_owned_value(value()).map_err(|error| {
-                    norito::core::Error::Message(error.to_string())
-                })
+                PredicateJson::try_from_owned_value(value())
+                    .map_err(|error| norito::core::Error::Message(error.to_string()))
             },
         );
         assert!(denied.is_err());
@@ -731,18 +724,14 @@ mod tests {
     fn execution_scope_checks_candidate_body_and_restores_legacy_path() {
         let value = norito::json!({"id": "alice", "metadata": {"rank": 7}});
         let canonical = json::to_json(&value).expect("canonical JSON");
-        let admitted = with_bounded_predicate_json_execution(
-            canonical.len(),
-            8 * 1_024,
-            || predicate_json_value_for_execution(&value),
-        );
+        let admitted = with_bounded_predicate_json_execution(canonical.len(), 8 * 1_024, || {
+            predicate_json_value_for_execution(&value)
+        });
         assert_eq!(admitted, Some(value.clone()));
 
-        let denied = with_bounded_predicate_json_execution(
-            canonical.len() - 1,
-            8 * 1_024,
-            || predicate_json_value_for_execution(&value),
-        );
+        let denied = with_bounded_predicate_json_execution(canonical.len() - 1, 8 * 1_024, || {
+            predicate_json_value_for_execution(&value)
+        });
         assert!(denied.is_none());
         assert_eq!(predicate_json_value_for_execution(&value), Some(value));
     }

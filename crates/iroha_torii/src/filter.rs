@@ -248,6 +248,7 @@ fn parse_filter_expr(
     filter_expr_from_value(val)
 }
 
+#[allow(unsafe_code)]
 fn admitted_filter_vec<T>(capacity: usize) -> Result<Vec<T>, norito::json::Error> {
     let requested = capacity
         .checked_mul(core::mem::size_of::<T>())
@@ -263,8 +264,8 @@ fn admitted_filter_vec<T>(capacity: usize) -> Result<Vec<T>, norito::json::Error
     // is rejected before ownership, and the returned vector starts empty so
     // only later successful pushes create initialized elements for `Drop`.
     let allocation = unsafe { std::alloc::alloc(layout) };
-    let allocation = core::ptr::NonNull::new(allocation)
-        .ok_or(norito::json::Error::AllocationFailed)?;
+    let allocation =
+        core::ptr::NonNull::new(allocation).ok_or(norito::json::Error::AllocationFailed)?;
     Ok(unsafe { Vec::from_raw_parts(allocation.as_ptr().cast::<T>(), 0, capacity) })
 }
 
@@ -780,18 +781,11 @@ mod tests {
         const ENTRIES: usize = 17;
         let bytes = ENTRIES * core::mem::size_of::<u64>();
         let limits = |allocated| {
-            norito::DecodeLimits::new(
-                usize::MAX,
-                usize::MAX,
-                usize::MAX,
-                allocated,
-                usize::MAX,
-            )
+            norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, allocated, usize::MAX)
         };
-        let (values, usage) =
-            norito::core::with_decode_limits_measured(limits(bytes), || {
-                admitted_filter_vec::<u64>(ENTRIES)
-            });
+        let (values, usage) = norito::core::with_decode_limits_measured(limits(bytes), || {
+            admitted_filter_vec::<u64>(ENTRIES)
+        });
         let values = values.expect("exact filter destination budget");
         assert_eq!(values.capacity(), ENTRIES);
         assert_eq!(usage.total_allocated_bytes(), bytes);

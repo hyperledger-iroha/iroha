@@ -1,0 +1,14 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  let payload = b"\x01\x02\x03";
+  let _bad = crypto::vrf::verify(
+    message: payload,
+    proof: payload,
+    public_key: payload,
+    variant: 1,
+  );
+}
+
+}

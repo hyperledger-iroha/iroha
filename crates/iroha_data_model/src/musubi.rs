@@ -40,7 +40,6 @@ use crate::{
         },
     },
 };
-
 /// Musubi registry schema version shipped by the first release.
 pub const MUSUBI_REGISTRY_VERSION_V1: u8 = 1;
 /// Typed artifact-descriptor schema version shipped by the first release.
@@ -200,7 +199,6 @@ pub const MUSUBI_MAX_SEARCH_QUERY_BYTES_V1: usize = 256;
 pub const MUSUBI_MAX_SEARCH_QUERY_TERMS_V1: usize = 16;
 /// Maximum UTF-8 byte length of one normalized discovery term.
 pub const MUSUBI_MAX_SEARCH_TERM_BYTES_V1: usize = 64;
-
 /// Validate a canonical Musubi source or complete bundle path set under the portable V1 policy.
 ///
 /// The caller supplies path components rather than platform paths. Every component must already
@@ -246,7 +244,6 @@ where
     if canonical_paths.is_empty() {
         return Err(musubi_portable_path_error());
     }
-
     canonical_paths.sort();
     if canonical_paths.windows(2).any(|pair| {
         pair[0] == pair[1]
@@ -255,7 +252,6 @@ where
     }) {
         return Err(musubi_portable_path_error());
     }
-
     let mut folded_paths = canonical_paths
         .iter()
         .map(|path| musubi_portable_collision_key_v1(path))
@@ -270,7 +266,6 @@ where
     }
     Ok(())
 }
-
 fn validate_musubi_portable_component_v1(component: &str) -> Result<(), ParseError> {
     if component.is_empty()
         || component == "."
@@ -290,7 +285,6 @@ fn validate_musubi_portable_component_v1(component: &str) -> Result<(), ParseErr
     }
     Ok(())
 }
-
 fn normalize_musubi_portable_component_v1(component: &str) -> Result<String, ParseError> {
     let mut output = String::with_capacity(component.len());
     let mut segment = String::new();
@@ -314,14 +308,12 @@ fn normalize_musubi_portable_component_v1(component: &str) -> Result<String, Par
     flush(&mut segment, &mut output)?;
     Ok(output)
 }
-
 fn musubi_portable_collision_key_v1(path: &str) -> String {
     path.chars()
         .flat_map(char::to_uppercase)
         .flat_map(char::to_lowercase)
         .collect()
 }
-
 fn musubi_path_is_reserved_component_v1(component: &str) -> bool {
     let basename = component.split('.').next().unwrap_or(component);
     if ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "CLOCK$"]
@@ -337,7 +329,6 @@ fn musubi_path_is_reserved_component_v1(component: &str) -> bool {
     }
     false
 }
-
 const fn musubi_path_is_bidi_control_v1(character: char) -> bool {
     matches!(
         character,
@@ -348,11 +339,9 @@ const fn musubi_path_is_bidi_control_v1(character: char) -> bool {
             | '\u{2066}'..='\u{2069}'
     )
 }
-
 fn musubi_portable_path_error() -> ParseError {
     ParseError::new("Musubi portable path set is invalid or noncanonical")
 }
-
 /// Domain used to derive an [`ArchiveId`] from canonical Norito bytes.
 pub const MUSUBI_ARCHIVE_ID_DOMAIN_V1: &[u8] = b"iroha.musubi.archive-id.v1";
 /// Domain used to derive immutable release digests.
@@ -379,7 +368,7 @@ pub const MUSUBI_PROVIDER_BUNDLE_ATTESTATION_DIGEST_DOMAIN_V1: &[u8] =
 /// Domain used to commit one sorted provider/digest attestation set.
 pub const MUSUBI_PROVIDER_BUNDLE_ATTESTATION_SET_DIGEST_DOMAIN_V1: &[u8] =
     b"iroha.musubi.provider-bundle-attestation-set.digest.v1";
-
+#[cfg(test)]
 fn validate_musubi_account_id_canonical_bytes_v1(encoded: &[u8]) -> Result<(), ParseError> {
     if encoded.is_empty() || encoded.len() > MUSUBI_MAX_ACCOUNT_ID_CANONICAL_BYTES_V1 {
         return Err(ParseError::new(
@@ -388,7 +377,6 @@ fn validate_musubi_account_id_canonical_bytes_v1(encoded: &[u8]) -> Result<(), P
     }
     Ok(())
 }
-
 /// Validate the canonical Norito byte bound shared by all Musubi V1 account identities.
 ///
 /// # Errors
@@ -404,7 +392,6 @@ pub fn validate_musubi_account_id_v1(account_id: &AccountId) -> Result<(), Parse
     }
     Ok(())
 }
-
 fn validate_musubi_approval_signature_v1<T>(
     public_key: &PublicKey,
     signature: &SignatureOf<T>,
@@ -424,7 +411,6 @@ fn validate_musubi_approval_signature_v1<T>(
     }
     Ok(())
 }
-
 fn parse_clean(raw: &str, empty: &'static str, invalid: &'static str) -> Result<(), ParseError> {
     if raw.is_empty() {
         return Err(ParseError::new(empty));
@@ -434,7 +420,6 @@ fn parse_clean(raw: &str, empty: &'static str, invalid: &'static str) -> Result<
     }
     Ok(())
 }
-
 fn parse_u64_identifier(raw: &str) -> Result<u64, ParseError> {
     if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
         return Err(ParseError::new(
@@ -449,11 +434,9 @@ fn parse_u64_identifier(raw: &str) -> Result<u64, ParseError> {
     raw.parse()
         .map_err(|_| ParseError::new("Musubi numeric version identifier overflows u64"))
 }
-
 fn digest_is_zero(bytes: &[u8; 32]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
 }
-
 fn domain_hash(domain: &[u8], encoded: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(
@@ -470,20 +453,16 @@ fn domain_hash(domain: &[u8], encoded: &[u8]) -> [u8; 32] {
     hasher.update(encoded);
     *hasher.finalize().as_bytes()
 }
-
 struct Blake3Writer<'a>(&'a mut blake3::Hasher);
-
 impl io::Write for Blake3Writer<'_> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.0.update(bytes);
         Ok(bytes.len())
     }
-
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
 }
-
 fn domain_hash_value<T: norito::core::NoritoSerialize>(domain: &[u8], value: &T) -> [u8; 32] {
     let encoded_len = norito::codec::encode_adaptive_into(value, &mut io::sink())
         .expect("Musubi canonical hash preflight must serialize");
@@ -507,7 +486,6 @@ fn domain_hash_value<T: norito::core::NoritoSerialize>(domain: &[u8], value: &T)
     );
     *hasher.finalize().as_bytes()
 }
-
 fn domain_signing_hash<T: Encode>(domain: &[u8], payload: &T) -> HashOf<T> {
     let encoded_len = norito::codec::encode_adaptive_into(payload, &mut io::sink())
         .expect("Musubi signing-hash preflight must serialize");
@@ -534,7 +512,6 @@ fn domain_signing_hash<T: Encode>(domain: &[u8], payload: &T) -> HashOf<T> {
     .expect("Musubi signing hash writer is infallible");
     HashOf::from_untyped_unchecked(hash)
 }
-
 fn validate_ascii_kebab(raw: &str, maximum: usize, label: &'static str) -> Result<(), ParseError> {
     parse_clean(raw, label, label)?;
     if raw.len() > maximum
@@ -549,12 +526,10 @@ fn validate_ascii_kebab(raw: &str, maximum: usize, label: &'static str) -> Resul
     }
     Ok(())
 }
-
 /// Canonical human-facing namespace text resolved through a namespace binding.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MusubiNamespaceV1(String);
-
 impl MusubiNamespaceV1 {
     /// Parse a dataspace-root or domain-qualified namespace.
     ///
@@ -565,13 +540,11 @@ impl MusubiNamespaceV1 {
     pub fn new(raw: &str) -> Result<Self, ParseError> {
         raw.parse()
     }
-
     /// Return canonical namespace text.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
     /// Validate namespace text obtained through decoding.
     ///
     /// # Errors
@@ -581,13 +554,11 @@ impl MusubiNamespaceV1 {
     pub fn validate(&self) -> Result<(), ParseError> {
         Self::from_str(&self.0).map(|_| ())
     }
-
     /// Return the optional domain segment.
     #[must_use]
     pub fn domain_segment(&self) -> Option<&str> {
         self.0.split_once('.').map(|(domain, _)| domain)
     }
-
     /// Return the human-facing dataspace segment.
     #[must_use]
     pub fn dataspace_segment(&self) -> &str {
@@ -596,10 +567,8 @@ impl MusubiNamespaceV1 {
             .map_or(self.0.as_str(), |(_, dataspace)| dataspace)
     }
 }
-
 impl FromStr for MusubiNamespaceV1 {
     type Err = ParseError;
-
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         parse_clean(
             raw,
@@ -630,13 +599,11 @@ impl FromStr for MusubiNamespaceV1 {
         Ok(Self(canonical))
     }
 }
-
 impl fmt::Display for MusubiNamespaceV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
-
 /// Structural package scope within the stable home dataspace.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -650,7 +617,6 @@ pub enum MusubiPackageScopeV1 {
     /// Package belongs to a domain in the dataspace.
     Domain(Name),
 }
-
 /// Immutable binding from public namespace text to stable structural identity.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -665,7 +631,6 @@ pub struct MusubiNamespaceBindingV1 {
     /// Monotonic namespace-owner generation used to bind delegations.
     pub generation: u64,
 }
-
 impl MusubiNamespaceBindingV1 {
     /// Validate that namespace text and structural scope agree.
     ///
@@ -688,7 +653,6 @@ impl MusubiNamespaceBindingV1 {
             )),
         }
     }
-
     /// Validate this binding against the authoritative SNS/domain ownership generation.
     ///
     /// Core calls this when registering the immutable binding. Later ownership changes do not
@@ -711,7 +675,6 @@ impl MusubiNamespaceBindingV1 {
         }
         Ok(())
     }
-
     /// Domain-separated digest of the immutable binding.
     #[must_use]
     pub fn digest(&self) -> MusubiNamespaceBindingDigestV1 {
@@ -721,12 +684,10 @@ impl MusubiNamespaceBindingV1 {
         ))
     }
 }
-
 /// Canonical package-name segment.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MusubiPackageNameV1(String);
-
 impl MusubiPackageNameV1 {
     /// Parse a lowercase ASCII kebab package name.
     ///
@@ -736,13 +697,11 @@ impl MusubiPackageNameV1 {
     pub fn new(raw: &str) -> Result<Self, ParseError> {
         raw.parse()
     }
-
     /// Return the canonical name.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
     /// Validate package-name text obtained through decoding.
     ///
     /// # Errors
@@ -752,10 +711,8 @@ impl MusubiPackageNameV1 {
         Self::from_str(&self.0).map(|_| ())
     }
 }
-
 impl FromStr for MusubiPackageNameV1 {
     type Err = ParseError;
-
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         validate_ascii_kebab(
             raw,
@@ -765,13 +722,11 @@ impl FromStr for MusubiPackageNameV1 {
         Ok(Self(raw.to_owned()))
     }
 }
-
 impl fmt::Display for MusubiPackageNameV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
-
 /// Stable structural package identifier; namespace aliases are not embedded.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -784,7 +739,6 @@ pub struct MusubiPackageIdV1 {
     /// Package name inside the scope.
     pub name: MusubiPackageNameV1,
 }
-
 impl MusubiPackageIdV1 {
     /// Construct a structural package identifier.
     #[must_use]
@@ -799,7 +753,6 @@ impl MusubiPackageIdV1 {
             name,
         }
     }
-
     /// Validate the structural package identity recursively.
     ///
     /// # Errors
@@ -809,7 +762,6 @@ impl MusubiPackageIdV1 {
         self.name.validate()
     }
 }
-
 impl fmt::Display for MusubiPackageIdV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.scope {
@@ -824,7 +776,6 @@ impl fmt::Display for MusubiPackageIdV1 {
         }
     }
 }
-
 /// User-facing package selector resolved through an immutable namespace binding.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -835,7 +786,6 @@ pub struct MusubiPackageSelectorV1 {
     /// Package name in that namespace.
     pub name: MusubiPackageNameV1,
 }
-
 impl MusubiPackageSelectorV1 {
     /// Validate both canonical selector components.
     ///
@@ -847,10 +797,8 @@ impl MusubiPackageSelectorV1 {
         self.name.validate()
     }
 }
-
 impl FromStr for MusubiPackageSelectorV1 {
     type Err = ParseError;
-
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         let (namespace, name) = raw.split_once('/').ok_or_else(|| {
             ParseError::new("Musubi package selector must use `namespace/package`")
@@ -866,13 +814,11 @@ impl FromStr for MusubiPackageSelectorV1 {
         })
     }
 }
-
 impl fmt::Display for MusubiPackageSelectorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}/{}", self.namespace, self.name)
     }
 }
-
 /// One canonical `SemVer` prerelease identifier.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -886,7 +832,6 @@ pub enum MusubiPrereleaseIdentifierV1 {
     /// ASCII alphanumeric/hyphen identifier containing a non-digit.
     AlphaNumeric(String),
 }
-
 impl MusubiPrereleaseIdentifierV1 {
     fn parse(raw: &str) -> Result<Self, ParseError> {
         if raw.is_empty() || raw.len() > MUSUBI_MAX_PRERELEASE_IDENTIFIER_BYTES_V1 {
@@ -907,7 +852,6 @@ impl MusubiPrereleaseIdentifierV1 {
         }
         Ok(Self::AlphaNumeric(raw.to_owned()))
     }
-
     /// Validate a decoded prerelease identifier recursively.
     ///
     /// # Errors
@@ -935,7 +879,6 @@ impl MusubiPrereleaseIdentifierV1 {
         }
     }
 }
-
 impl Ord for MusubiPrereleaseIdentifierV1 {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
@@ -946,13 +889,11 @@ impl Ord for MusubiPrereleaseIdentifierV1 {
         }
     }
 }
-
 impl PartialOrd for MusubiPrereleaseIdentifierV1 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 impl fmt::Display for MusubiPrereleaseIdentifierV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -961,7 +902,6 @@ impl fmt::Display for MusubiPrereleaseIdentifierV1 {
         }
     }
 }
-
 /// Structured canonical semantic version. Build metadata is forbidden in V1.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -976,7 +916,6 @@ pub struct MusubiVersionV1 {
     /// Ordered prerelease identifiers.
     pub prerelease: Vec<MusubiPrereleaseIdentifierV1>,
 }
-
 impl MusubiVersionV1 {
     /// Construct and validate a structured version.
     ///
@@ -999,7 +938,6 @@ impl MusubiVersionV1 {
         value.validate()?;
         Ok(value)
     }
-
     /// Validate consensus bounds.
     ///
     /// # Errors
@@ -1016,21 +954,17 @@ impl MusubiVersionV1 {
             .iter()
             .try_for_each(MusubiPrereleaseIdentifierV1::validate)
     }
-
     /// Whether this is a prerelease version.
     #[must_use]
     pub fn is_prerelease(&self) -> bool {
         !self.prerelease.is_empty()
     }
-
     fn same_core(&self, other: &Self) -> bool {
         (self.major, self.minor, self.patch) == (other.major, other.minor, other.patch)
     }
 }
-
 impl FromStr for MusubiVersionV1 {
     type Err = ParseError;
-
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         parse_clean(
             raw,
@@ -1067,7 +1001,6 @@ impl FromStr for MusubiVersionV1 {
         )
     }
 }
-
 impl fmt::Display for MusubiVersionV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}.{}.{}", self.major, self.minor, self.patch)?;
@@ -1080,7 +1013,6 @@ impl fmt::Display for MusubiVersionV1 {
         Ok(())
     }
 }
-
 impl Ord for MusubiVersionV1 {
     fn cmp(&self, other: &Self) -> Ordering {
         self.major
@@ -1096,13 +1028,11 @@ impl Ord for MusubiVersionV1 {
             )
     }
 }
-
 impl PartialOrd for MusubiVersionV1 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
-
 /// Comparator operator used by a canonical comma-separated requirement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1122,7 +1052,6 @@ pub enum MusubiComparatorOpV1 {
     /// Equal.
     Equal,
 }
-
 /// One exact comparator in a canonical requirement AST.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1133,7 +1062,6 @@ pub struct MusubiVersionComparatorV1 {
     /// Complete structured version.
     pub version: MusubiVersionV1,
 }
-
 /// Payload of a `MAJOR.MINOR.*` wildcard requirement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1144,7 +1072,6 @@ pub struct MusubiMinorWildcardV1 {
     /// Required minor component.
     pub minor: u64,
 }
-
 /// Canonical Cargo-style version requirement AST.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1168,7 +1095,6 @@ pub enum MusubiVersionReqV1 {
     /// Canonical conjunction of comma-separated comparators.
     Comparators(Vec<MusubiVersionComparatorV1>),
 }
-
 impl MusubiVersionReqV1 {
     /// Parse and canonicalize a requirement.
     ///
@@ -1179,7 +1105,6 @@ impl MusubiVersionReqV1 {
     pub fn new(raw: &str) -> Result<Self, ParseError> {
         raw.parse()
     }
-
     /// Validate AST bounds.
     ///
     /// # Errors
@@ -1225,7 +1150,6 @@ impl MusubiVersionReqV1 {
         }
         Ok(())
     }
-
     /// Return whether a release satisfies this requirement using Cargo prerelease eligibility.
     #[must_use]
     pub fn matches(&self, version: &MusubiVersionV1) -> bool {
@@ -1253,7 +1177,6 @@ impl MusubiVersionReqV1 {
             }),
         }
     }
-
     fn prerelease_eligible(&self, candidate: &MusubiVersionV1) -> bool {
         let explicitly_names_core =
             |version: &MusubiVersionV1| version.is_prerelease() && version.same_core(candidate);
@@ -1268,10 +1191,8 @@ impl MusubiVersionReqV1 {
         }
     }
 }
-
 impl FromStr for MusubiVersionReqV1 {
     type Err = ParseError;
-
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         parse_clean(
             raw,
@@ -1330,7 +1251,6 @@ impl FromStr for MusubiVersionReqV1 {
         Ok(Self::Caret(raw.parse()?))
     }
 }
-
 impl fmt::Display for MusubiVersionReqV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1361,11 +1281,9 @@ impl fmt::Display for MusubiVersionReqV1 {
         }
     }
 }
-
 fn starts_comparator(raw: &str) -> bool {
     raw.starts_with(['>', '<', '='])
 }
-
 fn parse_comparator(raw: &str) -> Result<MusubiVersionComparatorV1, ParseError> {
     let (op, version) = if let Some(version) = raw.strip_prefix(">=") {
         (MusubiComparatorOpV1::GreaterOrEqual, version)
@@ -1387,7 +1305,6 @@ fn parse_comparator(raw: &str) -> Result<MusubiVersionComparatorV1, ParseError> 
         version: version.parse()?,
     })
 }
-
 fn caret_core_is_compatible(base: &MusubiVersionV1, candidate: &MusubiVersionV1) -> bool {
     if base.major > 0 {
         candidate.major == base.major
@@ -1400,11 +1317,9 @@ fn caret_core_is_compatible(base: &MusubiVersionV1, candidate: &MusubiVersionV1)
             }
     }
 }
-
 fn tilde_core_is_compatible(base: &MusubiVersionV1, candidate: &MusubiVersionV1) -> bool {
     candidate.major == base.major && candidate.minor == base.minor
 }
-
 macro_rules! digest_type {
     ($name:ident, $doc:literal) => {
         #[doc = $doc]
@@ -1428,20 +1343,17 @@ macro_rules! digest_type {
             #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
             pub  [u8; 32],
         );
-
         impl $name {
             /// Construct from exact digest bytes.
             #[must_use]
             pub const fn new(bytes: [u8; 32]) -> Self {
                 Self(bytes)
             }
-
             /// Access exact digest bytes.
             #[must_use]
             pub const fn as_bytes(&self) -> &[u8; 32] {
                 &self.0
             }
-
             /// Whether this is the forbidden all-zero sentinel.
             #[must_use]
             pub fn is_zero(&self) -> bool {
@@ -1450,7 +1362,6 @@ macro_rules! digest_type {
         }
     };
 }
-
 digest_type!(
     ArchiveId,
     "Domain-separated identity of a canonical Musubi archive commitment."
@@ -1496,7 +1407,6 @@ digest_type!(
     "Digest binding an enacted Parliament action."
 );
 digest_type!(MusubiQueryHashV1, "Digest of canonical query parameters.");
-
 /// Complete source-archive commitment whose domain-separated Norito hash is [`ArchiveId`].
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1527,7 +1437,6 @@ pub struct MusubiArchiveCommitmentV1 {
     /// Number of chunks.
     pub chunk_count: u32,
 }
-
 impl MusubiArchiveCommitmentV1 {
     /// Validate first-release archive bounds and non-inert commitments.
     ///
@@ -1574,16 +1483,13 @@ impl MusubiArchiveCommitmentV1 {
         }
         Ok(())
     }
-
     /// Compute the domain-separated `ArchiveId` from canonical Norito bytes.
     #[must_use]
     pub fn archive_id(&self) -> ArchiveId {
         ArchiveId(domain_hash_value(MUSUBI_ARCHIVE_ID_DOMAIN_V1, self))
     }
 }
-
 include!("musubi/bundle_file_decode.rs");
-
 /// Typed descriptor parsed and verified by every provider before serving a bundle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(decode_from_slice)]
@@ -1603,7 +1509,6 @@ pub struct MusubiArtifactDescriptorV1 {
     /// Number of regular files in the positive selected source set.
     pub source_file_count: u32,
 }
-
 impl MusubiArtifactDescriptorV1 {
     /// Decode one exact canonical artifact-descriptor bundle file under the shared V1 limits.
     ///
@@ -1620,7 +1525,6 @@ impl MusubiArtifactDescriptorV1 {
             "Musubi artifact descriptor bundle file is invalid or out of bounds",
         )
     }
-
     /// Construct and validate a first-release artifact descriptor.
     ///
     /// # Errors
@@ -1645,7 +1549,6 @@ impl MusubiArtifactDescriptorV1 {
         descriptor.validate()?;
         Ok(descriptor)
     }
-
     /// Validate descriptor version, digest bindings, and first-release source bounds.
     ///
     /// # Errors
@@ -1669,7 +1572,6 @@ impl MusubiArtifactDescriptorV1 {
         Ok(())
     }
 }
-
 /// Immutable archive-registration projection independent of renewable locations.
 ///
 /// Unlike [`MusubiArchiveRecordV1`], this projection deliberately excludes the
@@ -1691,7 +1593,6 @@ pub struct MusubiArchiveRegistrationProjectionV1 {
     /// Finalized block height of registration.
     pub registered_at_height: u64,
 }
-
 impl MusubiArchiveRegistrationProjectionV1 {
     /// Validate the immutable archive identity and its exact ingress binding.
     ///
@@ -1709,7 +1610,6 @@ impl MusubiArchiveRegistrationProjectionV1 {
         )
     }
 }
-
 fn validate_archive_registration_fields(
     archive_id: ArchiveId,
     commitment: &MusubiArchiveCommitmentV1,
@@ -1733,7 +1633,6 @@ fn validate_archive_registration_fields(
     }
     Ok(())
 }
-
 /// Authoritative archive registration and its mutable renewable-location directory.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1754,7 +1653,6 @@ pub struct MusubiArchiveRecordV1 {
     /// Sorted identities of current non-retired locations for exact bounded lookup.
     pub location_ids: Vec<MusubiArchiveLocationIdV1>,
 }
-
 impl MusubiArchiveRecordV1 {
     /// Return the immutable registration fields reproducible by every later archive read.
     #[must_use]
@@ -1767,7 +1665,6 @@ impl MusubiArchiveRecordV1 {
             registered_at_height: self.registered_at_height,
         }
     }
-
     /// Validate the commitment and its derived identity.
     ///
     /// # Errors
@@ -1797,7 +1694,6 @@ impl MusubiArchiveRecordV1 {
         Ok(())
     }
 }
-
 /// Lifecycle of one renewable `SoraFS` archive location.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1815,7 +1711,6 @@ pub enum MusubiArchiveLocationStateV1 {
     /// Retired from future reads.
     Retired,
 }
-
 /// Canonical ordered key for one renewable archive location.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1826,7 +1721,6 @@ pub struct MusubiArchiveLocationKeyV1 {
     /// Stable identity within the archive's bounded location set.
     pub location_id: MusubiArchiveLocationIdV1,
 }
-
 impl MusubiArchiveLocationKeyV1 {
     /// Construct the canonical ordered location key.
     #[must_use]
@@ -1837,7 +1731,6 @@ impl MusubiArchiveLocationKeyV1 {
         }
     }
 }
-
 /// Fixed-size reverse-index value from one `SoraFS` pin manifest to one Musubi location.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1850,7 +1743,6 @@ pub struct MusubiPinLocationReferenceV1 {
     /// Whether this is the location's current pin rather than an immutable reuse tombstone.
     pub active: bool,
 }
-
 impl MusubiPinLocationReferenceV1 {
     /// Validate non-inert pin and location identities.
     ///
@@ -1870,9 +1762,7 @@ impl MusubiPinLocationReferenceV1 {
         Ok(())
     }
 }
-
 include!("musubi/replication_order_lifecycle.rs");
-
 /// Ordered provider/location composite key for exact provider-prefix lifecycle refreshes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1883,7 +1773,6 @@ pub struct MusubiProviderLocationKeyV1 {
     /// Musubi location containing verified evidence from this provider.
     pub location: MusubiArchiveLocationKeyV1,
 }
-
 impl MusubiProviderLocationKeyV1 {
     /// Construct an exact provider/location reverse-index key.
     #[must_use]
@@ -1893,7 +1782,6 @@ impl MusubiProviderLocationKeyV1 {
             location,
         }
     }
-
     /// Return inclusive ordered bounds covering only one provider's location references.
     #[must_use]
     pub fn provider_range(provider_id: ProviderId) -> std::ops::RangeInclusive<Self> {
@@ -1905,7 +1793,6 @@ impl MusubiProviderLocationKeyV1 {
         };
         Self::new(provider_id, location(0))..=Self::new(provider_id, location(u8::MAX))
     }
-
     /// Validate non-inert provider and location identities.
     ///
     /// # Errors
@@ -1923,7 +1810,6 @@ impl MusubiProviderLocationKeyV1 {
         Ok(())
     }
 }
-
 /// Renewable `SoraFS` pin and replication-order binding for an archive.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -1952,14 +1838,12 @@ pub struct MusubiArchiveLocationV1 {
     /// Current location state.
     pub state: MusubiArchiveLocationStateV1,
 }
-
 impl MusubiArchiveLocationV1 {
     /// Return the canonical ordered storage key.
     #[must_use]
     pub const fn key(&self) -> MusubiArchiveLocationKeyV1 {
         MusubiArchiveLocationKeyV1::new(self.archive_id, self.location_id)
     }
-
     /// Validate provider, renewal, and revision bounds.
     ///
     /// # Errors
@@ -1987,7 +1871,6 @@ impl MusubiArchiveLocationV1 {
         Ok(())
     }
 }
-
 /// Fresh-selection availability distinct from yank and Parliament takedown state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2003,7 +1886,6 @@ pub enum MusubiStorageAvailabilityV1 {
     /// No healthy location is currently known.
     Unavailable,
 }
-
 /// Finalized aggregate availability projection for an archive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2025,7 +1907,6 @@ pub struct MusubiArchiveAvailabilityV1 {
     /// Universal resolver-index revision.
     pub index_revision: u64,
 }
-
 impl MusubiArchiveAvailabilityV1 {
     /// Validate aggregate consistency and first-release bounds.
     ///
@@ -2063,7 +1944,6 @@ impl MusubiArchiveAvailabilityV1 {
         Ok(())
     }
 }
-
 /// Bounded universal reverse references from one archive to exact published releases.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2074,7 +1954,6 @@ pub struct MusubiArchiveReverseReferencesV1 {
     /// Sorted exact releases whose immutable manifests reference the archive.
     pub releases: Vec<MusubiReleaseIdV1>,
 }
-
 impl MusubiArchiveReverseReferencesV1 {
     /// Validate identity, cardinality, and canonical exact-release order.
     ///
@@ -2096,7 +1975,6 @@ impl MusubiArchiveReverseReferencesV1 {
             .try_for_each(MusubiReleaseIdV1::validate)
     }
 }
-
 /// Exact structural release identifier.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2107,14 +1985,12 @@ pub struct MusubiReleaseIdV1 {
     /// Exact structured version.
     pub version: MusubiVersionV1,
 }
-
 impl MusubiReleaseIdV1 {
     /// Construct an exact release identifier.
     #[must_use]
     pub const fn new(package: MusubiPackageIdV1, version: MusubiVersionV1) -> Self {
         Self { package, version }
     }
-
     /// Validate package identity and structured version recursively.
     ///
     /// # Errors
@@ -2125,13 +2001,11 @@ impl MusubiReleaseIdV1 {
         self.version.validate()
     }
 }
-
 impl fmt::Display for MusubiReleaseIdV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}@{}", self.package, self.version)
     }
 }
-
 /// Kotodama source edition accepted by Musubi V1.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2143,7 +2017,6 @@ pub enum MusubiKotodamaEditionV1 {
     /// First-release Kotodama edition.
     V1,
 }
-
 /// Exact IVM ABI binding embedded in every release and lock node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2155,7 +2028,6 @@ pub struct MusubiAbiBindingV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub abi_hash: [u8; 32],
 }
-
 impl MusubiAbiBindingV1 {
     /// Construct the only first-release ABI binding.
     ///
@@ -2171,7 +2043,6 @@ impl MusubiAbiBindingV1 {
             abi_hash,
         })
     }
-
     /// Validate the fixed ABI version and non-inert hash.
     ///
     /// # Errors
@@ -2186,7 +2057,6 @@ impl MusubiAbiBindingV1 {
         Ok(())
     }
 }
-
 /// Normal dependency requirement in a published manifest.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2199,7 +2069,6 @@ pub struct MusubiDependencyReqV1 {
     /// Published `SemVer` range.
     pub requirement: MusubiVersionReqV1,
 }
-
 impl MusubiDependencyReqV1 {
     /// Validate structural identity and the canonical version requirement.
     ///
@@ -2211,7 +2080,6 @@ impl MusubiDependencyReqV1 {
         self.requirement.validate()
     }
 }
-
 /// Dependency kind recorded in consumer-owned exact locks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2225,7 +2093,6 @@ pub enum MusubiDependencyKindV1 {
     /// Root-local development dependency; never propagates transitively.
     Development,
 }
-
 macro_rules! bounded_text_type {
     ($name:ident, $maximum:expr, $doc:literal, $error:literal) => {
         #[doc = $doc]
@@ -2234,7 +2101,6 @@ macro_rules! bounded_text_type {
         )]
         #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
         pub struct $name(String);
-
         impl $name {
             /// Parse canonical bounded text.
             ///
@@ -2249,13 +2115,11 @@ macro_rules! bounded_text_type {
                 }
                 Ok(Self(raw.to_owned()))
             }
-
             /// Return the validated text.
             #[must_use]
             pub fn as_str(&self) -> &str {
                 &self.0
             }
-
             /// Validate text obtained through decoding.
             ///
             /// # Errors
@@ -2265,15 +2129,12 @@ macro_rules! bounded_text_type {
                 Self::new(&self.0).map(|_| ())
             }
         }
-
         impl FromStr for $name {
             type Err = ParseError;
-
             fn from_str(raw: &str) -> Result<Self, Self::Err> {
                 Self::new(raw)
             }
         }
-
         impl fmt::Display for $name {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str(&self.0)
@@ -2281,7 +2142,6 @@ macro_rules! bounded_text_type {
         }
     };
 }
-
 bounded_text_type!(
     MusubiDescriptionV1,
     4_096,
@@ -2300,12 +2160,10 @@ bounded_text_type!(
     "Bounded governance, yank, or takedown reason.",
     "Musubi reason is empty, noncanonical, or exceeds 1024 bytes"
 );
-
 /// Canonical lowercase keyword.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MusubiKeywordV1(String);
-
 impl MusubiKeywordV1 {
     /// Validate keyword text obtained through decoding.
     ///
@@ -2316,22 +2174,18 @@ impl MusubiKeywordV1 {
         Self::from_str(&self.0).map(|_| ())
     }
 }
-
 impl FromStr for MusubiKeywordV1 {
     type Err = ParseError;
-
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         validate_ascii_kebab(raw, 64, "Musubi keyword must be lowercase ASCII kebab text")?;
         Ok(Self(raw.to_owned()))
     }
 }
-
 impl fmt::Display for MusubiKeywordV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
-
 /// Immutable descriptive metadata committed by a release digest.
 #[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2348,14 +2202,12 @@ pub struct MusubiReleaseMetadataV1 {
     /// Sorted unique keywords.
     pub keywords: Vec<MusubiKeywordV1>,
 }
-
 impl MusubiReleaseMetadataV1 {
     /// Canonicalize keyword set order.
     pub fn canonicalize(&mut self) {
         self.keywords.sort();
         self.keywords.dedup();
     }
-
     /// Validate keyword bounds and canonical ordering.
     ///
     /// # Errors
@@ -2385,7 +2237,6 @@ impl MusubiReleaseMetadataV1 {
         self.keywords.iter().try_for_each(MusubiKeywordV1::validate)
     }
 }
-
 /// Finalized universal registry snapshot used by a resolution graph.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2399,7 +2250,6 @@ pub struct MusubiRegistrySnapshotV1 {
     /// Resolver sparse-index revision.
     pub index_revision: u64,
 }
-
 impl MusubiRegistrySnapshotV1 {
     /// Validate a non-inert finalized anchor and revision.
     ///
@@ -2417,7 +2267,6 @@ impl MusubiRegistrySnapshotV1 {
         Ok(())
     }
 }
-
 /// Parent-local exact edge in a publication proof or verification lock.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2434,7 +2283,6 @@ pub struct MusubiExactDependencyEdgeV1 {
     /// Exact selected release.
     pub selected: MusubiReleaseIdV1,
 }
-
 impl MusubiExactDependencyEdgeV1 {
     /// Validate structural identity and requirement satisfaction.
     ///
@@ -2456,7 +2304,6 @@ impl MusubiExactDependencyEdgeV1 {
         Ok(())
     }
 }
-
 /// Exact immutable dependency node used in publication verification.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2477,7 +2324,6 @@ pub struct MusubiVerificationNodeV1 {
     /// Sorted parent-local exact edges with unique parent-local aliases.
     pub dependencies: Vec<MusubiExactDependencyEdgeV1>,
 }
-
 impl MusubiVerificationNodeV1 {
     /// Validate node commitments, dependency bounds, and edge order.
     ///
@@ -2512,7 +2358,6 @@ impl MusubiVerificationNodeV1 {
             .try_for_each(MusubiExactDependencyEdgeV1::validate)
     }
 }
-
 /// Normalized, secret-free exact verification lock packaged with a release.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(decode_from_slice)]
@@ -2531,11 +2376,9 @@ pub struct MusubiVerificationLockV1 {
     /// Sorted exact dependency nodes; the root itself is not included.
     pub nodes: Vec<MusubiVerificationNodeV1>,
 }
-
 impl MusubiVerificationLockV1 {
     /// Fixed verification-lock schema label.
     pub const SCHEMA: &'static str = "musubi-verification-lock";
-
     /// Decode one exact canonical verification-lock bundle file under the shared V1 limits.
     ///
     /// # Errors
@@ -2551,7 +2394,6 @@ impl MusubiVerificationLockV1 {
             "Musubi verification lock bundle file is invalid or out of bounds",
         )
     }
-
     /// Canonicalize all set-like vectors.
     pub fn canonicalize(&mut self) {
         self.root_dependencies.sort();
@@ -2565,7 +2407,6 @@ impl MusubiVerificationLockV1 {
         self.nodes
             .dedup_by(|left, right| left.release == right.release);
     }
-
     /// Validate schema, graph bounds, uniqueness, reachability, cycles, and depth.
     ///
     /// # Errors
@@ -2617,7 +2458,6 @@ impl MusubiVerificationLockV1 {
         }
         validate_exact_graph(&self.root_dependencies, &self.nodes)
     }
-
     /// Compute the normalized lock digest.
     #[must_use]
     pub fn digest(&self) -> MusubiVerificationLockDigestV1 {
@@ -2627,7 +2467,6 @@ impl MusubiVerificationLockV1 {
         ))
     }
 }
-
 fn validate_exact_graph(
     root_dependencies: &[MusubiExactDependencyEdgeV1],
     nodes: &[MusubiVerificationNodeV1],
@@ -2668,14 +2507,12 @@ fn validate_exact_graph(
         complete.insert(release);
         Ok(())
     }
-
     let by_release = nodes
         .iter()
         .map(|node| (&node.release, node))
         .collect::<BTreeMap<_, _>>();
     let mut complete = BTreeSet::new();
     let mut visiting = BTreeSet::new();
-
     for dependency in root_dependencies {
         visit(
             &dependency.selected,
@@ -2692,7 +2529,6 @@ fn validate_exact_graph(
     }
     Ok(())
 }
-
 /// Bounded exact resolution proof supplied at publication.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2703,7 +2539,6 @@ pub struct MusubiResolutionProofV1 {
     /// Normalized exact verification lock.
     pub lock: MusubiVerificationLockV1,
 }
-
 impl MusubiResolutionProofV1 {
     /// Validate the finalized anchor and exact graph.
     ///
@@ -2715,7 +2550,6 @@ impl MusubiResolutionProofV1 {
         self.lock.validate()
     }
 }
-
 /// Canonical archive-independent release semantics embedded in the Musubi bundle.
 ///
 /// The archive identity is deliberately absent: the canonical bundle embeds this
@@ -2743,7 +2577,6 @@ pub struct MusubiSemanticReleaseManifestV1 {
     /// Digest of the packaged normalized verification lock.
     pub verification_lock_digest: MusubiVerificationLockDigestV1,
 }
-
 impl MusubiSemanticReleaseManifestV1 {
     /// Decode one exact canonical semantic-release bundle file under the shared V1 limits.
     ///
@@ -2760,7 +2593,6 @@ impl MusubiSemanticReleaseManifestV1 {
             "Musubi semantic release bundle file is invalid or out of bounds",
         )
     }
-
     /// Canonicalize every set-like semantic field before packaging.
     pub fn canonicalize(&mut self) {
         self.dependencies.sort();
@@ -2769,7 +2601,6 @@ impl MusubiSemanticReleaseManifestV1 {
         self.exports.dedup();
         self.metadata.canonicalize();
     }
-
     /// Validate archive-independent release semantics and canonical ordering.
     ///
     /// # Errors
@@ -2787,7 +2618,6 @@ impl MusubiSemanticReleaseManifestV1 {
             self.verification_lock_digest,
         )
     }
-
     /// Validate this semantic release against its complete normalized verification lock.
     ///
     /// This is the shared bundle/publication boundary: both values must be independently valid,
@@ -2814,7 +2644,6 @@ impl MusubiSemanticReleaseManifestV1 {
             verification_lock,
         )
     }
-
     /// Domain-separated digest used inside bundles, staging receipts, and provider attestations.
     #[must_use]
     pub fn semantic_digest(&self) -> MusubiSemanticReleaseDigestV1 {
@@ -2824,7 +2653,6 @@ impl MusubiSemanticReleaseManifestV1 {
         ))
     }
 }
-
 /// Immutable registry release manifest binding semantic content to one source archive.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2849,7 +2677,6 @@ pub struct MusubiReleaseManifestV1 {
     /// Digest of the packaged normalized verification lock.
     pub verification_lock_digest: MusubiVerificationLockDigestV1,
 }
-
 impl MusubiReleaseManifestV1 {
     /// Canonicalize set-like fields before publication.
     pub fn canonicalize(&mut self) {
@@ -2859,7 +2686,6 @@ impl MusubiReleaseManifestV1 {
         self.exports.dedup();
         self.metadata.canonicalize();
     }
-
     /// Project the canonical archive-independent manifest embedded in the bundle.
     #[must_use]
     pub fn semantic_manifest(&self) -> MusubiSemanticReleaseManifestV1 {
@@ -2874,19 +2700,16 @@ impl MusubiReleaseManifestV1 {
             verification_lock_digest: self.verification_lock_digest,
         }
     }
-
     /// Compute the archive-independent bundle/receipt/provider-attestation digest.
     #[must_use]
     pub fn semantic_digest(&self) -> MusubiSemanticReleaseDigestV1 {
         streaming::semantic_release_digest(self)
     }
-
     /// Explicit alias for [`Self::semantic_digest`].
     #[must_use]
     pub fn semantic_release_digest(&self) -> MusubiSemanticReleaseDigestV1 {
         self.semantic_digest()
     }
-
     /// Validate first-release release-manifest invariants.
     ///
     /// # Errors
@@ -2909,7 +2732,6 @@ impl MusubiReleaseManifestV1 {
         }
         Ok(())
     }
-
     fn validate_verification_lock(
         &self,
         verification_lock: &MusubiVerificationLockV1,
@@ -2925,14 +2747,12 @@ impl MusubiReleaseManifestV1 {
             verification_lock,
         )
     }
-
     /// Domain-separated immutable release digest.
     #[must_use]
     pub fn release_digest(&self) -> MusubiReleaseDigestV1 {
         MusubiReleaseDigestV1(domain_hash_value(MUSUBI_RELEASE_DIGEST_DOMAIN_V1, self))
     }
 }
-
 /// Publication payload that binds a release to its independently validated exact proof.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2943,7 +2763,6 @@ pub struct MusubiPublicationV1 {
     /// Exact dependency proof and packaged verification lock.
     pub resolution: MusubiResolutionProofV1,
 }
-
 impl MusubiPublicationV1 {
     /// Validate release, proof root, lock digest, and direct dependency selections.
     ///
@@ -2958,7 +2777,6 @@ impl MusubiPublicationV1 {
             .validate_verification_lock(&self.resolution.lock)
     }
 }
-
 /// Exact, replay-resistant request binding accepted by authenticated `SoraFS` seed ingress.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -2984,7 +2802,6 @@ pub struct MusubiSeedIngressReceiptBindingV1 {
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
     pub nonce: [u8; 32],
 }
-
 impl MusubiSeedIngressReceiptBindingV1 {
     /// Validate every exact deployment, actor, commitment, and anti-replay binding.
     ///
@@ -3012,7 +2829,6 @@ impl MusubiSeedIngressReceiptBindingV1 {
         Ok(())
     }
 }
-
 /// Canonical expiring statement signed by an authenticated `SoraFS` seed-ingress broker.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3027,7 +2843,6 @@ pub struct MusubiSeedIngressReceiptPayloadV1 {
     /// Inclusive receipt expiry in Unix milliseconds.
     pub expires_at_ms: u64,
 }
-
 impl MusubiSeedIngressReceiptPayloadV1 {
     /// Validate the closed schema, exact request binding, and bounded positive lifetime.
     ///
@@ -3052,14 +2867,12 @@ impl MusubiSeedIngressReceiptPayloadV1 {
         }
         Ok(())
     }
-
     /// Compute the domain-separated typed hash signed by the ingress broker controller.
     #[must_use]
     pub fn signing_hash(&self) -> HashOf<Self> {
         domain_signing_hash(MUSUBI_SEED_INGRESS_RECEIPT_SIGNATURE_DOMAIN_V1, self)
     }
 }
-
 /// One ingress-broker controller approval over an exact staging receipt payload.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3070,7 +2883,6 @@ pub struct MusubiSeedIngressReceiptApprovalV1 {
     /// Signature over [`MusubiSeedIngressReceiptPayloadV1::signing_hash`].
     pub signature: SignatureOf<MusubiSeedIngressReceiptPayloadV1>,
 }
-
 /// Signed, expiring `SoraFS` seed-ingress receipt used by resumable publication.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3081,7 +2893,6 @@ pub struct MusubiSeedIngressReceiptV1 {
     /// Canonically ordered approvals from the ingress broker controller.
     pub approvals: Vec<MusubiSeedIngressReceiptApprovalV1>,
 }
-
 impl MusubiSeedIngressReceiptV1 {
     /// Validate the payload and bounded, strictly ordered controller approval set.
     ///
@@ -3106,7 +2917,6 @@ impl MusubiSeedIngressReceiptV1 {
             validate_musubi_approval_signature_v1(&approval.public_key, &approval.signature)
         })
     }
-
     /// Verify the exact request binding, receipt validity window, and broker controller quorum.
     ///
     /// # Errors
@@ -3127,7 +2937,6 @@ impl MusubiSeedIngressReceiptV1 {
                 "Musubi seed-ingress receipt binding or validity window does not match",
             ));
         }
-
         let signing_hash = self.payload.signing_hash();
         match self.payload.binding.ingress_broker.controller() {
             AccountController::Single(public_key) => {
@@ -3180,7 +2989,6 @@ impl MusubiSeedIngressReceiptV1 {
         }
     }
 }
-
 /// Exact parsed-bundle and finalized-replication completion bound by one provider.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3215,7 +3023,6 @@ pub struct MusubiProviderBundleVerificationBindingV1 {
     /// Digest of the normalized source tree parsed from the bundle.
     pub source_tree_digest: MusubiContentDigestV1,
 }
-
 impl MusubiProviderBundleVerificationBindingV1 {
     /// Validate exact provider authority, finalized completion, and parsed bundle commitments.
     ///
@@ -3253,7 +3060,6 @@ impl MusubiProviderBundleVerificationBindingV1 {
         Ok(())
     }
 }
-
 /// Canonical statement that a provider parsed and verified a bundle before finalized completion.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3264,7 +3070,6 @@ pub struct MusubiProviderBundleVerificationPayloadV1 {
     /// Exact deployment, bundle, provider, and finalized completion binding.
     pub binding: MusubiProviderBundleVerificationBindingV1,
 }
-
 impl MusubiProviderBundleVerificationPayloadV1 {
     /// Validate the closed schema and every exact attestation binding.
     ///
@@ -3280,14 +3085,12 @@ impl MusubiProviderBundleVerificationPayloadV1 {
         }
         self.binding.validate()
     }
-
     /// Compute the domain-separated typed hash signed by the provider-owner controller.
     #[must_use]
     pub fn signing_hash(&self) -> HashOf<Self> {
         domain_signing_hash(MUSUBI_PROVIDER_BUNDLE_ATTESTATION_SIGNATURE_DOMAIN_V1, self)
     }
 }
-
 /// One provider-owner controller approval over an exact bundle verification payload.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3298,7 +3101,6 @@ pub struct MusubiProviderBundleVerificationApprovalV1 {
     /// Signature over [`MusubiProviderBundleVerificationPayloadV1::signing_hash`].
     pub signature: SignatureOf<MusubiProviderBundleVerificationPayloadV1>,
 }
-
 /// Signed provider proof that the canonical bundle was parsed and verified before completion.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3309,7 +3111,6 @@ pub struct MusubiProviderBundleVerificationAttestationV1 {
     /// Canonically ordered approvals from the provider-owner controller.
     pub approvals: Vec<MusubiProviderBundleVerificationApprovalV1>,
 }
-
 impl MusubiProviderBundleVerificationAttestationV1 {
     /// Validate the payload and bounded, strictly ordered controller approval set.
     ///
@@ -3344,7 +3145,6 @@ impl MusubiProviderBundleVerificationAttestationV1 {
             validate_musubi_approval_signature_v1(&approval.public_key, &approval.signature)
         })
     }
-
     /// Return the deterministic immutable storage identity selected by the signed binding.
     #[must_use]
     pub const fn key(&self) -> MusubiProviderBundleAttestationKeyV1 {
@@ -3354,7 +3154,6 @@ impl MusubiProviderBundleVerificationAttestationV1 {
             provider_id: self.payload.binding.provider_id,
         }
     }
-
     /// Compute the domain-separated digest of the complete canonical attestation.
     #[must_use]
     pub fn digest(&self) -> MusubiProviderBundleAttestationDigestV1 {
@@ -3363,7 +3162,6 @@ impl MusubiProviderBundleVerificationAttestationV1 {
             self,
         ))
     }
-
     /// Return the compact provider/digest reference used by an archive-location set commitment.
     #[must_use]
     pub fn reference(&self) -> MusubiProviderBundleAttestationRefV1 {
@@ -3372,7 +3170,6 @@ impl MusubiProviderBundleVerificationAttestationV1 {
             digest: self.digest(),
         }
     }
-
     /// Verify the exact finalized completion binding and provider-owner controller quorum.
     ///
     /// # Errors
@@ -3389,7 +3186,6 @@ impl MusubiProviderBundleVerificationAttestationV1 {
                 "Musubi provider bundle verification binding does not match",
             ));
         }
-
         let signing_hash = self.payload.signing_hash();
         match self
             .payload
@@ -3446,7 +3242,6 @@ impl MusubiProviderBundleVerificationAttestationV1 {
         }
     }
 }
-
 /// Deterministic immutable identity of one provider's proof for an archive replication order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3459,7 +3254,6 @@ pub struct MusubiProviderBundleAttestationKeyV1 {
     /// Provider that completed and attested to the verification.
     pub provider_id: ProviderId,
 }
-
 impl MusubiProviderBundleAttestationKeyV1 {
     /// Validate every immutable identity component.
     ///
@@ -3478,7 +3272,6 @@ impl MusubiProviderBundleAttestationKeyV1 {
         Ok(())
     }
 }
-
 /// Compact immutable provider-attestation reference used by an archive-location set commitment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3489,7 +3282,6 @@ pub struct MusubiProviderBundleAttestationRefV1 {
     /// Digest of the complete canonical provider attestation.
     pub digest: MusubiProviderBundleAttestationDigestV1,
 }
-
 impl MusubiProviderBundleAttestationRefV1 {
     /// Validate the compact provider and digest binding.
     ///
@@ -3505,14 +3297,12 @@ impl MusubiProviderBundleAttestationRefV1 {
         Ok(())
     }
 }
-
 #[derive(Encode)]
 struct MusubiProviderBundleAttestationSetPreimageV1 {
     archive_id: ArchiveId,
     replication_order: ReplicationOrderId,
     references: Vec<MusubiProviderBundleAttestationRefV1>,
 }
-
 /// Derive the aggregate digest of an archive/order-bound, provider-sorted attestation set.
 ///
 /// # Errors
@@ -3549,7 +3339,6 @@ pub fn musubi_provider_bundle_attestation_set_digest_v1(
         &preimage.encode(),
     )))
 }
-
 /// Immutable full provider-attestation registry record addressed by its exact binding.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3566,7 +3355,6 @@ pub struct MusubiProviderBundleAttestationRecordV1 {
     /// Finalized height at which the immutable proof was registered.
     pub registered_at_height: u64,
 }
-
 impl MusubiProviderBundleAttestationRecordV1 {
     /// Validate the full proof and every redundant immutable identity binding.
     ///
@@ -3590,7 +3378,6 @@ impl MusubiProviderBundleAttestationRecordV1 {
         Ok(())
     }
 }
-
 /// Canonical, domain-separated payload authorized by a namespace owner.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3609,7 +3396,6 @@ pub struct MusubiNamespaceDelegationPayloadV1 {
     /// Last block height at which the delegation may claim a package.
     pub expires_at_height: u64,
 }
-
 impl MusubiNamespaceDelegationPayloadV1 {
     /// Validate the closed V1 payload shape.
     ///
@@ -3631,14 +3417,12 @@ impl MusubiNamespaceDelegationPayloadV1 {
         }
         Ok(())
     }
-
     /// Compute the canonical domain-separated hash signed by every owner approval.
     #[must_use]
     pub fn signing_hash(&self) -> HashOf<Self> {
         domain_signing_hash(MUSUBI_NAMESPACE_DELEGATION_SIGNATURE_DOMAIN_V1, self)
     }
 }
-
 /// One owner-controller approval of a namespace delegation payload.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3649,7 +3433,6 @@ pub struct MusubiNamespaceDelegationApprovalV1 {
     /// Signature of [`MusubiNamespaceDelegationPayloadV1::signing_hash`].
     pub signature: SignatureOf<MusubiNamespaceDelegationPayloadV1>,
 }
-
 /// Generation-bound authority to claim an absent package in one namespace.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3660,7 +3443,6 @@ pub struct MusubiNamespaceDelegationV1 {
     /// Canonically ordered owner-controller approvals.
     pub approvals: Vec<MusubiNamespaceDelegationApprovalV1>,
 }
-
 impl MusubiNamespaceDelegationV1 {
     /// Validate the payload and the bounded, strictly ordered approval set.
     ///
@@ -3685,7 +3467,6 @@ impl MusubiNamespaceDelegationV1 {
             validate_musubi_approval_signature_v1(&approval.public_key, &approval.signature)
         })
     }
-
     /// Verify a delegation against current authoritative ownership and the claiming account.
     ///
     /// The authoritative owner and generation must come from the live SNS dataspace record or
@@ -3715,7 +3496,6 @@ impl MusubiNamespaceDelegationV1 {
                 "Musubi namespace delegation does not match current authority",
             ));
         }
-
         let signing_hash = self.payload.signing_hash();
         match authoritative_owner.controller() {
             AccountController::Single(public_key) => {
@@ -3768,7 +3548,6 @@ impl MusubiNamespaceDelegationV1 {
         }
     }
 }
-
 /// Independent package governance revisions used for compare-and-set mutations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3781,7 +3560,6 @@ pub struct MusubiPackageRevisionsV1 {
     /// Archive-location revision.
     pub archive_locations: u64,
 }
-
 impl MusubiPackageRevisionsV1 {
     /// All first-release revisions begin at one.
     ///
@@ -3795,7 +3573,6 @@ impl MusubiPackageRevisionsV1 {
         Ok(())
     }
 }
-
 /// Authoritative package record stored in the stable home dataspace.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3816,7 +3593,6 @@ pub struct MusubiPackageRecordV1 {
     /// Compare-and-set revisions.
     pub revisions: MusubiPackageRevisionsV1,
 }
-
 impl MusubiPackageRecordV1 {
     /// Validate the last-owner invariant, bounds, ordering, and revisions.
     ///
@@ -3861,7 +3637,6 @@ impl MusubiPackageRecordV1 {
             .try_for_each(validate_musubi_account_id_v1)
     }
 }
-
 /// Independent permissions granted to an accepted package maintainer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3880,7 +3655,6 @@ pub struct MusubiMaintainerPermissionsV1 {
     /// May add, renew, and retire archive locations.
     pub archive_locations: bool,
 }
-
 impl MusubiMaintainerPermissionsV1 {
     /// Whether the role grants at least one capability.
     #[must_use]
@@ -3888,7 +3662,6 @@ impl MusubiMaintainerPermissionsV1 {
         !self.publish && !self.yank && !self.metadata && !self.archive_locations
     }
 }
-
 /// Accepted package member role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3902,7 +3675,6 @@ pub enum MusubiPackageRoleV1 {
     /// Maintainer with explicitly independent permissions.
     Maintainer(MusubiMaintainerPermissionsV1),
 }
-
 /// Canonical package-local ordered key for an accepted member.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3913,14 +3685,12 @@ pub struct MusubiPackageMemberKeyV1 {
     /// Accepted member account.
     pub account: AccountId,
 }
-
 impl MusubiPackageMemberKeyV1 {
     /// Construct the canonical ordered member key.
     #[must_use]
     pub const fn new(package: MusubiPackageIdV1, account: AccountId) -> Self {
         Self { package, account }
     }
-
     /// Validate the structural package and bounded account identity.
     ///
     /// # Errors
@@ -3931,7 +3701,6 @@ impl MusubiPackageMemberKeyV1 {
         validate_musubi_account_id_v1(&self.account)
     }
 }
-
 /// Accepted package member record.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3948,14 +3717,12 @@ pub struct MusubiPackageMemberV1 {
     /// Governance revision that created or last changed the member.
     pub governance_revision: u64,
 }
-
 impl MusubiPackageMemberV1 {
     /// Return the canonical ordered storage key.
     #[must_use]
     pub fn key(&self) -> MusubiPackageMemberKeyV1 {
         MusubiPackageMemberKeyV1::new(self.package.clone(), self.account.clone())
     }
-
     /// Validate role and revision.
     ///
     /// # Errors
@@ -3974,7 +3741,6 @@ impl MusubiPackageMemberV1 {
         Ok(())
     }
 }
-
 /// Invitation lifecycle; only acceptance creates package authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -3992,7 +3758,6 @@ pub enum MusubiInvitationStateV1 {
     /// Expired before acceptance.
     Expired,
 }
-
 /// Package owner/maintainer invitation bound to a governance revision.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4018,7 +3783,6 @@ pub struct MusubiMaintainerInvitationV1 {
     /// Invitation lifecycle.
     pub state: MusubiInvitationStateV1,
 }
-
 impl MusubiMaintainerInvitationV1 {
     /// Validate identity, role, and compare-and-set bounds.
     ///
@@ -4040,7 +3804,6 @@ impl MusubiMaintainerInvitationV1 {
         Ok(())
     }
 }
-
 /// Canonical package/account/invitation key for the maintainer directory.
 ///
 /// Accepted members use `invitation = None`; pending invitations use their
@@ -4057,7 +3820,6 @@ pub struct MusubiMaintainerDirectoryKeyV1 {
     /// Pending invitation identity; absent only for an accepted member.
     pub invitation: Option<MusubiInviteIdV1>,
 }
-
 impl MusubiMaintainerDirectoryKeyV1 {
     /// Construct the accepted-member directory key.
     #[must_use]
@@ -4068,7 +3830,6 @@ impl MusubiMaintainerDirectoryKeyV1 {
             invitation: None,
         }
     }
-
     /// Construct a pending-invitation directory key.
     #[must_use]
     pub const fn pending(
@@ -4082,7 +3843,6 @@ impl MusubiMaintainerDirectoryKeyV1 {
             invitation: Some(invitation),
         }
     }
-
     /// Construct a transient lower bound for an exact package-prefix range.
     #[must_use]
     pub const fn package_start(package: MusubiPackageIdV1) -> Self {
@@ -4092,7 +3852,6 @@ impl MusubiMaintainerDirectoryKeyV1 {
             invitation: None,
         }
     }
-
     /// Validate the structural package and any invitation identity.
     ///
     /// # Errors
@@ -4119,7 +3878,6 @@ impl MusubiMaintainerDirectoryKeyV1 {
         Ok(())
     }
 }
-
 /// Accepted member or pending package-governance invitation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4133,7 +3891,6 @@ pub enum MusubiMaintainerDirectoryEntryV1 {
     /// Invitation that has not created authority yet.
     PendingInvitation(MusubiMaintainerInvitationV1),
 }
-
 impl MusubiMaintainerDirectoryEntryV1 {
     /// Return the canonical package/account/invitation ordering key.
     #[must_use]
@@ -4150,7 +3907,6 @@ impl MusubiMaintainerDirectoryEntryV1 {
             ),
         }
     }
-
     /// Return the stable text key carried by finalized pagination cursors.
     #[must_use]
     pub fn cursor_key(&self) -> String {
@@ -4161,7 +3917,6 @@ impl MusubiMaintainerDirectoryEntryV1 {
             .expect("persisted Musubi maintainer directory entries always carry an account");
         maintainer_cursor_key_label_v1(&account.encode(), key.invitation.as_ref())
     }
-
     /// Validate the record and require invitations to remain pending.
     ///
     /// # Errors
@@ -4183,7 +3938,6 @@ impl MusubiMaintainerDirectoryEntryV1 {
         }
     }
 }
-
 fn maintainer_cursor_key_label_v1(
     encoded_account: &[u8],
     invitation: Option<&MusubiInviteIdV1>,
@@ -4212,7 +3966,6 @@ fn maintainer_cursor_key_label_v1(
     }
     label
 }
-
 fn maintainer_cursor_key_is_canonical_v1(raw: &str) -> bool {
     let Some((account, suffix)) = raw.split_once('|') else {
         return false;
@@ -4272,7 +4025,6 @@ fn maintainer_cursor_key_is_canonical_v1(raw: &str) -> bool {
         && is_lower_hex(invitation)
         && invitation.bytes().any(|byte| byte != b'0')
 }
-
 /// Mutable package metadata record, separate from immutable release metadata.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4289,7 +4041,6 @@ pub struct MusubiPackageMetadataRecordV1 {
     /// Finalized change height.
     pub changed_at_height: u64,
 }
-
 impl MusubiPackageMetadataRecordV1 {
     /// Validate metadata and revision.
     ///
@@ -4307,7 +4058,6 @@ impl MusubiPackageMetadataRecordV1 {
         Ok(())
     }
 }
-
 /// Reversible release-yank state, separate from immutable release content.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4327,7 +4077,6 @@ pub struct MusubiReleaseYankV1 {
     /// Compare-and-set yank revision.
     pub revision: u64,
 }
-
 impl MusubiReleaseYankV1 {
     /// Validate transition anchor and revision.
     ///
@@ -4345,7 +4094,6 @@ impl MusubiReleaseYankV1 {
         Ok(())
     }
 }
-
 /// Persisted outcome of an applied artifact takedown.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4358,7 +4106,6 @@ pub struct MusubiArtifactTakedownV1 {
     /// Finalized height where the delayed action was applied.
     pub applied_at_height: u64,
 }
-
 /// Governed artifact availability, independent of yank and replication health.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4372,7 +4119,6 @@ pub enum MusubiArtifactGovernanceStateV1 {
     /// Parliament has enacted an action-digest-bound takedown.
     TakenDown(MusubiArtifactTakedownV1),
 }
-
 impl MusubiArtifactGovernanceStateV1 {
     /// Validate any governed takedown binding.
     ///
@@ -4392,7 +4138,6 @@ impl MusubiArtifactGovernanceStateV1 {
         Ok(())
     }
 }
-
 /// Complete resolver selection state for one exact release.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4405,7 +4150,6 @@ pub struct MusubiReleaseSelectionStateV1 {
     /// Parliament takedown state.
     pub governance: MusubiArtifactGovernanceStateV1,
 }
-
 impl MusubiReleaseSelectionStateV1 {
     /// Whether a fresh resolver may select this release.
     #[must_use]
@@ -4414,7 +4158,6 @@ impl MusubiReleaseSelectionStateV1 {
             && self.storage.availability == MusubiStorageAvailabilityV1::Selectable
             && matches!(self.governance, MusubiArtifactGovernanceStateV1::Available)
     }
-
     /// Validate all independent state components.
     ///
     /// # Errors
@@ -4426,7 +4169,6 @@ impl MusubiReleaseSelectionStateV1 {
         self.governance.validate()
     }
 }
-
 /// Independent compare-and-set revisions for mutable release projections.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4437,7 +4179,6 @@ pub struct MusubiReleaseRevisionsV1 {
     /// Parliament artifact-governance revision.
     pub artifact_governance: u64,
 }
-
 impl MusubiReleaseRevisionsV1 {
     /// First-release revisions are always non-zero.
     ///
@@ -4451,7 +4192,6 @@ impl MusubiReleaseRevisionsV1 {
         Ok(())
     }
 }
-
 /// Authoritative release record; storage health remains a separate universal projection.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4472,7 +4212,6 @@ pub struct MusubiReleaseRecordV1 {
     /// Compare-and-set revisions for mutable projections.
     pub revisions: MusubiReleaseRevisionsV1,
 }
-
 impl MusubiReleaseRecordV1 {
     /// Validate immutable identity and all mutable projections recursively.
     ///
@@ -4498,19 +4237,16 @@ impl MusubiReleaseRecordV1 {
         Ok(())
     }
 }
-
 /// Canonical permanent global alias name.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct MusubiAliasNameV1(String);
-
 impl MusubiAliasNameV1 {
     /// Return canonical alias text.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
-
     /// Validate alias text obtained through decoding.
     ///
     /// # Errors
@@ -4520,10 +4256,8 @@ impl MusubiAliasNameV1 {
         Self::from_str(&self.0).map(|_| ())
     }
 }
-
 impl FromStr for MusubiAliasNameV1 {
     type Err = ParseError;
-
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
         validate_ascii_kebab(
             raw,
@@ -4533,13 +4267,11 @@ impl FromStr for MusubiAliasNameV1 {
         Ok(Self(raw.to_owned()))
     }
 }
-
 impl fmt::Display for MusubiAliasNameV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
-
 /// Prospective global-alias price policy denominated in whole XOR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4558,7 +4290,6 @@ pub struct MusubiAliasPricingPolicyV1 {
     /// Five-to-thirty-two-character alias price.
     pub length_5_to_32_xor: u64,
 }
-
 impl MusubiAliasPricingPolicyV1 {
     /// Genesis first-release prices.
     pub const GENESIS: Self = Self {
@@ -4569,7 +4300,6 @@ impl MusubiAliasPricingPolicyV1 {
         length_4_xor: 8,
         length_5_to_32_xor: 1,
     };
-
     /// Price for a validated alias.
     #[must_use]
     pub fn price_for(&self, alias: &MusubiAliasNameV1) -> u64 {
@@ -4581,7 +4311,6 @@ impl MusubiAliasPricingPolicyV1 {
             _ => self.length_5_to_32_xor,
         }
     }
-
     /// Validate a prospective non-zero policy.
     ///
     /// # Errors
@@ -4603,7 +4332,6 @@ impl MusubiAliasPricingPolicyV1 {
         Ok(())
     }
 }
-
 /// Permanent global alias registration.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4624,7 +4352,6 @@ pub struct MusubiAliasRecordV1 {
     /// Monotonic history revision; registrations begin at one.
     pub history_revision: u64,
 }
-
 impl MusubiAliasRecordV1 {
     /// Validate pricing/payment and immutable registration fields.
     ///
@@ -4647,7 +4374,6 @@ impl MusubiAliasRecordV1 {
         Ok(())
     }
 }
-
 /// Permanent alias history action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4661,7 +4387,6 @@ pub enum MusubiAliasHistoryActionV1 {
     /// Parliament recovery retarget; normal owners cannot retarget.
     ParliamentRetarget,
 }
-
 /// Canonical permanent-alias history key ordered by alias and revision.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4672,7 +4397,6 @@ pub struct MusubiAliasHistoryKeyV1 {
     /// Monotonic history revision.
     pub revision: u64,
 }
-
 impl MusubiAliasHistoryKeyV1 {
     /// Construct the canonical ordered alias-history key.
     #[must_use]
@@ -4680,7 +4404,6 @@ impl MusubiAliasHistoryKeyV1 {
         Self { alias, revision }
     }
 }
-
 /// One immutable alias-history entry.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4701,14 +4424,12 @@ pub struct MusubiAliasHistoryEntryV1 {
     /// Finalized transition height.
     pub finalized_height: u64,
 }
-
 impl MusubiAliasHistoryEntryV1 {
     /// Return the canonical ordered storage key.
     #[must_use]
     pub fn key(&self) -> MusubiAliasHistoryKeyV1 {
         MusubiAliasHistoryKeyV1::new(self.alias.clone(), self.revision)
     }
-
     /// Validate revision and action-specific fields.
     ///
     /// # Errors
@@ -4741,7 +4462,6 @@ impl MusubiAliasHistoryEntryV1 {
         Ok(())
     }
 }
-
 /// Enacted Parliament decision binding one exact Musubi action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4757,7 +4477,6 @@ pub struct MusubiGovernanceDecisionV1 {
     /// Existing mandatory execution-delay boundary.
     pub execute_after_height: u64,
 }
-
 impl MusubiGovernanceDecisionV1 {
     /// Validate replay and delay anchors.
     ///
@@ -4776,7 +4495,6 @@ impl MusubiGovernanceDecisionV1 {
         Ok(())
     }
 }
-
 /// Persisted proof that an enacted Parliament decision was consumed on-chain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4789,7 +4507,6 @@ pub struct MusubiGovernanceDecisionConsumptionV1 {
     /// Block height observed by the runtime when it consumed the decision.
     pub consumed_at_height: u64,
 }
-
 impl MusubiGovernanceDecisionConsumptionV1 {
     /// Validate the nested decision and its server-observed execution boundary.
     ///
@@ -4817,7 +4534,6 @@ impl MusubiGovernanceDecisionConsumptionV1 {
         Ok(())
     }
 }
-
 /// Payload for Parliament package-owner recovery.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4830,7 +4546,6 @@ pub struct MusubiRecoverPackageOwnersV1 {
     /// Expected governance revision.
     pub expected_revision: u64,
 }
-
 impl MusubiRecoverPackageOwnersV1 {
     /// Validate the replacement owner set and its compare-and-set revision.
     ///
@@ -4854,7 +4569,6 @@ impl MusubiRecoverPackageOwnersV1 {
             .try_for_each(validate_musubi_account_id_v1)
     }
 }
-
 /// Payload for Parliament alias recovery.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4867,7 +4581,6 @@ pub struct MusubiRetargetAliasV1 {
     /// Expected history revision.
     pub expected_revision: u64,
 }
-
 /// Payload for Parliament artifact takedown.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4880,7 +4593,6 @@ pub struct MusubiTakedownArtifactActionV1 {
     /// Current artifact-governance revision required by compare-and-set.
     pub expected_artifact_governance_revision: u64,
 }
-
 /// Payload for an enacted Musubi registry-policy replacement.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4891,7 +4603,6 @@ pub struct MusubiSetRegistryPolicyActionV1 {
     /// Current policy revision required by compare-and-set.
     pub expected_revision: u64,
 }
-
 /// Closed Parliament-only Musubi recovery and policy-replacement action.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
@@ -4909,7 +4620,6 @@ pub enum MusubiParliamentActionV1 {
     /// Prospectively replace registry admission and alias-pricing policy.
     SetRegistryPolicy(MusubiSetRegistryPolicyActionV1),
 }
-
 impl MusubiParliamentActionV1 {
     /// Validate action-specific bounds and compare-and-set revisions.
     ///
@@ -4954,7 +4664,6 @@ impl MusubiParliamentActionV1 {
         }
         Ok(())
     }
-
     /// Domain-separated digest used by the enacted decision.
     #[must_use]
     pub fn action_digest(&self) -> MusubiGovernanceActionDigestV1 {
@@ -4964,13 +4673,9 @@ impl MusubiParliamentActionV1 {
         ))
     }
 }
-
 include!("musubi/registry_policy_types.rs");
-
 include!("musubi/registry_policy_impl.rs");
-
 include!("musubi/query_models.rs");
-
 #[cfg(test)]
 mod tests {
     include!("musubi_tests.rs");

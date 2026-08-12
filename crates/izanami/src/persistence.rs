@@ -69,6 +69,7 @@ const CONFIG_FILE_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 compile_error!("Izanami persistence requires a defined no-follow open flag on this Unix target");
 
 #[derive(Clone, Debug, Encode, Decode)]
+#[norito(decode_from_slice)]
 struct StoredArgs {
     peers: u32,
     faulty: u32,

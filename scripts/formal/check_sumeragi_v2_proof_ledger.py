@@ -32,9 +32,7 @@ CROSS_TOOL_EVIDENCE_SCHEMA_VERSION = 4
 PRODUCTION_TRACE_EXTRACTION_EVIDENCE_SCHEMA_VERSION = 2
 PRODUCTION_TRACE_EXTRACTION_EVIDENCE_MAX_BYTES = 256 * 1024
 PRODUCTION_TRACE_EXTRACTION_COMPONENT_MAX_BYTES = 64 * 1024 * 1024
-PRODUCTION_TRACE_EXTRACTION_THEOREM = (
-    "sumeragi-v2-production-in-flight-first-release-trace-extraction"
-)
+PRODUCTION_TRACE_EXTRACTION_THEOREM = "sumeragi-v2-production-in-flight-first-release-trace-extraction"
 PRODUCTION_TRACE_EXTRACTION_CANONICAL_ENCODING = "utf8-json-sort-keys-compact-lf-v1"
 
 # Every required model action now has a complete production extraction seam.
@@ -42,32 +40,19 @@ PRODUCTION_TRACE_EXTRACTION_CANONICAL_ENCODING = "utf8-json-sort-keys-compact-lf
 # action without a source binding must fail the exact partition check below.
 PRODUCTION_TRACE_EXTRACTION_OPEN_MODEL_ACTIONS = ()
 PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS = (
-    "SelectQueuePlanV4Conjunction",
-    "FsyncReservationV5",
-    "ActivateKura",
-    "FanoutFromProducer",
-    "ServeLateBody",
-    "PersistExecutionInput",
-    "AuthorizeReady",
-    "SignReady",
-    "PersistReadyQc",
-    "Crash",
-    "Recover",
-    "RecoverReservationSnapshot",
-    "ReleaseReservationDirect",
-    "RehydrateLocalKuraCustody",
-    "LaneCommit",
-    "ApplyCarrier",
-    "PersistReservationCommitted",
-    "PersistPlanTombstone",
-    "ForgetReservationCommit",
-    "PersistKuraRetirement",
-    "AdvanceReleasePendingPrefix",
-    "PrepareReservationRelease",
-    "AdvanceReleasedPrefix",
-    "CompleteReservationRelease",
-    "RestoreReleasedFifo",
-    "ForgetReservationRelease",
+    "SelectQueuePlanV4Conjunction", "FsyncReservationV5",
+    "ActivateKura", "FanoutFromProducer",
+    "ServeLateBody", "PersistExecutionInput",
+    "AuthorizeReady", "SignReady",
+    "PersistReadyQc", "Crash",
+    "Recover", "RecoverReservationSnapshot",
+    "ReleaseReservationDirect", "RehydrateLocalKuraCustody",
+    "LaneCommit", "ApplyCarrier",
+    "PersistReservationCommitted", "PersistPlanTombstone",
+    "ForgetReservationCommit", "PersistKuraRetirement",
+    "AdvanceReleasePendingPrefix", "PrepareReservationRelease",
+    "AdvanceReleasedPrefix", "CompleteReservationRelease",
+    "RestoreReleasedFifo", "ForgetReservationRelease",
     "RepairPostCarrierEvidence",
 )
 
@@ -80,32 +65,20 @@ PRODUCTION_TRACE_EXTRACTION_REQUIRED_MODEL_ACTIONS = (
 # promoted to a complete trace theorem.
 
 _CHECKER_COMPONENT_FILES = (
-    "sumeragi_v2_proof_ledger_async_contracts.py",
-    "sumeragi_v2_proof_ledger_contract_types.py",
-    "sumeragi_v2_proof_ledger_cross_tool_contracts.py",
-    "sumeragi_v2_proof_ledger_proof_inventory.py",
-    "sumeragi_v2_proof_ledger_serve_contracts.py",
-    "sumeragi_v2_proof_ledger_historical_contracts.py",
-    "sumeragi_v2_proof_ledger_quantitative_contracts.py",
-    "sumeragi_v2_proof_ledger_exact_property_contracts.py",
-    "sumeragi_v2_proof_ledger_supporting_theorem_contracts.py",
-    "sumeragi_v2_proof_ledger_proof_token_contracts.py",
-    "sumeragi_v2_proof_ledger_source_seal_contracts.py",
-    "sumeragi_v2_proof_ledger_production_trace_contracts.py",
-    "sumeragi_v2_proof_ledger_serviced_candidate_contracts.py",
-    "sumeragi_v2_proof_ledger_reply_writer_deadline_formal_contracts.py",
-    "sumeragi_v2_proof_ledger_reply_writer_deadline_production_contracts.py",
-    "sumeragi_v2_proof_ledger_merge_runtime_config_contracts.py",
-    "sumeragi_v2_proof_ledger_shared_tlc_result_contracts.py",
-    "sumeragi_v2_proof_ledger_locked_body_reproposal_contracts.py",
-    "sumeragi_v2_proof_ledger_successor_recovery_contracts.py",
-    "sumeragi_v2_proof_ledger_chain_inventory_contracts.py",
-    "sumeragi_v2_proof_ledger_release_inventory_contracts.py",
-    "sumeragi_v2_proof_ledger_proof_architecture_contracts.py",
-    "sumeragi_v2_proof_ledger_effect_capacity_contracts.py",
-    "sumeragi_v2_proof_ledger_effect_capacity_tail_contracts.py",
-    "sumeragi_v2_proof_ledger_leader_wire_contracts.py",
-    "sumeragi_v2_proof_ledger_timeout_vote_episode_contracts.py",
+    "sumeragi_v2_proof_ledger_async_contracts.py", "sumeragi_v2_proof_ledger_contract_types.py",
+    "sumeragi_v2_proof_ledger_cross_tool_contracts.py", "sumeragi_v2_proof_ledger_proof_inventory.py",
+    "sumeragi_v2_proof_ledger_serve_contracts.py", "sumeragi_v2_proof_ledger_historical_contracts.py",
+    "sumeragi_v2_proof_ledger_quantitative_contracts.py", "sumeragi_v2_proof_ledger_exact_property_contracts.py",
+    "sumeragi_v2_proof_ledger_supporting_theorem_contracts.py", "sumeragi_v2_proof_ledger_proof_token_contracts.py",
+    "sumeragi_v2_proof_ledger_source_seal_contracts.py", "sumeragi_v2_proof_ledger_ingress_source_seal_contracts.py",
+    "sumeragi_v2_proof_ledger_production_trace_contracts.py", "sumeragi_v2_proof_ledger_serviced_candidate_contracts.py",
+    "sumeragi_v2_proof_ledger_reply_writer_deadline_formal_contracts.py", "sumeragi_v2_proof_ledger_reply_writer_deadline_production_contracts.py",
+    "sumeragi_v2_proof_ledger_merge_runtime_config_contracts.py", "sumeragi_v2_proof_ledger_shared_tlc_result_contracts.py",
+    "sumeragi_v2_proof_ledger_locked_body_reproposal_contracts.py", "sumeragi_v2_proof_ledger_runtime_ingress_contracts.py",
+    "sumeragi_v2_proof_ledger_successor_recovery_contracts.py", "sumeragi_v2_proof_ledger_chain_inventory_contracts.py",
+    "sumeragi_v2_proof_ledger_release_inventory_contracts.py", "sumeragi_v2_proof_ledger_proof_architecture_contracts.py",
+    "sumeragi_v2_proof_ledger_effect_capacity_tail_contracts.py", "sumeragi_v2_proof_ledger_effect_capacity_contracts.py",
+    "sumeragi_v2_proof_ledger_leader_wire_contracts.py", "sumeragi_v2_proof_ledger_timeout_vote_episode_contracts.py",
     "sumeragi_v2_proof_ledger_terminal_discharge_contracts.py",
 )
 
@@ -153,54 +126,27 @@ CERTIFIED_RESPONSE_REGISTRATION_SHA256 = _ADMISSION_MUTATION_CONTRACTS.CERTIFIED
 # The corpus distinguishes generation-free durable authority from the current
 # executor generation and remains mutation evidence rather than deductive proof.
 DECISION_RECOVERY_LIFECYCLE_FORMAL_ARTIFACTS = (
-    "SumeragiV2DecisionRecoveryLifecycleMutation.tla",
-    "decision_recovery_lifecycle_duplicate_decision_bug.cfg",
-    "decision_recovery_lifecycle_fanout_split_registration_bug.cfg",
-    "decision_recovery_lifecycle_fixed.cfg",
-    "decision_recovery_lifecycle_non_singleton_replay_bug.cfg",
-    "decision_recovery_lifecycle_prepare_authority_bug.cfg",
-    "decision_recovery_lifecycle_registration_generation_bug.cfg",
-    "decision_recovery_lifecycle_replay_drops_fetch_body_bug.cfg",
-    "decision_recovery_lifecycle_replay_retains_registration_bug.cfg",
-    "decision_recovery_lifecycle_stale_executor_generation_bug.cfg",
+    "SumeragiV2DecisionRecoveryLifecycleMutation.tla", "decision_recovery_lifecycle_duplicate_decision_bug.cfg",
+    "decision_recovery_lifecycle_fanout_split_registration_bug.cfg", "decision_recovery_lifecycle_fixed.cfg",
+    "decision_recovery_lifecycle_non_singleton_replay_bug.cfg", "decision_recovery_lifecycle_prepare_authority_bug.cfg",
+    "decision_recovery_lifecycle_registration_generation_bug.cfg", "decision_recovery_lifecycle_replay_drops_fetch_body_bug.cfg",
+    "decision_recovery_lifecycle_replay_retains_registration_bug.cfg", "decision_recovery_lifecycle_stale_executor_generation_bug.cfg",
 )
 DECISION_RECOVERY_LIFECYCLE_RUNNER = (
     "scripts/formal/run_sumeragi_v2_decision_recovery_lifecycle_mutation.sh"
 )
 DECISION_RECOVERY_LIFECYCLE_SHA256 = {
-    "SumeragiV2DecisionRecoveryLifecycleMutation.tla": (
-        "3e6bcfd6fc4fe3a7c0549398ce2ce0831f906a2a38cd8526dc997bb5b3e6369f"
-    ),
-    "decision_recovery_lifecycle_duplicate_decision_bug.cfg": (
-        "cf84f1b001395ccd04d2ac3d548b5a4c292d4afd8cf7877f3acde1c1f5be8758"
-    ),
-    "decision_recovery_lifecycle_fanout_split_registration_bug.cfg": (
-        "f0eaaceb6aeb4e0a0c760eb09787a75b788b9421c94a6f300331a3c4b0744b99"
-    ),
-    "decision_recovery_lifecycle_fixed.cfg": (
-        "92185aaacfc87a130cbfd9bd806a4e254d8cf9aac0ea5fac3485a1faa7480302"
-    ),
-    "decision_recovery_lifecycle_non_singleton_replay_bug.cfg": (
-        "23d168bdba84c6f5ba4cd3fc767cd2062635eec4393f48e3010d87ac5c2dcd6c"
-    ),
-    "decision_recovery_lifecycle_prepare_authority_bug.cfg": (
-        "c5d4d11c03d0dbf2c6bfa8922d9e47ea2f73f0a6b27728c1911158922f1b464b"
-    ),
-    "decision_recovery_lifecycle_registration_generation_bug.cfg": (
-        "be188ce77e7ad8eb4d3db4d09e496c53aecadf2d5aafb8dc3b959783d28c8faf"
-    ),
-    "decision_recovery_lifecycle_replay_drops_fetch_body_bug.cfg": (
-        "36885c1480da5b885106ef8e05c7ababccfc8fbcf88d320d0c95c9c93c358222"
-    ),
-    "decision_recovery_lifecycle_replay_retains_registration_bug.cfg": (
-        "53723257dac7729b96a454b5f62aa81c3e8a109929463285b5811ebe0be75d0b"
-    ),
-    "decision_recovery_lifecycle_stale_executor_generation_bug.cfg": (
-        "eb588df10921974613f708c3af6efa6a0b2e1e54de7db276ad50cd4f124b71e2"
-    ),
-    DECISION_RECOVERY_LIFECYCLE_RUNNER: (
-        "252ee943a2392f866d93cd1c62af4e17be63c22dcdfcfb0f73cd6691ac7bd3a4"
-    ),
+    "SumeragiV2DecisionRecoveryLifecycleMutation.tla": "3e6bcfd6fc4fe3a7c0549398ce2ce0831f906a2a38cd8526dc997bb5b3e6369f",
+    "decision_recovery_lifecycle_duplicate_decision_bug.cfg": "cf84f1b001395ccd04d2ac3d548b5a4c292d4afd8cf7877f3acde1c1f5be8758",
+    "decision_recovery_lifecycle_fanout_split_registration_bug.cfg": "f0eaaceb6aeb4e0a0c760eb09787a75b788b9421c94a6f300331a3c4b0744b99",
+    "decision_recovery_lifecycle_fixed.cfg": "92185aaacfc87a130cbfd9bd806a4e254d8cf9aac0ea5fac3485a1faa7480302",
+    "decision_recovery_lifecycle_non_singleton_replay_bug.cfg": "23d168bdba84c6f5ba4cd3fc767cd2062635eec4393f48e3010d87ac5c2dcd6c",
+    "decision_recovery_lifecycle_prepare_authority_bug.cfg": "c5d4d11c03d0dbf2c6bfa8922d9e47ea2f73f0a6b27728c1911158922f1b464b",
+    "decision_recovery_lifecycle_registration_generation_bug.cfg": "be188ce77e7ad8eb4d3db4d09e496c53aecadf2d5aafb8dc3b959783d28c8faf",
+    "decision_recovery_lifecycle_replay_drops_fetch_body_bug.cfg": "36885c1480da5b885106ef8e05c7ababccfc8fbcf88d320d0c95c9c93c358222",
+    "decision_recovery_lifecycle_replay_retains_registration_bug.cfg": "53723257dac7729b96a454b5f62aa81c3e8a109929463285b5811ebe0be75d0b",
+    "decision_recovery_lifecycle_stale_executor_generation_bug.cfg": "eb588df10921974613f708c3af6efa6a0b2e1e54de7db276ad50cd4f124b71e2",
+    DECISION_RECOVERY_LIFECYCLE_RUNNER: "aab9015dc476a567d81ce7ddc4f217578825da06a9cfc713f35186386459feeb",
 }
 
 STATUS_VALUES = (
@@ -440,7 +386,7 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
     CrossToolSourceItemSeal(
         "crates/iroha_core/src/sumeragi/v2_runtime.rs",
         "RuntimeEffectOwnership",
-        "35743d680ca008038833aa3282dfefa25f654270181a745d978ed14175dba613",
+        "067d73c41e68b3452f63d40153b1ac75815d13b48dac240d425c590082442144",
         "struct",
     ),
     *(
@@ -615,7 +561,7 @@ _EFFECT_TO_CANDIDATE_SOURCE_ITEM_SEALS = (
             ),
             (
                 "retain_effect_ownership",
-                "78ecefa5fcd5fe328e953b59f873ddb1f073fecda9b1f6225a4d8fd4d9976859",
+                "37ff981ed5ee5c51160c5301f4584486751a0fd3be20fb2872194c4cecd75741",
                 (
                     (
                         "impl",
@@ -2232,6 +2178,7 @@ _TLA_TOKEN_RE = re.compile(
 )
 
 _execute_checker_component("sumeragi_v2_proof_ledger_source_seal_contracts.py")
+_execute_checker_component("sumeragi_v2_proof_ledger_ingress_source_seal_contracts.py")
 
 
 @lru_cache(maxsize=512)
@@ -2421,6 +2368,21 @@ def _token_sequence_positions(
         for index in range(len(haystack) - width + 1)
         if tuple(haystack[index : index + width]) == tuple(needle)
     )
+
+
+def _adapter_step_has_synchronous_reducer_effect_dataflow(source: str) -> bool:
+    """Bind one reducer result directly to one later synchronous effect drive."""
+
+    tokens = rust_code_tokens(source)
+    outcome = _token_sequence_positions(tokens, ("let", "outcome", "="))
+    reducer = _token_sequence_positions(tokens, rust_code_tokens("self.step_reducer(event)"))
+    drive = _token_sequence_positions(
+        tokens, rust_code_tokens("self.drive_effects(outcome.into_effects())")
+    )
+    if len(outcome) != 1 or len(reducer) != 1 or len(drive) != 1:
+        return False
+    binding = tuple(tokens[outcome[0] + 3 : reducer[0]])
+    return binding in ((), ("match",)) and reducer[0] < drive[0]
 
 
 def _tla_dependency_positions(
@@ -10304,7 +10266,6 @@ def _async_candidate_producer_continuation_contract_errors(
     formal_dir: Path,
 ) -> list[str]:
     """Pin the finite producer handoff, minimum action, and rank contract."""
-
     path = formal_dir / "SumeragiV2AsyncCandidateProducerContinuationProofs.tla"
     if not path.is_file() or path.is_symlink():
         return [
@@ -10314,7 +10275,6 @@ def _async_candidate_producer_continuation_contract_errors(
         source = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
         return [f"{path}: cannot read producer-continuation contract: {error}"]
-
     network_path = formal_dir / "SumeragiV2AsyncNetwork.tla"
     if not network_path.is_file() or network_path.is_symlink():
         return [
@@ -10328,9 +10288,7 @@ def _async_candidate_producer_continuation_contract_errors(
             f"{network_path}: cannot read producer-continuation "
             f"implementation: {error}"
         ]
-
     errors: list[str] = []
-
     def require_continuation_physical_cut_operator(
         symbol: str,
         required: tuple[str, ...],
@@ -10829,8 +10787,8 @@ def _async_candidate_producer_continuation_contract_errors(
             '/\\ record.subject = subject /\\ record.phase \\in '
             'AsyncCandidateServiceTrackedKinds /\\ (record.phase \\in '
             '{"BeginDecision", "PersistDecision"} => record.node = target) '
-            '/\\ record.identity = AsyncCandidateServiceIdentity(record.candidate) '
-            '/\\ record.causalOrigin = record.candidate.causalOrigin'
+            '/\\ record.identity = AsyncCandidateServiceIdentity(record.candidate) /\\ '
+            'record.causalOrigin = record.candidate.causalOrigin'
         ),
         "AsyncCandidateProducerContinuationFrozenRecords": (
             "{record \\in "
@@ -10882,8 +10840,8 @@ def _async_candidate_producer_continuation_contract_errors(
         ),
         "AsyncCandidateProducerContinuationFrozenPrefixDescentProperty": (
             "specification => \\A node \\in AsyncVotersAt(initialContext), "
-            "identity \\in AsyncCandidateServiceIdentities, targetOrdinal "
-            "\\in Nat \\ {0}, targetStage \\in "
+            "identity \\in AsyncCandidateServiceIdentities, targetOrdinal \\in Nat "
+            "\\ {0}, targetStage \\in "
             "AsyncCandidateServiceStageClasses, status \\in "
             '{"Reserved", "Materialized"}, budget \\in '
             "AsyncCandidateProducerContinuationFrozenPrefixRankCarrier: "
@@ -10894,8 +10852,8 @@ def _async_candidate_producer_continuation_contract_errors(
         ),
         "AsyncCandidateProducerContinuationFrozenPrefixClosureProperty": (
             "specification => \\A node \\in AsyncVotersAt(initialContext), "
-            "identity \\in AsyncCandidateServiceIdentities, targetOrdinal "
-            "\\in Nat \\ {0}, targetStage \\in "
+            "identity \\in AsyncCandidateServiceIdentities, targetOrdinal \\in Nat "
+            "\\ {0}, targetStage \\in "
             "AsyncCandidateServiceStageClasses, status \\in "
             '{"Reserved", "Materialized"}, budget \\in '
             "AsyncCandidateProducerContinuationFrozenPrefixRankCarrier: "
@@ -11457,9 +11415,9 @@ def _async_candidate_producer_continuation_contract_errors(
             "targetOrdinal)"
         ),
         "CandidateProducerContinuationFrozenPrefixStepCannotReplenish": (
-            "\\A node \\in ValidatorIds, identity \\in "
-            "AsyncCandidateServiceIdentities, targetOrdinal \\in Nat \\ {0}, "
-            "targetStage \\in "
+            "\\A node \\in ValidatorIds, identity \\in AsyncCandidateServiceIdentities, "
+            "targetOrdinal \\in Nat "
+            "\\ {0}, targetStage \\in "
             "AsyncCandidateServiceStageClasses, status \\in "
             '{"Reserved", "Materialized"}, budget \\in '
             "AsyncCandidateProducerContinuationFrozenPrefixRankCarrier: /\\ "
@@ -12060,7 +12018,6 @@ def _producer_continuation_physical_cut_mutation_contract_errors(
     repo_root: Path,
 ) -> list[str]:
     """Pin positive/failing TLC pairs for each repaired physical-cut lasso."""
-
     errors: list[str] = []
     formal_dir = repo_root / "formal" / "sumeragi_v2"
     expected_formal = set(
@@ -12404,6 +12361,7 @@ def _producer_continuation_physical_cut_mutation_contract_errors(
         return errors
     required_runner_fragments = (
         'readonly TLA2TOOLS_VERSION="1.7.4"',
+        'readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:?TLA2TOOLS_JAR must name the authenticated external tool}"',
         "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88",
         'readonly EXPECTED_JAVA_VERSION=\'openjdk version "21.0.12"\'',
         'readonly MODEL="SumeragiV2ProducerContinuationPhysicalCutMutation.tla"',
@@ -12800,7 +12758,7 @@ def _adequate_leader_producer_origin_contract_errors(
             "leaderContext \\in ContextRecords, leader \\in ValidatorIds, "
             "leaderView \\in Views, subject \\in Subjects, "
             "sourceOccurrenceRank \\in "
-            "AdequateLeaderTargetOccurrenceRankCarrier, known \\in SUBSET "
+            "AdequateLeaderTargetOccurrenceRankCarrier: \\A known \\in SUBSET "
             "AdequateLeaderFrozenOwnerUniverse( target, leaderContext, "
             "leader, leaderView, subject), budget \\in Nat, owner \\in "
             "AdequateLeaderFrozenCandidateOwnerUniverse( target, "
@@ -12816,7 +12774,7 @@ def _adequate_leader_producer_origin_contract_errors(
             "leaderContext \\in ContextRecords, leader \\in ValidatorIds, "
             "leaderView \\in Views, subject \\in Subjects, "
             "sourceOccurrenceRank \\in "
-            "AdequateLeaderTargetOccurrenceRankCarrier, known \\in SUBSET "
+            "AdequateLeaderTargetOccurrenceRankCarrier: \\A known \\in SUBSET "
             "AdequateLeaderFrozenOwnerUniverse( target, leaderContext, "
             "leader, leaderView, subject), budget \\in Nat, owner \\in "
             "AdequateLeaderFrozenCandidateOwnerUniverse( target, "
@@ -12834,7 +12792,7 @@ def _adequate_leader_producer_origin_contract_errors(
             "specification => \\A target \\in ValidatorIds, leaderContext "
             "\\in ContextRecords, leader \\in ValidatorIds, leaderView "
             "\\in Views, subject \\in Subjects, sourceOccurrenceRank \\in "
-            "AdequateLeaderTargetOccurrenceRankCarrier, known \\in SUBSET "
+            "AdequateLeaderTargetOccurrenceRankCarrier: \\A known \\in SUBSET "
             "AdequateLeaderFrozenOwnerUniverse( target, leaderContext, "
             "leader, leaderView, subject), budget \\in Nat, owner \\in "
             "AdequateLeaderFrozenCandidateOwnerUniverse( target, "
@@ -15186,55 +15144,34 @@ def _worker_test_include_source_fidelity_errors(repo_root: Path) -> list[str]:
     )
     tests_dir = worker_path.parent / "tests"
     errors: list[str] = []
-    if not worker_path.is_file() or worker_path.is_symlink():
-        return [f"{worker_path}: worker include owner must be a regular file"]
-    worker_source = worker_path.read_text(encoding="utf-8")
-    structural_worker = mask_rust_comments_and_literals(worker_source)
-    expected_context = (
-        (
-            "#",
-            "[",
-            "cfg",
-            "(",
-            "test",
-            ")",
-            "]",
-            "pub",
-            "(",
-            "super",
-            ")",
-            "mod",
-            "tests",
-        ),
+    _path, worker_source = _read_reviewed_rust_source(
+        repo_root,
+        worker_path.relative_to(repo_root).as_posix(),
+        errors,
+        "worker regression include closure",
     )
-    offsets: list[int] = []
-    for filename, expected_sha256 in _WORKER_TEST_INCLUDE_SOURCE_SHA256.items():
-        include_pattern = re.compile(
-            rf'(?m)^\s*include!\("tests/{re.escape(filename)}"\);\s*$'
-        )
-        matches = tuple(include_pattern.finditer(worker_source))
-        if len(matches) != 1:
+    if not worker_source:
+        return errors
+    owner_contracts = {
+        "crates/iroha_core/src/sumeragi/tests/v2_worker_main_01.rs": (
+            "v2_worker_reply_route_cases.rs",
+            "v2_worker_backpressure_cases.rs",
+            "v2_worker_nonzero_view_restart.rs",
+        ),
+        "crates/iroha_core/src/sumeragi/tests/v2_worker_main_04.rs": (
+            "v2_worker_serve_unsealed_cases.rs",
+            "v2_worker_serve_decision_restart_cases.rs",
+            "v2_worker_certified_serve_budget_cases.rs",
+        ),
+    }
+    for owner, expected in owner_contracts.items():
+        observed = _REVIEWED_RUST_INCLUDE_MANIFESTS.get(owner)
+        if observed != expected:
             errors.append(
-                f"{worker_path}: worker regression include {filename} must "
-                f"occur exactly once; found {len(matches)}"
+                f"{repo_root / owner}: worker regression include inventory must "
+                f"equal {expected!r}; found {observed!r}"
             )
-        else:
-            match = matches[0]
-            offsets.append(match.start())
-            context = tuple(
-                header
-                for opener, _position, header in _rust_delimiter_context(
-                    structural_worker, match.start()
-                )
-                if opener == "{"
-            )
-            if context != expected_context:
-                errors.append(
-                    f"{worker_path}: worker regression include {filename} "
-                    "must remain directly inside the reviewed tests module; "
-                    f"found {context!r}"
-                )
-
+    for filename, expected_sha256 in _WORKER_TEST_INCLUDE_SOURCE_SHA256.items():
         include_path = tests_dir / filename
         if not include_path.is_file() or include_path.is_symlink():
             errors.append(
@@ -15261,8 +15198,11 @@ def _worker_test_include_source_fidelity_errors(repo_root: Path) -> list[str]:
                 f"exactly {expected_count} uniquely named test functions; "
                 f"found {len(names)} functions and {len(set(names))} names"
             )
+        parsed_items: dict[str, list[RustItem]] = {}
+        for item in _rust_all_function_items(include_source):
+            parsed_items.setdefault(item.name, []).append(item)
         for name in names:
-            items = rust_items(include_source, name)
+            items = tuple(parsed_items.get(name, ()))
             if len(items) != 1:
                 errors.append(
                     f"{include_path}: included worker regression {name} must "
@@ -15277,12 +15217,6 @@ def _worker_test_include_source_fidelity_errors(repo_root: Path) -> list[str]:
                 errors,
                 expected_attributes=("#[test]",),
             )
-    if len(offsets) == len(_WORKER_TEST_INCLUDE_SOURCE_SHA256) and offsets != sorted(
-        offsets
-    ):
-        errors.append(
-            f"{worker_path}: worker regression includes must retain reviewed order"
-        )
     return errors
 
 
@@ -15318,7 +15252,12 @@ def _serve_ingress_gate_production_source_fidelity_errors(
         return errors
 
     module_source = module_path.read_text(encoding="utf-8")
-    worker_source = worker_path.read_text(encoding="utf-8")
+    _loaded_path, worker_source = _read_reviewed_rust_source(
+        repo_root,
+        worker_path.relative_to(repo_root).as_posix(),
+        errors,
+        "certified Serve-gate integration regressions",
+    )
     decision_restart_path = (
         repo_root
         / "crates"
@@ -15546,6 +15485,17 @@ def _serve_ingress_ordinal_production_source_fidelity_errors(
             f"{path}: Serve ingress-ordinal production source must be a regular file"
         )
         return errors
+    path, authenticated_source = _read_reviewed_rust_source(
+        repo_root,
+        path.relative_to(repo_root).as_posix(),
+        errors,
+        "Serve ingress-ordinal production source",
+    )
+    if not authenticated_source:
+        return errors
+    # The authenticated closure above proves the exact parent/include graph.
+    # Parse production items from their owning provider so repeated item scans
+    # do not duplicate the complete expanded test corpus in memory.
     source = path.read_text(encoding="utf-8")
 
     for struct_name, expected_sha256 in (
@@ -15657,6 +15607,38 @@ fn fair_v2_ingress_message_is_certified_fence_escape(message: &BlockMessage) -> 
         errors,
     )
 
+    selector_path = path.with_name("fair_v2_ingress_selector.rs")
+    if not selector_path.is_file() or selector_path.is_symlink():
+        errors.append(
+            f"{selector_path}: fair-ingress selector provider must be a regular file"
+        )
+        selector_source = ""
+    else:
+        selector_source = selector_path.read_text(encoding="utf-8")
+    selector_items = {
+        name: _require_rust_item(selector_path, selector_source, name, errors)
+        for name in (
+            "fair_v2_ingress_serve_selector_projection",
+            "fair_v2_ingress_leader_wire_selector_projection",
+            "fair_v2_ingress_queue_gate_verdict",
+        )
+    }
+    for name, item in selector_items.items():
+        _require_rust_item_context(
+            selector_path,
+            item,
+            (),
+            f"durable physical-carrier ingress projection {name}",
+            errors,
+        )
+        _require_rust_item_token_sha256(
+            selector_path,
+            item,
+            _PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256[name],
+            f"durable physical-carrier ingress projection {name}",
+            errors,
+        )
+
     items = {
         name: _require_qualified_rust_item(
             path,
@@ -15679,6 +15661,10 @@ fn fair_v2_ingress_message_is_certified_fence_escape(message: &BlockMessage) -> 
                 "try_recv_if_at_checked_classified",
                 "durable physical-carrier ingress arbitration",
             ),
+            (
+                "dequeue_selected_locked",
+                "durable physical-carrier ingress retirement",
+            ),
         )
     }
     for name, item in items.items():
@@ -15693,6 +15679,9 @@ fn fair_v2_ingress_message_is_certified_fence_escape(message: &BlockMessage) -> 
                 "try_push_at": "atomic Serve ingress ordinal admission",
                 "try_recv_if_at_checked_classified": (
                     "durable physical-carrier ingress arbitration"
+                ),
+                "dequeue_selected_locked": (
+                    "durable physical-carrier ingress retirement"
                 ),
             }[name],
             errors,
@@ -15751,10 +15740,10 @@ let Some(carrier_admission_ordinal) = state.last_admission_ordinal.checked_add(1
         push,
         """
 state.last_admission_ordinal = admission_ordinal;
-inbound.ingress_ownership = Some(FairV2IngressOwnershipEvidence::new(
-    occurrence,
-    leader_wire_token.clone(),
-));
+let ingress_ownership =
+    FairV2IngressOwnershipEvidence::new(occurrence, leader_wire_token.clone());
+let ownership_snapshot = Arc::new(ingress_ownership.clone());
+inbound.ingress_ownership = Some(ingress_ownership);
 """,
         "validated admission must commit the fresh physical carrier "
         "high-watermark exactly once while retaining logical leader identity",
@@ -15772,6 +15761,10 @@ lane.entries.push_back(FairV2IngressEntry {
     class,
     wire_key,
     leader_wire_token,
+    encoded_bytes: encoded,
+    encoded_len,
+    ownership_snapshot,
+});
 """,
         "the admitted queue occurrence must keep its fresh physical ordinal "
         "separate from the retained logical leader token",
@@ -15874,55 +15867,80 @@ gate.reserve(
                 "carrier position"
             )
 
+    serve_projection = selector_items[
+        "fair_v2_ingress_serve_selector_projection"
+    ]
+    leader_projection = selector_items[
+        "fair_v2_ingress_leader_wire_selector_projection"
+    ]
+    queue_gate = selector_items["fair_v2_ingress_queue_gate_verdict"]
     receive = items["try_recv_if_at_checked_classified"]
+    dequeue = items["dequeue_selected_locked"]
+
     _require_rust_token_sequence(
-        path,
-        receive,
+        selector_path,
+        serve_projection,
         """
-.filter(|entry| {
-    fair_v2_ingress_is_certified_body_request(&entry.inbound)
-        && (!state.requires_certified_serve_gate
-            || entry.certified_serve_reservation.is_some())
-})
-.map(|entry| entry.admission_ordinal)
-.min()
+let certified_body_request_cutoff = selected_barrier
+    .is_none()
+    .then(|| {
+        state
+            .lanes
+            .values()
+            .flat_map(|lane| lane.entries.iter())
+            .filter(|entry| {
+                physical_cut.is_none_or(|cut| u128::from(entry.admission_ordinal) < cut)
+                    && fair_v2_ingress_is_certified_body_request(&entry.inbound)
+                    && (!state.requires_certified_serve_gate
+                        || entry.certified_serve_reservation.is_some())
+            })
+            .map(|entry| entry.admission_ordinal)
+            .min()
+    })
+    .flatten();
 """,
-        "the fallback selector must freeze the globally earliest eligible "
-        "Serve physical carrier",
+        "the Serve projection must freeze the globally earliest eligible "
+        "physical request below the supplied cut",
         errors,
     )
     _require_rust_token_sequence(
-        path,
-        receive,
+        selector_path,
+        leader_projection,
         """
-let authenticated_certified_fence_escape = !matches!(
-    source,
-    FairV2IngressSource::Anonymous
-) && fair_v2_ingress_is_certified_fence_escape(&entry.inbound);
-let certified_fence_escape_dependency =
-    authenticated_certified_fence_escape
-        && leader_wire_barrier.as_ref().is_some_and(|owner| {
-            fair_v2_ingress_certified_fence_escape_advances_owner(
-                &owner.token,
-                &entry.inbound,
-            )
-        });
-let serve_fence_escape_dependency =
-    authenticated_certified_fence_escape
-        && (selected_serve_barrier.is_some()
-            || certified_body_request_cutoff.is_some());
-let timeout_vote_episode_dependency =
-    barrier_bypass
-        == FairV2IngressBarrierBypass::TimeoutVoteEpisode
-        && fair_v2_ingress_is_direct_validator_timeout_vote_owner(
-            source, entry,
-        )
-        && (leader_wire_barrier.as_ref().is_some_and(|owner| {
-            owner.token.identity.phase
-                == FairV2IngressLeaderWirePhase::CertifiedResponse
-        }) || (leader_wire_barrier.is_none()
-            && (selected_serve_barrier.is_some()
-                || certified_body_request_cutoff.is_some())));
+let (mut selected_barrier, selected_carrier_ordinal) = match active_carriers.first() {
+    Some((owner, carrier_ordinal)) => (Some(owner.clone()), Some(*carrier_ordinal)),
+    None => (None, None),
+};
+if selected_serve_barrier.is_some_and(|serve| {
+    selected_carrier_ordinal
+        .is_some_and(|leader_ordinal| serve.carrier_ordinal() <= leader_ordinal)
+}) {
+    selected_barrier = None;
+}
+""",
+        "Serve versus restored-leader arbitration must compare current "
+        "physical carrier ordinals rather than retained scheduler identities",
+        errors,
+    )
+    _require_rust_token_sequence(
+        selector_path,
+        queue_gate,
+        """
+let authenticated_certified_fence_escape = !matches!(source, FairV2IngressSource::Anonymous)
+    && fair_v2_ingress_is_certified_fence_escape(&entry.inbound);
+let certified_fence_escape_dependency = authenticated_certified_fence_escape
+    && leader_wire_barrier.is_some_and(|owner| {
+        fair_v2_ingress_certified_fence_escape_advances_owner(&owner.token, &entry.inbound)
+    });
+let serve_fence_escape_dependency = authenticated_certified_fence_escape
+    && (selected_serve_barrier.is_some() || certified_body_request_cutoff.is_some());
+let timeout_vote_episode_dependency = barrier_bypass
+    == FairV2IngressBarrierBypass::TimeoutVoteEpisode
+    && fair_v2_ingress_is_direct_validator_timeout_vote_owner(source, entry)
+    && (leader_wire_barrier.is_some_and(|owner| {
+        owner.token.identity.phase == FairV2IngressLeaderWirePhase::CertifiedResponse
+    }) || (leader_wire_barrier.is_none()
+        && (selected_serve_barrier.is_some() || certified_body_request_cutoff.is_some())));
 let dependency_bypass = !ingress_barrier_allows
     && (serve_fence_escape_dependency
         || timeout_vote_episode_dependency
@@ -15932,58 +15950,40 @@ let dependency_bypass = !ingress_barrier_allows
                 || timeout_control_dependency
                 || certified_fence_escape_dependency)));
 """,
-        "certified escape and the closed timeout-vote episode must remain distinct across retained Serve or leader-wire reservations without widening ordinary selection",
+        "certified escape and the closed timeout-vote episode must remain "
+        "distinct across retained Serve or leader-wire reservations without "
+        "widening ordinary selection",
         errors,
     )
     _require_rust_token_sequence(
-        path,
-        receive,
+        selector_path,
+        queue_gate,
         """
-if selected_serve_barrier.is_some_and(|serve| {
-    leader_wire_carrier_ordinal
-        .is_some_and(|leader_ordinal| serve.carrier_ordinal() <= leader_ordinal)
-}) {
-    leader_wire_barrier = None;
-}
-""",
-        "Serve versus restored-leader arbitration must compare current "
-        "physical carrier ordinals rather than retained scheduler identities",
-        errors,
-    )
-    _require_rust_token_sequence(
-        path,
-        receive,
-        """
-entry.admission_ordinal < serve.carrier_ordinal()
+entry.admission_ordinal < selected.carrier_ordinal()
     || (selected_serve_predecessors_cleared
-        && entry.admission_ordinal == serve.carrier_ordinal()
+        && entry.admission_ordinal == selected.carrier_ordinal()
         && entry
             .certified_serve_reservation
             .as_ref()
-            .is_some_and(|reservation| {
-                reservation.matches_barrier(serve)
-            })
+            .is_some_and(|reservation| reservation.matches_barrier(selected))
         && matches!(
             entry.inbound.message(),
             BlockMessage::V2(ConsensusMessageV2 {
-                payload:
-                    ConsensusMessageV2Payload::CertifiedBodyRequest(request),
+                payload: ConsensusMessageV2Payload::CertifiedBodyRequest(_),
                 ..
-            }) if HashOf::new(request) == serve.request_hash()
+            })
         ))
 """,
-        "selected Serve equality must retain exact lifecycle, request, and "
-        "physical carrier identity",
+        "selected Serve equality must retain exact lifecycle, request shape, "
+        "and physical carrier identity without hashing under the queue lock",
         errors,
     )
     _require_rust_token_sequence(
-        path,
-        receive,
+        selector_path,
+        queue_gate,
         """
 } else {
-    certified_body_request_cutoff.is_none_or(|cutoff| {
-        entry.admission_ordinal <= cutoff
-    })
+    certified_body_request_cutoff.is_none_or(|cutoff| entry.admission_ordinal <= cutoff)
 };
 """,
         "ungated or not-yet-selected Serve fallback must retain the earliest "
@@ -16005,6 +16005,23 @@ let (ready_sources, candidates) = {
     _require_rust_token_sequence(
         path,
         receive,
+        """
+let serve_projection = fair_v2_ingress_serve_selector_projection(&state, None)?;
+let selected_serve_barrier = serve_projection.selected_barrier;
+let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection(
+    &state,
+    selected_serve_barrier,
+    retire_obsolete_leader_wire,
+    None,
+)?;
+""",
+        "one lock-held selector cut must bind exact Serve and leader-wire "
+        "projections before candidate publication",
+        errors,
+    )
+    _require_rust_token_sequence(
+        path,
+        dequeue,
         "reservation.publish_physical_drain()?;",
         "selected Serve physical retirement must publish before removing its "
         "fair-ingress carrier",
@@ -16012,7 +16029,7 @@ let (ready_sources, candidates) = {
     )
     _require_rust_token_sequence(
         path,
-        receive,
+        dequeue,
         """
 if let Some(predecessors) = record.ingress_predecessors.get_mut(&source)
     && admitted_index < *predecessors
@@ -16024,11 +16041,29 @@ if let Some(predecessors) = record.ingress_predecessors.get_mut(&source)
         "predecessor before carrier removal",
         errors,
     )
+    if serve_projection is not None:
+        cutoff_positions = _token_sequence_positions(
+            rust_code_tokens(serve_projection.body),
+            rust_code_tokens("let certified_body_request_cutoff ="),
+        )
+        if len(cutoff_positions) != 1:
+            errors.append(
+                f"{path}:{serve_projection.line}: exact physical Serve cutoff "
+                "must be frozen exactly once in the lock-held projection"
+            )
     if receive is not None:
         tokens = rust_code_tokens(receive.body)
-        cutoff_positions = _token_sequence_positions(
+        serve_projection_positions = _token_sequence_positions(
             tokens,
-            rust_code_tokens("let certified_body_request_cutoff ="),
+            rust_code_tokens(
+                "let serve_projection = fair_v2_ingress_serve_selector_projection"
+            ),
+        )
+        leader_projection_positions = _token_sequence_positions(
+            tokens,
+            rust_code_tokens(
+                "let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection"
+            ),
         )
         candidate_positions = _token_sequence_positions(
             tokens,
@@ -16038,30 +16073,51 @@ if let Some(predecessors) = record.ingress_predecessors.get_mut(&source)
             tokens,
             rust_code_tokens("predicate(inbound.as_ref())"),
         )
+        drop_positions = _token_sequence_positions(
+            tokens,
+            rust_code_tokens("drop(candidates)"),
+        )
         relock_positions = _token_sequence_positions(
             tokens,
             rust_code_tokens("let mut state = self.state.lock()"),
         )
+        dequeue_positions = _token_sequence_positions(
+            tokens,
+            rust_code_tokens("self.dequeue_selected_locked"),
+        )
         if (
-            len(cutoff_positions) != 1
+            len(serve_projection_positions) != 1
+            or len(leader_projection_positions) != 1
             or len(candidate_positions) != 1
             or len(predicate_positions) != 2
+            or len(drop_positions) != 1
             or len(relock_positions) != 2
+            or len(dequeue_positions) != 1
             or not (
-                cutoff_positions[0]
+                serve_projection_positions[0]
+                < leader_projection_positions[0]
                 < candidate_positions[0]
                 < min(predicate_positions)
                 <= max(predicate_positions)
+                < drop_positions[0]
                 < relock_positions[1]
+                < dequeue_positions[0]
             )
         ):
             errors.append(
-                f"{path}:{receive.line}: exact physical cutoff and barrier "
-                "authorization must be frozen once before the unlocked "
-                "predicate, then revalidated for removal under the state lock"
+                f"{path}:{receive.line}: exact physical projections and "
+                "barrier authorization must be frozen once before the unlocked "
+                "predicate, then committed by the sole lock-held dequeue tail"
             )
 
-    expected_test_context = (
+    test_path, test_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/tests/"
+        "mod_authoritative_runtime_gate_03_admission_and_fairness.rs",
+        errors,
+        "Serve ingress-ordinal regression source",
+    )
+    inline_test_context = (
         (
             "#",
             "[",
@@ -16077,9 +16133,15 @@ if let Some(predecessors) = record.ingress_predecessors.get_mut(&source)
     for test_name, expected_sha256 in (
         _SERVE_INGRESS_ORDINAL_REGRESSION_TEST_SHA256.items()
     ):
-        test_item = _require_rust_item(path, source, test_name, errors)
+        moved_to_component = test_name.startswith("restored_productive_retry_")
+        item_path = test_path if moved_to_component else path
+        item_source = test_source if moved_to_component else authenticated_source
+        expected_test_context = () if moved_to_component else inline_test_context
+        test_item = _require_rust_item(
+            item_path, item_source, test_name, errors
+        )
         _require_rust_item_context(
-            path,
+            item_path,
             test_item,
             expected_test_context,
             f"Serve ingress-ordinal regression {test_name}",
@@ -16087,7 +16149,7 @@ if let Some(predecessors) = record.ingress_predecessors.get_mut(&source)
             expected_attributes=("#[test]",),
         )
         _require_rust_item_token_sha256(
-            path,
+            item_path,
             test_item,
             expected_sha256,
             f"Serve ingress-ordinal regression {test_name}",
@@ -16113,7 +16175,12 @@ def _serve_lifecycle_production_source_fidelity_errors(
     )
     if not source:
         return errors
-    effects_path = path.with_name("v2_effects.rs")
+    effects_path, effects_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/v2_effects.rs",
+        errors,
+        "Decision/Serve WAL-fence production source",
+    )
     decision_restart_path = (
         path.parent / "tests" / "v2_worker_serve_decision_restart_cases.rs"
     )
@@ -16123,11 +16190,6 @@ def _serve_lifecycle_production_source_fidelity_errors(
     ):
         if not required_path.is_file() or required_path.is_symlink():
             errors.append(f"{required_path}: {description} must be a regular file")
-    effects_source = (
-        effects_path.read_text(encoding="utf-8")
-        if effects_path.is_file() and not effects_path.is_symlink()
-        else ""
-    )
     decision_restart_source = (
         decision_restart_path.read_text(encoding="utf-8")
         if decision_restart_path.is_file()
@@ -16445,7 +16507,7 @@ tracked.terminal = Some(V2IoServeTerminal::Response(response.clone()));
 
     terminal_requirements = {
         "fully_authenticate_persisted_certified_serve_request": (
-            "verify_quorum_certificate_with_validator_pops(",
+            "authenticate_certified_body_request_with_validator_pops(",
         ),
         "validate_persisted_certified_serve_terminal_outcomes": (
             "for tombstone in &persisted.terminal_tombstones",
@@ -16800,34 +16862,25 @@ tracked.terminal = Some(V2IoServeTerminal::Response(response.clone()));
                 f"occurrences={missing_or_repeated!r}, positions={positions!r}"
             )
 
-    expected_test_context = (
-        (
-            "#",
-            "[",
-            "cfg",
-            "(",
-            "test",
-            ")",
-            "]",
-            "pub",
-            "(",
-            "super",
-            ")",
-            "mod",
-            "tests",
-        ),
+    lifecycle_test_path, lifecycle_test_source = _read_reviewed_rust_source(
+        repo_root,
+        "crates/iroha_core/src/sumeragi/tests/"
+        "v2_worker_certified_serve_budget_cases.rs",
+        errors,
+        "Serve lifecycle regression source",
     )
+    expected_test_context: tuple[tuple[str, ...], ...] = ()
     for test_name, expected_sha256 in (
         _SERVE_LIFECYCLE_REGRESSION_TEST_SHA256.items()
     ):
         test_item = _require_rust_item(
-            path,
-            source,
+            lifecycle_test_path,
+            lifecycle_test_source,
             test_name,
             errors,
         )
         _require_rust_item_context(
-            path,
+            lifecycle_test_path,
             test_item,
             expected_test_context,
             f"Serve lifecycle regression {test_name}",
@@ -16835,7 +16888,7 @@ tracked.terminal = Some(V2IoServeTerminal::Response(response.clone()));
             expected_attributes=("#[test]",),
         )
         _require_rust_item_token_sha256(
-            path,
+            lifecycle_test_path,
             test_item,
             expected_sha256,
             f"Serve lifecycle regression {test_name}",
@@ -17211,57 +17264,7 @@ if record.capacity_bypass {
                 "current height/view before pruning owners and deliveries"
             )
 
-    test_context = (
-        ("#", "[", "cfg", "(", "test", ")", "]", "mod", "tests"),
-    )
-    long_tests = {
-        "capacity_bypass_records_follow_current_lock_and_timeout_view",
-        "certified_timeout_bypasses_hung_signer_and_opens_adjacent_vote",
-    }
-    for name, expected_sha256 in (
-        _TIMEOUT_VOTE_SEMANTIC_CAPACITY_REGRESSION_TEST_SHA256.items()
-    ):
-        item = _require_rust_item(path, source, name, errors)
-        expected_attributes = (
-            ("#[test]", "#[allow(clippy::too_many_lines)]")
-            if name in long_tests
-            else ("#[test]",)
-        )
-        _require_rust_item_context(
-            path,
-            item,
-            test_context,
-            f"TimeoutVote semantic-capacity regression {name}",
-            errors,
-            expected_attributes=expected_attributes,
-        )
-        _require_rust_item_token_sha256(
-            path,
-            item,
-            expected_sha256,
-            f"TimeoutVote semantic-capacity regression {name}",
-            errors,
-        )
-
-    cross_view_name = (
-        "busy_deferred_source_identity_coalesces_across_consumer_view_change"
-    )
-    cross_view = _require_rust_item(path, source, cross_view_name, errors)
-    _require_rust_item_context(
-        path,
-        cross_view,
-        test_context,
-        "cross-view Busy-deferred semantic-owner regression",
-        errors,
-        expected_attributes=("#[test]", "#[allow(clippy::too_many_lines)]"),
-    )
-    _require_rust_item_token_sha256(
-        path,
-        cross_view,
-        _SERVICED_CANDIDATE_REGRESSION_TEST_SHA256[cross_view_name],
-        "cross-view Busy-deferred semantic-owner regression",
-        errors,
-    )
+    errors.extend(_timeout_capacity_regression_source_fidelity_errors(path, source))
     return errors
 
 
@@ -18539,6 +18542,10 @@ def _candidate_producer_lifecycle_coverage_contract_errors(
         "SumeragiV2AsyncRecoveryVoteEpochProofs": (
             formal_dir / "SumeragiV2AsyncRecoveryVoteEpochProofs.tla"
         ),
+        "SumeragiV2AsyncRecoveryVoteEpochBoundaryContinuationProofs": (
+            formal_dir
+            / "SumeragiV2AsyncRecoveryVoteEpochBoundaryContinuationProofs.tla"
+        ),
         "SumeragiV2AsyncFairServiceProofs": (
             formal_dir / "SumeragiV2AsyncFairServiceProofs.tla"
         ),
@@ -18640,6 +18647,9 @@ def _candidate_producer_lifecycle_coverage_contract_errors(
 
     network_module = "SumeragiV2AsyncNetwork"
     recovery_module = "SumeragiV2AsyncRecoveryVoteEpochProofs"
+    recovery_continuation_module = (
+        "SumeragiV2AsyncRecoveryVoteEpochBoundaryContinuationProofs"
+    )
     fair_module = "SumeragiV2AsyncFairServiceProofs"
     runner_module = "SumeragiV2AsyncFiniteRunnerEpisodeProofs"
     reset_module = "SumeragiV2HeightResetBoundaryClosureProofs"
@@ -18792,14 +18802,14 @@ def _candidate_producer_lifecycle_coverage_contract_errors(
               => AsyncControlServiceStateTypeInvariant'
         """,
         (
-            recovery_module,
+            recovery_continuation_module,
             "AsyncNextPreservesStrongTypeInvariant",
         ): r"""
             AsyncStrongTypeInvariant /\ AsyncNext
               => AsyncStrongTypeInvariant'
         """,
         (
-            recovery_module,
+            recovery_continuation_module,
             "AsyncBracketNextPreservesStrongTypeInvariant",
         ): r"""
             AsyncStrongTypeInvariant /\ [AsyncNext]_AsyncAllVars
@@ -18944,13 +18954,13 @@ def _candidate_producer_lifecycle_coverage_contract_errors(
             "AsyncNextPreservesSchedulerType",
         ),
         (
-            recovery_module,
+            recovery_continuation_module,
             "AsyncNextPreservesStrongTypeInvariant",
         ): (
             "AsyncNextPreservesControlServiceStateTypeInvariant",
         ),
         (
-            recovery_module,
+            recovery_continuation_module,
             "AsyncBracketNextPreservesStrongTypeInvariant",
         ): (
             "AsyncNextPreservesStrongTypeInvariant",
@@ -20221,26 +20231,7 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             "AsyncStrongTypeInvariant",
             preserve_string_contents=True,
         )
-        expected_strong_type = (
-            "/\\ StrongInductiveInvariant /\\ AsyncSchedulerTypeInvariant "
-            "/\\ AsyncProducerTypeInvariant "
-            "/\\ AsyncServeProducerEpisodeTypeInvariant "
-            "/\\ AsyncServeProducerEpisodeOwnershipInvariant "
-            "/\\ AsyncServiceActivationPairInvariant "
-            "/\\ AsyncControlServiceStateTypeInvariant "
-            "/\\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant "
-            "/\\ AsyncCandidateLifecycleSchedulerCoverageInvariant "
-            "/\\ AsyncCertifiedResponseClaimIngressOwnershipInvariant "
-            "/\\ AsyncLeaderWireIngressCarrierOwnershipInvariant "
-            "/\\ AsyncOrdinaryIngressCarrierOwnershipInvariant "
-            "/\\ ReceivedTimeoutVotePoolInvariant "
-            "/\\ AsyncRecoveryTypeInvariant /\\ AsyncRestartAuthorityInvariant "
-            "/\\ AsyncRecoveryExecutionInvariant "
-            "/\\ AsyncHistoricalLockRestartAuthorityTypeInvariant "
-            "/\\ HistoricalLockRestartAuthoritySourceRetentionInvariant "
-            "/\\ AsyncGstRecoveryPhaseInvariant "
-            "/\\ AsyncSerializedBusyKernelInvariant"
-        )
+        expected_strong_type = ASYNC_STRONG_TYPE_INVARIANT_EXACT_BODY
         if strong_type is None:
             errors.append(f"{strong_type_path}: missing AsyncStrongTypeInvariant")
         else:
@@ -20614,7 +20605,8 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 )
             required_init_qed = (
                 "<2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3bb, <2>3c, "
-                "<2>3d, <2>3e, <2>3p, <2>3t, <2>4, <2>5, <2>6, <2>7 "
+                "<2>3d, <2>3e, <2>3f, <2>3p, <2>3t, <2>4, <2>5, "
+                "<2>6, <2>7 "
                 "DEF AsyncStrongTypeInvariant"
             )
             if normalized.count(required_init_qed) != 1:
@@ -20665,7 +20657,8 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 )
             required_stutter_qed = (
                 "<2> QED BY <2>3, <2>4, <2>4aa, <2>4a, <2>4b, <2>4bb, "
-                "<2>4c, <2>4d, <2>5, <2>6, <2>7, <2>8, <2>8p, <2>8t "
+                "<2>4c, <2>4d, <2>4e, <2>5, <2>6, <2>7, <2>8, <2>8p, "
+                "<2>8t "
                 "DEF AsyncStrongTypeInvariant"
             )
             if normalized.count(required_stutter_qed) != 1:
@@ -20675,6 +20668,7 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                     "retain producer-episode and timeout-boundary prime steps "
                     "as exact QED dependencies"
                 )
+        errors.extend(_async_extended_strong_type_induction_errors(path, source))
     scheduler_gate_theorems_with_semantic_strings = {
         "LocalAdmissionStepIsEnabled",
         "UngatedSerializedRuntimeStepIsEnabled",
@@ -20813,6 +20807,11 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "BY <1>1, <2>2h, "
                 "AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant"
             )
+            expected_producer_type_step = (
+                "<2>4f. AsyncProducerTypeInvariant' "
+                "BY <1>1, <2>2, "
+                "AsyncProducerProjectionPreservesTypeInvariant DEF AsyncNext"
+            )
             expected_recovery_step = (
                 "<2>6. /\\ AsyncRecoveryTypeInvariant' "
                 "/\\ AsyncRestartAuthorityInvariant' "
@@ -20862,9 +20861,9 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 "AsyncNextPreservesOrdinaryIngressCarrierOwnership"
             )
             expected_recovery_qed = (
-                "<2> QED BY <2>2l, <2>3, <2>4, <2>4a, <2>4b, <2>4c, "
-                "<2>4d, <2>4e, <2>5, <2>6, <2>7, <2>8, <2>9, <2>10, "
-                "<2>11, <2>12, <2>13 "
+                "<2> QED BY <2>2l, <2>2m, <2>3, <2>4, <2>4a, <2>4b, "
+                "<2>4c, <2>4d, <2>4e, <2>4f, <2>5, <2>6, <2>7, "
+                "<2>8, <2>9, <2>10, <2>11, <2>12, <2>13 "
                 "DEF AsyncStrongTypeInvariant"
             )
             normalized_body = " ".join(body.split())
@@ -20916,6 +20915,11 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                     f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant "
                     "must retain the exact timeout-recovery current-boundary "
                     "prime step"
+                )
+            if normalized_body.count(expected_producer_type_step) != 1:
+                errors.append(
+                    f"{path}:{line}: AsyncNextPreservesStrongTypeInvariant "
+                    "must retain the exact producer-journal prime step"
                 )
             if normalized_body.count(expected_recovery_step) != 1:
                 errors.append(
@@ -30837,6 +30841,7 @@ def _effect_capacity_mutation_runner_errors(
     return errors
 
 
+_execute_checker_component("sumeragi_v2_proof_ledger_effect_capacity_tail_contracts.py")
 _execute_checker_component("sumeragi_v2_proof_ledger_effect_capacity_contracts.py")
 
 
@@ -30898,6 +30903,7 @@ def _transport_geometry_production_source_fidelity_errors(
             repo_root / "crates" / "iroha_kagami" / "src" / "localnet.rs"
         ),
         "taira_renderer": repo_root / "scripts" / "render_taira_validator_bundle.py",
+        "kagami_profiles": repo_root / "xtask" / "src" / "kagami_profiles.rs",
         "taira_default": (
             repo_root / "defaults" / "kagami" / "iroha3-taira" / "config.toml"
         ),
@@ -30939,8 +30945,35 @@ def _transport_geometry_production_source_fidelity_errors(
         else:
             sources[role] = path.read_text(encoding="utf-8")
 
+    reviewed_core_path, authenticated_core_source = _read_reviewed_rust_source(
+        repo_root,
+        paths["core"].relative_to(repo_root).as_posix(),
+        errors,
+        "reviewed fair-ingress transport geometry source",
+    )
+    if authenticated_core_source:
+        paths["core"] = reviewed_core_path
+        # The closure authentication above binds the complete include graph.
+        # Production geometry items remain owned by the parent provider; parse
+        # that provider directly and load moved regression providers narrowly.
+        sources["core"] = reviewed_core_path.read_text(encoding="utf-8")
+        del authenticated_core_source
+
     core_path = paths["core"]
     core_source = sources["core"]
+    selector_path = core_path.with_name("fair_v2_ingress_selector.rs")
+    if not selector_path.is_file() or selector_path.is_symlink():
+        errors.append(
+            f"{selector_path}: fair-ingress selector provider must be a regular file"
+        )
+        selector_source = ""
+    else:
+        selector_source = selector_path.read_text(encoding="utf-8")
+    selector_item_names = {
+        "fair_v2_ingress_serve_selector_projection",
+        "fair_v2_ingress_leader_wire_selector_projection",
+        "fair_v2_ingress_queue_gate_verdict",
+    }
     for digest_inventory, expected_context in (
         (_PRODUCTION_FAIR_V2_INGRESS_TOP_LEVEL_ITEM_SHA256, ()),
         (
@@ -30951,10 +30984,23 @@ def _transport_geometry_production_source_fidelity_errors(
             _PRODUCTION_FAIR_V2_INGRESS_IMPL_ITEM_SHA256,
             (("impl", "FairV2Ingress"),),
         ),
-    ):
+        ):
         for item_name, expected_sha256 in digest_inventory.items():
             description = f"authoritative fair-v2 ingress geometry {item_name}"
-            if expected_context == (("impl", "FairV2IngressClass"),):
+            if item_name in selector_item_names:
+                item_path = selector_path
+                item = _require_rust_item(
+                    selector_path, selector_source, item_name, errors
+                )
+                _require_rust_item_context(
+                    selector_path,
+                    item,
+                    expected_context,
+                    description,
+                    errors,
+                )
+            elif expected_context == (("impl", "FairV2IngressClass"),):
+                item_path = core_path
                 item = _require_qualified_rust_item(
                     core_path,
                     core_source,
@@ -30964,6 +31010,7 @@ def _transport_geometry_production_source_fidelity_errors(
                     description,
                 )
             else:
+                item_path = core_path
                 item = _require_rust_item(
                     core_path, core_source, item_name, errors
                 )
@@ -30979,7 +31026,7 @@ def _transport_geometry_production_source_fidelity_errors(
             observed_sha256 = _rust_item_token_sha256(item)
             if observed_sha256 != expected_sha256:
                 errors.append(
-                    f"{core_path}:{item.line}: authoritative fair-v2 ingress "
+                    f"{item_path}:{item.line}: authoritative fair-v2 ingress "
                     f"geometry {item_name} must match exact reviewed token "
                     f"digest {expected_sha256}; found {observed_sha256}"
                 )
@@ -31412,16 +31459,24 @@ left.sender() == right.sender()
         errors,
     )
     queue_gate = _require_rust_item(
-        core_path, core_source, "fair_v2_ingress_queue_gate_verdict", errors
+        selector_path,
+        selector_source,
+        "fair_v2_ingress_queue_gate_verdict",
+        errors,
     )
     _require_rust_item_context(
-        core_path, queue_gate, (), "fair-ingress queue gate selector", errors)
+        selector_path,
+        queue_gate,
+        (),
+        "fair-ingress queue gate selector",
+        errors,
+    )
     _require_rust_item_token_sha256(
-        core_path, queue_gate,
+        selector_path, queue_gate,
         _TIMEOUT_VOTE_EPISODE_RUST_ITEM_SHA256["ingress::fair_v2_ingress_queue_gate_verdict"],
         "fair-ingress queue gate selector", errors)
     _require_rust_token_sequence(
-        core_path,
+        selector_path,
         queue_gate,
         _CORE_RUNTIME_TRANSPORT_TOKEN_SEQUENCES["queue_gate"],
         "live control predecessor identity must be computed before carrier "
@@ -31429,30 +31484,41 @@ left.sender() == right.sender()
         errors,
     )
     _require_rust_token_sequence(
-        core_path,
+        selector_path,
         queue_gate,
         _CORE_RUNTIME_TRANSPORT_TOKEN_SEQUENCES["queue_gate_verdict"],
         "live control predecessor blocks strict-newer carrier authorization "
         "while preserving the two exact dependency exceptions",
         errors,
     )
-    timeout_fifo_test_name = (
-        "fair_v2_ingress_serializes_distinct_timeout_certificates_per_source"
+    control_regression_path, control_regression_source = (
+        _read_reviewed_rust_source(
+            repo_root,
+            "crates/iroha_core/src/sumeragi/tests/"
+            "mod_authoritative_runtime_gate_08_capacity_and_control.rs",
+            errors,
+            "reviewed fair-ingress control regression source",
+        )
     )
-    timeout_fifo_test = _require_rust_item(
-        core_path, core_source, timeout_fifo_test_name, errors)
-    _require_rust_item_context(
-        core_path,
-        timeout_fifo_test,
-        (("#", "[", "cfg", "(", "test", ")", "]", "mod", "authoritative_runtime_gate_tests"),),
+    control_regression = _require_rust_item(
+        control_regression_path, control_regression_source,
+        "fair_v2_ingress_serializes_distinct_timeout_certificates_per_source", errors,
+    )
+    _require_rust_token_sequence(
+        control_regression_path,
+        control_regression,
+        """
+assert!(
+    !handle.try_incoming_block_message_from(
+        validator.clone(),
+        v2_timeout_certificate(1),
+    ),
+    "one authenticated source cannot spend two certified owners concurrently",
+);
+""",
         "two-view TimeoutCertificate FIFO predecessor regression",
         errors,
-        expected_attributes=("#[test]",),
     )
-    _require_rust_item_token_sha256(
-        core_path, timeout_fifo_test,
-        _PRODUCTION_FAIR_V2_INGRESS_TEST_ITEM_SHA256[timeout_fifo_test_name],
-        "two-view TimeoutCertificate FIFO predecessor regression", errors)
 
     # FairV2Ingress dequeue is only the first half of the live-control
     # predecessor cut.  Once the predecessor has transferred into the
@@ -32589,7 +32655,6 @@ if size > self.max_frame_bytes.min(crate::MAX_ENCRYPTED_FRAME_BYTES) {
         "runtime-clamped receiver parse boundary",
         errors,
     )
-
     sender_context = (
         ("mod", "run"),
         ("impl", "<", "E", ":", "Enc", ">", "MessageSender", "<", "E", ">"),
@@ -33258,6 +33323,8 @@ queues.insert(
         errors,
     )
 
+    errors.extend(_transport_geometry_refresh_resistant_errors(paths, sources))
+
     deployment_fragments = (
         (
             "taira_renderer",
@@ -33307,6 +33374,16 @@ queues.insert(
             "body_bytes = 242221056\n"
             "body_source_bytes = 34603008",
             "production Taira profile pins H=2 and seven source partitions",
+        ),
+        (
+            "taira_genesis",
+            '"max_tx_bytes": 10485760',
+            "production Taira genesis admits one maximum privacy transaction",
+        ),
+        (
+            "taira_default_genesis",
+            '"max_tx_bytes": 10485760',
+            "default Taira genesis admits one maximum privacy transaction",
         ),
         (
             "taira_readme",
@@ -41515,6 +41592,7 @@ def _commit_import_provenance_mutation_source_fidelity_errors(
                 f"{path}: Commit-import release source must match frozen "
                 f"SHA-256 {expected_sha256}; found {observed_sha256}"
             )
+    errors.extend(_commit_import_release_statement_errors(formal_dir))
 
     module_path = formal_dir / "SumeragiV2CommitImportProvenanceMutation.tla"
     exact_operators = {
@@ -44752,7 +44830,6 @@ if command.lifecycle_ordinal.is_some() {
 } else {
     self.validate_clock_owner_physical_cuts()?;
 }
-self.ingress.enqueue(command)
 """,
         "post-cut replay gate must backpressure inherited owners while fresh "
         "owners validate the cut before atomic FIFO minting",
@@ -45330,6 +45407,7 @@ assert_eq!(
 
 
 _execute_checker_component("sumeragi_v2_proof_ledger_timeout_vote_episode_contracts.py")
+_execute_checker_component("sumeragi_v2_proof_ledger_runtime_ingress_contracts.py")
 
 
 def _production_causal_fifo_source_fidelity_errors(
@@ -45396,6 +45474,11 @@ def _production_causal_fifo_source_fidelity_errors(
                 "fail_deferred_service_contract",
                 (("impl", "SumeragiV2Adapter"),),
                 "terminal deferred-service contract failure",
+            ),
+            (
+                "step_reducer",
+                (("impl", "SumeragiV2Adapter"),),
+                "reducer-fence generation step wrapper",
             ),
         )
         observed_adapter_bound_items: dict[str, RustItem | None] = {}
@@ -45716,6 +45799,21 @@ const _: () = assert!(
                     "contract, and complete control flow must match the exact "
                     f"reviewed token digest {expected_sha256}; found {observed_sha256}"
                 )
+        errors += _drive_effects_wal_frame_source_fidelity_errors(adapter_path, drive)
+        _require_rust_token_sequence(
+            adapter_path,
+            observed_adapter_bound_items.get("step_reducer"),
+            """
+let before = self.reducer_fence_projection();
+let outcome = self.reducer.step(event)?;
+if self.reducer_fence_projection() != before {
+    self.advance_reducer_fence_generation()?;
+}
+Ok(outcome)
+""",
+            "the reducer step wrapper must advance its process-local fence generation exactly when the reducer fence changes",
+            errors,
+        )
         drive_contract = (
             "while let Some(effect) = pending.pop_front()",
             "self.wal.append(&payload)",
@@ -46047,7 +46145,7 @@ fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
                 "closed RuntimeDriver authenticated Busy-deferred alias default",
                 errors,
             )
-            _require_rust_token_sequence(
+            _require_exact_rust_tokens(
                 runtime_path,
                 default_deferred_alias,
                 """
@@ -46171,6 +46269,7 @@ RuntimeDriverDispatch {
     deferred_ordinal,
     retry_unadmitted,
     producer_handoff,
+    remote_proposal_replay,
 }
 """,
             ),
@@ -46814,8 +46913,8 @@ projection.push(u8::from(evidence.fence_retry_marker_required));
                 "post-dequeue physical occurrence and runtime-receipt validator",
             ),
             (
-                "matches_authenticated",
-                "runtime_ingress_matches_authenticated",
+                "exactly_matches_authenticated",
+                "runtime_ingress_exactly_matches_authenticated",
                 "post-authentication canonical payload comparator",
             ),
             (
@@ -46912,7 +47011,7 @@ match (
         )
         _require_rust_token_sequence(
             runtime_path,
-            observed_runtime_ingress_items.get("matches_authenticated"),
+            observed_runtime_ingress_items.get("exactly_matches_authenticated"),
             """
 self.validate_frozen_physical()
     && self.runtime_bytes.as_ref() == authenticated.canonical_wire_bytes().as_slice()
@@ -47620,6 +47719,29 @@ assert!(scheduling.validate_exact().is_ok());
 """,
             "preowned fenced FIFO regression must retain an exact exceptional "
             "dependency-bypass carrier",
+            errors,
+        )
+        _require_rust_token_sequence(
+            runtime_path,
+            fence_runtime_regression,
+            """
+let periodic_step = runtime.step(periodic_at).expect(
+    "service the one bounded retransmit turn before Timeout"
+);
+let periodic_scheduling = runtime.take_last_scheduler_ownership().expect(
+    "periodic turn retains exact scheduler ownership"
+);
+assert_eq!(periodic_scheduling.selected, RuntimeSelectedOwnerKind::PeriodicTimer);
+let RuntimeStep::Advanced(periodic_effects) = periodic_step else {
+    panic!("pre-timeout periodic turn unexpectedly idled")
+};
+runtime.take_effect_ownership(periodic_effects.len()).expect(
+    "consume pre-timeout periodic effect ownership"
+);
+assert!(runtime.deferred_lifecycle_ownership.is_empty());
+""",
+            "preowned fenced FIFO regression must run and retire the bounded "
+            "pre-timeout periodic episode before Timeout signing",
             errors,
         )
         periodic_ordering_regression_name = (
@@ -48373,9 +48495,14 @@ for (admission_ordinal, candidate) in &self.deferred_lifecycle_ownership
                 "if raw_timeout_due && self.timeout_owner.is_none()",
                 "self.timeout_owner_physical_cut.is_some() "
                 "|| self.timeout_recovery_episode.is_some()",
-                "let owner = self.mint_fresh_lifecycle_owner("
-                "self.round_tag, CommandClass::Progress,"
-                'RuntimeFreshRootKind::Timeout, b"begin-timeout",)?;',
+                """
+let owner = self.mint_fresh_lifecycle_owner(
+    self.round_tag,
+    CommandClass::Progress,
+    RuntimeFreshRootKind::Timeout,
+    b"begin-timeout",
+)?;
+""",
                 "let pre_frozen_retransmit = match (",
                 "let episode = RuntimeTimeoutRecoveryEpisode",
                 "timeout_owner: owner.clone()",
@@ -48610,6 +48737,10 @@ self.accept_driver_dispatch(
         require_runtime_item_order(
             reconcile_deferred,
             (
+                "let active = self.driver.authenticated_deferred_admission_ordinals();",
+                "let all_active = self.driver.all_deferred_admission_ordinals();",
+                "if !active.is_subset(&all_active)",
+                "lifecycle_ownership.retain(|ordinal, _| all_active.contains(ordinal));",
                 "let previous_lifecycle = existing.earliest_lifecycle_ordinal()?;",
                 "existing.merge_downstream(candidate)?;",
                 "let merged_lifecycle = existing.earliest_lifecycle_ordinal()?;",
@@ -48628,8 +48759,9 @@ lifecycle_ownership.insert(ordinal, owner);
                 "self.deferred_ingress_ownership = retained;",
                 "self.deferred_lifecycle_ownership = lifecycle_ownership;",
             ),
-            "an earlier aggregate carrier must rebase its exact deferred owner "
-            "before either ownership map is committed",
+            "deferred reconciliation must validate the authenticated subset, "
+            "prune retired lifecycle wrappers, and rebase an earlier aggregate "
+            "owner before either ownership map is committed",
         )
         reconcile_after_retirement = observed_runtime_ownership_items.get(
             "reconcile_deferred_runtime_ownership_after_retirement"
@@ -48955,6 +49087,9 @@ self.complete_driver_dispatch_leader_wire_owners(
                     "exactly one serviceable adapter-deferred transition before "
                     f"{later_contract!r}"
                 )
+        errors += _remote_proposal_replay_source_fidelity_errors(
+            repo_root, runtime_path, runtime_source
+        )
 
     refinement_path = (
         repo_root / "crates/iroha_core/src/sumeragi/v2_core/refinement.rs"
@@ -49321,7 +49456,7 @@ _LOCKED_BODY_REPROPOSAL_RUST_ITEM_SHA256 = {
     ),
     "run_inner": "ab23dad98c55d25f940f2da39ba7c053e6a20fa3d27fa7ed87900a0dd31ee0fe",
     "replayed_proposal_sign_reserves_only_the_exact_current_lock_owner": (
-        "ffb3b7abab788acdf238fdec096ed6fb55f9843f4df66b42965d9ea3a1bcd2ab"
+        "6799b44549fe649a8253b718b8f3ba76fcce296e594f41e212d9c8c7e3bc3d23"
     ),
     "schedule_local_proposal": (
         "187b6563fb36d2108658af92649719c486d1a895748e833eca35372f7318600e"
@@ -50777,26 +50912,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "gst => asyncRecoveryPhase \\notin "
             '{"RestartRequired", "ReplayRequired", "Replaying"}'
         ),
-        "AsyncStrongTypeInvariant": (
-            "/\\ StrongInductiveInvariant /\\ AsyncSchedulerTypeInvariant "
-            "/\\ AsyncProducerTypeInvariant "
-            "/\\ AsyncServeProducerEpisodeTypeInvariant "
-            "/\\ AsyncServeProducerEpisodeOwnershipInvariant "
-            "/\\ AsyncServiceActivationPairInvariant "
-            "/\\ AsyncControlServiceStateTypeInvariant "
-            "/\\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant "
-            "/\\ AsyncCandidateLifecycleSchedulerCoverageInvariant "
-            "/\\ AsyncCertifiedResponseClaimIngressOwnershipInvariant "
-            "/\\ AsyncLeaderWireIngressCarrierOwnershipInvariant "
-            "/\\ AsyncOrdinaryIngressCarrierOwnershipInvariant "
-            "/\\ ReceivedTimeoutVotePoolInvariant "
-            "/\\ AsyncRecoveryTypeInvariant /\\ AsyncRestartAuthorityInvariant "
-            "/\\ AsyncRecoveryExecutionInvariant "
-            "/\\ AsyncHistoricalLockRestartAuthorityTypeInvariant "
-            "/\\ HistoricalLockRestartAuthoritySourceRetentionInvariant "
-            "/\\ AsyncGstRecoveryPhaseInvariant "
-            "/\\ AsyncSerializedBusyKernelInvariant"
-        ),
+        "AsyncStrongTypeInvariant": ASYNC_STRONG_TYPE_INVARIANT_EXACT_BODY,
     }
     for symbol, expected_body in async_base_invariant_bodies.items():
         extracted = _top_level_operator_body(
@@ -51511,7 +51627,7 @@ asyncServeProducerEpisodeDue' =
     reviewed_local_theorem_additions = tuple(
         symbol
         for additions in _ASYNC_NETWORK_REVIEWED_LOCAL_THEOREM_ADDITIONS_AFTER.values()
-        for symbol in additions
+        for symbol in additions if symbol not in ASYNC_NETWORK_RELEASE_THEOREMS
     )
     reviewed_local_theorems = (
         *ASYNC_NETWORK_RELEASE_THEOREMS,
@@ -53615,6 +53731,7 @@ asyncServeProducerEpisodeDue' =
         "CommitCertificateResponseAuthorized": (
             '/\\ item.kind = "CommitCertificateResponse" '
             "/\\ item.source \\in AsyncIngressSources "
+            "/\\ item.source = item.envelope.request.envelope.recipient "
             "/\\ item.envelope.request \\in asyncActiveRequests "
             "/\\ CommitCertificateRequestAuthorized("
             "item.envelope.request) "
@@ -54230,6 +54347,8 @@ asyncServeProducerEpisodeDue' =
                 "/\\ candidate.evidence \\in asyncSentItems "
                 "/\\ candidate.evidence.kind = "
                 '"CommitCertificateResponse" '
+                "/\\ candidate.evidence.source = "
+                "candidate.evidence.envelope.request.envelope.recipient "
                 "/\\ candidate.evidence.envelope.recipient = candidate.node "
                 "/\\ candidate.evidence.envelope.qc = qc "
                 "/\\ CommitCertificateRequestAuthorized( "
@@ -54602,6 +54721,15 @@ asyncServeProducerEpisodeDue' =
         ),
         "AsyncServeLifecycleTypeInvariant": (
             "bc96a899a2e5df4ccfc6b82b62d2241e420386653515d7cb40cb120065f42a12"
+        ),
+        "ReserveExactServeCapacity": (
+            "562a00dca984b3675b16b2e83a49db786ac1c0c7b934e0da8619e5af9077e64a"
+        ),
+        "AdvanceExactServeCapacity": (
+            "4603b3d73e0aac7904231b5822d08c1016305d1fcbe7c65e0d2479a90da383b9"
+        ),
+        "CoalesceExactServeIngressCapacity": (
+            "779d594f73bda5d9c55f7c0bd3d1348a999dd7f749782df1306c998c4dda4191"
         ),
         "PopSelectedIngress": (
             "f48e04bddc904f89060ffa1d78c648ea4645972ba243d83cc44507cf4e47acda"
@@ -55288,7 +55416,9 @@ asyncServeProducerEpisodeDue' =
                 "\\/ /\\ CanEnqueueCertifiedFenceEscape(node) "
                 "/\\ ~CandidateAdmissionCoalesced( "
                 "CommitCertificateResponseCandidate(item)) "
-                "ELSE IF AsyncCertifiedFenceEscapeItem(item)"
+                "ELSE IF AsyncCertifiedFenceEscapeItem(item) "
+                "THEN \\/ AsyncControlServiceOccurrenceRetired(item) "
+                "\\/ CandidateAdmissionCoalesced(candidate)"
             ),
         }
         for response_kind, reviewed_branch in reviewed_response_branches.items():
@@ -55627,24 +55757,34 @@ asyncServeProducerEpisodeDue' =
     core_transition = _top_level_operator_body(
         source, "AsyncFairIngressCoreStateTransition", preserve_string_contents=True
     )
+    exact_import = (
+        'IF /\\ item.kind = "CommitCertificateResponse" '
+        "/\\ item \\in asyncSentItems "
+        "/\\ CommitCertificateResponseAuthorized(item) "
+        "/\\ DiscoveredCommitQcItem(item).envelope \\notin qcNetwork "
+        "THEN ImportAuthenticatedCommitCertificate( "
+        "DiscoveredCommitQcItem(item).envelope) ELSE UNCHANGED vars"
+    )
     if core_transition is not None:
-        transition_body, transition_line = core_transition
-        transition_normalized = " ".join(transition_body.split())
-        exact_import = (
-            'IF /\\ item.kind = "CommitCertificateResponse" '
-            "/\\ item \\in asyncSentItems "
-            "/\\ CommitCertificateResponseAuthorized(item) "
-            "/\\ DiscoveredCommitQcItem(item).envelope \\notin qcNetwork "
-            "THEN ImportAuthenticatedCommitCertificate( "
-            "DiscoveredCommitQcItem(item).envelope) "
-            "ELSE UNCHANGED vars"
-        )
-        if transition_normalized != exact_import:
+        core_body, core_line = core_transition
+        if " ".join(core_body.split()) != exact_import:
             errors.append(
-                f"{path}:{transition_line}: AsyncFairIngressCoreStateTransition "
-                "must import "
+                f"{path}:{core_line}: AsyncFairIngressCoreStateTransition must import "
                 "only an authorized, sent, not-yet-present Commit-certificate "
-                "response before scheduler admission"
+                "response"
+            )
+    drain_action = _top_level_operator_body(
+        source, "DrainFairIngressSelected", preserve_string_contents=True
+    )
+    if drain_action is not None:
+        drain_body, drain_line = drain_action
+        if " ".join(drain_body.split()).count(
+            "/\\ AsyncFairIngressCoreStateTransition(item)"
+        ) != 1:
+            errors.append(
+                f"{path}:{drain_line}: DrainFairIngressSelected must delegate "
+                "the exact Commit-certificate import transition once before "
+                "scheduler admission"
             )
 
     target_write_count = len(
@@ -56281,6 +56421,9 @@ asyncServeProducerEpisodeDue' =
         "AsyncItemTyped": (
             'item.kind = "TimeoutCertificate"',
             "AsyncTcEnvelopeTyped(item.envelope)",
+            'item.kind = "CommitCertificateResponse"',
+            "AsyncCommitCertificateResponseEnvelopeTyped(item.envelope)",
+            "item.source = item.envelope.request.envelope.recipient",
             'item.kind \\notin {"Noise", "Chunk", "CertifiedResponse", "CommitCertificateResponse"}',
             "item.source \\in ValidatorIds",
         ),
@@ -56509,6 +56652,7 @@ asyncServeProducerEpisodeDue' =
             "AsyncSelectedFairIngressItem(node)",
             "PopSelectedIngress(node, index, laneIndex)",
             "AsyncFairIngressCoreStateTransition(item)",
+            "CommitCertificateResponseAuthorized(item)",
             "CommitCertificateResponseCandidate(item)",
             "EnqueueCandidate( discoveredCandidate)",
             "MatchingCommitCertificateRequests(item)",
@@ -57176,12 +57320,20 @@ asyncServeProducerEpisodeDue' =
             "as an auxiliary prefix"
         )
     else:
-        runner_path, runner_source = _read_reviewed_rust_source(
+        runner_path, _runner_closure_source = _read_reviewed_rust_source(
             repo_root,
             runner_relative,
             errors,
             "production runner causal-admission source",
         )
+        try:
+            runner_source = runner_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as error:
+            errors.append(
+                f"{runner_path}: cannot read physical production runner "
+                f"causal-admission source: {error}"
+            )
+            runner_source = ""
         drive_definition = runner_source.find("\nfn drive_block_sync(")
         main_loop = (
             runner_source
@@ -57196,12 +57348,23 @@ asyncServeProducerEpisodeDue' =
                 "before drain_v2_ingress"
             )
 
+        drain_relative = (
+            "crates/iroha_core/src/sumeragi/v2_runner/decided_lane_recovery.rs"
+        )
+        drain_path, drain_source = _read_reviewed_rust_source(
+            repo_root,
+            drain_relative,
+            errors,
+            "physical production ingress-drain provider",
+        )
         drain = _require_rust_item(
-            runner_path, runner_source, "drain_v2_ingress", errors)
-        _require_rust_item_context(
-            runner_path, drain, (), "reviewed three-mode ingress drain", errors)
+            drain_path, drain_source, "drain_v2_ingress", errors
+        )
         drain_body = "" if drain is None else " ".join(drain.source.split())
-        turn_loop = drain_body.find("for turn in outer_ingress_turns(")
+        turn_loop = drain_body.find(
+            "for turn in outer_ingress_turns(limit, executor.context().id(), "
+            "executor.context().height)"
+        )
         runtime_turn = drain_body.find(
             "if turn == OuterIngressTurn::Runtime", turn_loop
         )
@@ -57216,7 +57379,7 @@ asyncServeProducerEpisodeDue' =
             0 <= turn_loop < runtime_turn < executor_turn < ingress_receive
         ):
             errors.append(
-                f"{runner_path}: every ordinary outer ingress occurrence must be preceded "
+                f"{drain_path}: every ordinary outer ingress occurrence must be preceded "
                 "by one serialized advance_executor turn"
             )
         for escape_contract, description in (
@@ -57260,41 +57423,13 @@ asyncServeProducerEpisodeDue' =
             ),
         ):
             if escape_contract not in drain_body:
-                errors.append(f"{runner_path}: {description}")
+                errors.append(f"{drain_path}: {description}")
 
-        outer = _require_rust_item(
-            runner_path, runner_source, "outer_ingress_turns", errors)
-        _require_rust_token_sequence(
-            runner_path,
-            outer,
-            "OuterIngressTurns::new(limit, context_id, height)",
-            "outer ingress factory must delegate to the move-only cursor",
-            errors,
+        outer_turns = _require_rust_item(
+            runner_path, runner_source, "outer_ingress_turns", errors
         )
-        cursor_next = _require_rust_item(runner_path, runner_source, "next", errors)
-        _require_rust_item_context(
-            runner_path,
-            cursor_next,
-            (("impl", "Iterator", "for", "OuterIngressTurns"),),
-            "move-only outer ingress cursor transition",
-            errors,
-        )
-        _require_rust_token_sequence(
-            runner_path,
-            cursor_next,
-            """
-self.next_turn = match turn {
-    OuterIngressTurn::Completion => OuterIngressTurn::Runtime,
-    OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,
-    OuterIngressTurn::Ingress => {
-        self.cycles_remaining -= 1;
-        OuterIngressTurn::Completion
-    }
-};
-Some(turn)
-""",
-            "outer_ingress_turns must keep the exact Completion/Runtime/Ingress alternation",
-            errors,
+        errors += _outer_ingress_cursor_source_fidelity_errors(
+            runner_path, runner_source, outer_turns
         )
 
     adapter_relative = "crates/iroha_core/src/sumeragi/v2.rs"
@@ -57317,38 +57452,8 @@ Some(turn)
             "step_with_defer_policy adapter method",
             errors,
         )
-        step_tokens = () if step is None else rust_code_tokens(step.source)
-        step_reducer = _require_rust_item(
-            adapter_path, adapter_source, "step_reducer", errors)
-        _require_rust_item_context(
-            adapter_path,
-            step_reducer,
-            (("impl", "SumeragiV2Adapter"),),
-            "fence-aware reducer step",
-            errors,
-        )
-        _require_rust_token_sequence(
-            adapter_path,
-            step_reducer,
-            """
-let before = self.reducer_fence_projection();
-let outcome = self.reducer.step(event)?;
-if self.reducer_fence_projection() != before {
-    self.advance_reducer_fence_generation()?;
-}
-Ok(outcome)
-""",
-            "fence-aware reducer step must advance its generation around the sole reducer transition",
-            errors,
-        )
-        reducer_positions = _token_sequence_positions(
-            step_tokens, rust_code_tokens("let outcome = match self.step_reducer(event)"))
-        drive_positions = _token_sequence_positions(
-            step_tokens, rust_code_tokens("let effects = match self.drive_effects(outcome.into_effects())"))
-        if not (
-            len(reducer_positions) == 1
-            and len(drive_positions) == 1
-            and reducer_positions[0] < drive_positions[0]
+        if not _adapter_step_has_synchronous_reducer_effect_dataflow(
+            "" if step is None else step.source
         ):
             errors.append(
                 f"{adapter_path}: reducer effects must enter drive_effects "
@@ -57448,116 +57553,9 @@ Ok(outcome)
             )
 
         consume = executor_items["consume_effects"]
-        _require_rust_token_sequence(
-            effects_path,
-            consume,
-            """
-let frontier = self
-    .runtime
-    .reconciliation_frontier()
-    .map_err(EffectExecutorError::Runtime)
-    .map_err(|error| self.close(error, services))?;
-if let Err(error) = self.preflight_effect_batch_frontier(&effects, frontier) {
-    return Err(self.close(error, services));
-}
-let ownership = match self.runtime.take_effect_ownership(&effects) {
-    Ok(ownership) => ownership,
-    Err(error) => {
-        return Err(self.close(EffectExecutorError::Runtime(error), services));
-    }
-};
-if let Err(error) = self.retain_effect_batch_at_frontier(effects, ownership, frontier) {
-    return Err(self.close(error, services));
-}
-if let Err(error) = self.commit_reconciliation_frontier(frontier, services) {
-    return Err(self.close_after_transferring_runtime_terminals(error, services));
-}
-if let Err(error) = self.consume_leader_wire_runtime_terminals(services) {
-    return Err(self.close(error, services));
-}
-let count = self
-    .drain_retained_effect_batch(services, true)
-""",
-            "consume_effects must snapshot, retain, and commit the reducer frontier before transferring terminals and draining",
-            errors,
+        errors.extend(
+            _consume_effects_replay_transfer_order_errors(effects_path, consume)
         )
-        if consume is not None:
-            consume_tokens = rust_code_tokens(consume.source)
-            ownership_tokens = rust_code_tokens(
-                "self.runtime.take_effect_ownership(&effects)"
-            )
-            preflight_tokens = rust_code_tokens(
-                "self.preflight_effect_batch_frontier(&effects, frontier)"
-            )
-            retain_tokens = rust_code_tokens(
-                "self.retain_effect_batch_at_frontier(effects, ownership, frontier)"
-            )
-            frontier_tokens = rust_code_tokens("self.runtime.reconciliation_frontier()")
-            commit_tokens = rust_code_tokens(
-                "self.commit_reconciliation_frontier(frontier, services)"
-            )
-            drain_tokens = rust_code_tokens(
-                "self.drain_retained_effect_batch(services, true)"
-            )
-            frontier_positions = [
-                index
-                for index in range(
-                    len(consume_tokens) - len(frontier_tokens) + 1
-                )
-                if consume_tokens[index : index + len(frontier_tokens)]
-                == frontier_tokens
-            ]
-            ownership_positions = [
-                index
-                for index in range(
-                    len(consume_tokens) - len(ownership_tokens) + 1
-                )
-                if consume_tokens[index : index + len(ownership_tokens)]
-                == ownership_tokens
-            ]
-            preflight_positions = [
-                index
-                for index in range(
-                    len(consume_tokens) - len(preflight_tokens) + 1
-                )
-                if consume_tokens[index : index + len(preflight_tokens)]
-                == preflight_tokens
-            ]
-            retain_positions = [
-                index
-                for index in range(len(consume_tokens) - len(retain_tokens) + 1)
-                if consume_tokens[index : index + len(retain_tokens)] == retain_tokens
-            ]
-            commit_positions = [
-                index
-                for index in range(len(consume_tokens) - len(commit_tokens) + 1)
-                if consume_tokens[index : index + len(commit_tokens)] == commit_tokens
-            ]
-            drain_positions = [
-                index
-                for index in range(len(consume_tokens) - len(drain_tokens) + 1)
-                if consume_tokens[index : index + len(drain_tokens)] == drain_tokens
-            ]
-            if not (
-                len(frontier_positions) == 1
-                and len(preflight_positions) == 1
-                and len(ownership_positions) == 1
-                and len(retain_positions) == 1
-                and len(commit_positions) == 1
-                and len(drain_positions) == 1
-                and frontier_positions[0]
-                < preflight_positions[0]
-                < ownership_positions[0]
-                < retain_positions[0]
-                < commit_positions[0]
-                < drain_positions[0]
-            ):
-                errors.append(
-                    f"{effects_path}:{consume.line}: consume_effects must acquire "
-                    "one frontier, preflight before consuming its ownership "
-                    "vector, retain exactly once, "
-                    "commit reconciliation, then perform one retained-batch drain"
-                )
 
         consume_recovery = executor_items["consume_pending_tip_recovery_effects"]
         _require_rust_token_sequence(
@@ -58459,7 +58457,7 @@ _OWNERSHIP_N1_MODEL_SHA256 = (
     "68468b4869ddee1da8c59916e968a87b8d522e4523b5bfe2141ea2aa145f7c14"
 )
 _OWNERSHIP_N1_CONFIG_SHA256 = (
-    "7d08a3e8d5c039b31ff11e25775a36cf97da205c00ca2819191f41296eff5ffc"
+    "0171f01d126953564035f963a51f4d9c396b1e53adcac62c2d92f42b71ea637a"
 )
 _OWNERSHIP_N1_DEFINITION_OVERRIDES = (
     ("InstallTcFromEvidence", "OwnershipInstallTcFromEvidence"),
@@ -58921,9 +58919,7 @@ match tag {
     )
     semantic_admission_source = """
 if let LaneRelayMessage::CertifiedMergeSidecar {
-    sender,
-    message: sidecar,
-    ..
+    sender, reply_route, message: sidecar,
 } = &message
 {
     let allocating_requester = match sidecar {
@@ -58934,11 +58930,12 @@ if let LaneRelayMessage::CertifiedMergeSidecar {
         | CertifiedMergeSidecarMessage::Chunk(_) => None,
     };
     if allocating_requester.is_some_and(|requester| {
-        requester != sender || !self.block.frozen_roster_contains(sender)
+        requester != sender || !reply_route.as_ref().is_some_and(|route|
+            route.is_active() && route.semantic_target() == sender)
     }) {
         iroha_logger::debug!(
             %sender,
-            "rejecting non-roster certified merge-sidecar allocation before lane ingress"
+            "rejecting unauthenticated certified merge-sidecar allocation before lane ingress"
         );
         return SumeragiIngressDisposition::Rejected(message);
     }
@@ -58948,7 +58945,7 @@ if let LaneRelayMessage::CertifiedMergeSidecar {
         ingress_path,
         shared_lane_ingress,
         semantic_admission_source,
-        "Request and Close must bind their semantic requester to the frozen roster before shared lane-queue admission",
+        "Request and Close must bind their semantic requester to an active authenticated reply route before shared lane-queue admission",
         errors,
     )
     if shared_lane_ingress is not None:
@@ -58976,7 +58973,7 @@ if let LaneRelayMessage::CertifiedMergeSidecar {
             or roster_guard_index >= queue_transfer_index
         ):
             errors.append(
-                f"{ingress_path}:{shared_lane_ingress.line}: frozen semantic "
+                f"{ingress_path}:{shared_lane_ingress.line}: authenticated semantic "
                 "Request/Close admission must precede the shared lane queue"
             )
 
@@ -59151,7 +59148,7 @@ self.server_streams
         "V2LaneWorkAdapter",
         "accept_certified_merge_sidecar_request",
         errors,
-        "frozen-roster sidecar Request admission",
+        "current-or-immediate-predecessor sidecar Request admission",
     )
     frozen_roster_contains = _require_qualified_rust_item(
         lane_path,
@@ -59179,12 +59176,46 @@ fn frozen_roster_contains(&self, peer: &PeerId) -> bool {
         lane_path,
         lane_request,
         """
-if !self.frozen_roster_contains(&sender) {
-    return Ok(V2LaneIngressOutcome::Rejected);
-}
 let Some(reply_route) = reply_route else {
     return Ok(V2LaneIngressOutcome::Rejected);
 };
+if !reply_route.is_active() || reply_route.semantic_target() != &sender {
+    return Ok(V2LaneIngressOutcome::Rejected);
+}
+let sender_is_current = self.frozen_roster_contains(&sender);
+if !sender_is_current {
+    if request.version != CERTIFIED_MERGE_SIDECAR_VERSION_V1
+        || request.requester != sender
+        || request.responder != self.local_peer
+        || request.closed_through >= request.semantic_sequence.get()
+        || request.request_id != request.canonical_request_id()
+        || request.encoded_len == 0
+        || request.encoded_len
+            > u64::try_from(MAX_MERGE_LEDGER_ENTRY_BYTES).unwrap_or(u64::MAX)
+        || !self
+            .immediate_predecessor_sidecar_requesters()
+            .is_some_and(|requesters| requesters.contains(&sender))
+    {
+        return Ok(V2LaneIngressOutcome::Rejected);
+    }
+    if self
+        .merge_sidecars
+        .would_allocate_current_server_stream(&sender, request.service_generation)
+    {
+        let historical_streams =
+            self.merge_sidecars
+                .server_stream_count_matching(|requester| {
+                    !self
+                        .context
+                        .roster
+                        .iter()
+                        .any(|entry| &entry.validator == requester)
+                });
+        if historical_streams >= wire::MAX_VALIDATORS_PER_HEIGHT {
+            return Ok(V2LaneIngressOutcome::Rejected);
+        }
+    }
+}
 let now = Instant::now();
 let admission = match self.merge_sidecars.admit_server_request(
     &sender,
@@ -59194,14 +59225,14 @@ let admission = match self.merge_sidecars.admit_server_request(
     now,
 ) {
 """,
-        "a sidecar Request semantic sender must belong to the frozen HeightContext roster before route or transport allocation",
+        "a sidecar Request must bind an active exact route and admit only a current sender or a structurally valid bounded immediate predecessor before transport allocation",
         errors,
     )
     _require_rust_token_sequence(
         lane_path,
         lane_request,
         "self.frozen_roster_contains",
-        "Request admission must check only the semantic sender against the frozen roster so an authenticated relay hub may remain outside it",
+        "Request admission must classify only the semantic sender against the frozen roster so an authenticated relay hub may remain outside it",
         errors,
         count=1,
     )
@@ -59211,13 +59242,17 @@ let admission = match self.merge_sidecars.admit_server_request(
         "V2LaneWorkAdapter",
         "accept_certified_merge_sidecar_close",
         errors,
-        "frozen-roster sidecar Close admission",
+        "current-or-owned-predecessor sidecar Close admission",
     )
     _require_rust_token_sequence(
         lane_path,
         lane_close,
         """
-if !self.frozen_roster_contains(&sender) {
+if !self.frozen_roster_contains(&sender)
+    && !self
+        .merge_sidecars
+        .owns_current_server_stream(&sender, close.service_generation)
+{
     return Ok(V2LaneIngressOutcome::Rejected);
 }
 let Some(reply_route) = reply_route else {
@@ -59233,14 +59268,14 @@ let ack = match self.merge_sidecars.admit_server_close(
     &self.local_peer,
 ) {
 """,
-        "a sidecar Close semantic sender must belong to the frozen HeightContext roster before route or stream allocation",
+        "a sidecar Close must come from the frozen HeightContext roster or an already-owned current predecessor stream before route or stream mutation",
         errors,
     )
     _require_rust_token_sequence(
         lane_path,
         lane_close,
         "self.frozen_roster_contains",
-        "Close admission must check only the semantic sender against the frozen roster so an authenticated relay hub may remain outside it",
+        "Close admission must classify only the semantic sender against the frozen roster so an authenticated relay hub may remain outside it",
         errors,
         count=1,
     )
@@ -59584,6 +59619,12 @@ fn require_peeked_lane_work_effect(
         "every successful lane-work peek must fail stop if its exclusive drain becomes empty",
         errors,
         count=3,
+    )
+    run_inner = _require_rust_item(
+        runner_path,
+        runner_source,
+        "run_inner",
+        errors,
     )
     _require_rust_token_sequence(
         runner_path,
@@ -60716,14 +60757,14 @@ fn validate_shared_ownership_geometry(
         "accept_payload_chunk_with_ingress_ownership",
         "accept_certified_body_response_with_ingress_ownership",
         "classify_payload_chunk_lifecycle",
-        "begin_apply",
+        "begin_apply", "matches_apply",
         "complete_application",
     ):
         item = _require_rust_item(effects_path, effects_source, item_name, errors)
         _require_rust_item_context(
             effects_path,
             item,
-            effect_executor_context,
+            (("impl", "FinalityCompletion"),) if item_name == "matches_apply" else effect_executor_context,
             f"ingress-owned effect consumer {item_name}",
             errors,
         )
@@ -60838,6 +60879,7 @@ struct FinalityCompletion {
     tag: EventTag,
     receipt: KuraV2CommitReceipt,
     artifact: wire::finality::V2FinalityArtifact,
+    ownership: RuntimeEffectOwnership,
 }
 """,
         "durable Apply tombstone must retain the exact reducer incarnation tag and typed Kura finality",
@@ -60906,6 +60948,7 @@ self.finality_completion = Some(FinalityCompletion {
     tag,
     receipt: completion.receipt,
     artifact: completion.artifact,
+    ownership,
 });
 """,
         "durable Apply completion must retain the exact tag in its non-resurrecting tombstone",
@@ -60915,9 +60958,9 @@ self.finality_completion = Some(FinalityCompletion {
         effects_path,
         effects_source,
         "finality_completion",
-        "the durable Apply completion tombstone field must have exactly its eight reviewed uses and no additional mutation surface",
+        "the durable Apply completion tombstone field must have exactly its ten reviewed uses and no additional mutation surface",
         errors,
-        count=8,
+        count=10,
     )
     for expected, description in (
         (
@@ -60971,17 +61014,13 @@ self.finality_completion
         effects_path,
         ingress_seam_items["effects::begin_apply"][1],
         """
-if let Some(finality) = &self.finality_completion {
-    let exact = finality.tag == tag
-        && finality.artifact.height_context == self.context
-        && finality.artifact.subject == subject
-        && finality.artifact.commit_qc == certificate;
-    if exact {
-        return Ok(());
+if let Some(finality) = self.finality_completion.as_ref() {
+    if !finality.matches_apply(tag, &self.context, subject, &certificate, &ownership) {
+        return Err(EffectExecutorError::Contract(
+            "conflicting Apply retransmission after durable finality".to_owned(),
+        ));
     }
-    return Err(EffectExecutorError::Contract(
-        "conflicting Apply retransmission after durable completion".to_owned(),
-    ));
+    return Ok(());
 }
 """,
         "durable Apply completion must tombstone the exact logical request against later periodic recreation",
@@ -60992,10 +61031,15 @@ if let Some(finality) = &self.finality_completion {
         ingress_seam_items["effects::begin_apply"][1],
         """
 if let Some(existing) = self.pending_applications.values().next() {
-    let exact = existing.task.tag == tag
+    let same_decision = existing.task.tag == tag
         && existing.task.subject == subject
-        && existing.task.certificate == certificate;
-    if !exact {
+        && existing.task.ownership() == &ownership
+        && existing
+            .task
+            .certificate
+            .as_ref()
+            .same_commit_decision(certificate.as_ref());
+    if !same_decision {
         return Err(EffectExecutorError::Contract(
             "conflicting Apply retransmission for one height".to_owned(),
         ));
@@ -61062,16 +61106,20 @@ if token.matches_exact_body(manifest.round, manifest.subject, HashOf::new(manife
             "worker::sweep_buffered_payload_chunk_lifecycles"
         ][1],
         """
-Ok(PayloadChunkLifecycleDisposition::Retain) => {
-    retained.push_back(buffered);
-    continue;
+Ok(false) => {
+    self.orphan_lifecycle_sweep_cursor = Some(OrphanPayloadLifecycleSweepCursor {
+        manifest_hash: cursor.manifest_hash,
+        chunk_offset: cursor.chunk_offset.saturating_add(1),
+    });
 }
 Err(error) => {
+    self.orphan_lifecycle_sweep_cursor = Some(OrphanPayloadLifecycleSweepCursor {
+        manifest_hash: cursor.manifest_hash,
+        chunk_offset: cursor.chunk_offset.saturating_add(1),
+    });
     if first_error.is_none() {
         first_error = Some(error);
     }
-    retained.push_back(buffered);
-    continue;
 }
 """,
         "the buffered lifecycle sweep must preserve every nonterminal or unclassifiable exact owner",
@@ -61500,8 +61548,8 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
         errors,
     )
 
-    # The two lane coalescing branches and the exact Serve retry commit are the
-    # sole reviewed production consumers of the public observed-history
+    # The two lane branches, exact Serve retry, and reply-target fanout plan are
+    # the reviewed production consumers of the public observed-history
     # reconciliation kernel. Each consumes the operation-owned receipt before
     # committing its paired ownership state.
     _require_rust_source_token_sequence(
@@ -61516,9 +61564,9 @@ if !executor.can_admit_network_message_with_ingress_ownership(message, ingress_o
         worker_path,
         worker_source,
         ".merge_observed_with_receipt(",
-        "the exact Serve retry must be the sole worker-side observed-history reconciliation seam",
+        "the exact Serve retry and reply-target plan must be the worker-side observed-history reconciliation seams",
         errors,
-        count=1,
+        count=2,
     )
     for path, source in (
         (merge_path, merge_source),
@@ -61909,13 +61957,29 @@ semantic_peer_capacity: as_u64(MAX_CERTIFIED_MERGE_SEMANTIC_PEERS)?,
         ),
         """
 let stream_bytes = MAX_CERTIFIED_MERGE_SEMANTIC_PEERS
-    .checked_mul(2)
+    .checked_add(MAX_CERTIFIED_MERGE_SERVER_STREAMS)
     .and_then(|count| count.checked_mul(LIFECYCLE_JOURNAL_STREAM_BYTES))
     .ok_or(MergeSidecarError::Capacity(
         "lifecycle journal stream byte geometry",
     ))?;
 """,
-        "lifecycle byte geometry must reserve requester and responder stream records for every semantic validator",
+        "lifecycle byte geometry must reserve the distinct requester and bounded responder stream records",
+        errors,
+    )
+    _require_rust_token_sequence(
+        merge_path,
+        merge_lifecycle_items.get(
+            "MergeSidecarTransport::lifecycle_protocol_max_snapshot_bytes"
+        ),
+        """
+let (_, attempts) = Self::derive_server_request_capacities(
+    self.reply_source_capacity,
+    self.limits,
+    MAX_CERTIFIED_MERGE_SERVER_STREAMS,
+)?;
+Self::lifecycle_max_snapshot_bytes_for_attempt_capacity(attempts)
+""",
+        "lifecycle protocol sizing must reserve the maximum bounded responder roster rather than only the live roster",
         errors,
     )
     _require_rust_token_sequence(
@@ -63924,15 +63988,18 @@ if self.server_roster_digest != server_roster_digest {
     )?;
     return Ok(self);
 }
-if self.server_stream_capacity != server_stream_capacity {
+if server_stream_capacity < self.server_stream_capacity {
     return Err(MergeSidecarError::Capacity(
         "merge-sidecar retained-height roster capacity drift",
     ));
 }
+if server_stream_capacity > self.server_stream_capacity {
+    self.configure_server_roster_geometry(server_stream_capacity, server_roster_digest)?;
+}
 self.requeue_retained_outbound_after_height_rollover();
 Ok(self)
 """,
-        "validated restart rehydration must use its private restoration fence only for a changed-roster durable supersession and otherwise preserve equal-roster state",
+        "validated restart rehydration must use its private restoration fence for changed-roster supersession and permit only monotonic same-roster capacity expansion",
         errors,
     )
     _require_rust_token_sequence(
@@ -64396,6 +64463,13 @@ let (server_request_gate_capacity, server_request_attempt_capacity) =
             "MergeSidecarTransport::derive_server_request_capacities"
         ),
         """
+if server_stream_capacity == 0
+    || server_stream_capacity > MAX_CERTIFIED_MERGE_SERVER_STREAMS
+{
+    return Err(MergeSidecarError::Capacity(
+        "server semantic requester geometry",
+    ));
+}
 let gates = server_stream_capacity
     .checked_mul(limits.inbound_sessions_per_peer)
     .ok_or(MergeSidecarError::Capacity("server request gate geometry"))?;
@@ -64407,7 +64481,7 @@ let attempts =
         ))?;
 Ok((gates, attempts))
 """,
-        "sidecar responder gates and per-source attempts must use checked products of the immutable roster and authenticated-source geometry",
+        "sidecar responder gates and per-source attempts must enforce the protocol roster bound and use checked products of the authenticated-source geometry",
         errors,
     )
     _require_rust_token_sequence(
@@ -66616,6 +66690,8 @@ Self {
     merge_leader_body_frame_headroom_bytes,
     autonomous_carrier_headroom_bytes,
     autonomous_producer_recheck,
+    historical_recovery_retry_floor,
+    historical_recovery_retry_ceiling,
     historical_recovery_stuck_attempts,
     historical_recovery_retry_tier_attempts,
     historical_recovery_max_retry_tier,
@@ -66631,6 +66707,26 @@ Self {
     _require_rust_token_sequence(
         lane_path,
         lane_ack_items.get(
+            "V2LaneWorkAdapter::new_with_output_guard_and_transport"
+        ),
+        """
+let context = verified_context.context().clone();
+let frozen_validator_pops = context
+    .roster
+    .iter()
+    .zip(verified_context.proofs_of_possession())
+    .map(|(entry, pop)| (entry.validator.public_key().clone(), pop.clone()))
+    .collect();
+Self::new_with_output_guard_and_transport_inner(
+    context,
+    frozen_validator_pops,
+""",
+        "lane construction must derive its context and frozen validator proofs from one verified carrier",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_ack_items.get(
             "V2LaneWorkAdapter::new_with_output_guard_and_transport_inner"
         ),
         """
@@ -66639,7 +66735,7 @@ let sidecar_server_roster = context
     .iter()
     .map(|entry| entry.validator.clone())
     .collect::<Vec<_>>();
-let sidecar_server_stream_capacity = sidecar_server_roster.len();
+let sidecar_server_stream_capacity = merge_sidecar_server_stream_capacity(sidecar_server_roster.len());
 let sidecar_server_roster_digest =
     canonical_merge_sidecar_roster_digest(&sidecar_server_roster);
 let merge_sidecars = match retained_merge_sidecars {
@@ -67682,11 +67778,25 @@ if autonomous_certificate {
         lane_path,
         lane_ack_items.get("V2LaneWorkAdapter::hydrate_canonical_lane_artifacts"),
         """
-let _ = self
-    .lane_sessions
-    .insert_recovered_proposal_replacing_uncommitted_conflict(proposal);
+if self.lane_sessions.len() >= hydration_capacity
+    && !self.lane_sessions.contains_proposal(proposal)
+{
+    self.output_guard.close_admission_for_restart();
+    return Err(V2LaneWorkError::InvalidContext(
+        "historical autonomous recovery sessions exceed bounded capacity".to_owned(),
+    ));
+}
+self.lane_sessions
+    .insert_recovered_proposal_replacing_uncommitted_conflict(proposal.clone())
+    .map_err(|error| V2LaneWorkError::InvalidContext(error.to_string()))?;
+self.authorize_autonomous_ready_from_durable_input(
+    &record.payload,
+    proposal,
+    record.historical_context_id,
+)
+.map_err(V2LaneWorkError::InvalidContext)?;
 """,
-        "late canonical lane hydration must retain the exact proposal as bounded recovery work",
+        "late canonical lane hydration must bound and authorize every exact historical recovery proposal before successor work",
         errors,
     )
     _require_rust_token_sequence(
@@ -67837,6 +67947,8 @@ lane_work_limits(
     network.reply_route_source_capacity(),
     consensus_frame_byte_capacity,
     block_sync_frame_byte_capacity,
+    retransmit_interval,
+    round_timeout,
 )?
 """,
         "runner construction must pass the exact P2P source geometry into lane work",
@@ -68056,6 +68168,7 @@ let mut services = ProductionV2Services::start(
 Arc::clone(&output_guard),
 exact_output_transport_owner,
 retained_merge_sidecars.take(),
+_lifecycle_process_generation.clone(),
 )
 """,
         "runner construction must move the paired transport owner alongside any retained sidecar ownership into lane work",
@@ -68569,62 +68682,8 @@ fn reply_target_merge_plan(&self, candidate: &Self) -> Result<ReplyTargetMergePl
         worker_ack_items.get(
             "PendingExactFanout::reply_target_merge_plan_with_hooks"
         ),
-        """
-let retained_routes = self.reply_routes.clone().ok_or_else(|| {
-    "Sumeragi v2 retained reply fanout lost its bounded route history".to_owned()
-})?;
-let mut candidate_routes = candidate
-    .reply_routes
-    .clone()
-    .ok_or_else(|| "Sumeragi v2 reply retry lost its bounded route history".to_owned())?;
-let mut candidate_ownership = candidate.ingress_ownership.clone();
-let mut merge_attempt = 0usize;
-let merge_receipt = loop {
-    let (_, prune_receipt) = candidate_routes.retain_active_with_receipt();
-    if let Some(ownership) = candidate_ownership.as_mut() {
-        candidate_routes = ownership
-            .project_retained_reply_routes(prune_receipt)
-            .ok_or_else(|| {
-                "Sumeragi v2 candidate pruning lost fair-ingress ownership".to_owned()
-            })?;
-    }
-    let live_before_merge = candidate_routes.len();
-    after_candidate_prune(merge_attempt);
-
-    let mut merged_routes = retained_routes.clone();
-    match merged_routes.merge_with_receipt(&candidate_routes) {
-        Ok(receipt) => break receipt,
-        Err(NetworkReplyRouteError::Inactive) => {
-            let (_, prune_receipt) = candidate_routes.retain_active_with_receipt();
-            if let Some(ownership) = candidate_ownership.as_mut() {
-                candidate_routes = ownership
-                    .project_retained_reply_routes(prune_receipt)
-                    .ok_or_else(|| {
-                        "Sumeragi v2 raced candidate pruning lost fair-ingress ownership"
-                            .to_owned()
-                    })?;
-            }
-            if candidate_routes.len() >= live_before_merge {
-                return Err(
-                    "Sumeragi v2 inactive reply-history retry made no progress".to_owned()
-                );
-            }
-            merge_attempt = merge_attempt.checked_add(1).ok_or_else(|| {
-                "Sumeragi v2 reply-history retry count overflowed".to_owned()
-            })?;
-        }
-        Err(NetworkReplyRouteError::Stale) => {
-            return Err(
-                "Sumeragi v2 outbound reply fanout contains a stale capability".to_owned(),
-            );
-        }
-        Err(error) => {
-            return Err(format!("invalid Sumeragi v2 reply route history: {error}"));
-        }
-    }
-};
-""",
-        "candidate pruning must remain bound to its ownership receipt and strict route merge must return an opaque exact-history receipt",
+        _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES["reply_route_merge_receipt"],
+        "candidate pruning must retain its ownership receipt while strict or explicitly authorized superseded history produces a typed merge receipt",
         errors,
     )
     _require_rust_token_sequence(
@@ -68769,40 +68828,8 @@ for candidate_index in unmatched {
         worker_ack_items.get(
             "PendingExactFanout::reply_target_merge_plan_with_hooks"
         ),
-        """
-after_route_merge();
-let (merged_routes, ingress_ownership) =
-    match (&self.ingress_ownership, candidate_ownership) {
-    (Some(retained), Some(candidate)) => {
-        let mut retained = retained.clone();
-        let Some(receipt_routes) =
-            retained.merge_downstream_with_strict_receipt(candidate, merge_receipt)
-        else {
-            return Err(
-                "Sumeragi v2 exact-output coalescing lost fair-ingress ownership"
-                    .to_owned(),
-            );
-        };
-        (receipt_routes, Some(retained))
-    }
-    (None, None) => {
-        let receipt_routes = merge_receipt
-            .into_output(&retained_routes, &candidate_routes)
-            .ok_or_else(|| {
-                "Sumeragi v2 exact-output route receipt changed its exact histories"
-                    .to_owned()
-            })?;
-        (receipt_routes, None)
-    }
-    (Some(_), None) | (None, Some(_)) => {
-        return Err(
-            "Sumeragi v2 exact-output retry changed fair-ingress ownership shape"
-                .to_owned(),
-        );
-    }
-};
-""",
-        "retained fair-ingress ownership must consume the strict receipt and yield the sole authoritative route snapshot",
+        _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES["reply_route_ownership_receipt"],
+        "retained fair-ingress ownership must consume the typed strict or superseded receipt and yield the sole authoritative route snapshot",
         errors,
     )
     _require_rust_token_sequence(
@@ -69397,9 +69424,7 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
         errors,
     )
     durable_history_items: dict[str, RustItem | None] = {}
-    for item_name, expected_sha256 in (
-        _PRODUCTION_DURABLE_HISTORY_WORKER_ITEM_SHA256.items()
-    ):
+    for item_name, expected_sha256 in _PRODUCTION_DURABLE_HISTORY_WORKER_ITEM_SHA256.items():
         item = _require_rust_item(worker_path, worker_source, item_name, errors)
         durable_history_items[item_name] = item
         _require_rust_item_context(
@@ -69418,11 +69443,8 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
                     f"reviewed token digest {expected_sha256}; found "
                     f"{observed_sha256}"
                 )
-
     exact_output_claim_items: dict[str, RustItem | None] = {}
-    for item_name, expected_sha256 in (
-        _PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256.items()
-    ):
+    for item_name, expected_sha256 in _PRODUCTION_EXACT_OUTPUT_CLAIM_ITEM_SHA256.items():
         item = _require_rust_item(worker_path, worker_source, item_name, errors)
         exact_output_claim_items[item_name] = item
         if item_name == "covers":
@@ -69462,9 +69484,7 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
         lane_source = ""
     else:
         lane_source = lane_path.read_text(encoding="utf-8")
-    for item_name, expected_sha256 in (
-        _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256.items()
-    ):
+    for item_name, expected_sha256 in _PRODUCTION_LANE_ROLLOVER_AUTHORITY_ITEM_SHA256.items():
         item = _require_rust_item(lane_path, lane_source, item_name, errors)
         lane_items[item_name] = item
         if item_name == "covered_source_hash":
@@ -69495,6 +69515,13 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
                     f"reviewed token digest {expected_sha256}; found "
                     f"{observed_sha256}"
                 )
+    for path, item, expected, description in (
+        (worker_path, exact_output_claim_items.get("accepts_superseded_reply_delivery"), "const fn accepts_superseded_reply_delivery ( & self ) -> bool { matches ! ( self , Self :: DurableCommitCertificateResponse { .. } | Self :: DurableCertifiedBodyResponse { .. } ) }", "superseded reply history must be limited to durable global response claims"),
+        (effects_path, ingress_seam_items["effects::matches_apply"][1], "fn matches_apply ( & self , tag : EventTag , context : & wire :: HeightContext , subject : wire :: BlockSubject , certificate : & wire :: QuorumCertificate , ownership : & RuntimeEffectOwnership , ) -> bool { self . tag == tag && self . ownership == * ownership && self . artifact . validate ( ) . is_ok ( ) && self . artifact . height_context == * context && self . artifact . subject == subject && self . artifact . commit_qc . as_ref ( ) . same_commit_decision ( certificate . as_ref ( ) ) && self . receipt . height ( ) == context . height && self . receipt . context_id ( ) == context . id ( ) && self . receipt . block_hash ( ) == subject . block_hash && self . receipt . subject ( ) == subject && self . receipt . certificate ( ) == self . artifact . commit_qc . as_ref ( ) && self . receipt . artifact_hash ( ) == HashOf :: new ( & self . artifact ) }", "durable Apply tombstone equality must bind tag, ownership, finality decision, and Kura receipt"),
+        (lane_path, lane_items.get("durable_historical_lane_output_source_hash"), "pub ( crate ) fn durable_historical_lane_output_source_hash ( kura : & Kura , message : & BlockMessage , ) -> Result < Option < Hash > , String > { let Some ( ( _ , proposal_hash ) ) = lane_output_identity ( message ) else { return Ok ( None ) ; } ; let ( lane_id , lane_block_height ) = match message { BlockMessage :: LaneBlockProposal ( proposal ) => ( proposal . descriptor . lane_id , proposal . descriptor . lane_block_height , ) , BlockMessage :: LaneBlockVote ( vote ) => ( vote . body . lane_id , vote . body . lane_block_height ) , BlockMessage :: LaneBlockQc ( qc ) => ( qc . body . lane_id , qc . body . lane_block_height ) , BlockMessage :: LaneBlockCertificate ( certificate ) => ( certificate . proposal . descriptor . lane_id , certificate . proposal . descriptor . lane_block_height , ) , _ => return Ok ( None ) , } ; let Some ( durable ) = kura . read_certified_lane_block_artifact ( lane_id , lane_block_height ) else { return Ok ( None ) ; } ; if durable . proposal . proposal_hash != proposal_hash { return Ok ( None ) ; } if let Err ( retained_error ) = validate_winning_lane_output ( message , & durable . proposal , & durable . signer_pops ) { let signer_pops = durable_historical_lane_verification_pops ( kura , & durable ) ? ; if signer_pops == durable . signer_pops { return Err ( retained_error ) ; } validate_winning_lane_output ( message , & durable . proposal , & signer_pops ) ? ; } let durable_hash = HashOf :: new ( & durable ) ; Ok ( Some ( Hash :: new_from_chunks ( & [ , durable_hash . as_ref ( ) , HashOf :: new ( message ) . as_ref ( ) , ] ) ) ) }", "historical lane retirement must authenticate the exact durable proposal and bind its output hash"),
+        (lane_path, lane_items.get("durable_historical_lane_verification_pops"), "fn durable_historical_lane_verification_pops ( kura : & Kura , durable : & CertifiedLaneBlockArtifact , ) -> Result < BTreeMap < PublicKey , Vec < u8 > > , String > { let mut pops = durable . signer_pops . clone ( ) ; if let Some ( validator_pops ) = validated_autonomous_validator_pops ( & durable . prepare_qc , & durable . proposal . descriptor . validator_set , ) ? { if durable . commit_qc . validator_set != durable . proposal . descriptor . validator_set { return Err ( . to_owned ( ) ) ; } pops . extend ( validator_pops ) ; return Ok ( pops ) ; } let proposal_height = durable . proposal . descriptor . proposal_height ; let Some ( finality ) = kura . v2_finality_artifact ( proposal_height ) . map_err ( | error | format ! ( ) ) ? else { return Ok ( pops ) ; } ; let hint = durable . proposal . payload_block_hint . ok_or_else ( || . to_owned ( ) ) ? ; if finality . height != proposal_height || finality . height_context . height != proposal_height || hint . proposal_height != proposal_height || hint . proposal_block_hash != finality . block_hash { return Err ( . to_owned ( ) , ) ; } wire :: finality :: verify_validator_roster_pops ( & finality . height_context , & finality . validator_set_pops , ) . map_err ( | error | format ! ( ) ) ? ; for ( entry , pop ) in finality . height_context . roster . iter ( ) . zip ( & finality . validator_set_pops ) { if durable . proposal . descriptor . validator_set . contains ( & entry . validator ) { pops . insert ( entry . validator . public_key ( ) . clone ( ) , pop . clone ( ) ) ; } } Ok ( pops ) }", "historical lane verification must source alternate signer PoPs from the frozen finality roster"),
+    ):
+        _require_exact_rust_tokens(path, item, expected, description, errors)
 
     _require_rust_token_sequence(
         worker_path,
@@ -69875,22 +69902,15 @@ let covered = match envelope.as_message() {
     _require_rust_token_sequence(
         worker_path,
         exact_output_items.get("applied_height_reconstruction_covers"),
-        """
-lane_message @ (BlockMessage::LaneBlockProposal(_)
-| BlockMessage::LaneBlockVote(_)
-| BlockMessage::LaneBlockQc(_)
-| BlockMessage::LaneBlockCertificate(_))
-    if matches!(rollover_claim, ExactOutputRolloverClaim::Lane(_)) =>
-{
-    durable_lane_authority
-        .ok_or_else(|| {
-            "Sumeragi v2 lane output lacks a typed durable rollover authority".to_owned()
-        })?
-        .covered_source_hash(artifact, lane_message)?
-        .is_some()
-}
-""",
-        "lane output retirement must use the exact typed durable lane authority",
+        _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES["lane_output_retirement_authority"],
+        "lane output retirement must require exact typed durable or independently readable historical lane authority",
+        errors,
+    )
+    _require_rust_token_sequence(
+        worker_path,
+        exact_output_items.get("applied_height_reconstruction_covers"),
+        _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES["lane_output_retirement_use"],
+        "lane output retirement must route every typed lane class through the reviewed authority classifier",
         errors,
     )
     _require_rust_token_sequence(
@@ -70043,21 +70063,7 @@ if self.finality_artifact_hash != HashOf::new(finality_artifact)
 let Some((proposal_height, proposal_hash)) = lane_output_identity(message) else {
     return Ok(None);
 };
-if proposal_height != self.height {
-    return Ok(None);
-}
-""",
-        "lane rollover authority must bind the exact finality artifact and height",
-        errors,
-    )
-    _require_rust_token_sequence(
-        lane_path,
-        lane_items.get("covered_source_hash"),
-        """
-if self.winning_proposal_hashes.contains(&proposal_hash) {
-    let source = self.durable_sessions.get(&proposal_hash).ok_or_else(|| {
-        "winning Sumeragi v2 lane output lacks its exact durable session witness".to_owned()
-    })?;
+if let Some(source) = self.durable_sessions.get(&proposal_hash) {
     let covered = match source {
         DurableLaneSessionSource::Persistent {
             proposal,
@@ -70068,7 +70074,36 @@ if self.winning_proposal_hashes.contains(&proposal_hash) {
             Some(*durable_source_hash)
         }
 """,
-        "winning lane output must use its proposal-keyed durable session witness",
+        "lane rollover authority must bind the exact finality artifact and consult its proposal-keyed durable source before height supersession",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("covered_source_hash"),
+        """
+if covered.is_some() {
+    return Ok(covered);
+}
+if proposal_height != self.height
+    || self.winning_proposal_hashes.contains(&proposal_hash)
+{
+    return Err(
+        "Sumeragi v2 lane output does not match its exact rollover session witness"
+            .to_owned(),
+    );
+}
+}
+if proposal_height != self.height {
+    return Ok(None);
+}
+if self.winning_proposal_hashes.contains(&proposal_hash) {
+    return Err(
+        "winning Sumeragi v2 lane output lacks its exact rollover session witness"
+            .to_owned(),
+    );
+}
+""",
+        "lane rollover authority must preserve older retained sources and reject every mismatched or missing current winner witness",
         errors,
     )
     _require_rust_token_sequence(
@@ -70084,6 +70119,20 @@ Ok(Some(Hash::new_from_chunks(&[
 ])))
 """,
         "non-winning lane output must be validated before artifact-bound supersession",
+        errors,
+    )
+    _require_rust_token_sequence(
+        lane_path,
+        lane_items.get("validate_winning_lane_output"),
+        """
+BlockMessage::LaneBlockVote(vote) => {
+    validate_lane_vote_for_proposal(vote, proposal)?;
+}
+BlockMessage::LaneBlockQc(qc) => {
+    validate_winning_lane_qc(qc, proposal, signer_pops)?;
+}
+""",
+        "winning lane output validation must authenticate both standalone votes and aggregate certificates against the exact proposal",
         errors,
     )
     _require_rust_token_sequence(
@@ -70153,49 +70202,10 @@ if ownerships.len().saturating_add(autonomous_envelopes.len())
     _require_rust_token_sequence(
         lane_path,
         lane_items.get("durable_lane_rollover_authority"),
-        """
-let durable = self
-    .kura
-    .read_certified_lane_block_artifact(
-        descriptor.lane_id,
-        descriptor.lane_block_height,
-    )
-    .ok_or_else(|| {
-        V2LaneWorkError::Persistence(
-            "retained lane CommitQC has no durable certified artifact".to_owned(),
-        )
-    })?;
-let autonomous_payload = self
-    .canonical_autonomous_anchor_matches_kura(proposal)
-    .then(|| {
-        self.kura.read_autonomous_lane_block_artifact(
-            descriptor.lane_id,
-            descriptor.lane_block_height,
-            network_id,
-            self.context.epoch,
-        )
-    })
-    .flatten()
-    .map(|artifact| artifact.executable_payload);
-let application_receipt = if autonomous_payload.is_some() {
-    None
-} else {
-    Some(
-        self.kura
-            .read_lane_block_application_receipt(
-                descriptor.lane_id,
-                descriptor.lane_block_height,
-            )
-            .ok_or_else(|| {
-                V2LaneWorkError::Persistence(
-                    "retained lane CommitQC has no durable application receipt"
-                        .to_owned(),
-                )
-            })?,
-    )
-};
-""",
-        "lane authority builder must read an exact durable certificate and the appropriate ordinary or autonomous application witness",
+        _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES[
+            "lane_durable_or_retained_source"
+        ],
+        "lane authority builder must require either an exact durable certificate or the bounded retained successor owner and bind the appropriate ordinary or autonomous application witness",
         errors,
     )
     _require_rust_token_sequence(
@@ -70243,40 +70253,10 @@ if durable.proposal != *proposal
     _require_rust_token_sequence(
         lane_path,
         lane_items.get("durable_lane_rollover_authority"),
-        """
-let source = if let Some(payload) = autonomous_payload {
-    if payload.origin_proposal != *proposal {
-        return Err(V2LaneWorkError::Persistence(
-            "autonomous rollover payload differs from its certified proposal"
-                .to_owned(),
-        ));
-    }
-    DurableLaneSessionSource::autonomous_certified(
-        finality_artifact,
-        &durable,
-        &payload,
-        signer_pops,
-    )
-} else {
-    DurableLaneSessionSource::persistent(
-        finality_artifact,
-        &durable,
-        application_receipt
-            .as_ref()
-            .expect("ordinary rollover source requires its application receipt"),
-        signer_pops,
-    )
-};
-if durable_sessions
-    .insert(proposal.proposal_hash, source)
-    .is_some()
-{
-    return Err(V2LaneWorkError::Persistence(
-        "duplicate winning lane proposal in rollover authority".to_owned(),
-    ));
-}
-""",
-        "lane authority builder must preserve one exact persistent witness per winner",
+        _PRODUCTION_EXACT_OUTPUT_TOKEN_SEQUENCES[
+            "lane_complete_rollover_authority"
+        ],
+        "lane authority builder must preserve one exact retained or persistent witness per winner in the complete authority",
         errors,
     )
     _require_rust_token_sequence(
@@ -71571,7 +71551,7 @@ let Some((mut inbound, dequeue_disposition)) = receiver
                     inbound.ingress_ownership().is_some_and(|ownership| {
                         executor.can_admit_timeout_vote_recovery_episode(
                             message,
-                            ownership,
+                            ownership
                         )
                     })
                 }
@@ -72098,7 +72078,7 @@ def _local_runner_service_contract_source_fidelity_errors(
         liveness_path,
         liveness_source,
         "LocalRunnerServiceContractDebt",
-        "IF node \\in LocalRunnerServiceOwners "
+        "IF node \\in AsyncTimedServiceNodes "
         "/\\ asyncNodeServiceDeadlines[node] <= asyncNow "
         "THEN 1 ELSE 0",
     )
@@ -72106,7 +72086,7 @@ def _local_runner_service_contract_source_fidelity_errors(
         liveness_path,
         liveness_source,
         "LocalRunnerServiceContractDecreaseStep",
-        "\\E node \\in LocalRunnerServiceOwners: "
+        "\\E node \\in AsyncTimedServiceNodes: "
         "LocalRunnerServiceContractDebt(node)' "
         "< LocalRunnerServiceContractDebt(node)",
     )
@@ -72517,9 +72497,7 @@ for _ in 0..16 {
         CertifiedServeBarrierLivenessAction::TimeoutRecoveryPrefix => {
             recovery.service_timeout_recovery_prefix()
         }
-        CertifiedServeBarrierLivenessAction::Pacemaker => {
-            recovery.service_pacemaker()
-        }
+        CertifiedServeBarrierLivenessAction::Pacemaker => recovery.service_pacemaker(),
     },
     )
     .expect("the selected-Serve suffix retains typed timeout recovery");
@@ -73209,11 +73187,12 @@ ingress.try_push(certified_serve_inbound(
             or len(late_arm_positions) != 1
             or len(all_arm_positions) != 2
             or len(timeout_mode_positions) != 1
-            or len(late_mode_positions) != 1
+            or len(late_mode_positions) != 2
             or not (
-                timeout_mode_positions[0]
+                late_mode_positions[0]
+                < timeout_mode_positions[0]
                 < timeout_arm_positions[0]
-                < late_mode_positions[0]
+                < late_mode_positions[1]
                 < late_arm_positions[0]
             )
         ):
@@ -73319,10 +73298,7 @@ pub(in crate::sumeragi) fn service_exact_serve_runtime_prefix(
     }
     let older_predecessor_remains = predecessor_witness.is_some();
     self.services
-        .finish_certified_serve_runtime_episode_turn(
-            barrier,
-            older_predecessor_remains,
-        )?;
+        .finish_certified_serve_runtime_episode_turn(barrier, older_predecessor_remains)?;
     self.assert_missing_proposal_serve_selected();
     Ok(true)
 }
@@ -73985,18 +73961,8 @@ else {
         "tip-recovery runtime service must be a finite configured turn",
         errors,
     )
-    _require_rust_token_sequence(
-        runner_path,
-        runner_items.get("outer_ingress_turns"),
-        "OuterIngressTurns::new(limit, context_id, height)",
-        "ordinary ingress must delegate to its finite move-only cursor",
-        errors,
-    )
-    _require_rust_token_sequence(
-        runner_path, runner_items.get("next"),
-        _CORE_RUNTIME_TRANSPORT_TOKEN_SEQUENCES["outer_ingress_cursor"],
-        "ordinary ingress must alternate finite Completion, Runtime, and Ingress turns",
-        errors,
+    errors += _outer_ingress_cursor_source_fidelity_errors(
+        runner_path, runner_source, runner_items.get("outer_ingress_turns")
     )
     _require_rust_token_sequence(
         runner_path,

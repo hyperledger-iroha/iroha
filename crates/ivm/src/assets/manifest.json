@@ -1,0 +1,21 @@
+{
+  "format_version": 1,
+  "source_commit": "47cdc2d11e90d7034b57ae97fb460005020f037d",
+  "source_slice_hash_scope": "complete Rust constant declaration including trailing LF",
+  "assets": [
+    {
+      "path": "iso20022_iban_specs_v1.bin",
+      "byte_length": 234,
+      "sha256": "943470875f8286f0e5ef52bcd0471b8203162aa77ab33d23ec515f23afedc814",
+      "layout": "78 records: two ASCII country-code bytes, then one length byte",
+      "source_preimages": [
+        {
+          "path": "../iso20022.rs",
+          "constant": "IBAN_SPECS",
+          "physical_lines": 314,
+          "sha256": "3cfe421f9c9d4a3f2cddef7ec2f98366a86af09f4b94cb161738c5905d2cad13"
+        }
+      ]
+    }
+  ]
+}

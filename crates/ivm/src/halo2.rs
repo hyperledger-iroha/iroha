@@ -376,32 +376,7 @@ impl MerkleCircuit {
     /// Verify the circuit by recomputing the Merkle root from the witness
     /// values and comparing it to the provided public root.
     pub fn verify(&self) -> Result<(), &'static str> {
-        #[cfg(feature = "ivm_halo2_real")]
-        fn verify_path(leaf: Field, index: u32, path: &[Field; 32]) -> Field {
-            // Compute using iroha_zkp_halo2 prime field to exercise real backend types.
-            let mut cur = iroha_zkp_halo2::PrimeField64::from(leaf);
-            for (i, sib) in path.iter().enumerate() {
-                let bit = (index >> i) & 1;
-                let s = iroha_zkp_halo2::PrimeField64::from(*sib);
-                // Preserve left/right ordering
-                if bit == 0 {
-                    // Use the unified pairwise hash over u64 by converting back and forth.
-                    let v = super_hash(cur.to_u64(), s.to_u64());
-                    cur = iroha_zkp_halo2::PrimeField64::from(v);
-                } else {
-                    let v = super_hash(s.to_u64(), cur.to_u64());
-                    cur = iroha_zkp_halo2::PrimeField64::from(v);
-                }
-            }
-            cur.to_u64()
-        }
-
-        #[cfg(not(feature = "ivm_halo2_real"))]
-        fn verify_path(leaf: Field, index: u32, path: &[Field; 32]) -> Field {
-            verify_merkle_path(leaf, index, path)
-        }
-
-        let root = verify_path(self.witness.leaf, self.witness.index, &self.witness.path);
+        let root = verify_merkle_path(self.witness.leaf, self.witness.index, &self.witness.path);
         ensure_equal_u64(self.public.root, root)
     }
 }
@@ -457,35 +432,16 @@ pub fn verify_merkle_path_with_dirs(
     path: &[Field; 32],
     depth: usize,
 ) -> Field {
-    #[cfg(feature = "ivm_halo2_real")]
-    {
-        use iroha_zkp_halo2::PrimeField64 as F;
-        let mut current = F::from(leaf);
-        for (i, sibling) in path.iter().copied().take(depth.min(32)).enumerate() {
-            let sibling = F::from(sibling);
-            let bit = (dirs >> i) & 1;
-            let out = if bit == 0 {
-                super_hash(current.to_u64(), sibling.to_u64())
-            } else {
-                super_hash(sibling.to_u64(), current.to_u64())
-            };
-            current = F::from(out);
-        }
-        current.to_u64()
+    let mut current = leaf;
+    for (i, sibling) in path.iter().copied().take(depth.min(32)).enumerate() {
+        let bit = (dirs >> i) & 1;
+        current = if bit == 0 {
+            super_hash(current, sibling)
+        } else {
+            super_hash(sibling, current)
+        };
     }
-    #[cfg(not(feature = "ivm_halo2_real"))]
-    {
-        let mut current = leaf;
-        for (i, sibling) in path.iter().copied().take(depth.min(32)).enumerate() {
-            let bit = (dirs >> i) & 1;
-            current = if bit == 0 {
-                super_hash(current, sibling)
-            } else {
-                super_hash(sibling, current)
-            };
-        }
-        current
-    }
+    current
 }
 
 #[inline]
@@ -874,26 +830,6 @@ pub struct FieldCircuit {
 impl FieldCircuit {
     /// Verify the operation by recomputing the expected result from the inputs.
     pub fn verify(&self) -> Result<(), &'static str> {
-        #[cfg(feature = "ivm_halo2_real")]
-        fn do_op(op: FieldOp, a: u64, b: u64) -> Result<u64, &'static str> {
-            use iroha_zkp_halo2::PrimeField64 as F;
-            let aa = F::from(a);
-            let bb = F::from(b);
-            let out = match op {
-                FieldOp::Add => aa + bb,
-                FieldOp::Sub => aa - bb,
-                FieldOp::Mul => aa * bb,
-                FieldOp::Inv => {
-                    if a == 0 {
-                        return Err("field inverse undefined");
-                    }
-                    aa.inverse()
-                }
-            };
-            Ok(out.to_u64())
-        }
-
-        #[cfg(not(feature = "ivm_halo2_real"))]
         fn do_op(op: FieldOp, a: u64, b: u64) -> Result<u64, &'static str> {
             let v = match op {
                 FieldOp::Add => crate::field::add(a, b),
@@ -1094,15 +1030,6 @@ pub struct Poseidon2Circuit {
 impl Poseidon2Circuit {
     /// Verify the Poseidon2 hash by recomputing it from the inputs.
     pub fn verify(&self) -> Result<(), &'static str> {
-        #[cfg(feature = "ivm_halo2_real")]
-        {
-            use iroha_zkp_halo2::PrimeField64 as F;
-            let a = F::from(self.a).to_u64();
-            let b = F::from(self.b).to_u64();
-            let expected = crate::poseidon::poseidon2(a, b);
-            return ensure_equal_u64(expected, self.result);
-        }
-        #[cfg(not(feature = "ivm_halo2_real"))]
         let expected = crate::poseidon::poseidon2(self.a, self.b);
         ensure_equal_u64(expected, self.result)
     }
@@ -1119,17 +1046,6 @@ pub struct Poseidon6Circuit {
 impl Poseidon6Circuit {
     /// Verify the Poseidon6 hash by recomputing it from the inputs.
     pub fn verify(&self) -> Result<(), &'static str> {
-        #[cfg(feature = "ivm_halo2_real")]
-        {
-            use iroha_zkp_halo2::PrimeField64 as F;
-            let mut tmp = [0u64; 6];
-            for (i, v) in self.inputs.iter().enumerate() {
-                tmp[i] = F::from(*v).to_u64();
-            }
-            let expected = crate::poseidon::poseidon6(tmp);
-            return ensure_equal_u64(expected, self.result);
-        }
-        #[cfg(not(feature = "ivm_halo2_real"))]
         let expected = crate::poseidon::poseidon6(self.inputs);
         ensure_equal_u64(expected, self.result)
     }

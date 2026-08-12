@@ -890,7 +890,7 @@ fn params_from_wire_reports_version_and_curve_mismatch() {
     let params = pallas::Params::new(8).unwrap();
     let wire = nh::params_to_wire(&params);
 
-    let mut bad = wire.clone();
+    let mut bad = wire;
     bad.version = 2;
     assert!(matches!(
         nh::params_from_wire::<PallasBackend>(&bad),

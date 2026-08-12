@@ -1,8 +1,9 @@
 // Canonical fanout admission tests live here to keep the snapshot module's
 // production implementation within its source-size ratchet.
 
+use iroha_data_model::QueryOutputBatchBox;
 #[cfg(not(feature = "fast_dsl"))]
-use iroha_data_model::query::dsl::{CompoundPredicate, SelectorTuple};
+use iroha_data_model::query::dsl::CompoundPredicate;
 
 fn canonical_test_limits(max_items: u64) -> QueryLimits {
     use crate::smartcontracts::isi::query::{

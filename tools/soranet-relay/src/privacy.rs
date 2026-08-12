@@ -8,7 +8,7 @@
 
 use std::{
     collections::{BTreeMap, VecDeque},
-    fmt::{self, Write as _},
+    fmt,
     sync::Mutex,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };

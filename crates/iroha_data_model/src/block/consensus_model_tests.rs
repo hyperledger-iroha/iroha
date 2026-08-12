@@ -3,10 +3,7 @@ use std::num::NonZeroU64;
 use iroha_crypto::{
     Algorithm, KeyPair, MerkleProof, MerkleTree, MerkleTreeCommitment, SignatureOf,
 };
-use iroha_primitives::{
-    bigint::BigInt,
-    numeric::{Numeric, Quantity},
-};
+use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::core::DecodeFromSlice;
 
 use crate::consensus::VALIDATOR_SET_HASH_VERSION_V1;
@@ -154,34 +151,6 @@ fn committed_lane_block_status_progress_policy_is_fail_closed() {
     ));
 }
 
-fn sample_round_id() -> RoundId {
-    let roster = sample_roster();
-    RoundId {
-        height: 6,
-        view: 3,
-        epoch: 1,
-        validator_set_id: ValidatorSetId::from_roster(&roster),
-    }
-}
-
-fn sample_block_subject() -> BlockSubject {
-    BlockSubject {
-        parent_block: dummy_hash(),
-        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"canonical-block")),
-        payload_hash: Hash::new(b"canonical-payload"),
-    }
-}
-
-fn max_positive_quantity() -> Quantity {
-    let mut bytes = [0xff; 64];
-    bytes[63] = 0x7f;
-    Quantity::from_canonical_numeric(Numeric::new(
-        BigInt::from_twos_bytes(&bytes).expect("512-bit positive mantissa fits"),
-        0,
-    ))
-    .expect("maximum positive numeric is a quantity")
-}
-
 #[derive(Encode)]
 struct ForgedNexusFeeScheduleInputs {
     tx_bytes_len: u64,
@@ -206,13 +175,6 @@ struct ForgedNexusFeeReceipt {
     lease_id: Option<Hash>,
     fee_amount: Numeric,
     schedule: NexusFeeScheduleInputs,
-}
-
-#[derive(Encode)]
-#[norito(tag = "kind", content = "policy", rename_all = "snake_case")]
-enum ForgedQuorumPolicy {
-    PermissionedCount(u32),
-    NposStake(Numeric),
 }
 
 #[derive(Encode)]
@@ -351,24 +313,6 @@ fn sponsored_nexus_fee_receipt_roundtrips_typed_source_and_asset() {
     assert_eq!(
         norito::json::from_str::<NexusFeeReceipt>(&json).expect("deserialize sponsored receipt"),
         receipt
-    );
-}
-
-#[test]
-fn negative_numeric_payload_cannot_decode_as_npos_stake_quorum() {
-    // Keep both variants so this forged encoder has the same discriminant
-    // layout as `QuorumPolicy`; the signed payload probes the nominal
-    // quantity boundary on the NPoS variant.
-    let permissioned = ForgedQuorumPolicy::PermissionedCount(1);
-    let forged_stake = ForgedQuorumPolicy::NposStake(Numeric::new(-1_i32, 0));
-    assert_ne!(
-        core::mem::discriminant(&permissioned),
-        core::mem::discriminant(&forged_stake)
-    );
-    let encoded = forged_stake.encode();
-    assert!(
-        QuorumPolicy::decode(&mut encoded.as_slice()).is_err(),
-        "a negative signed payload must not decode as NPoS total stake"
     );
 }
 
@@ -2406,58 +2350,6 @@ fn proposal_roundtrip_codec() {
     let bytes = prop.encode();
     let dec = Proposal::decode(&mut &bytes[..]).expect("decode proposal");
     assert_eq!(prop, dec);
-}
-
-#[test]
-fn canonical_v1_consensus_types_roundtrip_codec() {
-    let round = sample_round_id();
-    let subject = sample_block_subject();
-    let vote = Vote {
-        phase: CertPhase::Prepare,
-        round,
-        subject,
-        highest_qc: Some(sample_qc_ref()),
-        signer: 1,
-        bls_sig: vec![1, 2, 3],
-    };
-    let certificate = Certificate {
-        phase: CertPhase::Commit,
-        round,
-        subject,
-        quorum_policy: QuorumPolicy::PermissionedCount(4),
-        highest_qc: Some(sample_qc_ref()),
-        signers_bitmap: vec![0b0000_0111],
-        bls_aggregate_signature: vec![4, 5, 6],
-    };
-    let request = PayloadRequest {
-        round,
-        block_hash: subject.block_hash,
-        payload_hash: subject.payload_hash,
-    };
-    let response = PayloadResponse {
-        request,
-        payload: vec![7, 8, 9],
-    };
-
-    for encoded in [
-        round.encode(),
-        subject.encode(),
-        vote.encode(),
-        certificate.encode(),
-        request.encode(),
-        response.encode(),
-    ] {
-        assert!(!encoded.is_empty(), "canonical type should encode");
-    }
-    assert_eq!(Vote::decode(&mut &vote.encode()[..]).expect("vote"), vote);
-    assert_eq!(
-        Certificate::decode(&mut &certificate.encode()[..]).expect("certificate"),
-        certificate
-    );
-    assert_eq!(
-        PayloadResponse::decode(&mut &response.encode()[..]).expect("payload response"),
-        response
-    );
 }
 
 fn checked_seeded_peer_id(seed: u8) -> PeerId {

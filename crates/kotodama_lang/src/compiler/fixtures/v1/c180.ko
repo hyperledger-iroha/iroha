@@ -1,0 +1,8 @@
+
+seiyaku UserStructAbi {
+    struct Pair { int left; bool right; }
+
+    view fn echo(Pair value) -> Pair {
+        value
+    }
+}

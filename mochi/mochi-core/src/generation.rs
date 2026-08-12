@@ -283,6 +283,7 @@ impl GenerationTransaction {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn publish_with_fault(
         self,
         context: GenerationInventoryContext<'_>,
@@ -1035,7 +1036,7 @@ pub(crate) fn verify_selected_generation(root: &Path, id: &str) -> Result<Verifi
             GENERATION_INVENTORY_MAX_FILES_V1
         )));
     }
-    let mut recorded = Vec::new();
+    let mut recorded: Vec<(String, String)> = Vec::new();
     recorded
         .try_reserve_exact(recorded_entries.len())
         .map_err(|_| {

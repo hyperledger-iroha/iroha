@@ -23,7 +23,12 @@ def _leader_wire_physical_ingress_production_source_fidelity_errors(
     if errors:
         return errors
 
-    ingress_source = ingress_path.read_text(encoding="utf-8")
+    _reviewed_ingress_path, ingress_source = _read_reviewed_rust_source(
+        repo_root,
+        ingress_path.relative_to(repo_root).as_posix(),
+        errors,
+        "fair leader-wire physical ingress implementation",
+    )
     store_source = store_path.read_text(encoding="utf-8")
 
     gate_set = _require_rust_item(
@@ -283,6 +288,52 @@ self.try_recv_if_at_checked_classified(
         errors,
     )
 
+    projection = _require_rust_item(
+        ingress_path,
+        ingress_source,
+        "fair_v2_ingress_leader_wire_selector_projection",
+        errors,
+    )
+    _require_rust_item_context(
+        ingress_path,
+        projection,
+        (),
+        "shared physical leader-wire selector projection",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        ingress_path,
+        projection,
+        _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
+            "fair_v2_ingress_leader_wire_selector_projection"
+        ],
+        "shared physical leader-wire selector projection",
+        errors,
+    )
+
+    queue_gate = _require_rust_item(
+        ingress_path,
+        ingress_source,
+        "fair_v2_ingress_queue_gate_verdict",
+        errors,
+    )
+    _require_rust_item_context(
+        ingress_path,
+        queue_gate,
+        (),
+        "queue-local leader-wire and Serve gate verdict",
+        errors,
+    )
+    _require_rust_item_token_sha256(
+        ingress_path,
+        queue_gate,
+        _LEADER_WIRE_PHYSICAL_INGRESS_ITEM_SHA256[
+            "fair_v2_ingress_queue_gate_verdict"
+        ],
+        "queue-local leader-wire and Serve gate verdict",
+        errors,
+    )
+
     selector = _require_rust_item(
         ingress_path,
         ingress_source,
@@ -309,7 +360,37 @@ self.try_recv_if_at_checked_classified(
         ingress_path,
         selector,
         """
-let leader_wire_control_barrier = leader_wire_barrier.as_ref().is_some_and(|owner| {
+let leader_wire_projection = fair_v2_ingress_leader_wire_selector_projection(
+    &state,
+    selected_serve_barrier,
+    retire_obsolete_leader_wire,
+    None,
+)?;
+""",
+        "the selector must freeze one exact leader-wire projection while the queue is locked",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        selector,
+        """
+let verdict = fair_v2_ingress_queue_gate_verdict(
+    source,
+    lane,
+    index,
+    &serve_projection,
+    &leader_wire_projection,
+    barrier_bypass,
+);
+""",
+        "every candidate must use the sealed queue-local gate verdict",
+        errors,
+    )
+    _require_rust_token_sequence(
+        ingress_path,
+        projection,
+        """
+let control_barrier = selected_barrier.as_ref().is_some_and(|owner| {
     owner.token.source_class == FairV2IngressLeaderWireSourceClass::Control
 });
 """,
@@ -319,30 +400,26 @@ let leader_wire_control_barrier = leader_wire_barrier.as_ref().is_some_and(|owne
     for sequence, description in (
         (
             """
-let gate = state.leader_wire_lifecycle_gate.as_ref().ok_or_else(|| {
-    "leader-wire selector crossed an unbound durable gate".to_owned()
-})?;
-let durable_ordinals = gate.ingress_scheduler_ordinals()?;
+let gate = gate
+    .as_ref()
+    .ok_or_else(|| "leader-wire selector crossed an unbound durable gate".to_owned())?;
+let durable_ingress_ordinals = gate.ingress_scheduler_ordinals()?;
 let active_ordinals = active_leader_wire_owners
     .iter()
     .map(|record| record.token.scheduler_ordinal)
     .collect::<BTreeSet<_>>();
-if durable_ordinals != active_ordinals {
+if durable_ingress_ordinals != active_ordinals {
 """,
             "the selector must compare the complete durable and in-memory "
             "logical Ingress owner sets",
         ),
         (
             """
-for entry in state
-    .lanes
-    .values()
-    .flat_map(|lane| lane.entries.iter())
-{
+for entry in state.lanes.values().flat_map(|lane| lane.entries.iter()) {
     let Some(token) = entry.leader_wire_token.as_ref() else {
         continue;
     };
-    if leader_wire_carrier_ordinals
+    if carrier_ordinals
         .insert(token.clone(), entry.admission_ordinal)
         .is_some()
 """,
@@ -350,29 +427,29 @@ for entry in state
         ),
         (
             """
-let carrier_ordinal = leader_wire_carrier_ordinals
+let carrier_ordinal = carrier_ordinals
     .remove(&owner.token)
-    .ok_or_else(|| {
-        "leader-wire selector lost its exact fair-ingress carrier".to_owned()
-    })?;
-active_leader_wire_carriers.push((owner, carrier_ordinal));
+    .ok_or_else(|| "leader-wire selector lost its exact fair-ingress carrier".to_owned())?;
+active_carriers.push((owner, carrier_ordinal));
 """,
             "every active logical Ingress owner must consume its one exact "
             "physical carrier",
         ),
         (
             """
-if !leader_wire_carrier_ordinals.is_empty() {
+if !carrier_ordinals.is_empty() {
     return Err("leader-wire carrier has no matching active lifecycle owner".to_owned());
 }
-active_leader_wire_carriers.sort_by_key(|(_, ordinal)| *ordinal);
+active_carriers
+    .retain(|(_, ordinal)| physical_cut.is_none_or(|cut| u128::from(*ordinal) < cut));
+active_carriers.sort_by_key(|(_, ordinal)| *ordinal);
 """,
             "carrier correspondence must be total before ordering by physical ordinal",
         ),
         (
             """
-match active_leader_wire_carriers.into_iter().next() {
-    Some((owner, carrier_ordinal)) => (Some(owner), Some(carrier_ordinal)),
+match active_carriers.first() {
+    Some((owner, carrier_ordinal)) => (Some(owner.clone()), Some(*carrier_ordinal)),
     None => (None, None),
 }
 """,
@@ -380,7 +457,7 @@ match active_leader_wire_carriers.into_iter().next() {
         ),
         (
             """
-leader_wire_carrier_ordinal
+selected_carrier_ordinal
     .is_some_and(|leader_ordinal| serve.carrier_ordinal() <= leader_ordinal)
 """,
             "Serve-versus-leader arbitration must compare physical carrier ordinals",
@@ -404,13 +481,13 @@ index
     ):
         _require_rust_token_sequence(
             ingress_path,
-            selector,
+            queue_gate if "source-prefix" in description else projection,
             sequence,
             description,
             errors,
         )
-    if selector is not None and _token_sequence_count(
-        rust_code_tokens(selector.source),
+    if projection is not None and _token_sequence_count(
+        rust_code_tokens(projection.source),
         rust_code_tokens(
             ".min_by_key(|record| record.token.scheduler_ordinal)"
         ),
@@ -601,7 +678,12 @@ def _exact_serve_runtime_episode_production_source_fidelity_errors(
         errors,
         "exact-Serve serialized-runner implementation",
     )
-    effects_source = effects_path.read_text(encoding="utf-8")
+    _loaded_path, effects_source = _read_reviewed_rust_source(
+        repo_root,
+        effects_path.relative_to(repo_root).as_posix(),
+        errors,
+        "exact-Serve executor owner publication",
+    )
     _loaded_path, runtime_source = _read_reviewed_rust_source(
         repo_root,
         runtime_path.relative_to(repo_root).as_posix(),
@@ -3693,7 +3775,7 @@ let completed_witness = runtime
     .exact_serve_predecessor_episode_witness(
         start,
         completed_target,
-        Some(completed_evidence),
+        Some(completed_evidence)
     )
     .expect("completion-qualified owner is accepted")
     .expect("completion-qualified owner opens one predecessor episode");

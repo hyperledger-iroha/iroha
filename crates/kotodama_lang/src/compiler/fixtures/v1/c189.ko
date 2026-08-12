@@ -1,0 +1,41 @@
+
+        seiyaku LifecycleReachability {
+            state int Counter;
+
+            fn initialize() {
+                Counter = 0;
+            }
+
+            fn improve() {
+                Counter = Counter + 1;
+            }
+
+            fn handle_trigger() {
+                Counter = Counter + 1;
+            }
+
+            fn orphan() {
+                Counter = 777;
+            }
+
+            hajimari() {
+                initialize();
+            }
+
+            kaizen() {
+                improve();
+            }
+
+            kotoage fn run() authorize("Entry") {
+                handle_trigger();
+            }
+
+            trigger wake -> run {
+                on time pre_commit;
+            }
+
+            view fn inspect() -> int {
+                return Counter;
+            }
+        }
+        

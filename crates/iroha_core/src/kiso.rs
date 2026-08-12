@@ -931,6 +931,9 @@ mod tests {
                     iroha_config::parameters::defaults::torii::QUERY_HEAVY_MAX_INFLIGHT,
                 query_fanout_max_retained_bytes:
                     iroha_config::parameters::defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES,
+                app_api_routed_read_body_read_timeout: Duration::from_millis(
+                    iroha_config::parameters::defaults::torii::APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS,
+                ),
                 query_queue_timeout: Duration::from_millis(
                     iroha_config::parameters::defaults::torii::QUERY_QUEUE_TIMEOUT_MS,
                 ),

@@ -1792,6 +1792,7 @@ impl PublicKeyCompact {
         }
     }
 
+    #[allow(unsafe_code)]
     fn try_new_for_decode(
         algorithm: Algorithm,
         payload: &[u8],
@@ -1825,6 +1826,7 @@ impl PublicKeyCompact {
         }
     }
 
+    #[allow(unsafe_code)]
     fn try_new_from_canonical_hex_for_decode(
         algorithm: Algorithm,
         payload_hex: &str,

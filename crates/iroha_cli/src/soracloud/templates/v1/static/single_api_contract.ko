@@ -1,0 +1,17 @@
+seiyaku __CONTRACT_NAME__ {
+  view fn main() -> Json {
+    return json {
+      app: "__APP_NAME__",
+      status: "ready"
+    };
+  }
+
+  view fn serve_healthz(bytes _request_body, Json _request_meta, int observed_height) -> Json {
+    return json {
+      app: "__APP_NAME__",
+      observed_height: observed_height,
+      route: "/api/healthz",
+      status: "ready"
+    };
+  }
+}

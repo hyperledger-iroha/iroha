@@ -95,7 +95,6 @@ use crate::{
     },
     sumeragi::status::{self as sumeragi_status, NexusFeeEvent, NexusFeePayer},
 };
-
 /// One-shot proof that the executor debited one exact sponsored fee charge.
 pub(crate) struct VerifiedFeeSponsorCharge {
     submitting_authority: AccountId,
@@ -105,7 +104,6 @@ pub(crate) struct VerifiedFeeSponsorCharge {
     destination: Option<AccountId>,
     amount: Quantity,
 }
-
 impl VerifiedFeeSponsorCharge {
     fn transfer(
         submitting_authority: AccountId,
@@ -124,7 +122,6 @@ impl VerifiedFeeSponsorCharge {
             amount,
         }
     }
-
     fn burn(
         submitting_authority: AccountId,
         program_id: FeeSponsorProgramId,
@@ -141,7 +138,6 @@ impl VerifiedFeeSponsorCharge {
             amount,
         }
     }
-
     #[cfg(test)]
     pub(crate) fn transfer_for_test(
         submitting_authority: AccountId,
@@ -159,7 +155,6 @@ impl VerifiedFeeSponsorCharge {
             amount,
         )
     }
-
     #[cfg(test)]
     pub(crate) fn burn_for_test(
         submitting_authority: AccountId,
@@ -175,7 +170,6 @@ impl VerifiedFeeSponsorCharge {
             amount,
         )
     }
-
     pub(crate) fn into_parts(
         self,
     ) -> (
@@ -197,7 +191,6 @@ impl VerifiedFeeSponsorCharge {
     }
 }
 // NoritoDecode alias is unused; keep Decode via norito::codec where needed inline
-
 const EXECUTOR_LENGTH_PREFIX_BYTES: usize = 8;
 const EXECUTOR_LENGTH_PREFIX_BYTES_U64: u64 = 8;
 /// Maximum accepted size of one framed executor result, including its prefix.
@@ -207,7 +200,6 @@ const EXECUTOR_LENGTH_PREFIX_BYTES_U64: u64 = 8;
 /// prevents a guest-controlled length prefix from requesting an unbounded host
 /// allocation, while retaining the entire addressable result envelope.
 const MAX_EXECUTOR_OUTPUT_BYTES: u64 = Memory::HEAP_MAX_SIZE;
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NativeQueryAccess {
     /// Control-plane or public-definition data available to any registered account.
@@ -217,7 +209,6 @@ enum NativeQueryAccess {
     /// Ledger-wide state requiring the genesis-issued read root.
     AllLedger,
 }
-
 fn decode_native_iterable_payload_exact<Q>(payload: &[u8]) -> Option<Q>
 where
     Q: Decode + Encode,
@@ -226,7 +217,6 @@ where
     let query = Q::decode(&mut input).ok()?;
     (query.encode() == payload).then_some(query)
 }
-
 #[allow(clippy::too_many_lines)]
 fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
     match query {
@@ -242,7 +232,6 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         SingularQueryBox::FindFeeSponsorProgramById(query) => {
             NativeQueryAccess::Account(query.id().sponsor.clone())
         }
-
         // Runtime/control-plane definitions and explicitly routed subsystem state do not expose
         // the general account roster, balances, or transaction history. Alias reads still pass
         // through their separate exact-scope gate below, and protected SoraFS records pass
@@ -322,7 +311,6 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindMusubiOrderedPrefixV1(_)
         | SingularQueryBox::FindAccountByAlias(_)
         | SingularQueryBox::FindDomainById(_) => NativeQueryAccess::Registered,
-
         SingularQueryBox::FindProofRecordById(_)
         | SingularQueryBox::FindAssetEscrowById(_)
         | SingularQueryBox::FindTriggerById(_)
@@ -342,29 +330,18 @@ fn native_singular_query_access(query: &SingularQueryBox) -> NativeQueryAccess {
         | SingularQueryBox::FindNftById(_) => NativeQueryAccess::AllLedger,
     }
 }
-
 #[allow(clippy::too_many_lines)]
 fn native_iterable_query_access(
     query: &QueryWithParams,
 ) -> Result<NativeQueryAccess, ValidationFail> {
     macro_rules! payload_for {
-        ($item:ty, $kind:ident) => {{
-            if let Some(query_box) = query.query_box() {
-                data_model_query::iter_query_inner::<$item>(query_box)
-                    .map(|erased| erased.payload())
-            } else {
-                query.fast_dsl_parts().and_then(|(kind, _, _, payload)| {
-                    (kind == QueryItemKind::$kind).then_some(payload)
-                })
-            }
-        }};
+        ($item:ty, $kind:ident) => {{ (query.item == QueryItemKind::$kind).then_some(query.query_payload.as_slice()) }};
     }
     macro_rules! any_exact {
         ($payload:expr; $($query_ty:path),+ $(,)?) => {
             false $(|| decode_native_iterable_payload_exact::<$query_ty>($payload).is_some())+
         };
     }
-
     if let Some(payload) = payload_for!(iroha_data_model::role::Role, Role) {
         if any_exact!(payload; data_model_query::role::prelude::FindRoles) {
             return Ok(NativeQueryAccess::AllLedger);
@@ -606,19 +583,27 @@ fn native_iterable_query_access(
         iroha_data_model::escrow::AssetEscrowRecord,
         AssetEscrowRecord
     ) {
-        if any_exact!(
-            payload;
-            data_model_query::escrow::prelude::FindAssetEscrows,
-            data_model_query::escrow::prelude::FindAssetEscrowsByStatus,
-        ) {
+        if any_exact!(payload; data_model_query::escrow::prelude::FindAssetEscrows) {
             return Ok(NativeQueryAccess::AllLedger);
         }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::escrow::AssetEscrowRecord,
+        AssetEscrowsBySeller
+    ) {
         if let Some(query) = decode_native_iterable_payload_exact::<
             data_model_query::escrow::prelude::FindAssetEscrowsBySeller,
         >(payload)
         {
             return Ok(NativeQueryAccess::Account(query.seller.clone()));
         }
+        return Err(invalid_native_iterable_query());
+    }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::escrow::AssetEscrowRecord,
+        AssetEscrowsByBuyer
+    ) {
         if let Some(query) = decode_native_iterable_payload_exact::<
             data_model_query::escrow::prelude::FindAssetEscrowsByBuyer,
         >(payload)
@@ -627,15 +612,22 @@ fn native_iterable_query_access(
         }
         return Err(invalid_native_iterable_query());
     }
+    if let Some(payload) = payload_for!(
+        iroha_data_model::escrow::AssetEscrowRecord,
+        AssetEscrowsByStatus
+    ) {
+        if any_exact!(payload; data_model_query::escrow::prelude::FindAssetEscrowsByStatus) {
+            return Ok(NativeQueryAccess::AllLedger);
+        }
+        return Err(invalid_native_iterable_query());
+    }
     Err(invalid_native_iterable_query())
 }
-
 fn invalid_native_iterable_query() -> ValidationFail {
     ValidationFail::NotPermitted(
         "iterable query is malformed or is not part of the native authorization matrix".to_owned(),
     )
 }
-
 fn validate_builtin_native_query_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -646,7 +638,6 @@ fn validate_builtin_native_query_permission(
             "query authority `{authority}` is not a registered account"
         ))
     })?;
-
     let access = match query {
         QueryRequest::Singular(query) => native_singular_query_access(query),
         QueryRequest::Start(query) => native_iterable_query_access(query)?,
@@ -654,7 +645,6 @@ fn validate_builtin_native_query_permission(
         // validating and advancing this cursor. Raw public validation cannot construct Continue.
         QueryRequest::Continue(_) => return Ok(()),
     };
-
     let global_permission: Permission = executor_permission::query::CanReadAllLedgerData.into();
     let has_global = || authority_has_permission(world, authority, &global_permission);
     match access {
@@ -682,7 +672,6 @@ fn validate_builtin_native_query_permission(
         }
     }
 }
-
 fn validate_builtin_account_alias_query_permission(
     world: &impl WorldReadOnly,
     latest_block: Option<&BlockHeader>,
@@ -702,7 +691,6 @@ fn validate_builtin_account_alias_query_permission(
     let QueryRequest::Singular(query) = query else {
         return Ok(());
     };
-
     match query {
         SingularQueryBox::FindAccountByAlias(query) => require_alias(query.alias()),
         SingularQueryBox::FindAccountRecoveryPolicyByAlias(query) => require_alias(query.alias()),
@@ -730,7 +718,6 @@ fn validate_builtin_account_alias_query_permission(
                         .map_err(|_| deny())
                 })
                 .transpose()?;
-
             if domain_filter.is_some() && dataspace_filter.is_none() {
                 return Err(deny());
             }
@@ -742,7 +729,6 @@ fn validate_builtin_account_alias_query_permission(
                 );
                 require_alias(&probe)?;
             }
-
             let now_ms = latest_block.map_or(0, |header| {
                 u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX)
             });
@@ -769,7 +755,6 @@ fn validate_builtin_account_alias_query_permission(
         _ => Ok(()),
     }
 }
-
 fn validate_builtin_subsystem_query_permission(
     world: &impl WorldReadOnly,
     latest_block: Option<&BlockHeader>,
@@ -784,7 +769,6 @@ fn validate_builtin_subsystem_query_permission(
     let QueryRequest::Singular(query) = query else {
         return Ok(());
     };
-
     match query {
         SingularQueryBox::FindSorafsOrderbookPolicy(_)
         | SingularQueryBox::FindSorafsOrderbookOrderById(_)
@@ -876,7 +860,6 @@ fn validate_builtin_subsystem_query_permission(
         _ => Ok(()),
     }
 }
-
 fn encode_executor_input<T: Encode>(payload: &T) -> Result<Vec<u8>, ValidationFail> {
     let payload_bytes = payload.encode();
     let total_len = EXECUTOR_LENGTH_PREFIX_BYTES
@@ -894,7 +877,6 @@ fn encode_executor_input<T: Encode>(payload: &T) -> Result<Vec<u8>, ValidationFa
     bytes.extend_from_slice(&payload_bytes);
     Ok(bytes)
 }
-
 fn executor_output_payload<'ivm>(
     ivm: &'ivm IVM,
     ret_ptr: u64,
@@ -915,7 +897,6 @@ fn executor_output_payload<'ivm>(
             "executor {output_kind} length exceeds the {MAX_EXECUTOR_OUTPUT_BYTES}-byte limit"
         )));
     }
-
     let framed = ivm
         .memory
         .load_region(ret_ptr, returned_len)
@@ -926,12 +907,10 @@ fn executor_output_payload<'ivm>(
         })?;
     Ok(&framed[EXECUTOR_LENGTH_PREFIX_BYTES..])
 }
-
 #[cfg(test)]
 pub(crate) fn build_program_from_encoded_result(result_bytes: &[u8]) -> Vec<u8> {
     ivm::prebuilt_fixtures::build_encoded_result_program(result_bytes)
 }
-
 #[cfg(test)]
 mod encoded_result_program_tests {
     use super::*;
@@ -947,13 +926,11 @@ mod encoded_result_program_tests {
                 .is_some_and(|literals| literals.count > 0),
             "encoded bytes must live in authenticated typed literals"
         );
-
         let mut vm = ivm::IVM::new(1_000_000);
         vm.load_program(&program)
             .expect("encoded-result program passes strict admission");
         vm.set_register(10, ivm::Memory::OUTPUT_START);
         vm.run().expect("encoded-result program runs");
-
         let output = vm.read_output_used();
         assert_eq!(
             u64::from_le_bytes(output[..8].try_into().expect("fixed u64 prefix")),
@@ -961,7 +938,6 @@ mod encoded_result_program_tests {
         );
         assert_eq!(&output[8..8 + result.len()], result);
     }
-
     #[test]
     fn executor_input_framing_uses_a_fixed_u64_prefix() {
         let payload = 42_u64;
@@ -975,13 +951,11 @@ mod encoded_result_program_tests {
         assert_eq!(&framed[8..], payload_bytes);
     }
 }
-
 #[cfg(test)]
 fn generate_verdict_program(verdict: &Result<(), ValidationFail>) -> Vec<u8> {
     let verdict_bytes = verdict.encode();
     build_program_from_encoded_result(&verdict_bytes)
 }
-
 /// Build a user executor that rejects every validation request with a stable message.
 #[cfg(test)]
 pub(crate) fn denying_executor_for_testing(message: &str) -> Executor {
@@ -992,7 +966,6 @@ pub(crate) fn denying_executor_for_testing(message: &str) -> Executor {
     );
     Executor::UserProvided(LoadedExecutor::load(raw).expect("load deny-all test executor"))
 }
-
 const SORA_V2_CLAIM_TX_HASH_METADATA_KEY: &str = "sora_v2_claim_tx_hash";
 const SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY: &str = "sora_nexus_claim_recipient";
 /// Execute a single instruction in a detached overlay, recording only the state deltas.
@@ -1011,16 +984,13 @@ pub(crate) fn execute_instruction_detached(
         BurnBox, GrantBox, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox, SetKeyValueBox,
         TransferBox, UnregisterBox,
     };
-
     if mutates_contract_deployment_permission(instruction) {
         return Err(ValidationFail::InternalError(
             "detached: CanRegisterSmartContractCode permission mutation requires the sequential consensus gate"
                 .to_owned(),
         ));
     }
-
     let any = instruction.as_any();
-
     // These mutations all depend on live ownership, permission, reserved-key, or
     // trigger state. A detached delta has no authoritative world view, so recording
     // them here would bypass the Initial executor's consensus authorization. Force
@@ -1040,7 +1010,6 @@ pub(crate) fn execute_instruction_detached(
             "detached: live authorization requires sequential execution".to_owned(),
         ));
     }
-
     // Transfers
     if let Some(tb) = any.downcast_ref::<TransferBox>() {
         match tb {
@@ -1063,7 +1032,6 @@ pub(crate) fn execute_instruction_detached(
         }
         return Ok(());
     }
-
     // Registration and removal depend on live ownership and permission state.
     if let Some(rb) = any.downcast_ref::<RegisterBox>() {
         match rb {
@@ -1093,7 +1061,6 @@ pub(crate) fn execute_instruction_detached(
             "detached: removal requires sequential authorization".to_owned(),
         ));
     }
-
     // Permission and role mutation depends on live authority, ownership, and role state.
     // Never pre-apply it to a detached delta: force the sequential executor path so the
     // same consensus authorization is evaluated for every scheduling profile.
@@ -1102,13 +1069,11 @@ pub(crate) fn execute_instruction_detached(
             "detached: permission and role mutation requires sequential authorization".to_owned(),
         ));
     }
-
     // Unknown instruction kind – signal fallback
     Err(ValidationFail::InternalError(
         "detached: unsupported instruction".to_owned(),
     ))
 }
-
 /// Executor that verifies that operation is valid and executes it.
 ///
 /// Executing is done in order to verify dependent instructions in transaction.
@@ -1121,7 +1086,6 @@ pub enum Executor {
     /// User-provided executor with arbitrary logic.
     UserProvided(LoadedExecutor),
 }
-
 /// Execution profile applied when running native ISIs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum InstructionExecutionProfile {
@@ -1131,7 +1095,6 @@ pub enum InstructionExecutionProfile {
     /// Lightweight execution for benchmarks/tests lacking a global logger.
     Bench,
 }
-
 impl JsonSerializeTrait for Executor {
     fn json_serialize(&self, out: &mut String) {
         let bytes =
@@ -1144,14 +1107,12 @@ impl JsonSerializeTrait for Executor {
         out.push('}');
     }
 }
-
 impl JsonDeserializeTrait for Executor {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;
         parse_executor_value(value)
     }
 }
-
 fn parse_executor_value(value: json::Value) -> Result<Executor, json::Error> {
     match value {
         json::Value::Object(mut map) => {
@@ -1159,7 +1120,6 @@ fn parse_executor_value(value: json::Value) -> Result<Executor, json::Error> {
                 let bytes = decode_executor_bytes(inner, "norito")?;
                 return executor_norito::from_bytes(&bytes).map_err(json::Error::Message);
             }
-
             if !map.is_empty() {
                 for key in map.keys() {
                     trace!(target: "executor::deserialize", field = %key, "ignoring unknown executor field");
@@ -1180,7 +1140,6 @@ fn parse_executor_value(value: json::Value) -> Result<Executor, json::Error> {
         ))),
     }
 }
-
 fn decode_executor_bytes(value: json::Value, context: &str) -> Result<Vec<u8>, json::Error> {
     match value {
         json::Value::String(s) => {
@@ -1211,7 +1170,6 @@ fn decode_executor_bytes(value: json::Value, context: &str) -> Result<Vec<u8>, j
         }),
     }
 }
-
 fn convert_volatility_bucket(volatility: GasVolatility) -> VolatilityBucket {
     match volatility {
         GasVolatility::Stable => VolatilityBucket::Stable,
@@ -1219,7 +1177,6 @@ fn convert_volatility_bucket(volatility: GasVolatility) -> VolatilityBucket {
         GasVolatility::Dislocated => VolatilityBucket::Dislocated,
     }
 }
-
 fn execute_system_fee_instruction(
     instr: DMInstructionBox,
     authority: &AccountId,
@@ -1234,7 +1191,6 @@ fn execute_system_fee_instruction(
     state_transaction.world.current_dataspace_id = previous_world_dataspace_id;
     result
 }
-
 fn execute_gas_fee_transfer_instruction(
     definition: &AssetDefinition,
     instr: DMInstructionBox,
@@ -1247,7 +1203,6 @@ fn execute_gas_fee_transfer_instruction(
         instr.execute(authority, state_transaction)
     }
 }
-
 fn metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
     metadata
         .get(key)
@@ -1255,7 +1210,6 @@ fn metadata_string(metadata: &Metadata, key: &str) -> Option<String> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
 }
-
 fn should_charge_pipeline_gas_asset(
     skip_nexus_fee: bool,
     nexus_enabled: bool,
@@ -1266,12 +1220,10 @@ fn should_charge_pipeline_gas_asset(
         && gas_asset_opt.is_some()
         && (!nexus_enabled || nexus_fees.per_gas_unit_fee.is_zero())
 }
-
 fn is_sora_v2_tx_hash_literal(value: &str) -> bool {
     let hex = value.strip_prefix("0x").unwrap_or(value);
     hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
-
 fn account_literal_matches(
     world: &impl WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
@@ -1288,12 +1240,10 @@ fn account_literal_matches(
     {
         return true;
     }
-
     crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
         .as_ref()
         .is_some_and(|account| account == expected)
 }
-
 fn successful_claim_fee_authority_allowed(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -1311,7 +1261,6 @@ fn successful_claim_fee_authority_allowed(
             account_literal_matches(world, world.dataspace_catalog(), literal, authority, now_ms)
         })
 }
-
 fn successful_claim_fee_exempt_instructions(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -1323,14 +1272,12 @@ fn successful_claim_fee_exempt_instructions(
     if !successful_claim_fee_authority_allowed(world, nexus, authority, observation_time_ms) {
         return false;
     }
-
     let Some(claim_tx_hash) = metadata_string(metadata, SORA_V2_CLAIM_TX_HASH_METADATA_KEY) else {
         return false;
     };
     if !is_sora_v2_tx_hash_literal(&claim_tx_hash) {
         return false;
     }
-
     let Some(recipient) = metadata_string(metadata, SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY)
         .and_then(|literal| {
             parse_account_id_literal(
@@ -1343,7 +1290,6 @@ fn successful_claim_fee_exempt_instructions(
     else {
         return false;
     };
-
     let Some(asset_def) = crate::block::parse_asset_definition_literal_with_world(
         world,
         &nexus.fees.fee_asset_id,
@@ -1351,15 +1297,12 @@ fn successful_claim_fee_exempt_instructions(
     ) else {
         return false;
     };
-
     let [instruction] = instructions else {
         return false;
     };
-
     let Some(mint) = instruction.as_any().downcast_ref::<MintBox>() else {
         return false;
     };
-
     match mint {
         MintBox::Asset(mint) => {
             mint.destination.account() == &recipient
@@ -1369,7 +1312,6 @@ fn successful_claim_fee_exempt_instructions(
         MintBox::TriggerRepetitions(_) => false,
     }
 }
-
 fn successful_claim_fee_exempt_transaction(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -1378,7 +1320,6 @@ fn successful_claim_fee_exempt_transaction(
 ) -> bool {
     successful_claim_fee_exempt_payload(world, nexus, transaction.payload(), observation_time_ms)
 }
-
 fn successful_claim_fee_exempt_payload(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -1397,7 +1338,6 @@ fn successful_claim_fee_exempt_payload(
         observation_time_ms,
     )
 }
-
 fn nexus_protocol_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
     let any = instruction.as_any();
     any.downcast_ref::<iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay>()
@@ -1408,26 +1348,21 @@ fn nexus_protocol_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
             >()
             .is_some()
 }
-
 fn nexus_fee_exempt_instruction(instruction: &InstructionBox) -> bool {
     nexus_protocol_fee_exempt_instruction(instruction)
 }
-
 fn nexus_fee_exempt_instructions(instructions: &[InstructionBox]) -> bool {
     !instructions.is_empty() && instructions.iter().all(nexus_fee_exempt_instruction)
 }
-
 fn nexus_fee_exempt_transaction(transaction: &SignedTransaction) -> bool {
     nexus_fee_exempt_payload(transaction.payload())
 }
-
 fn nexus_fee_exempt_payload(payload: &TransactionPayload) -> bool {
     let Executable::Instructions(instructions) = &payload.instructions else {
         return false;
     };
     nexus_fee_exempt_instructions(instructions.as_ref())
 }
-
 fn fee_exempt_payload(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -1437,7 +1372,6 @@ fn fee_exempt_payload(
     nexus_fee_exempt_payload(payload)
         || successful_claim_fee_exempt_payload(world, nexus, payload, observation_time_ms)
 }
-
 fn fee_exempt_transaction(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -1447,7 +1381,6 @@ fn fee_exempt_transaction(
     nexus_fee_exempt_transaction(transaction)
         || successful_claim_fee_exempt_transaction(world, nexus, transaction, observation_time_ms)
 }
-
 /// Transaction-scoped authorization for the sole deployment self-bootstrap exception.
 ///
 /// The private fields bind the authorization to the exact signed instruction sequence and
@@ -1459,7 +1392,6 @@ pub(crate) struct ContractDeploymentSelfBootstrapAuthorization {
     authority: AccountId,
     instructions: Box<[InstructionBox]>,
 }
-
 impl ContractDeploymentSelfBootstrapAuthorization {
     /// Derive an authorization from an exact signed plain transaction and pre-transaction world.
     pub(crate) fn derive(
@@ -1485,7 +1417,6 @@ impl ContractDeploymentSelfBootstrapAuthorization {
             // transaction. Never extend the upload-only bootstrap exception to this instruction.
             return None;
         }
-
         let Some([register, grant, deployment]) = instructions.get(..3) else {
             return None;
         };
@@ -1502,11 +1433,9 @@ impl ContractDeploymentSelfBootstrapAuthorization {
         {
             return None;
         }
-
         if !is_exact_contract_deployment_self_grant(authority, grant) {
             return None;
         }
-
         let deployment_is_allowed = deployment
             .as_any()
             .downcast_ref::<UploadSmartContractCodeChunk>()
@@ -1515,13 +1444,11 @@ impl ContractDeploymentSelfBootstrapAuthorization {
         if !deployment_is_allowed {
             return None;
         }
-
         Some(Self {
             authority: authority.clone(),
             instructions: instructions.iter().cloned().collect(),
         })
     }
-
     /// Verify that the executable about to run is the exact signed sequence that was authorized.
     pub(crate) fn validate_instruction_sequence(
         &self,
@@ -1536,7 +1463,6 @@ impl ContractDeploymentSelfBootstrapAuthorization {
         }
         Ok(())
     }
-
     fn allows_indexed_grant(
         &self,
         authority: &AccountId,
@@ -1549,7 +1475,6 @@ impl ContractDeploymentSelfBootstrapAuthorization {
             && is_exact_contract_deployment_self_grant(authority, instruction)
     }
 }
-
 /// Recognize the sole plain-transaction prefix that may bootstrap deployment authority.
 ///
 /// The account lookup is deliberately performed before the first instruction executes. This
@@ -1564,7 +1489,6 @@ fn allows_contract_deployment_self_bootstrap(
 ) -> bool {
     ContractDeploymentSelfBootstrapAuthorization::derive(world, authority, transaction).is_some()
 }
-
 fn is_exact_contract_deployment_self_grant(
     authority: &AccountId,
     instruction: &InstructionBox,
@@ -1580,7 +1504,6 @@ fn is_exact_contract_deployment_self_grant(
         }) if destination == authority && permission == &expected_permission
     )
 }
-
 #[derive(Clone, Copy)]
 enum PermissionOrRoleMutation<'a> {
     AccountPermission {
@@ -1598,7 +1521,6 @@ enum PermissionOrRoleMutation<'a> {
         is_revoke: bool,
     },
 }
-
 fn extract_permission_or_role_mutation(
     instruction: &InstructionBox,
 ) -> Option<PermissionOrRoleMutation<'_>> {
@@ -1620,7 +1542,6 @@ fn extract_permission_or_role_mutation(
             },
         }
     }
-
     fn from_revoke(revoke: &RevokeBox) -> PermissionOrRoleMutation<'_> {
         match revoke {
             RevokeBox::Permission(revoke) => PermissionOrRoleMutation::AccountPermission {
@@ -1639,7 +1560,6 @@ fn extract_permission_or_role_mutation(
             },
         }
     }
-
     let any = instruction.as_any();
     if let Some(grant) = any.downcast_ref::<GrantBox>() {
         return Some(from_grant(grant));
@@ -1687,7 +1607,6 @@ fn extract_permission_or_role_mutation(
             is_revoke: true,
         })
 }
-
 fn mutates_contract_deployment_permission(instruction: &InstructionBox) -> bool {
     matches!(
         extract_permission_or_role_mutation(instruction),
@@ -1697,7 +1616,6 @@ fn mutates_contract_deployment_permission(instruction: &InstructionBox) -> bool 
         ) if permission.name() == "CanRegisterSmartContractCode"
     )
 }
-
 fn ensure_contract_deployment_permission_mutation_allowed(
     state_transaction: &StateTransaction<'_, '_>,
     instruction: &InstructionBox,
@@ -1711,7 +1629,6 @@ fn ensure_contract_deployment_permission_mutation_allowed(
     }
     Ok(())
 }
-
 fn ensure_contract_runtime_permission_mutation_allowed(
     authority: &AccountId,
     instruction: &InstructionBox,
@@ -1720,7 +1637,6 @@ fn ensure_contract_runtime_permission_mutation_allowed(
     let Some(context) = contract_runtime_context else {
         return Ok(());
     };
-
     let mutation = extract_permission_or_role_mutation(instruction);
     let mutates_role = extract_register_role(instruction).is_some()
         || extract_unregister_role(instruction).is_some()
@@ -1737,11 +1653,9 @@ fn ensure_contract_runtime_permission_mutation_allowed(
                 .to_owned(),
         ));
     }
-
     let Some(PermissionOrRoleMutation::AccountPermission { permission, .. }) = mutation else {
         return Ok(());
     };
-
     let scoped =
         executor_permission::smart_contract::CanInvokeContractEntrypoint::try_from(permission)
             .map_err(|_| {
@@ -1762,10 +1676,8 @@ fn ensure_contract_runtime_permission_mutation_allowed(
                 .to_owned(),
         ));
     }
-
     Ok(())
 }
-
 fn execute_contract_deployment_self_bootstrap_grant(
     authorization: &ContractDeploymentSelfBootstrapAuthorization,
     instruction_index: usize,
@@ -1776,7 +1688,6 @@ fn execute_contract_deployment_self_bootstrap_grant(
     if !authorization.allows_indexed_grant(authority, instruction_index, instruction) {
         return Ok(false);
     }
-
     crate::smartcontracts::isi::execute_borrowed_instruction(
         instruction,
         authority,
@@ -1785,7 +1696,6 @@ fn execute_contract_deployment_self_bootstrap_grant(
     .map_err(ValidationFail::from)?;
     Ok(true)
 }
-
 fn parse_account_id_literal(
     world: &impl WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
@@ -1794,7 +1704,6 @@ fn parse_account_id_literal(
 ) -> Option<AccountId> {
     crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
 }
-
 /// Deterministic reason a Nexus fee quote or admission check failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NexusFeeAdmissionError {
@@ -1808,7 +1717,6 @@ pub enum NexusFeeAdmissionError {
     /// Node or persisted fee configuration is invalid.
     ConfigInvalid(String),
 }
-
 impl NexusFeeAdmissionError {
     fn rejected(code: FeeRejectionCode, reason: impl Into<String>) -> Self {
         Self::Rejected {
@@ -1816,11 +1724,9 @@ impl NexusFeeAdmissionError {
             reason: reason.into(),
         }
     }
-
     fn sponsor(code: FeeRejectionCode, reason: impl Into<String>) -> Self {
         Self::rejected(code, reason)
     }
-
     /// Stable fee-admission denial code.
     pub const fn code(&self) -> FeeRejectionCode {
         match self {
@@ -1828,7 +1734,6 @@ impl NexusFeeAdmissionError {
             Self::ConfigInvalid(_) => FeeRejectionCode::InvalidProgramConfiguration,
         }
     }
-
     /// Human-readable detail suitable for authorized diagnostics.
     pub fn reason(&self) -> &str {
         match self {
@@ -1836,7 +1741,6 @@ impl NexusFeeAdmissionError {
         }
     }
 }
-
 fn smart_contract_state_name(
     raw: String,
     context: &'static str,
@@ -1847,7 +1751,6 @@ fn smart_contract_state_name(
         ))
     })
 }
-
 fn decode_verified_fee_sponsor_vault_allocation_state(
     payload: &[u8],
 ) -> Result<VerifiedFeeSponsorVaultAllocation, NexusFeeAdmissionError> {
@@ -1862,7 +1765,6 @@ fn decode_verified_fee_sponsor_vault_allocation_state(
         ))
     })
 }
-
 fn fee_sponsor_vault_allocation_usage_state_key(
     lease_id: &iroha_crypto::Hash,
 ) -> Result<StatePath, NexusFeeAdmissionError> {
@@ -1871,7 +1773,6 @@ fn fee_sponsor_vault_allocation_usage_state_key(
         "verified fee sponsor vault allocation usage",
     )
 }
-
 fn fee_sponsor_vault_allocation_settled_usage_state_key(
     lease_id: &iroha_crypto::Hash,
 ) -> Result<StatePath, NexusFeeAdmissionError> {
@@ -1880,7 +1781,6 @@ fn fee_sponsor_vault_allocation_settled_usage_state_key(
         "settled verified fee sponsor vault allocation usage",
     )
 }
-
 fn fee_sponsor_vault_allocation_quantity_at(
     world: &impl WorldReadOnly,
     key: &StatePath,
@@ -1896,7 +1796,6 @@ fn fee_sponsor_vault_allocation_quantity_at(
         },
     )
 }
-
 fn fee_sponsor_vault_allocation_spent(
     world: &impl WorldReadOnly,
     lease_id: &iroha_crypto::Hash,
@@ -1907,7 +1806,6 @@ fn fee_sponsor_vault_allocation_spent(
     let settled = fee_sponsor_vault_allocation_quantity_at(world, &settled_key)?;
     Ok(core::cmp::max(executed, settled))
 }
-
 fn select_fee_sponsor_relay_lease(
     world: &impl WorldReadOnly,
     program_id: &FeeSponsorProgramId,
@@ -1973,7 +1871,6 @@ fn select_fee_sponsor_relay_lease(
         )
     })
 }
-
 fn select_fee_sponsor_relay_leases(
     world: &impl WorldReadOnly,
     program_id: &FeeSponsorProgramId,
@@ -1993,7 +1890,6 @@ fn select_fee_sponsor_relay_leases(
             checked_quantity_add(&current, &charge.max_bound, "relay spend-lease charge")?,
         );
     }
-
     let mut selections = BTreeMap::new();
     for (asset_definition_id, required) in required_by_asset {
         let (record, remaining) = select_fee_sponsor_relay_lease(
@@ -2015,7 +1911,6 @@ fn select_fee_sponsor_relay_leases(
     }
     Ok(selections)
 }
-
 /// Reject account-paid receipt settlement until authority balances have an
 /// authenticated source-lock protocol equivalent to sponsor spend leases.
 ///
@@ -2030,7 +1925,6 @@ fn reject_authority_lane_relay_burn_fee(payer: &AccountId) -> Result<(), NexusFe
         ),
     ))
 }
-
 fn validation_fail_to_nexus_fee_admission_error(err: ValidationFail) -> NexusFeeAdmissionError {
     match err {
         ValidationFail::InternalError(reason) => NexusFeeAdmissionError::ConfigInvalid(reason),
@@ -2039,14 +1933,12 @@ fn validation_fail_to_nexus_fee_admission_error(err: ValidationFail) -> NexusFee
         }
     }
 }
-
 fn nexus_fee_admission_error_to_validation_fail(err: NexusFeeAdmissionError) -> ValidationFail {
     match err {
         NexusFeeAdmissionError::Rejected { reason, .. } => ValidationFail::NotPermitted(reason),
         NexusFeeAdmissionError::ConfigInvalid(reason) => ValidationFail::InternalError(reason),
     }
 }
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FeeSponsorOperation {
     NativeInstruction {
@@ -2067,7 +1959,6 @@ enum FeeSponsorOperation {
         proved: bool,
     },
 }
-
 /// One deterministic fee component quoted by Core.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FeeChargeBound {
@@ -2078,7 +1969,6 @@ pub struct FeeChargeBound {
     /// Deterministic maximum charge for the supplied payload and state.
     pub max_bound: Quantity,
 }
-
 /// Remaining capacity for one program asset at the observed state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FeeSponsorCapacity {
@@ -2093,7 +1983,6 @@ pub struct FeeSponsorCapacity {
     /// Capacity remaining for this beneficiary epoch before this quote.
     pub beneficiary_epoch_remaining: Quantity,
 }
-
 /// Exact proof-bound spend lease selected for one sponsored fee asset.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FeeSponsorRelayLeaseCapacity {
@@ -2102,7 +1991,6 @@ pub struct FeeSponsorRelayLeaseCapacity {
     /// Remaining verified allocation on the lease before this quote.
     pub remaining: Quantity,
 }
-
 /// Read-only deterministic fee quote shared by queue admission and Torii.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FeeAdmissionQuote {
@@ -2128,7 +2016,6 @@ pub struct FeeAdmissionQuote {
     /// Exact authority balance bucket selected for each charge component.
     pub authority_charge_assets: BTreeMap<FeeChargeKind, AssetId>,
 }
-
 /// Unsigned quote result with the exact fee intent that should be signed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FeeAdmissionDraftQuote {
@@ -2137,13 +2024,11 @@ pub struct FeeAdmissionDraftQuote {
     /// Exact payer selection, revision, gas limit, assets, and charge maxima to sign.
     pub recommended_intent: FeePaymentIntent,
 }
-
 #[derive(Clone, Debug)]
 struct ResolvedSponsorProgram {
     id: FeeSponsorProgramId,
     revision: FeeSponsorProgramRevision,
 }
-
 fn fee_sponsor_asset_transfer_definition_id(
     instruction: &InstructionBox,
 ) -> Option<AssetDefinitionId> {
@@ -2157,7 +2042,6 @@ fn fee_sponsor_asset_transfer_definition_id(
     any.downcast_ref::<Transfer<Asset, Quantity, Account>>()
         .map(|transfer| transfer.source.definition().clone())
 }
-
 fn fee_sponsor_instruction_operation(
     instruction: &InstructionBox,
 ) -> Result<FeeSponsorOperation, NexusFeeAdmissionError> {
@@ -2184,7 +2068,6 @@ fn fee_sponsor_instruction_operation(
             account_id,
         });
     }
-
     let wire_id = iroha_data_model::isi::instruction_wire_id(instruction)
         .ok_or_else(|| {
             NexusFeeAdmissionError::sponsor(
@@ -2198,7 +2081,6 @@ fn fee_sponsor_instruction_operation(
         asset_definition_id: fee_sponsor_asset_transfer_definition_id(instruction),
     })
 }
-
 fn fee_sponsor_operations(
     executable: &Executable,
 ) -> Result<Vec<FeeSponsorOperation>, NexusFeeAdmissionError> {
@@ -2237,7 +2119,6 @@ fn fee_sponsor_operations(
         }]),
     }
 }
-
 fn fee_sponsor_selector_matches_operation(
     selector: &FeeSponsorRuleSelector,
     operation: &FeeSponsorOperation,
@@ -2295,7 +2176,6 @@ fn fee_sponsor_selector_matches_operation(
         _ => false,
     }
 }
-
 fn validate_fee_sponsor_rules(
     revision: &FeeSponsorProgramRevision,
     executable: &Executable,
@@ -2307,7 +2187,6 @@ fn validate_fee_sponsor_rules(
             "fee sponsor program cannot authorize an empty executable",
         ));
     }
-
     for operation in &operations {
         if revision.rules.iter().any(|rule| {
             rule.effect == FeeSponsorRuleEffect::Deny
@@ -2337,7 +2216,6 @@ fn validate_fee_sponsor_rules(
     }
     Ok(())
 }
-
 fn resolve_fee_sponsor_program(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -2417,7 +2295,6 @@ fn resolve_fee_sponsor_program(
             "fee sponsor revision key does not match its embedded program id",
         ));
     }
-
     let enrollment_key = FeeSponsorEnrollmentKey {
         program_id: program_id.clone(),
         beneficiary: beneficiary.clone(),
@@ -2446,7 +2323,6 @@ fn resolve_fee_sponsor_program(
         revision,
     })
 }
-
 fn checked_quantity_add(
     lhs: &Quantity,
     rhs: &Quantity,
@@ -2459,20 +2335,17 @@ fn checked_quantity_add(
         )
     })
 }
-
 fn counter_spent(world: &impl WorldReadOnly, key: &FeeSponsorBudgetCounterKey) -> Quantity {
     world
         .fee_sponsor_budget_counters()
         .get(key)
         .map_or_else(Quantity::zero, |counter| counter.spent.clone())
 }
-
 fn remaining_capacity(limit: &Quantity, spent: &Quantity) -> Quantity {
     limit
         .checked_sub(spent)
         .unwrap_or_else(|_| Quantity::zero())
 }
-
 fn evaluate_fee_sponsor_capacity(
     world: &impl WorldReadOnly,
     resolved: &ResolvedSponsorProgram,
@@ -2491,7 +2364,6 @@ fn evaluate_fee_sponsor_capacity(
             checked_quantity_add(&total, &charge.max_bound, "per-transaction charge")?,
         );
     }
-
     let mut capacities = BTreeMap::new();
     for (asset_definition_id, amount) in totals {
         let definition = world.asset_definition(&asset_definition_id).map_err(|_| {
@@ -2619,7 +2491,6 @@ fn evaluate_fee_sponsor_capacity(
     }
     Ok(capacities)
 }
-
 fn validate_signed_charge_limits(
     intent: &FeePaymentIntent,
     charges: &[FeeChargeBound],
@@ -2659,7 +2530,6 @@ fn validate_signed_charge_limits(
     }
     Ok(())
 }
-
 /// Return the explicit signature-bound executable gas limit.
 pub(crate) fn transaction_gas_limit(transaction: &SignedTransaction) -> Option<u64> {
     transaction
@@ -2667,7 +2537,6 @@ pub(crate) fn transaction_gas_limit(transaction: &SignedTransaction) -> Option<u
         .gas_limit()
         .map(core::num::NonZeroU64::get)
 }
-
 fn overlay_build_error_to_validation_fail(
     error: crate::pipeline::overlay::OverlayBuildError,
 ) -> ValidationFail {
@@ -2684,13 +2553,11 @@ fn overlay_build_error_to_validation_fail(
         other => ValidationFail::NotPermitted(other.to_string()),
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreparedIvmZkAvailability {
     RequireLocalBackend,
     GovernedProof,
 }
-
 fn validate_prepared_ivm_execution_policy_with_availability<R: StateReadOnly>(
     state: &R,
     metadata: &ivm::ProgramMetadata,
@@ -2721,7 +2588,6 @@ fn validate_prepared_ivm_execution_policy_with_availability<R: StateReadOnly>(
     .map_err(overlay_build_error_to_validation_fail)?;
     Ok(effective_cycles)
 }
-
 /// Apply the canonical first-release IVM admission policy to an already prepared program.
 ///
 /// Preparation authenticates and predecodes the image, while this check binds local execution to
@@ -2737,7 +2603,6 @@ pub(crate) fn validate_prepared_ivm_execution_policy<R: StateReadOnly>(
         PreparedIvmZkAvailability::RequireLocalBackend,
     )
 }
-
 // Proof-carrying execution uses the same deterministic header/resource limits, while native
 // verification is selected by the governed on-chain verifier record rather than local proving
 // availability toggles. `verify_ivm_proved_execution` performs that governed verification.
@@ -2751,7 +2616,6 @@ fn validate_governed_ivm_proved_execution_policy<R: StateReadOnly>(
         PreparedIvmZkAvailability::GovernedProof,
     )
 }
-
 #[derive(Clone, Debug)]
 pub(crate) struct ContractRuntimeExecutionContext {
     #[allow(dead_code)]
@@ -2763,7 +2627,6 @@ pub(crate) struct ContractRuntimeExecutionContext {
     pub(crate) contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     pub(crate) entrypoint: String,
 }
-
 /// Immutable authorization selected before a contract invocation is decoded or executed.
 ///
 /// This snapshot deliberately carries the permission name chosen from the validated artifact.
@@ -2780,7 +2643,6 @@ pub(crate) struct ContractEntrypointAuthorizationSnapshot {
     pub(crate) code_hash: iroha_crypto::Hash,
     parent: Option<Box<ContractEntrypointAuthorizationSnapshot>>,
 }
-
 impl ContractEntrypointAuthorizationSnapshot {
     /// Capture the exact live identity and selected artifact permission at dispatch time.
     pub(crate) fn new(
@@ -2800,7 +2662,6 @@ impl ContractEntrypointAuthorizationSnapshot {
             parent: None,
         }
     }
-
     /// Attach the complete caller authorization chain for a nested invocation.
     #[must_use]
     pub(crate) fn with_parent(
@@ -2810,7 +2671,6 @@ impl ContractEntrypointAuthorizationSnapshot {
         self.parent = parent.map(Box::new);
         self
     }
-
     /// Return whether this snapshot is the root or retains it in its caller chain.
     pub(crate) fn descends_from(&self, root: &Self) -> bool {
         self == root
@@ -2819,12 +2679,10 @@ impl ContractEntrypointAuthorizationSnapshot {
                 .as_deref()
                 .is_some_and(|parent| parent.descends_from(root))
     }
-
     /// Return whether this snapshot represents a top-level invocation.
     pub(crate) fn is_root(&self) -> bool {
         self.parent.is_none()
     }
-
     /// Return whether `path` is owned by the exact contract instance captured by this snapshot.
     ///
     /// Durable contract state is namespaced by the immutable contract address rather than by a
@@ -2840,7 +2698,6 @@ impl ContractEntrypointAuthorizationSnapshot {
             .is_some_and(|suffix| suffix.starts_with('/'))
             || path == code::contract_lifecycle_state_key(&self.contract_address).as_ref()
     }
-
     /// Validate the immutable caller relationship between every adjacent invocation.
     ///
     /// A nested contract executes as the subject account derived from its immediate caller's
@@ -2875,13 +2732,11 @@ impl ContractEntrypointAuthorizationSnapshot {
         }
         Ok(())
     }
-
     /// Revalidate the captured caller permission and the exact forward/reverse live binding.
     pub(crate) fn validate(&self, world: &impl WorldReadOnly) -> Result<(), ValidationFail> {
         self.validate_chain_structure(world)?;
         self.validate_live(world)
     }
-
     fn validate_live(&self, world: &impl WorldReadOnly) -> Result<(), ValidationFail> {
         if let Some(parent) = self.parent.as_deref() {
             parent.validate_live(world)?;
@@ -2902,7 +2757,6 @@ impl ContractEntrypointAuthorizationSnapshot {
                 self.contract_address, self.code_hash, live_code_hash
             )));
         }
-
         let live_alias_binding = world
             .contract_alias_bindings()
             .get(&self.contract_address)
@@ -2938,7 +2792,6 @@ impl ContractEntrypointAuthorizationSnapshot {
                 self.contract_address
             )));
         }
-
         enforce_named_contract_entrypoint_permission(
             world,
             &self.authority,
@@ -2947,7 +2800,6 @@ impl ContractEntrypointAuthorizationSnapshot {
             self.permission.as_deref(),
         )
     }
-
     /// Validate the snapshot and require the apply-time caller to be the captured caller.
     pub(crate) fn validate_for_authority(
         &self,
@@ -2962,7 +2814,6 @@ impl ContractEntrypointAuthorizationSnapshot {
         self.validate(world)
     }
 }
-
 /// Reject binding mutations emitted from a lifecycle hook before executor dispatch.
 ///
 /// This guard runs ahead of both initial and user-provided executors and is shared by owned and
@@ -2995,13 +2846,11 @@ pub(crate) fn ensure_lifecycle_hook_cannot_mutate_contract_binding(
     {
         return Ok(());
     }
-
     Err(ValidationFail::NotPermitted(format!(
         "lifecycle entrypoint `{}` cannot activate or deactivate contract bindings",
         context.entrypoint
     )))
 }
-
 #[derive(Clone, Debug)]
 /// Parsed contract dispatch metadata used to configure IVM execution.
 pub struct ContractCallExecutionContext {
@@ -3014,7 +2863,6 @@ pub struct ContractCallExecutionContext {
     pub(crate) args: Json,
     pub(crate) argument_record: Option<ivm::PreparedArgumentRecord>,
 }
-
 /// Cache-independent inputs resolved for one deployed-contract invocation.
 ///
 /// Keeping the prepared summary owned lets trigger execution release the outer IVM cache mutex
@@ -3025,7 +2873,6 @@ pub(crate) struct ResolvedContractInvocation {
     contract_subject: AccountId,
     summary: ProgramSummary,
 }
-
 /// Effects and metering information returned by one deployed-contract invocation.
 #[derive(Debug)]
 pub(crate) struct ContractInvocationOutcome {
@@ -3036,7 +2883,6 @@ pub(crate) struct ContractInvocationOutcome {
     /// Trigger-local NFT sequence after successful guest execution.
     pub(crate) next_nft_sequence: Option<u64>,
 }
-
 impl ContractCallExecutionContext {
     pub(crate) fn runtime_context(&self) -> Option<ContractRuntimeExecutionContext> {
         let contract_address = self.contract_address.clone()?;
@@ -3048,7 +2894,6 @@ impl ContractCallExecutionContext {
             entrypoint: self.entrypoint.clone()?,
         })
     }
-
     pub(crate) fn bind_runtime_identity(
         &mut self,
         identity: code::BoundContractIdentity,
@@ -3058,31 +2903,25 @@ impl ContractCallExecutionContext {
         self.contract_subject = Some(contract_subject);
         self.contract_alias = identity.contract_alias;
     }
-
     pub(crate) fn entrypoint_pc(&self) -> Option<u64> {
         self.entrypoint_pc
     }
-
     pub(crate) fn entrypoint_permission(&self) -> Option<&str> {
         self.entrypoint_permission.as_deref()
     }
-
     pub(crate) fn args(&self) -> &Json {
         &self.args
     }
-
     #[cfg(test)]
     pub(crate) fn argument_record(&self) -> Option<&[u8]> {
         self.argument_record
             .as_ref()
             .map(ivm::PreparedArgumentRecord::canonical_bytes)
     }
-
     pub(crate) fn prepared_argument_record(&self) -> Option<&ivm::PreparedArgumentRecord> {
         self.argument_record.as_ref()
     }
 }
-
 pub(crate) fn encode_contract_argument_record(
     schema: Option<&ivm::EntrypointArgumentSchemaV1>,
     payload: Option<&Json>,
@@ -3104,7 +2943,6 @@ pub(crate) fn encode_contract_argument_record(
             }),
     }
 }
-
 fn prepare_contract_argument_record_from_json(
     schema: Option<&ivm::EntrypointArgumentSchemaV1>,
     payload: Option<&Json>,
@@ -3127,7 +2965,6 @@ fn prepare_contract_argument_record_from_json(
         )),
     }
 }
-
 fn prepare_validated_contract_argument_record(
     schema: Option<&ivm::EntrypointArgumentSchemaV1>,
     arguments: Option<&[u8]>,
@@ -3152,9 +2989,7 @@ fn prepare_validated_contract_argument_record(
         }),
     }
 }
-
 type ResolvedContractEntrypoint = (u64, Option<String>, Option<ivm::EntrypointArgumentSchemaV1>);
-
 #[cfg(test)]
 fn resolve_callable_contract_entrypoint(
     bytecode: &[u8],
@@ -3185,7 +3020,6 @@ fn resolve_callable_contract_entrypoint(
         descriptor.argument_schema.clone(),
     ))
 }
-
 fn resolve_raw_contract_entrypoint(
     bytecode: &[u8],
     selector: &str,
@@ -3215,7 +3049,6 @@ fn resolve_raw_contract_entrypoint(
         descriptor.argument_schema.clone(),
     ))
 }
-
 fn resolve_prepared_contract_entrypoint(
     contract: &ivm::PreparedContract,
     selector: &str,
@@ -3236,7 +3069,6 @@ fn resolve_prepared_contract_entrypoint(
         descriptor.argument_schema.clone(),
     ))
 }
-
 fn resolve_prepared_nested_contract_entrypoint(
     contract: &ivm::PreparedContract,
     selector: &str,
@@ -3257,7 +3089,6 @@ fn resolve_prepared_nested_contract_entrypoint(
         descriptor.argument_schema.clone(),
     ))
 }
-
 fn resolve_prepared_contract_view_entrypoint(
     contract: &ivm::PreparedContract,
     selector: &str,
@@ -3283,7 +3114,6 @@ fn resolve_prepared_contract_view_entrypoint(
         descriptor.argument_schema.clone(),
     ))
 }
-
 fn resolve_prepared_raw_contract_entrypoint(
     contract: &ivm::PreparedContract,
     selector: &str,
@@ -3304,7 +3134,6 @@ fn resolve_prepared_raw_contract_entrypoint(
         descriptor.argument_schema.clone(),
     ))
 }
-
 fn reject_unavailable_private_input_entrypoint(
     contract: &ivm::PreparedContract,
     selector: &str,
@@ -3325,7 +3154,6 @@ fn reject_unavailable_private_input_entrypoint(
         ))),
     }
 }
-
 /// Resolve authorization for a top-level deployed-contract transaction entrypoint.
 pub(crate) fn callable_contract_entrypoint_permission(
     descriptor: &ivm::EmbeddedEntrypointDescriptor,
@@ -3345,7 +3173,6 @@ pub(crate) fn callable_contract_entrypoint_permission(
         )),
     }
 }
-
 /// Resolve authorization for raw-IVM source dispatch.
 ///
 /// Lifecycle hooks require a consensus-bound deployed-instance transition and therefore can only
@@ -3367,7 +3194,6 @@ pub(crate) fn raw_contract_entrypoint_permission(
         }
     }
 }
-
 /// Resolve authorization for an ordinary nested contract call.
 ///
 /// Nested calls may invoke `kotoage`/`言挙げ` and `view` entrypoints, but lifecycle
@@ -3386,19 +3212,16 @@ pub(crate) fn nested_contract_entrypoint_permission(
         }
     }
 }
-
 fn is_self_describing_contract(bytecode: &[u8]) -> bool {
     ivm::ProgramMetadata::parse(bytecode)
         .ok()
         .and_then(|parsed| parsed.contract_interface)
         .is_some()
 }
-
 enum ContractDispatchSource<'a> {
     Bytecode(&'a [u8]),
     Prepared(&'a ivm::PreparedContract),
 }
-
 impl ContractDispatchSource<'_> {
     fn resolve(
         &self,
@@ -3414,7 +3237,6 @@ impl ContractDispatchSource<'_> {
             }
         }
     }
-
     fn is_self_describing(&self) -> bool {
         match self {
             Self::Bytecode(bytecode) => is_self_describing_contract(bytecode),
@@ -3422,7 +3244,6 @@ impl ContractDispatchSource<'_> {
         }
     }
 }
-
 #[cfg(test)]
 pub(crate) fn parse_contract_call_execution_context(
     metadata: &Metadata,
@@ -3435,7 +3256,6 @@ pub(crate) fn parse_contract_call_execution_context(
         u64::MAX,
     )
 }
-
 pub(crate) fn parse_prepared_contract_call_execution_context(
     metadata: &Metadata,
     contract: &ivm::PreparedContract,
@@ -3448,7 +3268,6 @@ pub(crate) fn parse_prepared_contract_call_execution_context(
         gas_limit,
     )
 }
-
 /// Read and normalize the explicitly selected contract entrypoint.
 ///
 /// Callers use this cheap metadata-only step to authorize a selector before
@@ -3472,7 +3291,6 @@ pub(crate) fn requested_contract_entrypoint(
     }
     Ok(entrypoint)
 }
-
 /// Require a by-reference invocation to match the exact live code binding
 /// authorized by its signer.
 pub(crate) fn ensure_contract_invocation_code_hash(
@@ -3487,7 +3305,6 @@ pub(crate) fn ensure_contract_invocation_code_hash(
     }
     Ok(())
 }
-
 fn requested_contract_address(
     metadata: &Metadata,
 ) -> Result<Option<iroha_data_model::smart_contract::ContractAddress>, ValidationFail> {
@@ -3514,7 +3331,6 @@ fn requested_contract_address(
         })
         .transpose()
 }
-
 fn requested_contract_alias(
     metadata: &Metadata,
 ) -> Result<Option<iroha_data_model::smart_contract::ContractAlias>, ValidationFail> {
@@ -3541,7 +3357,6 @@ fn requested_contract_alias(
         })
         .transpose()
 }
-
 /// Resolve raw-IVM identity metadata exclusively through live world-state bindings.
 ///
 /// User metadata selects an identity; it never supplies the trusted alias or
@@ -3616,7 +3431,6 @@ pub(crate) fn resolve_raw_contract_runtime_identity(
         code_hash,
     }))
 }
-
 /// Resolve the mandatory live identity for a selected raw-IVM contract entrypoint.
 ///
 /// A selected entrypoint is contract dispatch, even when its descriptor has no named
@@ -3633,14 +3447,12 @@ pub(crate) fn require_raw_contract_runtime_identity(
         )
     })
 }
-
 #[derive(Clone, Copy)]
 enum ContractArgumentSource<'a> {
     Metadata,
     TriggerEvent(&'a Json),
     SchemaOnly,
 }
-
 /// Resolve a self-describing IVM trigger callback and bind the current event
 /// arguments to its compiler-emitted schema.
 ///
@@ -3667,7 +3479,6 @@ pub(crate) fn parse_prepared_trigger_call_execution_context(
         )
     })
 }
-
 /// Validate trigger callback selection at registration without fabricating an
 /// event payload for a parameterized callback.
 pub(crate) fn validate_trigger_call_execution_context(
@@ -3687,7 +3498,6 @@ pub(crate) fn validate_trigger_call_execution_context(
     })?;
     Ok(())
 }
-
 fn parse_contract_call_execution_context_from_source(
     metadata: &Metadata,
     source: ContractDispatchSource<'_>,
@@ -3696,9 +3506,7 @@ fn parse_contract_call_execution_context_from_source(
 ) -> Result<Option<ContractCallExecutionContext>, ValidationFail> {
     let contract_address = requested_contract_address(metadata)?;
     let contract_alias = requested_contract_alias(metadata)?;
-
     let entrypoint = requested_contract_entrypoint(metadata)?;
-
     let metadata_payload = metadata.get("contract_payload").cloned();
     if !matches!(argument_source, ContractArgumentSource::Metadata) && metadata_payload.is_some() {
         return Err(ValidationFail::NotPermitted(
@@ -3728,7 +3536,6 @@ fn parse_contract_call_execution_context_from_source(
         } else {
             (None, None, None, None)
         };
-
     let payload = match argument_source {
         ContractArgumentSource::Metadata => metadata_payload,
         ContractArgumentSource::TriggerEvent(event_args) => {
@@ -3751,7 +3558,6 @@ fn parse_contract_call_execution_context_from_source(
             payload.unwrap_or_default()
         }
     };
-
     Ok(Some(ContractCallExecutionContext {
         contract_address,
         contract_subject: None,
@@ -3763,7 +3569,6 @@ fn parse_contract_call_execution_context_from_source(
         argument_record,
     }))
 }
-
 #[cfg(test)]
 pub(crate) fn parse_contract_invocation_execution_context(
     invocation: &ContractInvocation,
@@ -3777,7 +3582,6 @@ pub(crate) fn parse_contract_invocation_execution_context(
             "contract entrypoint must not be empty".to_owned(),
         ));
     }
-
     let (entrypoint_pc, entrypoint_permission, argument_schema) =
         resolve_callable_contract_entrypoint(
             bytecode,
@@ -3790,7 +3594,6 @@ pub(crate) fn parse_contract_invocation_execution_context(
         invocation.arguments.as_deref(),
         u64::MAX,
     )?;
-
     Ok(ContractCallExecutionContext {
         contract_address: Some(invocation.contract_address.clone()),
         contract_subject: Some(contract_subject),
@@ -3802,7 +3605,6 @@ pub(crate) fn parse_contract_invocation_execution_context(
         argument_record,
     })
 }
-
 pub(crate) fn parse_prepared_contract_invocation_execution_context(
     invocation: &ContractInvocation,
     contract: &ivm::PreparedContract,
@@ -3819,7 +3621,6 @@ pub(crate) fn parse_prepared_contract_invocation_execution_context(
         resolve_prepared_contract_entrypoint,
     )
 }
-
 /// Resolve a prepared ordinary nested call using the nested entrypoint policy.
 ///
 /// Unlike top-level transaction dispatch, nested calls may enter read-only
@@ -3841,7 +3642,6 @@ pub(crate) fn parse_prepared_nested_contract_invocation_execution_context(
         resolve_prepared_nested_contract_entrypoint,
     )
 }
-
 fn parse_prepared_contract_invocation_execution_context_with_resolver(
     invocation: &ContractInvocation,
     contract: &ivm::PreparedContract,
@@ -3859,7 +3659,6 @@ fn parse_prepared_contract_invocation_execution_context_with_resolver(
             "contract entrypoint must not be empty".to_owned(),
         ));
     }
-
     let (entrypoint_pc, entrypoint_permission, argument_schema) =
         resolve_entrypoint(contract, selector)?;
     let args = Json::default();
@@ -3879,7 +3678,6 @@ fn parse_prepared_contract_invocation_execution_context_with_resolver(
         argument_record,
     })
 }
-
 /// Validate a top-level deployed entrypoint against the instance lifecycle state.
 pub(crate) fn validate_prepared_contract_lifecycle_call(
     world: &impl WorldReadOnly,
@@ -3893,7 +3691,6 @@ pub(crate) fn validate_prepared_contract_lifecycle_call(
     })?;
     code::validate_contract_lifecycle_call(world, contract_address, code_hash, descriptor.kind)
 }
-
 pub(crate) fn compute_nexus_fee_amount(
     cfg: &iroha_config::parameters::actual::NexusFees,
     tx_bytes_len: usize,
@@ -3921,7 +3718,6 @@ pub(crate) fn compute_nexus_fee_amount(
     }
     Ok(fee)
 }
-
 fn fee_bound_for_admission_payload(
     payload: &TransactionPayload,
 ) -> Result<(usize, usize, u64), NexusFeeAdmissionError> {
@@ -3930,7 +3726,6 @@ fn fee_bound_for_admission_payload(
             "failed to encode transaction for fee metering: {err}"
         ))
     })?;
-
     let (instruction_count, gas_used) = match &payload.instructions {
         Executable::Instructions(instructions) => (
             instructions.len(),
@@ -3990,16 +3785,13 @@ fn fee_bound_for_admission_payload(
             (instructions.len(), gas_used)
         }
     };
-
     Ok((tx_bytes_len, instruction_count, gas_used))
 }
-
 fn fee_bound_for_admission(
     transaction: &SignedTransaction,
 ) -> Result<(usize, usize, u64), NexusFeeAdmissionError> {
     fee_bound_for_admission_payload(transaction.payload())
 }
-
 fn pipeline_gas_component_enabled(
     nexus: &iroha_config::parameters::actual::Nexus,
     pipeline: &Pipeline,
@@ -4007,7 +3799,6 @@ fn pipeline_gas_component_enabled(
     !pipeline.gas.accepted_assets.is_empty()
         && (!nexus.enabled || nexus.fees.per_gas_unit_fee.is_zero())
 }
-
 fn resolve_pipeline_gas_quote_asset(
     world: &impl WorldReadOnly,
     pipeline: &Pipeline,
@@ -4080,7 +3871,6 @@ fn resolve_pipeline_gas_quote_asset(
                 )
             })?
     };
-
     let rate = pipeline
         .gas
         .units_per_gas
@@ -4096,7 +3886,6 @@ fn resolve_pipeline_gas_quote_asset(
             "pipeline gas units_per_gas mapping for `{selected}` must be positive"
         )));
     }
-
     let parsed = AssetDefinitionId::parse_address_literal(&selected).map_err(|_| {
         NexusFeeAdmissionError::ConfigInvalid(format!(
             "invalid pipeline gas asset `{selected}`; expected a canonical asset definition address"
@@ -4119,7 +3908,6 @@ fn resolve_pipeline_gas_quote_asset(
     };
     Ok((asset_definition_id, definition, rate.units_per_gas))
 }
-
 fn authority_fee_asset_id(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -4152,7 +3940,6 @@ fn authority_fee_asset_id(
         scope,
     ))
 }
-
 fn evaluate_nexus_fee_admission_payload(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -4211,7 +3998,6 @@ fn evaluate_nexus_fee_admission_payload(
     if validate_charge_limits {
         validate_signed_charge_limits(intent, &charges)?;
     }
-
     match intent.sponsor_program() {
         None => {
             let mut required_by_asset = BTreeMap::<AssetId, Quantity>::new();
@@ -4300,7 +4086,6 @@ fn evaluate_nexus_fee_admission_payload(
         }
     }
 }
-
 /// Quote and validate the exact fee funding source for a canonical unsigned draft.
 ///
 /// The fee byte component is measured over the canonical [`TransactionPayload`]
@@ -4331,7 +4116,6 @@ pub fn quote_nexus_fee_admission_payload(
         true,
     )
 }
-
 fn fee_intent_with_exact_bounds(
     template: &FeePaymentIntent,
     charges: &[FeeChargeBound],
@@ -4358,7 +4142,6 @@ fn fee_intent_with_exact_bounds(
         ),
     }
 }
-
 fn fee_exempt_admission_quote(payload: &TransactionPayload) -> FeeAdmissionQuote {
     let (debit_source, program_revision) = payload.fee_payment.sponsor_program().map_or_else(
         || (FeeDebitSource::Account(payload.authority.clone()), None),
@@ -4379,7 +4162,6 @@ fn fee_exempt_admission_quote(payload: &TransactionPayload) -> FeeAdmissionQuote
         authority_charge_assets: BTreeMap::new(),
     }
 }
-
 /// Discover the exact charge limits for an unsigned transaction draft.
 ///
 /// Callers may supply empty or stale limits. Core deterministically reaches a
@@ -4440,7 +4222,6 @@ pub fn quote_nexus_fee_admission_draft(
         "fee quote did not converge to a canonical charge-limit fixed point".to_owned(),
     ))
 }
-
 /// Quote and validate the fee funding source selected by a signed transaction.
 ///
 /// This is the queue/admission wrapper around
@@ -4464,7 +4245,6 @@ pub fn quote_nexus_fee_admission(
         route_dataspace_id,
     )
 }
-
 /// Return whether execution is running inside the chain's initial genesis block.
 ///
 /// The empty committed-block history keeps a genesis-shaped header replayed against live state
@@ -4472,7 +4252,6 @@ pub fn quote_nexus_fee_admission(
 pub(crate) fn is_initial_genesis_context(state_transaction: &StateTransaction<'_, '_>) -> bool {
     state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty()
 }
-
 pub(crate) fn quote_external_nexus_fee_admission(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -4485,7 +4264,6 @@ pub(crate) fn quote_external_nexus_fee_admission(
     if fee_exempt_transaction(world, nexus, transaction, observation_time_ms) {
         return Ok(None);
     }
-
     quote_nexus_fee_admission(
         world,
         nexus,
@@ -4497,7 +4275,6 @@ pub(crate) fn quote_external_nexus_fee_admission(
     )
     .map(|quote| (!quote.charges.is_empty()).then_some(quote))
 }
-
 /// Revalidate the exact signed fee intent against the state used for block execution.
 ///
 /// Queue reservations are an availability optimization, not consensus
@@ -4519,7 +4296,6 @@ pub(crate) fn validate_transaction_fee_admission(
     {
         return Ok(());
     }
-
     Executor::refresh_gas_from_parameters(state_transaction)?;
     if state_transaction.nexus.enabled
         || pipeline_gas_component_enabled(&state_transaction.nexus, &state_transaction.pipeline)
@@ -4537,7 +4313,6 @@ pub(crate) fn validate_transaction_fee_admission(
     }
     Ok(())
 }
-
 /// Charge gas and Nexus fees for a transaction that was applied via overlay execution paths.
 ///
 /// Overlay execution bypasses `Executor::execute_transaction`, so this helper mirrors the
@@ -4564,7 +4339,6 @@ pub(crate) fn charge_fees_for_applied_overlay(
         tx_bytes_len,
     )
 }
-
 /// Charge gas and Nexus fees for an overlay-applied transaction using trusted local metadata.
 ///
 /// The supplied encoded length is retained for call-site compatibility, but
@@ -4588,7 +4362,6 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
                 "failed to encode transaction payload for fee metering: {err}"
             ))
         })?;
-
     let fee_sponsor = transaction
         .fee_payment_intent()
         .sponsor_program()
@@ -4599,11 +4372,9 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
         transaction,
         state_transaction.block_unix_timestamp_ms(),
     );
-
     // Admission captured the governed gas policy before business effects were applied.
     // Keep that immutable snapshot for settlement so this transaction cannot alter its
     // own fee asset, rate, or destination account through the overlay.
-
     let gas_asset_opt = transaction
         .fee_payment_intent()
         .charge_limits()
@@ -4634,7 +4405,6 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
             )));
         }
     }
-
     let (gas_used, instruction_count, require_gas_limit) = match transaction.instructions() {
         Executable::ContractCall(_) | Executable::Ivm(_) => (
             overlay.ivm_gas_used().ok_or_else(|| {
@@ -4666,7 +4436,6 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
             ));
         }
     };
-
     if require_gas_limit && gas_limit_md.is_none() {
         return Err(ValidationFail::NotPermitted(
             "missing gas limit in fee payment intent".to_owned(),
@@ -4679,7 +4448,6 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
             "out of gas: used {gas_used} > limit {limit}"
         )));
     }
-
     let confidential_delta = overlay
         .instruction_slice()
         .iter()
@@ -4690,14 +4458,12 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
     }
     state_transaction.last_tx_gas_used = gas_used;
     Executor::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
-
     let tx_hash = transaction.hash();
     let settlement_source_id = {
         let mut bytes = [0u8; iroha_crypto::Hash::LENGTH];
         bytes.copy_from_slice(tx_hash.as_ref());
         bytes
     };
-
     if should_charge_pipeline_gas_asset(
         skip_nexus_fee,
         state_transaction.nexus.enabled,
@@ -4716,7 +4482,6 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
             fee_sponsor.as_ref(),
         )?;
     }
-
     if !skip_nexus_fee {
         Executor::charge_nexus_fees(
             state_transaction,
@@ -4729,10 +4494,8 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
             gas_used,
         )?;
     }
-
     Ok(())
 }
-
 /// Charge fees for a rejected mixed batch after its staged business effects were discarded.
 ///
 /// Mixed batches execute directly against a live [`StateTransaction`] instead of producing a
@@ -4747,7 +4510,6 @@ pub(crate) fn charge_fees_for_rejected_live_batch(
     if is_initial_genesis_context(state_transaction) {
         return Ok(());
     }
-
     let instruction_count = match transaction.instructions() {
         Executable::Batch(items) => items
             .iter()
@@ -4788,7 +4550,6 @@ pub(crate) fn charge_fees_for_rejected_live_batch(
         bytes.copy_from_slice(tx_hash.as_ref());
         bytes
     };
-
     Executor::settle_live_transaction_fees(
         state_transaction,
         authority,
@@ -4803,13 +4564,11 @@ pub(crate) fn charge_fees_for_rejected_live_batch(
         skip_nexus_fee,
     )
 }
-
 fn live_batch_overlay_byte_size(instructions: &[InstructionBox]) -> u64 {
     instructions.iter().fold(0_u64, |total, instruction| {
         total.saturating_add(u64::try_from(instruction.encode().len()).unwrap_or(u64::MAX))
     })
 }
-
 fn enforce_live_batch_overlay_limits(
     max_instructions: usize,
     max_bytes: u64,
@@ -4828,17 +4587,14 @@ fn enforce_live_batch_overlay_limits(
     }
     Ok(())
 }
-
 fn is_reserved_multisig_role_id(role_id: &RoleId) -> bool {
     const MULTISIG_SIGNATORY_NAMESPACE: &str = "MULTISIG_SIGNATORY";
-
     let name = role_id.name().as_ref();
     name == MULTISIG_SIGNATORY_NAMESPACE
         || name
             .strip_prefix(MULTISIG_SIGNATORY_NAMESPACE)
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
-
 impl Executor {
     fn resolve_pipeline_gas_asset_definition(
         state_transaction: &StateTransaction<'_, '_>,
@@ -4850,11 +4606,9 @@ impl Executor {
                     .to_owned(),
             )
         })?;
-
         if let Ok(definition) = state_transaction.world.asset_definition(&parsed) {
             return Ok((definition.id().clone(), definition));
         }
-
         state_transaction
             .world
             .asset_definitions()
@@ -4867,7 +4621,6 @@ impl Executor {
                 ))
             })
     }
-
     fn enforce_transaction_gas_fits_block(
         state_transaction: &StateTransaction<'_, '_>,
         gas_used: u64,
@@ -4886,7 +4639,6 @@ impl Executor {
         }
         Ok(())
     }
-
     #[allow(clippy::too_many_arguments)]
     fn record_pipeline_gas_settlement_receipt(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -4941,7 +4693,6 @@ impl Executor {
         state_transaction.record_settlement_receipt(tx_hash, pending);
         Ok(())
     }
-
     fn consume_fee_sponsor_relay_lease(
         state_transaction: &mut StateTransaction<'_, '_>,
         program_id: &FeeSponsorProgramId,
@@ -5009,7 +4760,6 @@ impl Executor {
         }
         Ok(record.lease_id)
     }
-
     fn increment_fee_sponsor_counter(
         state_transaction: &mut StateTransaction<'_, '_>,
         key: FeeSponsorBudgetCounterKey,
@@ -5032,7 +4782,6 @@ impl Executor {
             .insert(key.clone(), FeeSponsorBudgetCounter { key, spent });
         Ok(())
     }
-
     fn debit_fee_sponsor_program(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
@@ -5083,7 +4832,6 @@ impl Executor {
             core::slice::from_ref(&charge),
         )
         .map_err(nexus_fee_admission_error_to_validation_fail)?;
-
         let budget = resolved
             .revision
             .asset_budgets
@@ -5117,7 +4865,6 @@ impl Executor {
             .world
             .fee_sponsor_vaults
             .insert(vault_key, vault);
-
         let epoch =
             state_transaction.block_height().saturating_sub(1) / budget.epoch_length_blocks.get();
         for window in [
@@ -5142,7 +4889,6 @@ impl Executor {
         }
         Ok(())
     }
-
     #[allow(clippy::too_many_arguments)]
     fn charge_pipeline_gas_asset_fee(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -5173,11 +4919,9 @@ impl Executor {
             GasLiquidity::Tier2 => LiquidityProfile::Tier2,
             GasLiquidity::Tier3 => LiquidityProfile::Tier3,
         };
-
         if gas_used == 0 || units_per_gas == 0 {
             return Ok(());
         }
-
         let tech_account: AccountId = parse_account_id_literal(
             &state_transaction.world,
             &state_transaction.nexus.dataspace_catalog,
@@ -5192,7 +4936,6 @@ impl Executor {
         })?;
         let (asset_definition_id, definition) =
             Self::resolve_pipeline_gas_asset_definition(state_transaction, gas_asset_id_str)?;
-
         // The product of two `u64` values is always exactly representable in
         // `u128`; keep fee consensus arithmetic exact instead of silently
         // selecting a saturation policy that can never be reached here.
@@ -5310,7 +5053,6 @@ impl Executor {
             let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX))).unwrap_or(u64::MAX);
             state_transaction.stage_block_fee_amount(Quantity::from(delta));
         }
-
         Self::record_pipeline_gas_settlement_receipt(
             state_transaction,
             tx_hash,
@@ -5322,7 +5064,6 @@ impl Executor {
             volatility_bucket,
         )
     }
-
     #[allow(clippy::too_many_lines)]
     fn charge_nexus_fees(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -5339,7 +5080,6 @@ impl Executor {
         }
         let cfg = state_transaction.nexus.fees.clone();
         let fee = compute_nexus_fee_amount(&cfg, tx_bytes_len, instruction_count, gas_used)?;
-
         if fee.is_zero() {
             return Ok(());
         }
@@ -5426,7 +5166,6 @@ impl Executor {
             } else {
                 (authority.clone(), authority.to_string(), None, None)
             };
-
         let payer_kind_label = match payer_kind {
             NexusFeePayer::Payer => "payer",
             NexusFeePayer::Sponsor => "sponsor",
@@ -5478,7 +5217,6 @@ impl Executor {
         }
         let payer_asset = AssetId::new(asset_def, payer.clone());
         let asset_label = payer_asset.definition().to_string();
-
         let previous_tx_dataspace_id = state_transaction.current_dataspace_id;
         let previous_world_dataspace_id = state_transaction.world.current_dataspace_id;
         state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -5527,7 +5265,6 @@ impl Executor {
             );
             ValidationFail::from(err)
         })?;
-
         // Stage the charged event so rejected transactions don't report successful debits.
         state_transaction.stage_nexus_fee_event(NexusFeeEvent::Charged {
             payer_kind,
@@ -5537,7 +5274,6 @@ impl Executor {
         });
         Ok(())
     }
-
     /// Refresh pipeline.gas snapshot from on-chain custom parameters (genesis/governance updatable).
     fn refresh_gas_from_parameters(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -5550,7 +5286,6 @@ impl Executor {
             liquidity_profile: Option<String>,
             volatility_class: Option<String>,
         }
-
         let params = state_transaction.world.parameters.get();
         // Decode the complete governed snapshot before replacing any live value. A malformed
         // parameter must fail closed without leaving a partially refreshed fee policy behind.
@@ -5568,7 +5303,6 @@ impl Executor {
                         ))
                     })?;
         }
-
         let mut accepted_assets = state_transaction.pipeline.gas.accepted_assets.clone();
         if let Ok(name) = core::str::FromStr::from_str("ivm_gas_accepted_assets")
             && let Some(custom) = params.custom().get(&CustomParameterId(name))
@@ -5582,7 +5316,6 @@ impl Executor {
                     ))
                 })?;
         }
-
         let mut units_per_gas = state_transaction.pipeline.gas.units_per_gas.clone();
         if let Ok(name) = core::str::FromStr::from_str("ivm_gas_units_per_gas")
             && let Some(custom) = params.custom().get(&CustomParameterId(name))
@@ -5641,13 +5374,11 @@ impl Executor {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
         }
-
         state_transaction.pipeline.gas.tech_account_id = tech_account_id;
         state_transaction.pipeline.gas.accepted_assets = accepted_assets;
         state_transaction.pipeline.gas.units_per_gas = units_per_gas;
         Ok(())
     }
-
     #[allow(clippy::too_many_lines)]
     fn execute_metered_instructions(
         &self,
@@ -5679,7 +5410,6 @@ impl Executor {
                 state_transaction,
             )?;
         }
-
         // Capture this against the pre-instruction world. The executable-shape check inside the
         // helper also keeps the exception unavailable to proved IVM and contract overlays.
         let contract_deployment_self_bootstrap = (ivm_proved_replay.is_none()
@@ -5696,14 +5426,12 @@ impl Executor {
         if let Some(authorization) = contract_deployment_self_bootstrap.as_ref() {
             authorization.validate_instruction_sequence(authority, &instructions)?;
         }
-
         // 1) Deterministically meter the instruction batch. Proved IVM transactions retain the
         // verified replay gas because the plain overlay does not account for VM execution cost.
         let used = ivm_proved_replay.as_ref().map_or_else(
             || isi_gas::meter_instructions(&instructions),
             |replay| replay.gas_used,
         );
-
         // 2) Enforce optional payer-provided gas limit (caps fee exposure).
         if let Some(limit) = gas_limit_md
             && used > limit
@@ -5713,7 +5441,6 @@ impl Executor {
             )));
         }
         Self::enforce_transaction_gas_fits_block(state_transaction, used)?;
-
         match (contract_runtime_context, entrypoint_authorization) {
             (Some(context), Some(authorization)) => {
                 if !authorization.is_root() {
@@ -5772,13 +5499,11 @@ impl Executor {
                 root,
             )?;
         }
-
         let instruction_count = instructions.len();
         let confidential_delta = instructions
             .iter()
             .map(crate::gas::confidential_gas_cost)
             .sum::<u64>();
-
         // 3) Execute ISIs in order.
         let prior_sccp_ivm_proved_execution_binding =
             state_transaction.sccp_ivm_proved_execution_binding.clone();
@@ -5936,15 +5661,12 @@ impl Executor {
         state_transaction.sccp_ivm_proved_execution_binding =
             prior_sccp_ivm_proved_execution_binding;
         execution_result?;
-
         // Track confidential gas after successful execution.
         if confidential_delta > 0 {
             state_transaction.record_confidential_gas_delta(confidential_delta);
         }
-
         // 4) Record gas used for block-level budget enforcement.
         state_transaction.last_tx_gas_used = used;
-
         // 5) Charge gas fees when configured and the transaction specified a gas asset.
         if should_charge_pipeline_gas_asset(
             skip_nexus_fee,
@@ -5964,7 +5686,6 @@ impl Executor {
                 fee_sponsor.as_ref(),
             )?;
         }
-
         if !skip_nexus_fee {
             Self::charge_nexus_fees(
                 state_transaction,
@@ -5977,10 +5698,8 @@ impl Executor {
                 used,
             )?;
         }
-
         Ok(())
     }
-
     /// Resolve the cache-bound inputs for one deployed-contract invocation.
     ///
     /// The returned value owns its prepared-program handle and can therefore be executed after
@@ -6040,7 +5759,6 @@ impl Executor {
             summary,
         })
     }
-
     /// Execute one deployed-contract invocation against the current transaction view.
     ///
     /// Fee settlement and block-gas accounting deliberately remain with the enclosing
@@ -6068,7 +5786,6 @@ impl Executor {
             trigger_context,
         )
     }
-
     /// Execute a previously resolved deployed-contract invocation without accessing `IvmCache`.
     #[allow(clippy::too_many_lines)]
     pub(crate) fn execute_resolved_contract_invocation(
@@ -6259,7 +5976,6 @@ impl Executor {
             next_nft_sequence,
         })
     }
-
     #[allow(clippy::too_many_arguments)]
     fn settle_live_transaction_fees(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -6276,7 +5992,6 @@ impl Executor {
     ) -> Result<(), ValidationFail> {
         state_transaction.last_tx_gas_used = gas_used;
         Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
-
         if should_charge_pipeline_gas_asset(
             skip_nexus_fee,
             state_transaction.nexus.enabled,
@@ -6295,7 +6010,6 @@ impl Executor {
                 fee_sponsor.as_ref(),
             )?;
         }
-
         if !skip_nexus_fee {
             Self::charge_nexus_fees(
                 state_transaction,
@@ -6310,7 +6024,6 @@ impl Executor {
         }
         Ok(())
     }
-
     /// Execute [`SignedTransaction`].
     ///
     /// # Errors
@@ -6485,7 +6198,6 @@ impl Executor {
                                 .map(|entry| entry.alias.clone())
                         })
                 });
-
             // Process ZK attachments embedded in V2 transactions.
             if let Some(attachments) = transaction.attachments() {
                 // Canonicalize verification order for determinism
@@ -6539,7 +6251,6 @@ impl Executor {
                             "unsupported proof backends are not supported".to_owned(),
                         ));
                     }
-
                     // If a VK reference is provided without a commitment, check existence in
                     // WSV. If a commitment is provided, skip the lookup to keep pre-verify
                     // stateless and cheap.
@@ -6555,7 +6266,6 @@ impl Executor {
                             vk_ref.backend, vk_ref.name
                         )));
                     }
-
                     // Perform lightweight pre-verify (dedup + tag sanity).
                     let block_height = state_transaction.block_height();
                     let (expected_commitment, vk_active) =
@@ -6631,11 +6341,9 @@ impl Executor {
                 }
             }
         }
-
         let mut proved_contract_runtime_context = None;
         let mut proved_entrypoint_authorization = None;
         let mut sccp_ivm_proved_execution_binding = None;
-
         // Full verification for proof-carrying IVM executables must run before we move the
         // transaction payload out of `SignedTransaction`.
         let ivm_proved_replay = if let Executable::IvmProved(proved) = transaction.instructions() {
@@ -6644,20 +6352,17 @@ impl Executor {
                     "missing gas limit in fee payment intent".to_owned(),
                 ));
             }
-
             let summary = ivm_cache
                 .summarize_program(proved.bytecode.as_ref())
                 .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
             let meta = summary.metadata.clone();
             validate_governed_ivm_proved_execution_policy(state_transaction, &meta)?;
-
             crate::pipeline::overlay::validate_contract_binding(
                 state_transaction,
                 &transaction,
                 &summary,
             )
             .map_err(overlay_build_error_to_validation_fail)?;
-
             let selector = requested_contract_entrypoint(transaction.metadata())?.ok_or_else(|| {
                 ValidationFail::NotPermitted(
                     "self-describing proved raw-IVM contract dispatch requires explicit contract_entrypoint metadata"
@@ -6691,14 +6396,12 @@ impl Executor {
                 entrypoint: selector,
             });
             proved_entrypoint_authorization = Some(authorization);
-
             crate::pipeline::overlay::enforce_manifest_is_pre_registered(
                 state_transaction,
                 &transaction,
                 summary.code_hash,
             )
             .map_err(overlay_build_error_to_validation_fail)?;
-
             let replay = crate::pipeline::overlay::verify_ivm_proved_execution(
                 state_transaction,
                 &transaction,
@@ -6719,13 +6422,11 @@ impl Executor {
         } else {
             None
         };
-
         let tx_creation_time_ms =
             u64::try_from(transaction.creation_time().as_millis()).unwrap_or(u64::MAX);
         let transaction_for_fee = transaction.clone();
         let (tx_authority, executable) = transaction.into();
         debug_assert_eq!(&tx_authority, authority, "authority mismatch");
-
         match (self, executable) {
             (Self::Initial | Self::UserProvided(_), Executable::Instructions(instructions)) => self
                 .execute_metered_instructions(
@@ -6816,7 +6517,6 @@ impl Executor {
                         "executable batch must not be empty".to_owned(),
                     ));
                 }
-
                 let items = items.into_vec();
                 let contains_contract_call = items
                     .iter()
@@ -6845,7 +6545,6 @@ impl Executor {
                         "out of gas: used {explicit_gas} > limit {limit}"
                     )));
                 }
-
                 let block_remaining = if state_transaction.gas_limit_per_block == 0 {
                     u64::MAX
                 } else {
@@ -6877,7 +6576,6 @@ impl Executor {
                 // Native ISIs are metered as one authored set, matching the existing
                 // `Executable::Instructions` rejected-business fee behavior.
                 state_transaction.last_tx_gas_used = explicit_gas;
-
                 for item in items {
                     match item {
                         ExecutableBatchItem::Instruction(instruction) => {
@@ -6917,7 +6615,6 @@ impl Executor {
                         }
                     }
                 }
-
                 let confidential_delta = explicit_instructions
                     .iter()
                     .map(crate::gas::confidential_gas_cost)
@@ -6973,7 +6670,6 @@ impl Executor {
                             state_transaction,
                             &summary.metadata,
                         )?;
-
                         let prepared_contract_cache = ivm_cache.prepared_contract_cache();
                         let amx_analysis =
                             ivm_cache
@@ -7058,7 +6754,6 @@ impl Executor {
                             artifacts.apply_to_transaction(state_transaction, authority)?;
                         state_transaction.last_tx_gas_used = gas_used;
                         Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
-
                         if should_charge_pipeline_gas_asset(
                             skip_nexus_fee,
                             state_transaction.nexus.enabled,
@@ -7232,13 +6927,11 @@ impl Executor {
                     );
                 }
                 let gas_used = effective_limit.saturating_sub(runtime.remaining_gas());
-
                 // Drain and apply queued ISIs deterministically via executor.
                 let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
                 let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
                 state_transaction.last_tx_gas_used = gas_used;
                 Self::enforce_transaction_gas_fits_block(state_transaction, gas_used)?;
-
                 // Charge gas fees: if a gas asset was provided and accepted by policy.
                 if should_charge_pipeline_gas_asset(
                     skip_nexus_fee,
@@ -7274,7 +6967,6 @@ impl Executor {
             }
         }
     }
-
     /// Execute [`InstructionBox`].
     ///
     /// # Errors
@@ -7296,7 +6988,6 @@ impl Executor {
             None,
         )
     }
-
     /// Execute one instruction from an exact signed deployment-bootstrap transaction.
     pub(crate) fn execute_transaction_instruction(
         &self,
@@ -7319,7 +7010,6 @@ impl Executor {
         }
         self.execute_instruction(state_transaction, authority, instruction)
     }
-
     /// Execute [`InstructionBox`] using the runtime profile and an optional
     /// contract execution context for nested contract-originated instructions.
     pub(crate) fn execute_instruction_with_contract_runtime_context(
@@ -7337,7 +7027,6 @@ impl Executor {
             contract_runtime_context,
         )
     }
-
     /// Execute a borrowed overlay instruction using the runtime profile.
     ///
     /// The public executor API remains owned-instruction based. Overlay apply
@@ -7374,7 +7063,6 @@ impl Executor {
             }
         }
     }
-
     /// Execute one borrowed overlay instruction with an exact signed-bootstrap authorization.
     pub(crate) fn execute_borrowed_transaction_overlay_instruction(
         &self,
@@ -7404,7 +7092,6 @@ impl Executor {
             contract_runtime_context,
         )
     }
-
     /// Execute [`InstructionBox`] using a specific execution profile.
     ///
     /// `InstructionExecutionProfile::Runtime` mirrors production behaviour.
@@ -7430,7 +7117,6 @@ impl Executor {
             None,
         )
     }
-
     fn execute_instruction_with_profile_and_contract_runtime_context(
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -7451,7 +7137,6 @@ impl Executor {
         )?;
         trace!("Running instruction execution");
         let instr_id = instruction.id();
-
         let result = match self {
             Self::Initial => Self::execute_initial_instruction(
                 state_transaction,
@@ -7477,7 +7162,6 @@ impl Executor {
         }
         result
     }
-
     fn execute_borrowed_instruction_with_profile_and_contract_runtime_context(
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -7498,7 +7182,6 @@ impl Executor {
         )?;
         trace!("Running borrowed instruction execution");
         let instr_id = instruction.id();
-
         let result = match self {
             Self::Initial => Self::execute_initial_instruction(
                 state_transaction,
@@ -7526,7 +7209,6 @@ impl Executor {
         }
         result
     }
-
     #[allow(clippy::too_many_lines, clippy::items_after_statements)]
     fn execute_initial_instruction(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -7541,7 +7223,6 @@ impl Executor {
                 "executing instruction (Initial executor)"
             );
         }
-
         match MultisigInstructionBox::try_from(instruction) {
             Ok(multisig) => {
                 return crate::smartcontracts::isi::multisig::execute_multisig_instruction(
@@ -7561,7 +7242,6 @@ impl Executor {
                 }
             }
         }
-
         if instruction
             .as_any()
             .downcast_ref::<CustomInstruction>()
@@ -7571,9 +7251,7 @@ impl Executor {
                 "custom instructions require an executor upgrade".to_owned(),
             ));
         }
-
         let is_genesis = is_initial_genesis_context(state_transaction);
-
         validate_initial_permission_or_role_mutation(
             state_transaction,
             authority,
@@ -7587,14 +7265,12 @@ impl Executor {
             instruction,
             is_genesis,
         )?;
-
         if let Some(register_role) = extract_register_role(instruction) {
             if is_reserved_multisig_role_id(register_role.object().id()) {
                 return Err(ValidationFail::NotPermitted(
                     "reserved multisig role names may not be registered".to_owned(),
                 ));
             }
-
             let role = register_role.object();
             let mut normalized_role = Role::new(role.id().clone(), role.grant_to().clone());
             for permission in role.inner().permissions() {
@@ -7615,7 +7291,6 @@ impl Executor {
                 }
                 normalized_role = normalized_role.add_permission(normalized);
             }
-
             if !is_genesis {
                 let can_manage_roles: Permission = executor_permission::role::CanManageRoles.into();
                 let has_manage_roles = authority_has_permission(
@@ -7629,13 +7304,11 @@ impl Executor {
                     ));
                 }
             }
-
             Register::role(normalized_role)
                 .execute(authority, state_transaction)
                 .map_err(ValidationFail::from)?;
             return Ok(());
         }
-
         if extract_unregister_role(instruction).is_some() && !is_genesis {
             let can_manage_roles: Permission = executor_permission::role::CanManageRoles.into();
             if !authority_has_permission(&state_transaction.world, authority, &can_manage_roles)? {
@@ -7644,7 +7317,6 @@ impl Executor {
                 ));
             }
         }
-
         // Native fail-safe authorization remains active until an on-chain executor is
         // installed. Keep the specialized validation below for registration invariants
         // and CBDC-specific authority relationships that go beyond the generic gates.
@@ -7672,18 +7344,15 @@ impl Executor {
                 &trg_owner,
                 state_transaction.block_unix_timestamp_ms(),
             )?;
-
             // Prefer cached permission check; parse once per tx/account.
             let has_permission =
                 (!is_genesis) && state_transaction.can_register_trigger_for(authority, &trg_owner);
-
             if !(is_genesis || is_domain_owner || has_permission) {
                 return Err(ValidationFail::NotPermitted(
                     "Can't register trigger owned by another account".to_owned(),
                 ));
             }
         }
-
         if let Some(reg_asset_definition) = extract_register_asset_definition(instruction) {
             ensure_asset_definition_registration_allowed(
                 state_transaction,
@@ -7691,7 +7360,6 @@ impl Executor {
                 &reg_asset_definition,
             )?;
         }
-
         if !is_genesis
             && let Some(mint) = extract_mint_asset(instruction)
             && !can_mint_asset(&state_transaction.world, authority, mint.destination())?
@@ -7701,7 +7369,6 @@ impl Executor {
                     .to_owned(),
             ));
         }
-
         if !is_genesis
             && let Some(asset_definition_id) = extract_asset_definition_metadata_target(instruction)
             && !can_modify_asset_definition_metadata(
@@ -7715,7 +7382,6 @@ impl Executor {
                     .to_owned(),
             ));
         }
-
         if let Some(account_id) = extract_account_metadata_target(instruction) {
             if !is_genesis
                 && !can_modify_account_metadata(&state_transaction.world, authority, &account_id)?
@@ -7725,7 +7391,6 @@ impl Executor {
                 ));
             }
         }
-
         fn has_modify_nft_metadata_permission(
             state_transaction: &mut StateTransaction<'_, '_>,
             authority: &AccountId,
@@ -7737,7 +7402,6 @@ impl Executor {
                     .try_into_any_norito::<executor_permission::nft::CanModifyNftMetadata>()
                     .is_ok_and(|token| token.nft == *nft_id)
             };
-
             {
                 let permissions = state_transaction
                     .world
@@ -7749,7 +7413,6 @@ impl Executor {
                     return Ok(true);
                 }
             }
-
             for role_id in state_transaction.world.account_roles_iter(authority) {
                 if let Some(role) = state_transaction.world.roles.get(role_id) {
                     if role.permissions.iter().any(is_target_permission) {
@@ -7757,10 +7420,8 @@ impl Executor {
                     }
                 }
             }
-
             Ok(false)
         }
-
         if let Some(nft_id) = instruction
             .as_any()
             .downcast_ref::<SetKeyValueBox>()
@@ -7798,7 +7459,6 @@ impl Executor {
                     .map_err(|err| {
                         ValidationFail::InstructionFailed(InstructionExecutionError::Find(err))
                     })?;
-
                 if &domain_owner != authority
                     && !has_modify_nft_metadata_permission(state_transaction, authority, &nft_id)?
                 {
@@ -7808,7 +7468,6 @@ impl Executor {
                 }
             }
         }
-
         if let Some(transfer_domain) = extract_transfer_domain(instruction)
             && !can_transfer_domain(
                 &state_transaction.world,
@@ -7839,7 +7498,6 @@ impl Executor {
                 "Can't transfer NFT of another account".to_owned(),
             ));
         }
-
         if !is_genesis
             && let Some(transfer_asset) = extract_transfer_asset(instruction)
             && !can_transfer_asset(
@@ -7853,7 +7511,6 @@ impl Executor {
                 "Can't transfer asset: source asset owner must sign the transaction".to_owned(),
             ));
         }
-
         let instruction_id = instruction.id();
         crate::smartcontracts::isi::execute_borrowed_instruction(
             instruction,
@@ -7872,7 +7529,6 @@ impl Executor {
             ValidationFail::from(err)
         })
     }
-
     /// Validate [`QueryRequest`].
     ///
     /// # Errors
@@ -7889,7 +7545,6 @@ impl Executor {
         let latest_block = state_ro.latest_block().map(|block| block.header());
         self.validate_query_with_world_parts(state_ro.world(), latest_block, authority, query)
     }
-
     /// Validate [`QueryRequest`] using world-state and latest committed block header.
     ///
     /// This variant avoids requiring a full [`StateReadOnly`] snapshot in callers that
@@ -7908,11 +7563,9 @@ impl Executor {
         query: &QueryRequest,
     ) -> Result<(), ValidationFail> {
         trace!("Running query validation");
-
         // This native boundary is mandatory for Initial and user-provided executors alike.
         // A custom executor may further restrict a query, but can never widen these grants.
         validate_builtin_native_query_permission(world_ro, authority, query)?;
-
         let query_box = match query {
             QueryRequest::Singular(singular) => AnyQueryBox::Singular(singular.clone()),
             QueryRequest::Start(iterable) => AnyQueryBox::Iterable(iterable.clone()),
@@ -7923,7 +7576,6 @@ impl Executor {
                 return Ok(());
             }
         };
-
         // Alias reads carry privacy and routing authority independent of the pluggable executor.
         // Enforce the exact built-in dataspace/domain grants first so neither the permissive
         // initial executor nor an incomplete user executor visitor can bypass them.
@@ -7933,14 +7585,12 @@ impl Executor {
             authority,
             query,
         )?;
-
         validate_builtin_subsystem_query_permission(
             world_ro,
             latest_block.as_ref(),
             authority,
             query,
         )?;
-
         match self {
             Self::Initial => Ok(()),
             Self::UserProvided(loaded_executor) => {
@@ -7948,23 +7598,19 @@ impl Executor {
                     || BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0),
                     core::convert::identity,
                 );
-
                 let context = ExecutorContext {
                     authority: authority.clone(),
                     curr_block,
                 };
-
                 let payload = ValidatePayload {
                     context,
                     target: query_box,
                 };
-
                 let query_label = match query {
                     QueryRequest::Singular(_) => "query::singular",
                     QueryRequest::Start(_) => "query::start",
                     QueryRequest::Continue(_) => unreachable!("continue queries return early"),
                 };
-
                 let executor_parameters = world_ro.parameters().executor();
                 let gas_limit = executor_parameters.fuel().get();
                 let heap_limit = executor_parameters.memory().get();
@@ -7990,7 +7636,6 @@ impl Executor {
             }
         }
     }
-
     /// Migrate executor to a new user-provided one.
     ///
     /// Execute `migrate()` entrypoint of the `raw_executor` and set `self` to
@@ -8009,7 +7654,6 @@ impl Executor {
         authority: &AccountId,
     ) -> Result<(), VMError> {
         trace!("Running executor migration");
-
         let can_upgrade: Permission = executor_permission::executor::CanUpgradeExecutor.into();
         if !is_initial_genesis_context(state_transaction)
             && !authority_has_permission(&state_transaction.world, authority, &can_upgrade)
@@ -8017,16 +7661,13 @@ impl Executor {
         {
             return Err(VMError::PermissionDenied);
         }
-
         // Load new executor bytecode
         let loaded_executor = LoadedExecutor::load(raw_executor)?;
-
         let curr_block = state_transaction._curr_block;
         let context = ExecutorContext {
             authority: authority.clone(),
             curr_block,
         };
-
         let executor_parameters = state_transaction.world.parameters.get().executor();
         let gas_limit = executor_parameters.fuel().get();
         let heap_limit = executor_parameters.memory().get();
@@ -8040,24 +7681,20 @@ impl Executor {
                 .apply_executor_data_model(data_model);
         }
         purge_legacy_escalation_permissions(state_transaction);
-
         *self = Self::UserProvided(loaded_executor);
         Ok(())
     }
 }
-
 struct ExecutorValidationReport {
     verdict: Result<(), ValidationFail>,
     gas_used: u64,
 }
-
 fn initial_executor_permission_names() -> BTreeSet<String> {
     INITIAL_EXECUTOR_PERMISSION_NAMES
         .iter()
         .map(|permission| (*permission).to_owned())
         .collect()
 }
-
 pub(crate) fn initial_executor_data_model_fallback() -> ExecutorDataModel {
     ExecutorDataModel::new(
         BTreeMap::new(),
@@ -8066,7 +7703,6 @@ pub(crate) fn initial_executor_data_model_fallback() -> ExecutorDataModel {
         Json::new(()),
     )
 }
-
 /// Permission payloads issued under pre-release rules that admitted authorities which did not
 /// control the effective capability.
 ///
@@ -8081,7 +7717,6 @@ const LEGACY_ESCALATION_PERMISSION_NAMES: &[&str] = &[
     "CanPublishSpaceDirectoryManifestForUaid",
     "CanPublishSpaceDirectoryManifestForAccountDomain",
 ];
-
 fn purge_legacy_escalation_permissions(state_transaction: &mut StateTransaction<'_, '_>) {
     let account_ids: Vec<_> = state_transaction
         .world
@@ -8107,7 +7742,6 @@ fn purge_legacy_escalation_permissions(state_transaction: &mut StateTransaction<
                 .remove(account_id);
         }
     }
-
     let role_ids: Vec<_> = state_transaction
         .world
         .roles
@@ -8125,7 +7759,6 @@ fn purge_legacy_escalation_permissions(state_transaction: &mut StateTransaction<
         }
     }
 }
-
 fn run_executor_validation<T>(
     executor: &LoadedExecutor,
     payload: &ValidatePayload<T>,
@@ -8140,15 +7773,12 @@ where
         .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
         .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
     ivm.set_host(ivm::host::DefaultHost::default());
-
     let bytes = encode_executor_input(payload)?;
-
     let ptr = Memory::HEAP_START;
     ivm.store_bytes(ptr, &bytes)
         .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
     ivm.set_register(10, ptr);
     ivm.set_gas_limit(gas_limit);
-
     let run_result = ivm.run();
     let gas_used = gas_limit.saturating_sub(ivm.remaining_gas());
     if let Err(err) = run_result {
@@ -8160,7 +7790,6 @@ where
         }
         return Err(ValidationFail::InternalError(err.to_string()));
     }
-
     let ret_ptr = ivm.register(10);
     let mut slice = executor_output_payload(&ivm, ret_ptr, "validation verdict")?;
     let verdict: Result<(), ValidationFail> = Decode::decode(&mut slice).map_err(|err| {
@@ -8173,22 +7802,18 @@ where
             "executor returned a verdict with trailing bytes: {verdict_context}"
         )));
     }
-
     Ok(ExecutorValidationReport { verdict, gas_used })
 }
-
 #[derive(Debug, Decode, Encode)]
 enum MigrationResultPayload {
     Ok(ExecutorDataModel),
     Err(ValidationFail),
 }
-
 #[derive(Debug, Decode, Encode)]
 enum MigrationUnitPayload {
     Ok(()),
     Err(ValidationFail),
 }
-
 fn run_executor_migration(
     executor: &LoadedExecutor,
     context: &ExecutorContext,
@@ -8199,21 +7824,16 @@ fn run_executor_migration(
         .checkout_runtime_for_gas_limit(gas_limit, heap_limit)
         .map_err(|err| ValidationFail::InternalError(err.to_string()))?;
     ivm.set_host(ivm::host::DefaultHost::default());
-
     let bytes = encode_executor_input(context)?;
-
     let ptr = Memory::HEAP_START;
     ivm.store_bytes(ptr, &bytes)
         .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
     ivm.set_register(10, ptr);
     ivm.set_gas_limit(gas_limit);
-
     ivm.run()
         .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
-
     let ret_ptr = ivm.register(10);
     let payload = executor_output_payload(&ivm, ret_ptr, "migration result")?;
-
     let mut slice = payload;
     if let Ok(verdict) = MigrationResultPayload::decode(&mut slice)
         && slice.is_empty()
@@ -8223,7 +7843,6 @@ fn run_executor_migration(
             MigrationResultPayload::Err(fail) => Err(fail),
         };
     }
-
     let mut slice_unit = payload;
     if let Ok(verdict) = MigrationUnitPayload::decode(&mut slice_unit)
         && slice_unit.is_empty()
@@ -8233,12 +7852,10 @@ fn run_executor_migration(
             MigrationUnitPayload::Err(fail) => Err(fail),
         };
     }
-
     Err(ValidationFail::InternalError(
         "executor migrate entrypoint returned an undecodable or non-canonical result".to_owned(),
     ))
 }
-
 fn map_migration_fail_to_vm_error(fail: ValidationFail) -> VMError {
     match fail {
         ValidationFail::NotPermitted(reason) => {
@@ -8290,7 +7907,6 @@ fn map_migration_fail_to_vm_error(fail: ValidationFail) -> VMError {
         }
     }
 }
-
 fn dispatch_instruction_with_ivm(
     executor: &LoadedExecutor,
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -8301,18 +7917,15 @@ fn dispatch_instruction_with_ivm(
         || BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, None, 0, 0),
         |b| b.header(),
     );
-
     let context = ExecutorContext {
         authority: authority.clone(),
         curr_block,
     };
-
     let payload = ValidatePayload {
         context,
         target: instruction.clone(),
     };
     let instruction_id = instruction.id();
-
     let gas_limit = state_transaction.executor_fuel_remaining;
     let heap_limit = state_transaction
         .world
@@ -8326,7 +7939,6 @@ fn dispatch_instruction_with_ivm(
     state_transaction.executor_fuel_remaining = state_transaction
         .executor_fuel_remaining
         .saturating_sub(report.gas_used);
-
     match report.verdict {
         Ok(()) => {
             if execute_multisig_custom_instruction_if_present(
@@ -8336,7 +7948,6 @@ fn dispatch_instruction_with_ivm(
             )? {
                 return Ok(());
             }
-
             instruction
                 .execute(authority, state_transaction)
                 .map_err(|err| {
@@ -8360,7 +7971,6 @@ fn dispatch_instruction_with_ivm(
         }
     }
 }
-
 fn execute_multisig_custom_instruction_if_present(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -8373,20 +7983,16 @@ fn execute_multisig_custom_instruction_if_present(
     {
         return Ok(false);
     }
-
     let Ok(multisig) = MultisigInstructionBox::try_from(instruction) else {
         return Ok(false);
     };
-
     crate::smartcontracts::isi::multisig::execute_multisig_instruction(
         state_transaction,
         authority,
         multisig,
     )?;
-
     Ok(true)
 }
-
 fn extract_register_role(instruction: &InstructionBox) -> Option<Register<Role>> {
     let instr_any = instruction.as_any();
     if let Some(reg) = instr_any.downcast_ref::<Register<Role>>() {
@@ -8400,7 +8006,6 @@ fn extract_register_role(instruction: &InstructionBox) -> Option<Register<Role>>
     }
     None
 }
-
 fn extract_unregister_role(instruction: &InstructionBox) -> Option<Unregister<Role>> {
     let instr_any = instruction.as_any();
     if let Some(unregister) = instr_any.downcast_ref::<Unregister<Role>>() {
@@ -8414,7 +8019,6 @@ fn extract_unregister_role(instruction: &InstructionBox) -> Option<Unregister<Ro
     }
     None
 }
-
 fn extract_account_metadata_target(instruction: &InstructionBox) -> Option<AccountId> {
     instruction
         .as_any()
@@ -8445,7 +8049,6 @@ fn extract_account_metadata_target(instruction: &InstructionBox) -> Option<Accou
                 .map(|rm| rm.object.clone())
         })
 }
-
 fn extract_asset_definition_metadata_target(
     instruction: &InstructionBox,
 ) -> Option<AssetDefinitionId> {
@@ -8486,7 +8089,6 @@ fn extract_asset_definition_metadata_target(
                 .map(|remove| remove.object.clone())
         })
 }
-
 fn extract_mint_asset(instruction: &InstructionBox) -> Option<Mint<Quantity, Asset>> {
     let any = instruction.as_any();
     if let Some(mint) = any.downcast_ref::<Mint<Quantity, Asset>>() {
@@ -8506,7 +8108,6 @@ fn extract_mint_asset(instruction: &InstructionBox) -> Option<Mint<Quantity, Ass
         .ok()
         .flatten()
 }
-
 fn extract_transfer_asset(
     instruction: &InstructionBox,
 ) -> Option<Transfer<Asset, Quantity, Account>> {
@@ -8531,7 +8132,6 @@ fn extract_transfer_asset(
     .ok()
     .flatten()
 }
-
 fn extract_transfer_domain(
     instruction: &InstructionBox,
 ) -> Option<Transfer<Account, DomainId, Account>> {
@@ -8556,7 +8156,6 @@ fn extract_transfer_domain(
     .ok()
     .flatten()
 }
-
 fn extract_transfer_asset_definition(
     instruction: &InstructionBox,
 ) -> Option<Transfer<Account, AssetDefinitionId, Account>> {
@@ -8584,7 +8183,6 @@ fn extract_transfer_asset_definition(
     .ok()
     .flatten()
 }
-
 fn extract_transfer_nft(
     instruction: &InstructionBox,
 ) -> Option<Transfer<Account, iroha_data_model::NftId, Account>> {
@@ -8613,7 +8211,6 @@ fn extract_transfer_nft(
     .ok()
     .flatten()
 }
-
 fn authority_has_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -8628,7 +8225,6 @@ fn authority_has_permission(
     {
         return Ok(true);
     }
-
     for role_id in world.account_roles_iter(authority) {
         if let Some(role) = world.roles().get(role_id)
             && role.permissions.contains(target)
@@ -8636,16 +8232,13 @@ fn authority_has_permission(
             return Ok(true);
         }
     }
-
     Ok(false)
 }
-
 fn authority_has_role(world: &impl WorldReadOnly, authority: &AccountId, role_id: &RoleId) -> bool {
     world
         .account_roles_iter(authority)
         .any(|assigned| assigned == role_id)
 }
-
 const INITIAL_GENESIS_ONLY_PERMISSION_NAMES: &[&str] = &[
     "CanManagePeers",
     "CanManageLaneRelayEmergency",
@@ -8660,11 +8253,9 @@ const INITIAL_GENESIS_ONLY_PERMISSION_NAMES: &[&str] = &[
     "CanActivateKagemushaRecursiveReleaseV4",
     "CanManageOfflineDeviceAttestationPolicy",
 ];
-
 fn initial_permission_is_genesis_only(permission: &Permission) -> bool {
     INITIAL_GENESIS_ONLY_PERMISSION_NAMES.contains(&permission.name().as_ref())
 }
-
 fn invalid_initial_permission_payload(
     permission: &Permission,
     error: impl core::fmt::Debug,
@@ -8673,7 +8264,6 @@ fn invalid_initial_permission_payload(
         "{permission:?}: Invalid permission payload ({error:?})"
     ))
 }
-
 fn validate_initial_permission_payload_constraints(
     permission: &Permission,
 ) -> Result<(), ValidationFail> {
@@ -8693,7 +8283,6 @@ fn validate_initial_permission_payload_constraints(
             }
         }};
     }
-
     match permission.name().as_ref() {
         "CanSubmitGovernanceBallot" => validate_governance_selector!(
             executor_permission::governance::CanSubmitGovernanceBallot
@@ -8708,7 +8297,6 @@ fn validate_initial_permission_payload_constraints(
     }
     Ok(())
 }
-
 fn initial_alias_scope_owned_by(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -8738,7 +8326,6 @@ fn initial_alias_scope_owned_by(
         }
     }
 }
-
 fn initial_asset_definition_alias_scope_owned_by(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -8766,7 +8353,6 @@ fn initial_asset_definition_alias_scope_owned_by(
         }
     }
 }
-
 fn initial_asset_definition_alias_namespace_scope(
     alias: &ResolvedAssetDefinitionAliasV1,
 ) -> Result<
@@ -8789,7 +8375,6 @@ fn initial_asset_definition_alias_namespace_scope(
         ))),
     }
 }
-
 fn initial_asset_definition_alias_namespace_root_authority(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -8804,7 +8389,6 @@ fn initial_asset_definition_alias_namespace_root_authority(
         &initial_asset_definition_alias_namespace_scope(alias)?,
     )
 }
-
 fn initial_asset_definition_alias_namespace_authority(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -8823,7 +8407,6 @@ fn initial_asset_definition_alias_namespace_authority(
             || initial_asset_definition_alias_scope_owned_by(state_transaction, authority, &scope)?,
     )
 }
-
 fn initial_asset_definition_alias_exact_grant_authority(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -8856,7 +8439,6 @@ fn initial_asset_definition_alias_exact_grant_authority(
             )?,
     )
 }
-
 fn initial_nft_transfer_authority(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -8872,7 +8454,6 @@ fn initial_nft_transfer_authority(
     Ok(owner == *authority
         || authority_owns_domain(&state_transaction.world, authority, nft_id.domain())?)
 }
-
 fn initial_trigger_authority(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -8889,7 +8470,6 @@ fn initial_trigger_authority(
             ))
         })
 }
-
 #[allow(clippy::too_many_lines)]
 /// Return whether `authority` is a legitimate non-token root for delegating `permission`.
 ///
@@ -8904,14 +8484,12 @@ fn initial_permission_capability_root_authority(
     contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
 ) -> Result<Option<bool>, ValidationFail> {
     validate_initial_permission_payload_constraints(permission)?;
-
     macro_rules! decode {
         ($permission_ty:path) => {
             <$permission_ty>::try_from(permission)
                 .map_err(|error| invalid_initial_permission_payload(permission, error))?
         };
     }
-
     let result = match permission.name().as_ref() {
         "CanUnregisterDomain" => {
             let token = decode!(executor_permission::domain::CanUnregisterDomain);
@@ -9224,7 +8802,6 @@ fn initial_permission_capability_root_authority(
     };
     Ok(Some(result))
 }
-
 fn initial_permission_delegation_allowed(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9264,7 +8841,6 @@ fn initial_permission_delegation_allowed(
     }
     Ok(capability_root.unwrap_or(false))
 }
-
 fn initial_permission_revocation_allowed(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9297,7 +8873,6 @@ fn initial_permission_revocation_allowed(
         contract_runtime_context,
     )
 }
-
 fn validate_initial_account_permission_destination(
     _state_transaction: &StateTransaction<'_, '_>,
     _permission: &Permission,
@@ -9307,7 +8882,6 @@ fn validate_initial_account_permission_destination(
 ) -> Result<(), ValidationFail> {
     Ok(())
 }
-
 fn validate_initial_permission_or_role_mutation(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9319,7 +8893,6 @@ fn validate_initial_permission_or_role_mutation(
     let Some(mutation) = mutation else {
         return Ok(());
     };
-
     match mutation {
         PermissionOrRoleMutation::AccountPermission {
             permission,
@@ -9442,7 +9015,6 @@ fn validate_initial_permission_or_role_mutation(
         }
     }
 }
-
 fn initial_authority_has_exact_permission(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9450,7 +9022,6 @@ fn initial_authority_has_exact_permission(
 ) -> Result<bool, ValidationFail> {
     authority_has_permission(&state_transaction.world, authority, &permission)
 }
-
 fn can_unregister_domain_initial(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9468,7 +9039,6 @@ fn can_unregister_domain_initial(
         .into(),
     )
 }
-
 fn can_modify_domain_metadata_initial(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9486,7 +9056,6 @@ fn can_modify_domain_metadata_initial(
         .into(),
     )
 }
-
 fn can_unregister_account_initial(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9504,7 +9073,6 @@ fn can_unregister_account_initial(
         .into(),
     )
 }
-
 fn can_replace_account_controller_initial(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9522,7 +9090,6 @@ fn can_replace_account_controller_initial(
         .into(),
     )
 }
-
 fn initial_accounts_share_active_lineage(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9550,7 +9117,6 @@ fn initial_accounts_share_active_lineage(
     };
     Ok(authority == target)
 }
-
 fn can_unregister_asset_definition_initial(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9568,7 +9134,6 @@ fn can_unregister_asset_definition_initial(
         .into(),
     )
 }
-
 fn can_register_nft_initial(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9586,7 +9151,6 @@ fn can_register_nft_initial(
         .into(),
     )
 }
-
 fn can_unregister_nft_initial(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9601,7 +9165,6 @@ fn can_unregister_nft_initial(
         executor_permission::nft::CanUnregisterNft { nft: nft.clone() }.into(),
     )
 }
-
 fn can_modify_nft_metadata_initial(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9616,7 +9179,6 @@ fn can_modify_nft_metadata_initial(
         executor_permission::nft::CanModifyNftMetadata { nft: nft.clone() }.into(),
     )
 }
-
 fn can_modify_trigger_initial(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9634,7 +9196,6 @@ fn can_modify_trigger_initial(
         .into(),
     )
 }
-
 fn can_unregister_trigger_initial(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9652,7 +9213,6 @@ fn can_unregister_trigger_initial(
         .into(),
     )
 }
-
 fn can_execute_trigger_initial(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9670,7 +9230,6 @@ fn can_execute_trigger_initial(
         .into(),
     )
 }
-
 fn can_modify_trigger_metadata_initial(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9688,7 +9247,6 @@ fn can_modify_trigger_metadata_initial(
         .into(),
     )
 }
-
 fn can_burn_asset_initial(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9715,7 +9273,6 @@ fn can_burn_asset_initial(
         .into(),
     )
 }
-
 fn can_modify_asset_metadata_initial(
     state_transaction: &StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -9742,7 +9299,6 @@ fn can_modify_asset_metadata_initial(
         .into(),
     )
 }
-
 fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBox) -> bool {
     use iroha_data_model::isi::{BurnBox, MintBox, RegisterBox, UnregisterBox};
     let any = instruction.as_any();
@@ -9751,7 +9307,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
             false $(|| any.downcast_ref::<$ty>().is_some())+
         };
     }
-
     // Standard ISIs are authorized by the native parity gates above.
     if is_any!(
         iroha_data_model::isi::SetParameter,
@@ -9771,7 +9326,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-
     // CBDC account control, native multisig/consensus-key rotation, and alias lifecycle.
     if is_any!(
         iroha_data_model::isi::AddSignatory,
@@ -9795,7 +9349,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-
     // Asset controls and CBDC policy records have Core owner/scope checks.
     if is_any!(
         iroha_data_model::isi::SetAssetKeyValue,
@@ -9818,7 +9371,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-
     // Smart-contract deployment and instance lifecycle enforce immutable subject,
     // code, nonce, and deployment permissions inside Core.
     if is_any!(
@@ -9835,7 +9387,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-
     // Offline/Kagemusha execution is guarded by the native escrow, activation,
     // release, and device-attestation policy checks in Core.
     if is_any!(
@@ -9847,7 +9398,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-
     // Native VPN escrow admission is one signed lifecycle surface. Core
     // validates quote issuance, funding, settlement, and timeout refund; the
     // Initial executor must admit all three operations together so no lease can
@@ -9859,7 +9409,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-
     // Cross-border settlement, relays, and public governance mutations either
     // require an exact Core-enforced permission or consume a cryptographically
     // verified, replay-protected proof. Keep the signed governance draft surface
@@ -9894,7 +9443,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-
     // Retail identifier policies and claims are bound to their signed policy and
     // RAM-LFE proof state by Core.
     if is_any!(
@@ -9908,7 +9456,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-
     // Public-validator mutations have the explicit CanManagePeers gate above.
     if is_any!(
         iroha_data_model::isi::staking::RegisterPublicLaneValidator,
@@ -9917,14 +9464,12 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
     ) {
         return true;
     }
-
     // The Initial executor is a deliberately narrow CBDC bootstrap profile.
     // Proof-bound social, endorsement, ZK, and Musubi operations are not part of
     // the PK release surface and remain closed until an installed executor
     // explicitly admits them.
     false
 }
-
 fn initial_genesis_instruction_is_explicitly_admitted(instruction: &InstructionBox) -> bool {
     let any = instruction.as_any();
     macro_rules! is_any {
@@ -9932,7 +9477,6 @@ fn initial_genesis_instruction_is_explicitly_admitted(instruction: &InstructionB
             false $(|| any.downcast_ref::<$ty>().is_some())+
         };
     }
-
     // Genesis has a small, explicit bootstrap-only surface in addition to the
     // ordinary Initial-executor surface. Never treat "genesis" as permission to
     // execute an otherwise unclassified native instruction: several instruction
@@ -9958,7 +9502,6 @@ fn initial_genesis_instruction_is_explicitly_admitted(instruction: &InstructionB
         iroha_data_model::isi::staking::RecordPublicLaneRewards,
     )
 }
-
 #[allow(clippy::too_many_lines)]
 fn validate_initial_native_instruction_authority(
     state_transaction: &StateTransaction<'_, '_>,
@@ -9969,7 +9512,6 @@ fn validate_initial_native_instruction_authority(
     use iroha_data_model::isi::{BurnBox, MintBox, RegisterBox, UnregisterBox};
     let any = instruction.as_any();
     let deny = |message: &'static str| Err(ValidationFail::NotPermitted(message.to_owned()));
-
     // Direct multisig mutations are accepted only from the account being changed
     // (including its active rekey lineage), or from an exact controller delegate.
     // The transaction layer still applies the native multisig proposal/quorum flow
@@ -9992,7 +9534,6 @@ fn validate_initial_native_instruction_authority(
     {
         return deny("authority cannot mutate another account's multisig controller");
     }
-
     if let Some(set_parameter) = any.downcast_ref::<iroha_data_model::isi::SetParameter>() {
         if matches!(
             set_parameter.inner(),
@@ -10025,7 +9566,6 @@ fn validate_initial_native_instruction_authority(
         }
         return deny("Can't set network parameters without CanSetParameters");
     }
-
     if any
         .downcast_ref::<iroha_data_model::isi::Upgrade>()
         .is_some()
@@ -10041,7 +9581,6 @@ fn validate_initial_native_instruction_authority(
         }
         return deny("Can't upgrade executor without CanUpgradeExecutor");
     }
-
     // The default executor does not admit these authority-free administrative
     // instructions. Genesis may seed their state, but post-genesis callers must use
     // the corresponding governed lifecycle instead of falling through Core Execute.
@@ -10050,7 +9589,6 @@ fn validate_initial_native_instruction_authority(
     if !is_genesis && default_denied_administrative_instruction {
         return deny("administrative instruction requires an explicit governed lifecycle");
     }
-
     let mutates_public_validator_lifecycle = any
         .downcast_ref::<iroha_data_model::isi::staking::RegisterPublicLaneValidator>()
         .is_some()
@@ -10070,7 +9608,6 @@ fn validate_initial_native_instruction_authority(
     {
         return deny("public validator lifecycle requires CanManagePeers");
     }
-
     if any
         .downcast_ref::<iroha_data_model::isi::register::RegisterPeerWithPop>()
         .is_some()
@@ -10083,7 +9620,6 @@ fn validate_initial_native_instruction_authority(
     {
         return deny("peer registration requires CanManagePeers");
     }
-
     if let Some(register) = any.downcast_ref::<RegisterBox>() {
         if matches!(register, RegisterBox::Domain(_)) && !is_genesis {
             return deny("raw domain registration is reserved for genesis; use EnsureAlias");
@@ -10112,7 +9648,6 @@ fn validate_initial_native_instruction_authority(
             return deny("authority cannot register this resource");
         }
     }
-
     if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
         let allowed = match unregister {
             UnregisterBox::Peer(_) => {
@@ -10169,7 +9704,6 @@ fn validate_initial_native_instruction_authority(
             return deny("authority cannot remove this resource");
         }
     }
-
     if let Some(mint) = any.downcast_ref::<MintBox>()
         && let MintBox::TriggerRepetitions(mint) = mint
         && !is_genesis
@@ -10177,7 +9711,6 @@ fn validate_initial_native_instruction_authority(
     {
         return deny("authority cannot modify trigger repetitions");
     }
-
     if let Some(burn) = any.downcast_ref::<BurnBox>() {
         let allowed = match burn {
             BurnBox::Asset(burn) => {
@@ -10193,14 +9726,12 @@ fn validate_initial_native_instruction_authority(
             return deny("authority cannot burn this resource");
         }
     }
-
     if let Some(execute) = any.downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()
         && !is_genesis
         && !can_execute_trigger_initial(state_transaction, authority, execute.trigger())?
     {
         return deny("authority cannot execute this trigger");
     }
-
     if let Some(set) = any.downcast_ref::<SetKeyValueBox>() {
         let allowed = match set {
             SetKeyValueBox::Domain(set) => {
@@ -10249,7 +9780,6 @@ fn validate_initial_native_instruction_authority(
             return deny("authority cannot modify this metadata");
         }
     }
-
     if let Some(remove) = any.downcast_ref::<RemoveKeyValueBox>() {
         let allowed = match remove {
             RemoveKeyValueBox::Domain(remove) => {
@@ -10302,7 +9832,6 @@ fn validate_initial_native_instruction_authority(
             return deny("authority cannot remove this metadata");
         }
     }
-
     if let Some(set) = any.downcast_ref::<iroha_data_model::isi::SetAssetKeyValue>()
         && !is_genesis
         && !can_modify_asset_metadata_initial(state_transaction, authority, set.asset())?
@@ -10315,7 +9844,6 @@ fn validate_initial_native_instruction_authority(
     {
         return deny("authority cannot remove this asset metadata");
     }
-
     let recovery_account = any
         .downcast_ref::<iroha_data_model::isi::ReplaceAccountController>()
         .map(|instruction| instruction.account())
@@ -10333,7 +9861,6 @@ fn validate_initial_native_instruction_authority(
     {
         return deny("authority cannot replace another account's controller or recovery policy");
     }
-
     if let Some(set_alias) =
         any.downcast_ref::<iroha_data_model::isi::asset_alias::SetAssetDefinitionAlias>()
         && !is_genesis
@@ -10353,10 +9880,8 @@ fn validate_initial_native_instruction_authority(
             instruction.id()
         )));
     }
-
     Ok(())
 }
-
 fn authority_owns_asset_definition(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -10367,7 +9892,6 @@ fn authority_owns_asset_definition(
         .map(|definition| definition.owned_by() == authority)
         .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))
 }
-
 fn can_mint_asset(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -10390,7 +9914,6 @@ fn can_mint_asset(
     .into();
     authority_has_permission(world, authority, &exact_destination)
 }
-
 fn can_modify_asset_definition_metadata(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -10406,7 +9929,6 @@ fn can_modify_asset_definition_metadata(
         .into();
     authority_has_permission(world, authority, &required)
 }
-
 pub(crate) fn enforce_contract_entrypoint_permission(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -10429,7 +9951,6 @@ pub(crate) fn enforce_contract_entrypoint_permission(
         permission,
     )
 }
-
 /// Authorize a prepared deployed-contract selector and capture its immutable apply snapshot.
 pub(crate) fn authorize_prepared_contract_selector(
     world: &impl WorldReadOnly,
@@ -10454,7 +9975,6 @@ pub(crate) fn authorize_prepared_contract_selector(
     snapshot.validate(world)?;
     Ok(snapshot)
 }
-
 /// Authorize a prepared deployed-contract read-only selector and capture its immutable snapshot.
 pub(crate) fn authorize_prepared_contract_view_selector(
     world: &impl WorldReadOnly,
@@ -10479,7 +9999,6 @@ pub(crate) fn authorize_prepared_contract_view_selector(
     snapshot.validate(world)?;
     Ok(snapshot)
 }
-
 /// Authorize a prepared raw-IVM selector and capture its immutable apply snapshot.
 pub(crate) fn authorize_prepared_raw_contract_selector(
     world: &impl WorldReadOnly,
@@ -10504,7 +10023,6 @@ pub(crate) fn authorize_prepared_raw_contract_selector(
     snapshot.validate(world)?;
     Ok(snapshot)
 }
-
 /// Enforce the compiler-verified permission attached to a named public entrypoint.
 ///
 /// Overlay preparation, live overlay application, direct execution, triggers,
@@ -10530,7 +10048,6 @@ pub(crate) fn enforce_named_contract_entrypoint_permission(
             "contract entrypoint and permission must use non-empty canonical spellings".to_owned(),
         ));
     }
-
     let target: Permission = if permission_name == SCOPED_PERMISSION_NAME {
         iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
             contract: contract_address.clone(),
@@ -10547,7 +10064,6 @@ pub(crate) fn enforce_named_contract_entrypoint_permission(
     if authority_has_permission(world, authority, &target)? {
         return Ok(());
     }
-
     if permission_name == SCOPED_PERMISSION_NAME {
         Err(ValidationFail::NotPermitted(format!(
             "contract entrypoint `{entrypoint}` on `{contract_address}` requires an exact `{SCOPED_PERMISSION_NAME}` grant"
@@ -10558,7 +10074,6 @@ pub(crate) fn enforce_named_contract_entrypoint_permission(
         )))
     }
 }
-
 fn enforce_transaction_contract_permission_before_proof_verification<R>(
     state: &R,
     authority: &AccountId,
@@ -10702,7 +10217,6 @@ where
         }
     }
 }
-
 fn can_modify_account_metadata(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -10711,14 +10225,12 @@ fn can_modify_account_metadata(
     if authority == account_id {
         return Ok(true);
     }
-
     let required: Permission = executor_permission::account::CanModifyAccountMetadata {
         account: account_id.clone(),
     }
     .into();
     authority_has_permission(world, authority, &required)
 }
-
 fn authority_owns_domain(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -10730,7 +10242,6 @@ fn authority_owns_domain(
         .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
     Ok(&owner == authority)
 }
-
 fn authority_owns_any_alias_domain(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -10763,7 +10274,6 @@ fn authority_owns_any_alias_domain(
     }
     Ok(false)
 }
-
 fn can_transfer_domain(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -10773,14 +10283,11 @@ fn can_transfer_domain(
     if transfer.source() == authority {
         return Ok(true);
     }
-
     if authority_owns_any_alias_domain(world, authority, transfer.source(), now_ms)? {
         return Ok(true);
     }
-
     authority_owns_domain(world, authority, transfer.object())
 }
-
 fn can_transfer_asset_definition(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -10789,14 +10296,12 @@ fn can_transfer_asset_definition(
     if transfer.source() == authority {
         return Ok(true);
     }
-
     let owner = world
         .asset_definition(transfer.object())
         .map(|definition| definition.owned_by().clone())
         .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
     Ok(&owner == authority)
 }
-
 fn can_transfer_nft(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -10805,18 +10310,15 @@ fn can_transfer_nft(
     if transfer.source() == authority {
         return Ok(true);
     }
-
     if authority_owns_domain(world, authority, transfer.object().domain())? {
         return Ok(true);
     }
-
     let required: Permission = executor_permission::nft::CanTransferNft {
         nft: transfer.object().clone(),
     }
     .into();
     authority_has_permission(world, authority, &required)
 }
-
 fn can_transfer_asset(
     world: &impl WorldReadOnly,
     authority: &AccountId,
@@ -10834,11 +10336,9 @@ fn can_transfer_asset(
             return Ok(false);
         }
     }
-
     if transfer.source().account() == authority {
         return Ok(true);
     }
-
     let asset = transfer.source().clone();
     let specific: Permission = executor_permission::asset::CanTransferAsset {
         asset: asset.clone(),
@@ -10847,14 +10347,12 @@ fn can_transfer_asset(
     if authority_has_permission(world, authority, &specific)? {
         return Ok(true);
     }
-
     let by_definition: Permission = executor_permission::asset::CanTransferAssetWithDefinition {
         asset_definition: asset.definition().clone(),
     }
     .into();
     authority_has_permission(world, authority, &by_definition)
 }
-
 fn normalize_role_permission_for_initial_executor(
     state_transaction: &StateTransaction<'_, '_>,
     permission: &Permission,
@@ -10872,9 +10370,7 @@ fn normalize_role_permission_for_initial_executor(
             "{permission:?}: Unknown permission"
         )));
     }
-
     validate_initial_permission_payload_constraints(permission)?;
-
     if permission.name() == "CanTransferAsset" {
         let normalized = executor_permission::asset::CanTransferAsset::try_from(permission)
             .map_err(|err| {
@@ -10884,14 +10380,11 @@ fn normalize_role_permission_for_initial_executor(
             })?;
         return Ok(normalized.into());
     }
-
     Ok(permission.clone())
 }
-
 fn instruction_has_concrete_type<T: 'static>(instruction: &InstructionBox) -> bool {
     instruction.id() == core::any::type_name::<T>()
 }
-
 const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManagePeers",
     "CanManageLaneRelayEmergency",
@@ -10990,11 +10483,9 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageTwitterBindings",
     "CanResolveEscrowDispute",
 ];
-
 fn is_builtin_initial_permission_name(permission_name: &str) -> bool {
     INITIAL_EXECUTOR_PERMISSION_NAMES.contains(&permission_name)
 }
-
 /// Parse the WAT-like template used in integration tests to embed a sequence
 /// of Norito-encoded ISIs into linear memory, then execute each instruction.
 pub(crate) fn extract_register_asset_definition(
@@ -11021,7 +10512,6 @@ pub(crate) fn extract_register_asset_definition(
     .ok()
     .flatten()
 }
-
 pub(crate) fn ensure_asset_definition_registration_allowed(
     state_transaction: &mut StateTransaction<'_, '_>,
     authority: &AccountId,
@@ -11035,7 +10525,6 @@ pub(crate) fn ensure_asset_definition_registration_allowed(
     if is_genesis_context {
         return Ok(());
     }
-
     let Some(alias) = reg_asset_definition.object().alias.as_ref() else {
         return Err(ValidationFail::NotPermitted(
             "domainless asset definitions may only be registered in genesis".to_owned(),
@@ -11051,7 +10540,6 @@ pub(crate) fn ensure_asset_definition_registration_allowed(
             "asset definition registration alias has invalid domain context: {err}"
         ))
     })?;
-
     let domain_owner = state_transaction
         .world
         .domain(&domain_id)
@@ -11060,12 +10548,10 @@ pub(crate) fn ensure_asset_definition_registration_allowed(
     if &domain_owner == authority {
         return Ok(());
     }
-
     Err(ValidationFail::NotPermitted(
         "Can't register asset definition".to_owned(),
     ))
 }
-
 #[allow(dead_code)]
 fn execute_wat_embedded_instructions(
     state_tx: &mut StateTransaction<'_, '_>,
@@ -11075,7 +10561,6 @@ fn execute_wat_embedded_instructions(
     let Ok(wat_str) = core::str::from_utf8(wat_bytes) else {
         return Err("contract is not valid UTF-8".to_owned());
     };
-
     // 1) Extract the memory data blob inside: (data (i32.const 0) "...")
     let needle = "(data (i32.const 0) \"";
     let start = wat_str
@@ -11087,7 +10572,6 @@ fn execute_wat_embedded_instructions(
         .find('\"')
         .ok_or_else(|| "unterminated data segment".to_owned())?;
     let hex_esc = &rest[..end];
-
     // Decode sequences like \ab into bytes
     let mut mem_blob: Vec<u8> = Vec::with_capacity(hex_esc.len() / 3 + 1);
     let chars: Vec<char> = hex_esc.chars().collect();
@@ -11109,7 +10593,6 @@ fn execute_wat_embedded_instructions(
             i += 1;
         }
     }
-
     // 2) Extract all call sites: (call $exec_isi (i32.const <ptr>) (i32.const <len>))
     let mut cursor = wat_str;
     let mut slices: Vec<(usize, usize)> = Vec::new();
@@ -11143,11 +10626,9 @@ fn execute_wat_embedded_instructions(
         slices.push((ptr, len));
         cursor = &after_len[k..];
     }
-
     if slices.is_empty() {
         return Err("no exec_isi calls found".to_owned());
     }
-
     // 3) Decode each instruction from the memory blob and execute it.
     for (ptr, len) in slices {
         let end = ptr
@@ -11166,10 +10647,8 @@ fn execute_wat_embedded_instructions(
             .execute_instruction(state_tx, authority, isi)
             .map_err(|e| format!("execution failed: {e}"))?;
     }
-
     Ok(())
 }
-
 /// [`Executor`] with cached [`IVM`] for execution.
 #[derive(Debug, Clone)]
 #[debug("LoadedExecutor {{ runtime: <IVM> }}")]
@@ -11179,19 +10658,16 @@ pub struct LoadedExecutor {
     /// See [`crate::tx::TransactionExecutor::validate_with_runtime_executor`].
     raw_executor: Arc<data_model_executor::Executor>,
 }
-
 // Stack sizing and the governed heap ceiling define distinct VM memory
 // authorities. Keep a small bounded LRU so adversarial governance/gas
 // variation cannot retain an unbounded number of complete memory images and
 // Merkle baselines.
 const EXECUTOR_RUNTIME_VARIANT_CAPACITY: usize = 4;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct ExecutorRuntimeKey {
     stack_limit: u64,
     heap_limit: u64,
 }
-
 impl ExecutorRuntimeKey {
     fn for_limits(gas_limit: u64, heap_limit: u64) -> Self {
         // The exact gas limit is replenished on every checkout. Keying by it
@@ -11202,12 +10678,10 @@ impl ExecutorRuntimeKey {
         }
     }
 }
-
 struct ExecutorRuntimeVariant {
     baseline: Arc<RuntimeTemplate>,
     available: Option<IVM>,
 }
-
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct ExecutorRuntimePoolStats {
@@ -11218,7 +10692,6 @@ struct ExecutorRuntimePoolStats {
     dirty_resets: u64,
     evictions: u64,
 }
-
 #[derive(Clone, Copy)]
 enum ExecutorRuntimePoolEvent {
     Hit,
@@ -11228,7 +10701,6 @@ enum ExecutorRuntimePoolEvent {
     DirtyReset,
     Eviction,
 }
-
 struct ExecutorRuntimePool {
     variants: BTreeMap<ExecutorRuntimeKey, ExecutorRuntimeVariant>,
     order: VecDeque<ExecutorRuntimeKey>,
@@ -11236,7 +10708,6 @@ struct ExecutorRuntimePool {
     #[cfg(test)]
     stats: ExecutorRuntimePoolStats,
 }
-
 impl ExecutorRuntimePool {
     fn new(
         key: ExecutorRuntimeKey,
@@ -11265,7 +10736,6 @@ impl ExecutorRuntimePool {
             },
         }
     }
-
     fn record(&mut self, event: ExecutorRuntimePoolEvent) {
         #[cfg(test)]
         match event {
@@ -11291,14 +10761,12 @@ impl ExecutorRuntimePool {
         #[cfg(not(test))]
         let _ = event;
     }
-
     fn touch(&mut self, key: ExecutorRuntimeKey) {
         if let Some(position) = self.order.iter().position(|candidate| *candidate == key) {
             self.order.remove(position);
         }
         self.order.push_back(key);
     }
-
     fn insert_variant(&mut self, key: ExecutorRuntimeKey, baseline: Arc<RuntimeTemplate>) {
         while self.variants.len() >= self.capacity {
             let Some(evicted) = self.order.pop_front() else {
@@ -11318,24 +10786,20 @@ impl ExecutorRuntimePool {
         self.touch(key);
     }
 }
-
 struct ExecutorRuntimeLease {
     pool: Arc<Mutex<ExecutorRuntimePool>>,
     key: ExecutorRuntimeKey,
     baseline: Arc<RuntimeTemplate>,
     vm: Option<IVM>,
 }
-
 impl Deref for ExecutorRuntimeLease {
     type Target = IVM;
-
     fn deref(&self) -> &Self::Target {
         self.vm
             .as_ref()
             .expect("executor runtime lease always owns a VM")
     }
 }
-
 impl DerefMut for ExecutorRuntimeLease {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.vm
@@ -11343,13 +10807,11 @@ impl DerefMut for ExecutorRuntimeLease {
             .expect("executor runtime lease always owns a VM")
     }
 }
-
 impl Drop for ExecutorRuntimeLease {
     fn drop(&mut self) {
         let Some(mut vm) = self.vm.take() else {
             return;
         };
-
         let can_return = {
             let pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
             pool.variants.get(&self.key).is_some_and(|variant| {
@@ -11359,7 +10821,6 @@ impl Drop for ExecutorRuntimeLease {
         if !can_return {
             return;
         }
-
         if vm.reset_from_runtime_template(&self.baseline).is_err() {
             return;
         }
@@ -11377,11 +10838,9 @@ impl Drop for ExecutorRuntimeLease {
         }
     }
 }
-
 fn stack_limit_for_gas(gas_limit: u64) -> u64 {
     IvmConfig::new(gas_limit).stack_limit_for_gas()
 }
-
 impl LoadedExecutor {
     pub(crate) fn load(raw_executor: data_model_executor::Executor) -> Result<Self, VMError> {
         let default_parameters = iroha_data_model::parameter::SmartContractParameters::default();
@@ -11401,7 +10860,6 @@ impl LoadedExecutor {
             raw_executor,
         })
     }
-
     fn load_runtime(
         raw_executor: &data_model_executor::Executor,
         gas_limit: u64,
@@ -11413,7 +10871,6 @@ impl LoadedExecutor {
         vm.set_gas_limit(gas_limit);
         Ok(vm)
     }
-
     fn checkout_runtime_for_gas_limit(
         &self,
         gas_limit: u64,
@@ -11450,7 +10907,6 @@ impl LoadedExecutor {
                 (baseline, Some(vm))
             }
         };
-
         let mut vm = if let Some(vm) = vm {
             vm
         } else {
@@ -11470,7 +10926,6 @@ impl LoadedExecutor {
             vm: Some(vm),
         })
     }
-
     #[cfg(test)]
     fn runtime_pool_snapshot(&self) -> (ExecutorRuntimePoolStats, usize) {
         let pool = self
@@ -11479,7 +10934,6 @@ impl LoadedExecutor {
             .unwrap_or_else(|error| error.into_inner());
         (pool.stats, pool.variants.len())
     }
-
     #[cfg(test)]
     fn runtime_variant_capacity(&self) -> usize {
         self.runtime_pool
@@ -11488,7 +10942,6 @@ impl LoadedExecutor {
             .capacity
     }
 }
-
 /// Norito encode/decode helpers for the runtime `Executor`.
 ///
 /// These helpers serialize the core `Executor` enum into a compact Norito
@@ -11505,7 +10958,6 @@ pub mod executor_norito {
         Initial,
         UserProvided(iroha_data_model::executor::Executor),
     }
-
     /// Serialize the given `Executor` to Norito bytes.
     /// Serialize an [`Executor`] into Norito-encoded bytes.
     ///
@@ -11521,7 +10973,6 @@ pub mod executor_norito {
         };
         norito::to_bytes(&dto)
     }
-
     /// Deserialize Norito bytes into a materialized `Executor`.
     ///
     /// For `UserProvided` DTO, loads the IVM program to construct a `LoadedExecutor`.
@@ -11540,7 +10991,6 @@ pub mod executor_norito {
                 .map_err(|e| format!("executor load failed: {e}")),
         }
     }
-
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -11555,7 +11005,6 @@ pub mod executor_norito {
                 _ => panic!("expected Initial variant"),
             }
         }
-
         #[test]
         fn userprovided_encodes_but_load_may_fail() {
             // Construct a dummy data-model executor with some bytecode; loading may fail,
@@ -11570,7 +11019,6 @@ pub mod executor_norito {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -11618,7 +11066,6 @@ mod tests {
                 "must reserve {name}"
             );
         }
-
         for name in [
             "MULTISIG_SIGNATORY_ADJACENT",
             "MULTISIG_SIGNATORY2/domain/address",
@@ -11631,22 +11078,16 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn executor_byte_array_accepts_maximum_byte() {
         let value = json::Value::Array(vec![json::Value::from(u64::from(u8::MAX))]);
-
         let decoded = decode_executor_bytes(value, "norito").expect("decode byte array");
-
         assert_eq!(decoded, vec![u8::MAX]);
     }
-
     #[test]
     fn executor_byte_array_rejects_byte_overflow() {
         let value = json::Value::Array(vec![json::Value::from(u64::from(u8::MAX) + 1)]);
-
         let error = decode_executor_bytes(value, "norito").expect_err("reject byte overflow");
-
         match error {
             json::Error::InvalidField { field, message } => {
                 assert_eq!(field, "norito");
@@ -11655,17 +11096,14 @@ mod tests {
             other => panic!("unexpected error: {other}"),
         }
     }
-
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("executor fixture key generation should succeed")
     }
-
     fn executor_test_network_id(seed: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             seed,
         )))
     }
-
     fn seed_test_asset_supply(world: &mut World, asset_definition_id: &AssetDefinitionId) {
         let total = world
             .assets
@@ -11687,16 +11125,108 @@ mod tests {
             .asset_definitions
             .insert(asset_definition_id.clone(), definition);
     }
-
     fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("executor algorithm-specific fixture key generation should succeed")
     }
-
     fn checked_account_id() -> AccountId {
         AccountId::new(checked_keypair().public_key().clone())
     }
-
+    #[test]
+    fn native_escrow_query_authorization_uses_query_specific_tags() {
+        use iroha_data_model::{
+            escrow::AssetEscrowStatus,
+            query::{
+                escrow::prelude::{
+                    FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
+                },
+                parameters::QueryParams,
+            },
+        };
+        let seller = checked_account_id();
+        let buyer = checked_account_id();
+        let seller_query = FindAssetEscrowsBySeller {
+            seller: seller.clone(),
+        };
+        let buyer_query = FindAssetEscrowsByBuyer {
+            buyer: buyer.clone(),
+        };
+        let status_query = FindAssetEscrowsByStatus {
+            status: AssetEscrowStatus::Accepted,
+        };
+        let seller_envelope = QueryWithParams {
+            query: (),
+            query_payload: seller_query.encode(),
+            item: QueryItemKind::AssetEscrowsBySeller,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
+        };
+        assert_eq!(
+            native_iterable_query_access(&seller_envelope).expect("authorize seller query"),
+            NativeQueryAccess::Account(seller)
+        );
+        let buyer_envelope = QueryWithParams {
+            query: (),
+            query_payload: buyer_query.encode(),
+            item: QueryItemKind::AssetEscrowsByBuyer,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
+        };
+        assert_eq!(
+            native_iterable_query_access(&buyer_envelope).expect("authorize buyer query"),
+            NativeQueryAccess::Account(buyer)
+        );
+        let status_envelope = QueryWithParams {
+            query: (),
+            query_payload: status_query.encode(),
+            item: QueryItemKind::AssetEscrowsByStatus,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
+        };
+        assert_eq!(
+            native_iterable_query_access(&status_envelope).expect("authorize status query"),
+            NativeQueryAccess::AllLedger
+        );
+    }
+    #[test]
+    fn native_escrow_query_authorization_rejects_wrong_or_malformed_tags() {
+        use iroha_data_model::query::{
+            escrow::prelude::FindAssetEscrowsBySeller, parameters::QueryParams,
+        };
+        let seller_query = FindAssetEscrowsBySeller {
+            seller: checked_account_id(),
+        };
+        let legacy_item_tag = QueryWithParams {
+            query: (),
+            query_payload: seller_query.encode(),
+            item: QueryItemKind::AssetEscrowRecord,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
+        };
+        assert!(native_iterable_query_access(&legacy_item_tag).is_err());
+        let status_tag_with_account_payload = QueryWithParams {
+            query: (),
+            query_payload: seller_query.encode(),
+            item: QueryItemKind::AssetEscrowsByStatus,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
+        };
+        assert!(native_iterable_query_access(&status_tag_with_account_payload).is_err());
+        let malformed_seller = QueryWithParams {
+            query: (),
+            query_payload: vec![0xff],
+            item: QueryItemKind::AssetEscrowsBySeller,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: QueryParams::default(),
+        };
+        assert!(native_iterable_query_access(&malformed_seller).is_err());
+    }
     #[test]
     fn fee_sponsor_operations_preserve_every_mixed_batch_item() {
         let authority = checked_account_id();
@@ -11725,7 +11255,6 @@ mod tests {
             ]
             .into(),
         );
-
         let operations = fee_sponsor_operations(&executable).expect("resolve sponsor operations");
         assert_eq!(operations.len(), 2);
         assert!(matches!(
@@ -11743,7 +11272,6 @@ mod tests {
                 && entrypoint == "main"
         ));
     }
-
     #[test]
     fn fee_sponsor_multisig_operations_decode_variant_and_exact_target_account() {
         let target = checked_account_id();
@@ -11777,7 +11305,6 @@ mod tests {
             FeeSponsorMultisigOperation::Cancel,
             FeeSponsorMultisigOperation::Register,
         ];
-
         for (instruction, expected_operation) in instructions.iter().zip(expected) {
             assert_eq!(
                 fee_sponsor_instruction_operation(instruction)
@@ -11789,7 +11316,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn fee_sponsor_multisig_selector_is_exact_and_register_is_opt_in() {
         let target = checked_account_id();
@@ -11828,7 +11354,6 @@ mod tests {
             account_ids: vec![target],
         };
         let selector_box = FeeSponsorRuleSelector::Multisig(selector.clone());
-
         assert!(fee_sponsor_selector_matches_operation(
             &selector_box,
             &propose
@@ -11849,7 +11374,6 @@ mod tests {
             &selector_box,
             &other_account
         ));
-
         let broad_custom = FeeSponsorRuleSelector::NativeInstruction(
             iroha_data_model::nexus::FeeSponsorNativeInstructionSelector {
                 wire_id: "iroha.custom".to_owned(),
@@ -11860,7 +11384,6 @@ mod tests {
             !fee_sponsor_selector_matches_operation(&broad_custom, &propose),
             "decoded multisig payloads must not fall back to broad iroha.custom sponsorship"
         );
-
         selector
             .operations
             .push(FeeSponsorMultisigOperation::Register);
@@ -11869,138 +11392,7 @@ mod tests {
             &register
         ));
     }
-
-    #[test]
-    fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() {
-        use iroha_data_model::{
-            account::{
-                AccountAddress,
-                rekey::{AccountAlias, AccountRekeyRecord, AccountRekeyTransitionProvenance},
-            },
-            nexus::{DataSpaceCatalog, DataSpaceId},
-            sns::{NameControllerV1, NameRecordV1, NameStatus, NameTombstoneStateV1},
-        };
-
-        let retired = checked_account_id();
-        let active = checked_account_id();
-        let unrelated = checked_account_id();
-        let mut world = World::with(
-            [],
-            [
-                Account::new(active.clone()).build(&active),
-                Account::new(unrelated.clone()).build(&active),
-            ],
-            [],
-        );
-        let alias = AccountAlias::domainless(
-            "executor-lineage".parse().expect("alias label"),
-            DataSpaceId::UNIVERSAL,
-        );
-        let selector = crate::sns::selector_for_account_alias(&alias, &DataSpaceCatalog::default())
-            .expect("alias selector");
-        let address = AccountAddress::from_account_id(&active).expect("active account address");
-        let mut lease = NameRecordV1::new(
-            selector.clone(),
-            active.clone(),
-            vec![NameControllerV1::account(&address)],
-            0,
-            0,
-            100,
-            200,
-            300,
-            Metadata::default(),
-        );
-        let storage_key = crate::sns::record_storage_key(&selector);
-        world
-            .smart_contract_state_mut_for_testing()
-            .insert(storage_key.clone(), lease.encode());
-        world.account_aliases.insert(alias.clone(), active.clone());
-        let canonical = AccountRekeyRecord::new(alias.clone(), retired.clone())
-            .repoint_for_account_id_rekey(active.clone())
-            .expect("canonical account-id rekey fixture");
-        world
-            .account_rekey_records
-            .insert(alias.clone(), canonical.clone());
-
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            query::store::LiveQueryStore::start_test(),
-        );
-        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 50, 0));
-        let mut state_transaction = block.transaction();
-
-        assert!(
-            initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
-                .expect("lineage check")
-        );
-        assert!(
-            initial_accounts_share_active_lineage(&state_transaction, &active, &retired)
-                .expect("reverse lineage check")
-        );
-        assert!(
-            !initial_accounts_share_active_lineage(&state_transaction, &unrelated, &active)
-                .expect("unrelated lineage check")
-        );
-
-        lease.status = NameStatus::Tombstoned(NameTombstoneStateV1 {
-            reason: "revoked".to_owned(),
-        });
-        state_transaction
-            .world
-            .smart_contract_state
-            .insert(storage_key.clone(), lease.encode());
-        assert!(
-            !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
-                .expect("revoked lineage check")
-        );
-
-        lease.status = NameStatus::Active;
-        lease.expires_at_ms = 40;
-        lease.grace_expires_at_ms = 45;
-        lease.redemption_expires_at_ms = 50;
-        state_transaction
-            .world
-            .smart_contract_state
-            .insert(storage_key.clone(), lease.encode());
-        assert!(
-            !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
-                .expect("stale lineage check")
-        );
-
-        lease.expires_at_ms = 100;
-        lease.grace_expires_at_ms = 200;
-        lease.redemption_expires_at_ms = 300;
-        state_transaction
-            .world
-            .smart_contract_state
-            .insert(storage_key, lease.encode());
-        state_transaction.world.account_rekey_records.insert(
-            alias.clone(),
-            AccountRekeyRecord::new(alias.clone(), retired.clone())
-                .reassign_alias_to_account(active.clone())
-                .expect("alias reassignment fixture"),
-        );
-        assert!(
-            !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
-                .expect("alias reassignment lineage check")
-        );
-
-        let mut cyclic = canonical;
-        cyclic.previous_account_ids.push(active.clone());
-        cyclic
-            .transition_provenance
-            .push(AccountRekeyTransitionProvenance::AccountIdRekey);
-        state_transaction
-            .world
-            .account_rekey_records
-            .insert(alias, cyclic);
-        assert!(
-            !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
-                .expect("malformed lineage check")
-        );
-    }
-
+    include!("executor_account_lineage_tests.rs");
     macro_rules! concrete_instruction_box {
         ($instruction_ty:ty, $instruction:expr) => {{
             let instruction: $instruction_ty = $instruction;
@@ -12021,9 +11413,7 @@ mod tests {
             decoded
         }};
     }
-
     include!("executor_contract_deployment_tests.rs");
-
     #[test]
     fn initial_executor_genesis_rejects_unclassified_oracle_instruction() {
         let authority = checked_account_id();
@@ -12039,7 +11429,6 @@ mod tests {
             state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty(),
             "the regression must exercise the authenticated genesis context"
         );
-
         let instruction = iroha_data_model::isi::oracle::AggregateOracleFeed {
             feed_id: "genesis_oracle".parse().expect("feed id"),
             slot: 0,
@@ -12050,7 +11439,6 @@ mod tests {
         let error = super::Executor::Initial
             .execute_instruction(&mut state_transaction, &authority, instruction)
             .expect_err("genesis must not bypass the native instruction allowlist");
-
         assert!(
             matches!(
                 error,
@@ -12060,7 +11448,6 @@ mod tests {
             "unexpected genesis oracle rejection: {error:?}"
         );
     }
-
     #[test]
     fn initial_executor_classifies_verifying_key_bootstrap_as_genesis_only() {
         use iroha_data_model::{
@@ -12068,7 +11455,6 @@ mod tests {
             proof::{VerifyingKeyId, VerifyingKeyRecord},
             zk::BackendTag,
         };
-
         let id = VerifyingKeyId::new("halo2/ipa", "genesis_vk");
         let record = VerifyingKeyRecord::new(
             1,
@@ -12086,7 +11472,6 @@ mod tests {
             .into(),
             UpdateVerifyingKey { id, record }.into(),
         ];
-
         for instruction in &instructions {
             assert!(
                 initial_genesis_instruction_is_explicitly_admitted(instruction),
@@ -12100,7 +11485,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn initial_executor_keeps_the_complete_vpn_lifecycle_allowlisted() {
         let source = include_str!("executor.rs");
@@ -12112,7 +11496,6 @@ mod tests {
             .find("// Cross-border settlement and relays")
             .expect("VPN lifecycle allowlist terminator");
         let allowlist = &tail[..end];
-
         for instruction in [
             "OpenVpnLeaseEscrow",
             "SettleVpnLease",
@@ -12124,7 +11507,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn initial_executor_routes_exact_scoped_governance_isis_through_core_authorization() {
@@ -12133,7 +11515,6 @@ mod tests {
             CanProposeContractDeployment, CanProposeRuntimeUpgrade, CanRecordCitizenService,
             CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
         };
-
         let authority = checked_account_id();
         let citizen_target = checked_account_id();
         let network_id: NetworkId =
@@ -12237,7 +11618,6 @@ mod tests {
                 instruction.id()
             );
         }
-
         let account = Account::new(authority.clone()).build(&authority);
         let mut world = World::with([], [account], []);
         world.account_permissions.insert(
@@ -12274,7 +11654,6 @@ mod tests {
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         state_transaction.gov.citizenship_bond_amount = Quantity::zero();
-
         for (instruction, permission_name, _) in &probes {
             let error = super::Executor::Initial
                 .execute_instruction(&mut state_transaction, &authority, instruction.clone())
@@ -12321,7 +11700,6 @@ mod tests {
                 .is_none()
         );
         assert!(state_transaction.world.citizens.iter().next().is_none());
-
         state_transaction.world.account_permissions.insert(
             authority.clone(),
             BTreeSet::from([
@@ -12352,7 +11730,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn initial_executor_keeps_low_level_submit_ballot_behind_the_ivm_latch() {
         let backend = "halo2/ipa";
@@ -12368,13 +11745,11 @@ mod tests {
             nullifier: [0x03; 32],
         }
         .into();
-
         assert!(
             !initial_native_instruction_is_explicitly_admitted(&instruction),
             "direct signed SubmitBallot would bypass the IVM host's one-shot verification latch"
         );
     }
-
     #[test]
     fn initial_executor_requires_exact_enactment_permission_before_state_lookup() {
         use iroha_data_model::isi::governance::{AtWindow, EnactReferendum};
@@ -12404,7 +11779,6 @@ mod tests {
             at_window: AtWindow { lower: 1, upper: 1 },
         }
         .into();
-
         assert!(initial_native_instruction_is_explicitly_admitted(
             &instruction
         ));
@@ -12437,7 +11811,6 @@ mod tests {
                 .is_none()
         );
         assert!(state_transaction.world.elections.iter().next().is_none());
-
         state_transaction.world.account_permissions.insert(
             authority.clone(),
             BTreeSet::from([Permission::from(CanEnactGovernance)]),
@@ -12455,7 +11828,6 @@ mod tests {
             "exact enactment permission did not reach Core validation: {error:?}"
         );
     }
-
     #[test]
     fn initial_executor_denies_chain_and_foreign_controller_takeover_paths() {
         let attacker = checked_account_id();
@@ -12486,7 +11858,6 @@ mod tests {
             IvmBytecode::from_compiled(generate_denied_program("attacker executor")),
         ));
         let foreign_signatory = checked_keypair().public_key().clone();
-
         let instructions: Vec<InstructionBox> = vec![
             set_parameter.into(),
             upgrade.into(),
@@ -12499,7 +11870,6 @@ mod tests {
             )
             .into(),
         ];
-
         for instruction in instructions {
             let error = super::Executor::Initial
                 .execute_instruction(&mut state_transaction, &attacker, instruction)
@@ -12511,7 +11881,6 @@ mod tests {
                 "{error:?}"
             );
         }
-
         // Referendum finalization is intentionally permissionless once its
         // authenticated governance records exist. A fabricated identifier must
         // instead fail closed on the missing proposal before any finalization.
@@ -12542,7 +11911,6 @@ mod tests {
         ));
         assert!(state_transaction.world.account(&victim).is_ok());
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn initial_executor_enforces_capability_roots_for_every_scoped_permission() {
@@ -12672,7 +12040,6 @@ mod tests {
         ))
         .execute(&legitimate_root, &mut state_transaction)
         .expect("seed trigger authority");
-
         let alias_scope = AccountAliasPermissionScope::Domain(governed_domain.clone());
         let asset_alias_scope =
             executor_permission::asset_definition::AssetDefinitionAliasPermissionScope::Domain(
@@ -13039,7 +12406,6 @@ mod tests {
             ("CanSlashGovernanceLock", slash_permission, false),
             ("CanRestituteGovernanceLock", restitute_permission, false),
         ];
-
         assert_eq!(cases.len(), 48, "update this table for every scoped arm");
         assert_eq!(
             cases
@@ -13050,7 +12416,6 @@ mod tests {
             cases.len(),
             "permission cases must be unique",
         );
-
         for name in [
             "CanProposeContractDeployment",
             "CanProposeRuntimeUpgrade",
@@ -13088,7 +12453,6 @@ mod tests {
                 "malformed {name} permission reached account storage"
             );
         }
-
         for (name, permission, expected_root) in &cases {
             assert_eq!(permission.name(), *name);
             assert_eq!(
@@ -13141,7 +12505,6 @@ mod tests {
                 )
                 .expect_err("adjacent owner must not self-grant a scoped permission");
         }
-
         for (name, permission, _) in &cases {
             super::Executor::Initial
                 .execute_instruction(
@@ -13169,13 +12532,11 @@ mod tests {
                 .unwrap_or_else(|error| panic!("legitimate root could not revoke {name}: {error}"));
         }
     }
-
     #[test]
     fn initial_executor_rejects_noncanonical_governance_permission_selectors_before_storage() {
         use iroha_executor_data_model::permission::governance::{
             CanRestituteGovernanceLock, CanSlashGovernanceLock, CanSubmitGovernanceBallot,
         };
-
         let authority = checked_account_id();
         let destination = checked_account_id();
         let invalid_permissions = vec![
@@ -13214,7 +12575,6 @@ mod tests {
         Register::role(Role::new(role_id.clone(), authority.clone()))
             .execute(&authority, &mut state_transaction)
             .expect("seed empty role fixture");
-
         for permission in invalid_permissions {
             let permission_name: &str = permission.name().as_ref();
             for (path, instruction) in [
@@ -13237,7 +12597,6 @@ mod tests {
                     "unexpected {path} grant rejection: {error:?}"
                 );
             }
-
             assert!(
                 !state_transaction
                     .world
@@ -13258,7 +12617,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn initial_executor_keeps_vpn_quote_issuer_leaf_manager_controlled() {
         let manager = checked_account_id();
@@ -13291,7 +12649,6 @@ mod tests {
         );
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
-
         assert!(
             !initial_permission_delegation_allowed(
                 &state_transaction,
@@ -13310,7 +12667,6 @@ mod tests {
             )
             .expect("issuer-manager delegation decision")
         );
-
         super::Executor::Initial
             .execute_instruction(
                 &mut state_transaction,
@@ -13333,7 +12689,6 @@ mod tests {
             )
             .expect("the issuer manager may revoke an issuer");
     }
-
     #[test]
     fn initial_executor_exact_asset_alias_lifecycle_survives_clear_without_issuer_guessing() {
         use iroha_data_model::asset::AssetDefinitionAlias;
@@ -13343,7 +12698,6 @@ mod tests {
                 AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
             },
         };
-
         let namespace_root = checked_account_id();
         let asset_owner = checked_account_id();
         let holder = checked_account_id();
@@ -13370,7 +12724,6 @@ mod tests {
             )),
         }
         .into();
-
         let mut world = World::with_assets(
             [Domain::new(domain).build(&namespace_root)],
             [
@@ -13408,14 +12761,12 @@ mod tests {
             0,
         ));
         let mut state_transaction = block.transaction();
-
         let malformed_permission =
             Permission::new("CanManageAssetDefinitionAlias".to_owned(), Json::new(()));
         let malformed = Grant::account_permission(malformed_permission, holder.clone())
             .execute(&asset_owner, &mut state_transaction)
             .expect_err("Core must reject malformed built-in asset-alias permission payloads");
         assert!(malformed.to_string().contains("current live binding"));
-
         let mismatched_permission: Permission = CanManageAssetDefinitionAlias {
             scope: AssetDefinitionAliasPermissionScope::Alias(ResolvedAssetDefinitionAliasV1::new(
                 alias.clone(),
@@ -13428,7 +12779,6 @@ mod tests {
             .execute(&asset_owner, &mut state_transaction)
             .expect_err("Core must reject a text/ID pair that does not match the live catalog");
         assert!(mismatch.to_string().contains("current live binding"));
-
         let live_binding = state_transaction
             .world
             .asset_definition_alias_bindings
@@ -13451,7 +12801,6 @@ mod tests {
             .world
             .asset_definition_alias_bindings
             .insert(definition_id.clone(), live_binding);
-
         let other_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("banka", "universal").expect("alias domain"),
             "eur".parse().expect("asset definition name"),
@@ -13467,7 +12816,6 @@ mod tests {
         Grant::account_permission(rebound_target, holder.clone())
             .execute(&asset_owner, &mut state_transaction)
             .expect_err("Core must reject an exact label capability for a different definition");
-
         for authority in [&namespace_root, &asset_owner] {
             super::Executor::Initial
                 .execute_instruction(
@@ -13479,7 +12827,6 @@ mod tests {
                     "neither namespace ownership alone nor account-alias permission may grant an exact asset alias",
                 );
         }
-
         state_transaction
             .world
             .add_account_permission(&asset_owner, namespace_permission);
@@ -13492,7 +12839,6 @@ mod tests {
             .expect(
                 "active asset owner with asset-alias namespace authority may grant exact scope",
             );
-
         let permission_role: RoleId = "asset_alias_permission_lifecycle".parse().expect("role id");
         Register::role(
             Role::new(permission_role.clone(), namespace_root.clone())
@@ -13510,7 +12856,6 @@ mod tests {
         Grant::account_role(membership_role.clone(), holder.clone())
             .execute(&namespace_root, &mut state_transaction)
             .expect("seed exact role membership revocation fixture");
-
         state_transaction
             .world
             .clear_asset_definition_alias(&definition_id);
@@ -13525,7 +12870,6 @@ mod tests {
         Grant::account_permission(exact_permission.clone(), unrelated.clone())
             .execute(&namespace_root, &mut state_transaction)
             .expect_err("Core must reject a new exact grant after the binding is cleared");
-
         for authority in [&unrelated, &holder, &asset_owner] {
             super::Executor::Initial
                 .execute_instruction(
@@ -13545,7 +12889,6 @@ mod tests {
                 .any(|permission| permission == &exact_permission),
             "failed revocations must preserve the exact capability",
         );
-
         super::Executor::Initial
             .execute_instruction(
                 &mut state_transaction,
@@ -13560,7 +12903,6 @@ mod tests {
                 .expect("holder permissions")
                 .any(|permission| permission == &exact_permission),
         );
-
         super::Executor::Initial
             .execute_instruction(
                 &mut state_transaction,
@@ -13577,7 +12919,6 @@ mod tests {
                 .permissions()
                 .any(|permission| permission == &exact_permission),
         );
-
         super::Executor::Initial
             .execute_instruction(
                 &mut state_transaction,
@@ -13591,7 +12932,6 @@ mod tests {
             &membership_role,
         ));
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn initial_executor_authorizes_every_permission_and_role_mutation_path() {
@@ -13615,7 +12955,6 @@ mod tests {
         );
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
-
         let ordinary_role: RoleId = "initial_executor_ordinary_role".parse().expect("role id");
         Register::role(
             Role::new(ordinary_role.clone(), administrator.clone())
@@ -13630,7 +12969,6 @@ mod tests {
         )
         .execute(&administrator, &mut state_transaction)
         .expect("seed governed role fixture");
-
         let denied = [
             Grant::account_permission(ordinary_permission.clone(), attacker.clone()).into(),
             Revoke::account_permission(ordinary_permission.clone(), administrator.clone()).into(),
@@ -13657,7 +12995,6 @@ mod tests {
             &attacker,
             &ordinary_role
         ));
-
         super::Executor::Initial
             .execute_instruction(
                 &mut state_transaction,
@@ -13672,7 +13009,6 @@ mod tests {
                 .expect("attacker permissions")
                 .any(|permission| permission == &ordinary_permission)
         );
-
         for instruction in [
             Grant::account_permission(offline_permission.clone(), attacker.clone()).into(),
             Grant::account_role(offline_role.clone(), attacker.clone()).into(),
@@ -13696,7 +13032,6 @@ mod tests {
             &offline_role
         ));
     }
-
     #[test]
     fn initial_executor_restricted_reader_cannot_mutate_direct_or_role_grants() {
         let holder = checked_account_id();
@@ -13727,7 +13062,6 @@ mod tests {
         );
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
-
         let reader_role: RoleId = "restricted_reader_role".parse().expect("role id");
         Register::role(
             Role::new(reader_role.clone(), holder.clone()).add_permission(exact.clone()),
@@ -13737,12 +13071,10 @@ mod tests {
         Grant::account_role(reader_role.clone(), revoke_destination.clone())
             .execute(&holder, &mut state_transaction)
             .expect("seed revocation membership fixture");
-
         let empty_role: RoleId = "empty_reader_role".parse().expect("role id");
         Register::role(Role::new(empty_role.clone(), holder.clone()))
             .execute(&holder, &mut state_transaction)
             .expect("seed empty role fixture");
-
         let attempted_registration: RoleId =
             "attempted_restricted_reader_role".parse().expect("role id");
         let denied = [
@@ -13778,7 +13110,6 @@ mod tests {
                 ))),
             ),
         ];
-
         for (path, instruction) in denied {
             let error = super::Executor::Initial
                 .execute_instruction(&mut state_transaction, &holder, instruction)
@@ -13789,7 +13120,6 @@ mod tests {
                 "unexpected rejection for {path}: {error}",
             );
         }
-
         let grant_destination_permissions = state_transaction
             .world
             .account_permissions_iter(&grant_destination)
@@ -13843,7 +13173,6 @@ mod tests {
             "rejected role registration must not create the role",
         );
     }
-
     #[test]
     fn lifecycle_runtime_context_rejects_binding_mutations_for_every_executor_path() {
         let subject = checked_account_id();
@@ -13880,7 +13209,6 @@ mod tests {
                 },
             ),
         ];
-
         for entrypoint in ["hajimari", "始まり", "kaizen", "改善"] {
             let context = ContractRuntimeExecutionContext {
                 contract_address: contract_address.clone(),
@@ -13898,7 +13226,6 @@ mod tests {
                 ));
             }
         }
-
         let ordinary_context = ContractRuntimeExecutionContext {
             contract_address,
             contract_subject: subject,
@@ -13913,7 +13240,6 @@ mod tests {
             .expect("ordinary kotoage dispatch is governed by the instruction permission layer");
         }
     }
-
     #[test]
     fn contract_runtime_permission_boundary_precedes_user_executor_dispatch() {
         let deployer = checked_account_id();
@@ -14001,7 +13327,6 @@ mod tests {
                 Revoke::account_permission(ordinary_permission, destination.clone())
             ),
         ];
-
         for instruction in boxed_forbidden.into_iter().chain(concrete_forbidden) {
             let error = executor
                 .execute_instruction_with_contract_runtime_context(
@@ -14017,7 +13342,6 @@ mod tests {
             );
             assert!(matches!(error, ValidationFail::NotPermitted(_)));
         }
-
         let borrowed_role_grant: InstructionBox =
             Grant::account_role(role_id, destination.clone()).into();
         let error = executor
@@ -14032,7 +13356,6 @@ mod tests {
             !error.to_string().contains("user executor reached"),
             "borrowed role mutation reached the user executor: {error}",
         );
-
         let exact: Permission = executor_permission::smart_contract::CanInvokeContractEntrypoint {
             contract: contract_address.clone(),
             entrypoint: "main".to_owned(),
@@ -14050,7 +13373,6 @@ mod tests {
             error.to_string().contains("user executor reached"),
             "an exact bound token should pass the common boundary: {error}",
         );
-
         let inconsistent_context = ContractRuntimeExecutionContext {
             contract_subject: destination.clone(),
             contract_address: contract_address.clone(),
@@ -14075,7 +13397,6 @@ mod tests {
             !error.to_string().contains("user executor reached"),
             "inconsistent contract context reached the user executor: {error}",
         );
-
         let sibling_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -14104,7 +13425,6 @@ mod tests {
             "sibling token reached the user executor: {error}",
         );
     }
-
     #[test]
     fn proved_empty_overlay_accounts_verified_replay_gas() {
         let keypair = checked_keypair();
@@ -14148,7 +13468,6 @@ mod tests {
             gas_used: replay_gas,
             trace_hash: Hash::new(b"trace"),
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
@@ -14182,7 +13501,6 @@ mod tests {
         );
         assert_eq!(block.axt_envelopes()[0].binding.as_bytes(), &axt_binding);
     }
-
     #[test]
     fn proved_replay_applies_durable_state_with_exact_per_path_authorization() {
         let keypair = checked_keypair();
@@ -14217,7 +13535,6 @@ mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "proved durable fixture".to_owned())])
         .sign(keypair.private_key());
-
         let authorization = ContractEntrypointAuthorizationSnapshot::new(
             authority.clone(),
             "write".to_owned(),
@@ -14253,7 +13570,6 @@ mod tests {
             gas_used: 0,
             trace_hash: Hash::new(b"trace"),
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
@@ -14284,7 +13600,6 @@ mod tests {
         );
         drop(state_tx);
         drop(block);
-
         let malformed_replay = crate::pipeline::overlay::IvmProvedReplay {
             queued: Vec::new(),
             completed_axt: Vec::new(),
@@ -14333,7 +13648,6 @@ mod tests {
         );
         drop(malformed_tx);
         drop(malformed_block);
-
         let foreign_digest = hex::encode(Hash::new(b"foreign contract namespace").as_ref());
         let foreign_path: StatePath = format!("sc/{foreign_digest}/Values/fixture")
             .parse()
@@ -14388,7 +13702,6 @@ mod tests {
             "a foreign per-path snapshot must apply zero durable writes"
         );
     }
-
     #[test]
     fn proved_replay_rejects_durable_state_without_root_authorization_before_effects() {
         let keypair = checked_keypair();
@@ -14416,7 +13729,6 @@ mod tests {
             gas_used: 0,
             trace_hash: Hash::new(b"trace"),
         };
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
@@ -14441,7 +13753,6 @@ mod tests {
                 true,
             )
             .expect_err("proved replay durable state writes require root authorization");
-
         assert!(matches!(
             error,
             ValidationFail::NotPermitted(message)
@@ -14452,12 +13763,10 @@ mod tests {
             "rejected proved replay must apply no durable state"
         );
     }
-
     fn make_peer_id() -> crate::PeerId {
         let kp = checked_keypair_with_algorithm(Algorithm::BlsNormal);
         crate::PeerId::new(kp.public_key().clone())
     }
-
     #[test]
     fn checked_keypair_helpers_preserve_requested_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
@@ -14470,11 +13779,9 @@ mod tests {
             Algorithm::BlsNormal
         );
     }
-
     fn alice() -> AccountId {
         iroha_test_samples::ALICE_ID.clone()
     }
-
     fn pipeline_fee_state_fixture() -> (
         State,
         KeyPair,
@@ -14547,7 +13854,6 @@ mod tests {
             alternate_asset,
         )
     }
-
     fn configure_pipeline_fee_snapshot(
         state_transaction: &mut StateTransaction<'_, '_>,
         tech_account: &AccountId,
@@ -14566,7 +13872,6 @@ mod tests {
                 volatility: GasVolatility::Stable,
             }];
     }
-
     fn sponsored_pipeline_fee_fixture(
         lease_allocation: Option<Quantity>,
     ) -> (
@@ -14725,7 +14030,6 @@ mod tests {
             lease_id,
         )
     }
-
     fn configure_sponsored_pipeline_fee_transaction(
         state_transaction: &mut StateTransaction<'_, '_>,
         custody: &AccountId,
@@ -14744,7 +14048,6 @@ mod tests {
         state_transaction.nexus.fees.settlement_mode = settlement_mode;
         configure_pipeline_fee_snapshot(state_transaction, tech_account, asset_definition_id, 1);
     }
-
     fn configure_direct_nexus_fee_snapshot(
         state_transaction: &mut StateTransaction<'_, '_>,
         fee_asset: &AssetDefinitionId,
@@ -14758,7 +14061,6 @@ mod tests {
         state_transaction.nexus.fees.per_instruction_fee = Quantity::zero();
         state_transaction.nexus.fees.per_gas_unit_fee = Quantity::zero();
     }
-
     fn test_asset_balance(
         state_transaction: &StateTransaction<'_, '_>,
         asset_id: &AssetId,
@@ -14770,14 +14072,12 @@ mod tests {
             .map(|asset| asset.as_ref().clone())
             .unwrap_or_else(Quantity::zero)
     }
-
     fn configure_direct_genesis_ivm_fee_fixture(
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
         fee_asset: &AssetDefinitionId,
     ) -> (AssetId, Quantity, Quantity) {
         configure_direct_nexus_fee_snapshot(state_transaction, fee_asset);
-
         let payer_asset_id = AssetId::new(fee_asset.clone(), authority.clone());
         let payer_before = test_asset_balance(state_transaction, &payer_asset_id);
         let supply_before = state_transaction
@@ -14788,7 +14088,6 @@ mod tests {
             .clone();
         (payer_asset_id, payer_before, supply_before)
     }
-
     #[test]
     fn stateful_fee_admission_exempts_authenticated_genesis_with_missing_limit() {
         let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
@@ -14801,12 +14100,10 @@ mod tests {
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_direct_nexus_fee_snapshot(&mut state_transaction, &fee_asset);
-
         assert!(is_initial_genesis_context(&state_transaction));
         validate_transaction_fee_admission(&mut state_transaction, &transaction)
             .expect("authenticated genesis must bypass Nexus fee intent validation");
     }
-
     #[test]
     fn initial_genesis_context_rejects_height_one_replay_over_committed_history() {
         let (state, _, _, _, _, _, _) = pipeline_fee_state_fixture();
@@ -14819,14 +14116,12 @@ mod tests {
         }
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
         let state_transaction = block.transaction();
-
         assert!(state_transaction._curr_block.is_genesis());
         assert!(
             !is_initial_genesis_context(&state_transaction),
             "a genesis-shaped header over committed state must not regain bootstrap authority"
         );
     }
-
     #[test]
     fn transaction_execution_keeps_authenticated_genesis_fee_free() {
         let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
@@ -14843,7 +14138,6 @@ mod tests {
         let mut state_transaction = block.transaction();
         configure_direct_nexus_fee_snapshot(&mut state_transaction, &fee_asset);
         let mut ivm_cache = IvmCache::new();
-
         super::Executor::Initial
             .execute_transaction(
                 &mut state_transaction,
@@ -14853,7 +14147,6 @@ mod tests {
             )
             .expect("authenticated genesis execution must not require Nexus fee limits");
     }
-
     #[test]
     fn transaction_execution_keeps_authenticated_genesis_generic_ivm_fee_free() {
         let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
@@ -14885,7 +14178,6 @@ mod tests {
                 &fee_asset,
             );
         let mut ivm_cache = IvmCache::new();
-
         super::Executor::Initial
             .execute_transaction(
                 &mut state_transaction,
@@ -14894,7 +14186,6 @@ mod tests {
                 &mut ivm_cache,
             )
             .expect("authenticated genesis generic IVM execution must remain fee-free");
-
         assert_eq!(
             test_asset_balance(&state_transaction, &payer_asset_id),
             payer_before,
@@ -14910,7 +14201,6 @@ mod tests {
             "generic IVM genesis execution must not burn fee-asset supply"
         );
     }
-
     #[test]
     fn transaction_execution_keeps_authenticated_genesis_prepared_contract_ivm_fee_free() {
         let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
@@ -14989,7 +14279,6 @@ mod tests {
             .contract_instances
             .insert(contract_address, code_hash);
         let mut ivm_cache = IvmCache::new();
-
         super::Executor::Initial
             .execute_transaction(
                 &mut state_transaction,
@@ -14998,7 +14287,6 @@ mod tests {
                 &mut ivm_cache,
             )
             .expect("authenticated genesis prepared-contract IVM execution must remain fee-free");
-
         assert_eq!(
             test_asset_balance(&state_transaction, &payer_asset_id),
             payer_before,
@@ -15014,7 +14302,6 @@ mod tests {
             "prepared-contract IVM genesis execution must not burn fee-asset supply"
         );
     }
-
     #[test]
     fn stateful_fee_admission_does_not_exempt_non_genesis_with_missing_limit() {
         let (state, keypair, authority, _, _, fee_asset, _) = pipeline_fee_state_fixture();
@@ -15031,7 +14318,6 @@ mod tests {
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_direct_nexus_fee_snapshot(&mut state_transaction, &fee_asset);
-
         assert!(!is_initial_genesis_context(&state_transaction));
         let error = validate_transaction_fee_admission(&mut state_transaction, &transaction)
             .expect_err("non-genesis must validate its signed Nexus fee limit");
@@ -15041,7 +14327,6 @@ mod tests {
                 if reason.contains("signed fee intent is missing Nexus charge limit")
         ));
     }
-
     #[test]
     fn stateful_fee_admission_rejects_understated_authority_limit_before_effects() {
         let (state, keypair, authority, tech_account, _, gas_asset, _) =
@@ -15075,10 +14360,8 @@ mod tests {
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_pipeline_fee_snapshot(&mut state_transaction, &tech_account, &gas_asset, 2);
-
         let error = validate_transaction_fee_admission(&mut state_transaction, &transaction)
             .expect_err("an understated signed limit must fail stateful admission");
-
         assert!(matches!(
             error,
             ValidationFail::NotPermitted(reason)
@@ -15113,7 +14396,6 @@ mod tests {
             "fee admission must not credit the fee destination"
         );
     }
-
     #[test]
     fn pipeline_fee_charge_defensively_rejects_understated_authority_limit() {
         let (state, keypair, authority, tech_account, _, gas_asset, _) =
@@ -15136,7 +14418,6 @@ mod tests {
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         configure_pipeline_fee_snapshot(&mut state_transaction, &tech_account, &gas_asset, 2);
-
         let error = super::Executor::charge_pipeline_gas_asset_fee(
             &mut state_transaction,
             &authority,
@@ -15148,7 +14429,6 @@ mod tests {
             None,
         )
         .expect_err("actual authority charge must be checked against the signed limit");
-
         assert!(matches!(
             error,
             ValidationFail::NotPermitted(reason)
@@ -15171,7 +14451,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn sponsored_pipeline_gas_consumes_and_settles_lane_spend_lease() {
         let (
@@ -15193,7 +14472,6 @@ mod tests {
             &asset_definition_id,
             iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn,
         );
-
         super::Executor::charge_pipeline_gas_asset_fee(
             &mut state_transaction,
             &beneficiary,
@@ -15205,7 +14483,6 @@ mod tests {
             Some(&program_id),
         )
         .expect("sponsored PipelineGas charge has exact lane spend capacity");
-
         let executed_key =
             fee_sponsor_vault_allocation_usage_state_key(&lease_id).expect("executed usage key");
         let settled_key = fee_sponsor_vault_allocation_settled_usage_state_key(&lease_id)
@@ -15252,7 +14529,6 @@ mod tests {
             &Quantity::from(2_u32)
         );
     }
-
     #[test]
     fn sponsored_pipeline_gas_direct_mode_does_not_require_or_consume_lease() {
         let (
@@ -15274,7 +14550,6 @@ mod tests {
             &asset_definition_id,
             iroha_config::parameters::actual::NexusFeeSettlementMode::Direct,
         );
-
         super::Executor::charge_pipeline_gas_asset_fee(
             &mut state_transaction,
             &beneficiary,
@@ -15286,7 +14561,6 @@ mod tests {
             Some(&program_id),
         )
         .expect("direct-settled sponsored PipelineGas does not require a spend lease");
-
         let executed_key =
             fee_sponsor_vault_allocation_usage_state_key(&lease_id).expect("executed usage key");
         let settled_key = fee_sponsor_vault_allocation_settled_usage_state_key(&lease_id)
@@ -15302,7 +14576,6 @@ mod tests {
             Quantity::zero()
         );
     }
-
     #[test]
     fn sponsored_pipeline_gas_insufficient_lease_fails_before_debit_or_transfer() {
         let (
@@ -15324,7 +14597,6 @@ mod tests {
             &asset_definition_id,
             iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn,
         );
-
         let error = super::Executor::charge_pipeline_gas_asset_fee(
             &mut state_transaction,
             &beneficiary,
@@ -15336,7 +14608,6 @@ mod tests {
             Some(&program_id),
         )
         .expect_err("insufficient spend lease must reject the PipelineGas charge");
-
         assert!(matches!(error, ValidationFail::NotPermitted(_)));
         let vault_key = FeeSponsorVaultKey {
             program_id,
@@ -15382,7 +14653,6 @@ mod tests {
             Quantity::zero()
         );
     }
-
     #[test]
     fn sponsor_resolution_predicts_scheduled_revision_only_after_old_leases_drain() {
         let (
@@ -15434,7 +14704,6 @@ mod tests {
             .world
             .fee_sponsor_programs
             .insert(program_id.clone(), program);
-
         let current = resolve_fee_sponsor_program(
             &state_transaction.world,
             &state_transaction.nexus,
@@ -15459,7 +14728,6 @@ mod tests {
         )
         .expect_err("scheduled revision must not be predicted before old leases drain");
         assert_eq!(early_error.code(), FeeRejectionCode::RevisionNotActive);
-
         let drained = resolve_fee_sponsor_program(
             &state_transaction.world,
             &state_transaction.nexus,
@@ -15473,7 +14741,6 @@ mod tests {
         .expect("scheduled revision becomes effective after the old lease expiry");
         assert_eq!(drained.revision.revision, 2);
     }
-
     #[test]
     fn overlay_fee_uses_pre_effect_gas_policy_snapshot() {
         let (state, keypair, authority, initial_tech, updated_tech, gas_asset, alternate_asset) =
@@ -15531,7 +14798,6 @@ mod tests {
         configure_pipeline_fee_snapshot(&mut state_transaction, &initial_tech, &gas_asset, 1);
         state_transaction.tx_call_hash = Some(Hash::from(transaction.hash_as_entrypoint()));
         state_transaction.current_tx_hash = Some(transaction.hash());
-
         validate_transaction_fee_admission(&mut state_transaction, &transaction)
             .expect("pre-effect policy accepts its exact signed limit");
         overlay
@@ -15543,7 +14809,6 @@ mod tests {
             .expect("apply governed gas parameter effects");
         charge_fees_for_applied_overlay(&mut state_transaction, &authority, &transaction, &overlay)
             .expect("settle against the pre-effect gas policy snapshot");
-
         assert_eq!(
             state_transaction.pipeline.gas.tech_account_id,
             initial_tech.to_string()
@@ -15586,7 +14851,6 @@ mod tests {
             &expected_authority_balance
         );
     }
-
     #[test]
     fn governed_gas_rate_refresh_rejects_malformed_strings_without_partial_update() {
         for (label, twap, liquidity, volatility, expected_error) in [
@@ -15637,10 +14901,8 @@ mod tests {
                     payload,
                 )),
             );
-
             let error = super::Executor::refresh_gas_from_parameters(&mut state_transaction)
                 .expect_err("malformed governed rate must fail closed");
-
             assert!(
                 matches!(
                     error,
@@ -15668,12 +14930,10 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn pipeline_gas_asset_charge_is_disabled_when_nexus_gas_fee_is_active() {
         let mut nexus_fees = NexusFees::default();
         let gas_asset = Some("xor#universal".to_owned());
-
         nexus_fees.per_gas_unit_fee = Quantity::zero();
         assert!(should_charge_pipeline_gas_asset(
             false,
@@ -15681,7 +14941,6 @@ mod tests {
             &nexus_fees,
             &gas_asset
         ));
-
         nexus_fees.per_gas_unit_fee = "0.001".parse().expect("valid gas fee");
         assert!(!should_charge_pipeline_gas_asset(
             false,
@@ -15695,7 +14954,6 @@ mod tests {
             &nexus_fees,
             &gas_asset
         ));
-
         assert!(!should_charge_pipeline_gas_asset(
             true,
             true,
@@ -15709,7 +14967,6 @@ mod tests {
             &None
         ));
     }
-
     fn multi_component_fee_quote_fixture() -> (
         World,
         iroha_config::parameters::actual::Nexus,
@@ -15763,7 +15020,6 @@ mod tests {
         );
         seed_test_asset_supply(&mut world, &nexus_asset);
         seed_test_asset_supply(&mut world, &gas_asset);
-
         let mut nexus = iroha_config::parameters::actual::Nexus::default();
         nexus.enabled = true;
         nexus.fees.base_fee = Quantity::from(2_u32);
@@ -15772,7 +15028,6 @@ mod tests {
         nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.fees.fee_asset_id = nexus_asset.canonical_address();
         nexus.fees.fee_sink_account_id = sink.to_string();
-
         let mut pipeline = Pipeline::default();
         pipeline.gas.accepted_assets = vec![gas_asset.canonical_address()];
         pipeline.gas.units_per_gas = vec![iroha_config::parameters::actual::GasRate {
@@ -15782,7 +15037,6 @@ mod tests {
             liquidity: GasLiquidity::Tier1,
             volatility: GasVolatility::Stable,
         }];
-
         let payload = TransactionBuilder::new(
             executor_test_network_id(b"fee-quote"),
             authority,
@@ -15793,7 +15047,6 @@ mod tests {
         .expect("canonical unsigned payload");
         (world, nexus, pipeline, payload)
     }
-
     fn assert_receipt_mode_fee_exempt_draft(
         world: World,
         nexus: &iroha_config::parameters::actual::Nexus,
@@ -15812,7 +15065,6 @@ mod tests {
             Some(DataSpaceId::UNIVERSAL),
         )
         .expect("fee-exempt draft must bypass receipt-mode payer requirements");
-
         assert!(draft.quote.charges.is_empty());
         assert!(draft.quote.capacities.is_empty());
         assert!(draft.quote.authority_balances.is_empty());
@@ -15824,7 +15076,6 @@ mod tests {
             draft.recommended_intent,
             FeePaymentIntent::authority(Vec::new(), None)
         );
-
         payload.fee_payment = draft.recommended_intent.clone();
         let strict = quote_nexus_fee_admission_payload(
             &world,
@@ -15838,7 +15089,6 @@ mod tests {
         .expect("the recommended empty intent must pass strict quoting");
         assert_eq!(strict, draft.quote);
     }
-
     #[test]
     fn protocol_fee_exempt_draft_returns_zero_quote_in_receipt_mode() {
         let (world, mut nexus, pipeline, mut payload) = multi_component_fee_quote_fixture();
@@ -15876,10 +15126,8 @@ mod tests {
         .into();
         nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
-
         assert_receipt_mode_fee_exempt_draft(world, &nexus, &pipeline, payload);
     }
-
     #[test]
     fn successful_claim_fee_exempt_draft_returns_zero_quote_in_receipt_mode() {
         let (world, mut nexus, pipeline, mut payload) = multi_component_fee_quote_fixture();
@@ -15914,10 +15162,8 @@ mod tests {
             AssetId::new(fee_asset, payload.authority.clone()),
         ))]
         .into();
-
         assert_receipt_mode_fee_exempt_draft(world, &nexus, &pipeline, payload);
     }
-
     #[test]
     fn fee_quote_discovers_pipeline_gas_and_matches_strict_signed_payload_quote() {
         let (world, nexus, pipeline, mut payload) = multi_component_fee_quote_fixture();
@@ -15941,7 +15187,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![FeeChargeKind::Nexus, FeeChargeKind::PipelineGas]
         );
-
         payload.fee_payment = draft.recommended_intent.clone();
         let strict = quote_nexus_fee_admission_payload(
             &world,
@@ -15957,14 +15202,12 @@ mod tests {
         assert_eq!(strict.authority_balances.len(), 2);
         assert_eq!(strict.authority_charge_assets.len(), 2);
     }
-
     #[test]
     fn receipt_settled_quote_rejects_authority_payer_with_sponsor_remediation() {
         let (world, mut nexus, pipeline, payload) = multi_component_fee_quote_fixture();
         nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
         let world = world.block();
-
         let error = quote_nexus_fee_admission_draft(
             &world,
             &nexus,
@@ -15975,12 +15218,10 @@ mod tests {
             Some(DataSpaceId::UNIVERSAL),
         )
         .expect_err("receipt-settled quotes must require an exact sponsor program");
-
         assert_eq!(error.code(), FeeRejectionCode::RelayCapacityUnavailable);
         assert!(error.reason().contains("active fee sponsor program"));
         assert!(error.reason().contains("exact active revision"));
     }
-
     #[test]
     fn receipt_settled_execution_rejects_authority_before_recording_receipt() {
         let authority = ALICE_ID.clone();
@@ -16029,7 +15270,6 @@ mod tests {
         state_tx.nexus.fees.per_byte_fee = Quantity::zero();
         state_tx.nexus.fees.per_instruction_fee = Quantity::zero();
         state_tx.nexus.fees.per_gas_unit_fee = Quantity::zero();
-
         let error = super::Executor::charge_nexus_fees(
             &mut state_tx,
             &authority,
@@ -16041,7 +15281,6 @@ mod tests {
             0,
         )
         .expect_err("execution must defensively reject an authority-paid receipt");
-
         assert!(matches!(
             error,
             ValidationFail::NotPermitted(reason)
@@ -16063,7 +15302,6 @@ mod tests {
             "the rejected receipt path must not debit public XOR locally"
         );
     }
-
     #[test]
     fn nexus_fee_charge_defensively_rejects_understated_authority_limit() {
         let (authority, keypair) = gen_account_in("nexus_actual_bound");
@@ -16118,7 +15356,6 @@ mod tests {
         state_transaction.nexus.fees.per_byte_fee = Quantity::zero();
         state_transaction.nexus.fees.per_instruction_fee = Quantity::zero();
         state_transaction.nexus.fees.per_gas_unit_fee = Quantity::zero();
-
         let error = super::Executor::charge_nexus_fees(
             &mut state_transaction,
             &authority,
@@ -16130,7 +15367,6 @@ mod tests {
             0,
         )
         .expect_err("actual Nexus charge must be checked against the signed limit");
-
         assert!(matches!(
             error,
             ValidationFail::NotPermitted(reason)
@@ -16146,7 +15382,6 @@ mod tests {
             &Quantity::from(100_u32)
         );
     }
-
     #[test]
     fn fee_quote_configuration_failure_has_stable_rejection_code() {
         let (world, nexus, mut pipeline, payload) = multi_component_fee_quote_fixture();
@@ -16164,7 +15399,6 @@ mod tests {
         .expect_err("missing conversion rate must reject the quote");
         assert_eq!(err.code(), FeeRejectionCode::InvalidProgramConfiguration);
     }
-
     #[test]
     fn sponsor_capacity_rejects_dataspace_scoped_fee_assets() {
         let (sponsor, _) = gen_account_in("sponsor_scope");
@@ -16215,14 +15449,11 @@ mod tests {
             max_bound: Quantity::from(1_u32),
         };
         let world = world.block();
-
         let error = evaluate_fee_sponsor_capacity(&world, &resolved, &sponsor, 1, &[charge])
             .expect_err("sponsor accounting must reject dataspace-scoped fee assets");
-
         assert_eq!(error.code(), FeeRejectionCode::InvalidProgramConfiguration);
         assert!(error.reason().contains("Global balance scope"));
     }
-
     fn relay_allocation_fixture(
         program_id: FeeSponsorProgramId,
         program_revision: u64,
@@ -16266,7 +15497,6 @@ mod tests {
             },
         )
     }
-
     fn insert_relay_allocation(world: &mut World, record: &VerifiedFeeSponsorVaultAllocation) {
         let key: StatePath = VerifiedFeeSponsorVaultAllocation::state_key_for(
             &record.program_id,
@@ -16281,7 +15511,6 @@ mod tests {
             .smart_contract_state_mut_for_testing()
             .insert(key, payload);
     }
-
     #[test]
     fn sponsor_relay_lease_selection_is_exact_canonical_and_capacity_aware() {
         let program_id = FeeSponsorProgramId::new(
@@ -16326,7 +15555,6 @@ mod tests {
         insert_relay_allocation(&mut world, &matching_a);
         insert_relay_allocation(&mut world, &matching_b);
         insert_relay_allocation(&mut world, &wrong_revision);
-
         let selected_lease = if lease_a.as_ref() < lease_b.as_ref() {
             lease_a
         } else {
@@ -16351,7 +15579,6 @@ mod tests {
             );
         }
         let world = world.block();
-
         let (selected, remaining) = select_fee_sponsor_relay_lease(
             &world,
             &program_id,
@@ -16364,7 +15591,6 @@ mod tests {
         .expect("exact lease has four units remaining");
         assert_eq!(selected.lease_id, selected_lease);
         assert_eq!(remaining, Quantity::from(4_u32));
-
         let error = select_fee_sponsor_relay_lease(
             &world,
             &program_id,
@@ -16377,7 +15603,6 @@ mod tests {
         .expect_err("settled usage must cap the proof-bound allocation");
         assert_eq!(error.code(), FeeRejectionCode::RelayCapacityUnavailable);
     }
-
     #[test]
     fn sponsor_relay_lease_selection_aggregates_same_asset_and_selects_distinct_assets() {
         let program_id = FeeSponsorProgramId::new(
@@ -16434,7 +15659,6 @@ mod tests {
                 max_bound: Quantity::from(6_u32),
             },
         ];
-
         let same_asset_selection = select_fee_sponsor_relay_leases(
             &world,
             &program_id,
@@ -16444,14 +15668,12 @@ mod tests {
             &same_asset_charges,
         )
         .expect("aggregate lease capacity covers both same-asset components");
-
         assert_eq!(same_asset_selection.len(), 1);
         assert_eq!(same_asset_selection[&shared_asset].lease_id, shared_lease);
         assert_eq!(
             same_asset_selection[&shared_asset].remaining,
             Quantity::from(10_u32)
         );
-
         let distinct_asset_charges = [
             FeeChargeBound {
                 kind: FeeChargeKind::Nexus,
@@ -16482,7 +15704,6 @@ mod tests {
             distinct_asset_selections[&distinct_asset].lease_id,
             distinct_lease
         );
-
         let over_capacity = [
             FeeChargeBound {
                 kind: FeeChargeKind::Nexus,
@@ -16506,7 +15727,6 @@ mod tests {
         .expect_err("same-asset components must be checked as one lease charge");
         assert_eq!(error.code(), FeeRejectionCode::RelayCapacityUnavailable);
     }
-
     #[test]
     fn sponsor_relay_lease_selection_rejects_noncanonical_record_key() {
         let program_id = FeeSponsorProgramId::new(
@@ -16537,7 +15757,6 @@ mod tests {
             norito::to_bytes(&json).expect("encode relay allocation state"),
         );
         let world = world.block();
-
         let error = select_fee_sponsor_relay_lease(
             &world,
             &program_id,
@@ -16550,7 +15769,6 @@ mod tests {
         .expect_err("noncanonical allocation state must fail closed");
         assert_eq!(error.code(), FeeRejectionCode::InvalidProgramConfiguration);
     }
-
     #[test]
     fn sponsor_relay_lease_consumption_tracks_direct_and_receipt_settlement() {
         let program_id = FeeSponsorProgramId::new(
@@ -16583,7 +15801,6 @@ mod tests {
         let mut block = state.block(BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         state_transaction.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
-
         super::Executor::consume_fee_sponsor_relay_lease(
             &mut state_transaction,
             &program_id,
@@ -16593,7 +15810,6 @@ mod tests {
             true,
         )
         .expect("direct-settled PipelineGas consumes both usage counters");
-
         let executed_key =
             fee_sponsor_vault_allocation_usage_state_key(&lease_id).expect("executed usage key");
         let settled_key = fee_sponsor_vault_allocation_settled_usage_state_key(&lease_id)
@@ -16608,7 +15824,6 @@ mod tests {
                 .expect("settled usage"),
             Quantity::from(3_u32)
         );
-
         super::Executor::consume_fee_sponsor_relay_lease(
             &mut state_transaction,
             &program_id,
@@ -16628,7 +15843,6 @@ mod tests {
                 .expect("settled usage"),
             Quantity::from(3_u32)
         );
-
         super::Executor::consume_fee_sponsor_relay_lease(
             &mut state_transaction,
             &program_id,
@@ -16648,7 +15862,6 @@ mod tests {
                 .expect("settled usage"),
             Quantity::from(4_u32)
         );
-
         let error = super::Executor::consume_fee_sponsor_relay_lease(
             &mut state_transaction,
             &program_id,
@@ -16670,42 +15883,35 @@ mod tests {
             Quantity::from(4_u32)
         );
     }
-
     #[test]
     fn detached_register_peer_forces_sequential_path() {
         let peer_id = make_peer_id();
         let isi = iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id, Vec::new());
         let mut delta = crate::state::DetachedStateTransactionDelta::default();
-
         let err = execute_instruction_detached(&alice(), &InstructionBox::from(isi), &mut delta)
             .expect_err("peer registration must be unsupported in detached mode");
         assert!(matches!(err, ValidationFail::InternalError(msg) if msg.contains("registration")));
     }
-
     #[test]
     fn detached_unregister_peer_forces_sequential_path() {
         let peer_id = make_peer_id();
         let isi = iroha_data_model::isi::Unregister::peer(peer_id);
         let mut delta = crate::state::DetachedStateTransactionDelta::default();
-
         let err = execute_instruction_detached(&alice(), &InstructionBox::from(isi), &mut delta)
             .expect_err("peer removal must be unsupported in detached mode");
         assert!(matches!(err, ValidationFail::InternalError(msg) if msg.contains("removal")));
     }
-
     #[test]
     fn detached_execute_trigger_forces_sequential_path() {
         let trigger_id = "detached_trigger".parse().expect("valid trigger id");
         let instruction =
             InstructionBox::from(iroha_data_model::isi::ExecuteTrigger::new(trigger_id));
         let mut delta = crate::state::DetachedStateTransactionDelta::default();
-
         let error = execute_instruction_detached(&alice(), &instruction, &mut delta)
             .expect_err("trigger execution needs the live executor and trigger state");
         assert!(matches!(error, ValidationFail::InternalError(message) if
             message.contains("live authorization") && message.contains("sequential")));
     }
-
     #[test]
     fn detached_supply_changes_force_sequential_path() {
         let definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -16721,7 +15927,6 @@ mod tests {
             )),
             InstructionBox::from(iroha_data_model::isi::Burn::asset_quantity(1_u32, asset_id)),
         ];
-
         for instruction in instructions {
             let mut delta = crate::state::DetachedStateTransactionDelta::default();
             let error = execute_instruction_detached(&alice(), &instruction, &mut delta)
@@ -16730,7 +15935,6 @@ mod tests {
                 message.contains("live authorization") && message.contains("sequential")));
         }
     }
-
     #[test]
     fn detached_transfers_keep_authorization_in_the_canonical_executor() {
         let authority = alice();
@@ -16742,7 +15946,6 @@ mod tests {
             domain_id.clone(),
             "rose".parse().expect("valid asset name"),
         );
-
         let delegated_asset = InstructionBox::from(Transfer::asset_quantity(
             AssetId::new(definition_id.clone(), other.clone()),
             1_u32,
@@ -16763,7 +15966,6 @@ mod tests {
             NftId::new(domain_id, "ticket".parse().expect("valid NFT name")),
             destination,
         ));
-
         for instruction in [delegated_asset, domain, asset_definition, nft] {
             let mut delta = crate::state::DetachedStateTransactionDelta::default();
             let error = execute_instruction_detached(&authority, &instruction, &mut delta)
@@ -16771,7 +15973,6 @@ mod tests {
             assert!(matches!(error, ValidationFail::InternalError(message) if
                 message.contains("sequential authorization")));
         }
-
         let owned_definition = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("valid domain identifier"),
             "owned".parse().expect("valid asset name"),
@@ -16790,27 +15991,23 @@ mod tests {
             Some((owned_source, other, Quantity::from(1_u32)))
         );
     }
-
     #[test]
     fn detached_contract_deployment_permission_mutation_forces_sequential_path() {
         let authority = alice();
         let instruction: InstructionBox =
             Grant::account_permission(contract_deployment_permission(), authority.clone()).into();
         let mut delta = crate::state::DetachedStateTransactionDelta::default();
-
         let error = execute_instruction_detached(&authority, &instruction, &mut delta)
             .expect_err("deployment permission mutation must fall back to the consensus gate");
         assert!(matches!(error, ValidationFail::InternalError(message) if
             message.contains("CanRegisterSmartContractCode")
                 && message.contains("sequential consensus gate")));
     }
-
     #[test]
     fn detached_asset_instructions_cannot_be_constructed_with_negative_quantities() {
         let negative = Numeric::new(-1_i32, 0);
         assert!(Quantity::try_from_numeric(negative).is_err());
     }
-
     #[test]
     fn detached_nft_metadata_forces_sequential_authorization() {
         let nft_id: NftId = "nft_detached$wonderland.universal".parse().expect("nft id");
@@ -16833,7 +16030,6 @@ mod tests {
             | ((u32::from(rd) & 0x1f) << 7)
             | 0x03
     }
-
     #[allow(dead_code)]
     fn encode_store(base: u8, rs: u8, imm12: u16, funct3: u8) -> u32 {
         let imm = u32::from(imm12 & 0x0fff);
@@ -16846,7 +16042,6 @@ mod tests {
             | (imm_lo << 7)
             | 0x23
     }
-
     #[cfg(feature = "zk-preverify")]
     #[test]
     fn preverify_and_dedup_across_transactions_in_block() {
@@ -16891,7 +16086,6 @@ mod tests {
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
-
         // Build attachments with canonical envelope metadata so preverify
         // exercises deduplication after production-shaped proof admission.
         let envelope = OpenVerifyEnvelope::new(
@@ -16911,7 +16105,6 @@ mod tests {
             .expect("one attachment is a valid bounded proof list");
         let attachments_dup = ProofAttachmentList::try_from(vec![attachment])
             .expect("one attachment is a valid bounded proof list");
-
         let tx1 = TransactionBuilder::new(
             state.network_id,
             ALICE_ID.clone(),
@@ -16928,10 +16121,8 @@ mod tests {
         .with_executable(Executable::Instructions(Vec::new().into()))
         .with_attachments(attachments_dup)
         .sign(ALICE_KEYPAIR.private_key());
-
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-
         // First transaction preverify accepted
         {
             let mut state_tx = block.transaction();
@@ -16939,7 +16130,6 @@ mod tests {
                 .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx1, &mut ivm_cache)
                 .expect("preverify accepted");
         }
-
         // Second identical proof should be flagged as duplicate by per-block dedup
         {
             let mut state_tx = block.transaction();
@@ -16948,7 +16138,6 @@ mod tests {
             assert!(res.is_err(), "duplicate proof should be rejected");
         }
     }
-
     #[cfg(feature = "zk-preverify")]
     #[test]
     fn preverify_attachments_enforce_verifying_key_height_window() {
@@ -16973,7 +16162,6 @@ mod tests {
             let domain: Domain = Domain::new(domain_id).build(&ALICE_ID);
             let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
             let mut world = World::with([domain], [alice_account], []);
-
             let backend: Ident = "halo2/ipa".parse().expect("backend ident");
             let vk = VerifyingKeyBox::new(backend.clone(), vec![4u8, 5, 6]);
             let vk_id = VerifyingKeyId::new(backend.clone(), "vk_height_window");
@@ -16995,7 +16183,6 @@ mod tests {
             vk_record.max_proof_bytes = 1024;
             vk_record.key = Some(vk);
             world.verifying_keys.insert(vk_id.clone(), vk_record);
-
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
                 "halo2/ipa:height-window",
@@ -17040,7 +16227,6 @@ mod tests {
             let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
             executor.execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
         }
-
         for (label, activation_height, withdraw_height, block_height) in [
             ("future", Some(2), None, 1),
             ("withdrawn", Some(1), Some(1), 1),
@@ -17056,11 +16242,9 @@ mod tests {
                 other => panic!("case {label}: unexpected error: {other:?}"),
             }
         }
-
         execute_with_window(Some(1), Some(2), 1)
             .expect("in-window active verifying key must preverify");
     }
-
     #[cfg(feature = "zk-preverify")]
     #[test]
     fn preverify_attachments_reject_non_production_backend_labels_before_vk_lookup() {
@@ -17082,7 +16266,6 @@ mod tests {
         let mut block = state.block(block_header);
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-
         for (idx, (backend, expected_msg)) in [
             (
                 "halo2/ipa:production-ready",
@@ -17116,7 +16299,6 @@ mod tests {
                     .expect("one attachment is a valid bounded proof list"),
             )
             .sign(ALICE_KEYPAIR.private_key());
-
             let mut state_tx = block.transaction();
             let err = executor
                 .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
@@ -17136,7 +16318,6 @@ mod tests {
             }
         }
     }
-
     #[cfg(feature = "zk-preverify")]
     #[test]
     fn preverify_attachments_reject_malformed_attachment_shapes_before_vk_lookup() {
@@ -17157,21 +16338,18 @@ mod tests {
         let mut block = state.block(block_header);
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-
         let mut zero_vk_commitment = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
             VerifyingKeyId::new("halo2/ipa", "vk_preverify"),
         );
         zero_vk_commitment.vk_commitment = Some([0u8; 32]);
-
         let mut zero_envelope_hash = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
             VerifyingKeyId::new("halo2/ipa", "vk_preverify"),
         );
         zero_envelope_hash.envelope_hash = Some([0u8; 32]);
-
         let mut forged_envelope_hash = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
@@ -17181,12 +16359,10 @@ mod tests {
             iroha_crypto::Hash::new(&forged_envelope_hash.proof.bytes).into();
         forged_hash[0] ^= 0x80;
         forged_envelope_hash.envelope_hash = Some(forged_hash);
-
         assert!(matches!(
             ProofAttachmentList::try_from(Vec::new()),
             Err(iroha_data_model::proof::ProofAttachmentListError::Empty)
         ));
-
         let cases = [
             (
                 "proof-backend-mismatch",
@@ -17237,7 +16413,6 @@ mod tests {
                 "envelope_hash",
             ),
         ];
-
         for (label, attachments, expected_msg) in cases {
             let tx = TransactionBuilder::new(
                 state.network_id,
@@ -17247,7 +16422,6 @@ mod tests {
             .with_executable(Executable::Instructions(Vec::new().into()))
             .with_attachments(attachments)
             .sign(ALICE_KEYPAIR.private_key());
-
             let mut state_tx = block.transaction();
             let err = executor
                 .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
@@ -17267,29 +16441,24 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn initial_executor_denies_asset_definition_without_permission() {
         let alice_id = ALICE_ID.clone();
         let genesis_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
-
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&genesis_id);
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let genesis_account = Account::new(genesis_id.clone()).build(&genesis_id);
-
         let world = World::with([domain], [alice_account, genesis_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
-
         state
             .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
             .commit()
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         {
             let mut stx = block.transaction();
             Transfer::domain(genesis_id.clone(), domain_id.clone(), alice_id.clone())
@@ -17297,7 +16466,6 @@ mod tests {
                 .expect("domain transfer to succeed");
             stx.apply();
         }
-
         let executor = super::Executor::Initial;
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -17313,7 +16481,6 @@ mod tests {
                 None,
             )
         }));
-
         let mut stx = block.transaction();
         let res = executor.execute_instruction(&mut stx, &genesis_id, instruction);
         assert!(
@@ -17321,7 +16488,6 @@ mod tests {
             "initial executor should deny registering asset definition without permission"
         );
     }
-
     #[test]
     fn borrowed_overlay_apply_matches_owned_initial_executor_for_register_domain() {
         fn test_state() -> State {
@@ -17334,11 +16500,9 @@ mod tests {
             let query_handle = query::store::LiveQueryStore::start_test();
             State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"))
         }
-
         let executor = super::Executor::Initial;
         let domain_id: DomainId =
             DomainId::try_new("borrowed-overlay", "universal").expect("domain id");
-
         let owned_state = test_state();
         let mut owned_block =
             owned_state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
@@ -17348,7 +16512,6 @@ mod tests {
             .execute_instruction(&mut owned_tx, &ALICE_ID.clone(), owned_instruction)
             .expect("owned initial executor applies instruction");
         assert!(owned_tx.world.domains.get(&domain_id).is_some());
-
         let overlay_state = test_state();
         let mut overlay_block =
             overlay_state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
@@ -17361,7 +16524,6 @@ mod tests {
             .expect("borrowed overlay applies instruction");
         assert!(overlay_tx.world.domains.get(&domain_id).is_some());
     }
-
     #[test]
     fn initial_executor_rejects_raw_domain_registration_after_genesis() {
         use iroha_executor_data_model::permission::domain::CanRegisterDomain;
@@ -17384,7 +16546,6 @@ mod tests {
         Grant::account_permission(CanRegisterDomain, ALICE_ID.clone())
             .execute(&ALICE_ID, &mut state_transaction)
             .expect("seed legacy permission directly");
-
         let domain_id = DomainId::try_new("planned", "universal").expect("planned domain id");
         let error = super::Executor::Initial
             .execute_instruction(
@@ -17393,12 +16554,10 @@ mod tests {
                 Register::domain(Domain::new(domain_id)).into(),
             )
             .expect_err("raw domain registration must be denied after genesis");
-
         assert!(
             matches!(error, ValidationFail::NotPermitted(ref message) if message.contains("reserved for genesis"))
         );
     }
-
     #[test]
     fn initial_executor_allows_native_escrow_open_without_transfer_permission() {
         let seller = ALICE_ID.clone();
@@ -17432,7 +16591,6 @@ mod tests {
         let mut block = state.block(header);
         let mut stx = block.transaction();
         stx.tx_call_hash = Some(Hash::prehashed([0xE5; Hash::LENGTH]));
-
         let escrow_id = EscrowId::new(Hash::new("executor-native-escrow-open"));
         let instruction = iroha_data_model::isi::escrow::OpenAssetEscrow::new(
             escrow_id,
@@ -17448,7 +16606,6 @@ mod tests {
             res.is_ok(),
             "native escrow opening should not require generic CanTransferAsset permission: {res:?}"
         );
-
         let record = stx
             .world
             .asset_escrows
@@ -17470,26 +16627,22 @@ mod tests {
         assert_eq!(seller_balance, Quantity::from(60_u64));
         assert_eq!(custody_balance, Quantity::from(40_u64));
     }
-
     #[test]
     fn initial_executor_rejects_domainless_asset_definition_registration_after_genesis() {
         let alice_id = ALICE_ID.clone();
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
-
         let world = World::with([domain], [alice_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
-
         state
             .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
             .commit()
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let executor = super::Executor::Initial;
         let asset_definition_id = AssetDefinitionId::from_uuid_bytes([
             0x2e, 0x3d, 0x34, 0xbe, 0xb8, 0xa8, 0x42, 0x39, 0xb3, 0xd9, 0x59, 0x07, 0x70, 0xf1,
@@ -17503,7 +16656,6 @@ mod tests {
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )));
-
         let mut stx = block.transaction();
         let result = executor.execute_instruction(&mut stx, &alice_id, instruction);
         assert!(
@@ -17519,7 +16671,6 @@ mod tests {
             "a rejected opaque asset definition must not enter world state"
         );
     }
-
     #[test]
     fn initial_executor_authorizes_wire_decoded_asset_definition_from_explicit_owner() {
         let domain_id =
@@ -17542,7 +16693,6 @@ mod tests {
             .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
             .commit()
             .expect("commit bootstrap block");
-
         let registration = Register::asset_definition(AssetDefinition::numeric(
             projected_id,
             "coin".to_owned(),
@@ -17557,13 +16707,11 @@ mod tests {
         let opaque_id = decoded.object().id().clone();
         assert_eq!(decoded.object().owning_domain.as_ref(), Some(&domain_id));
         assert!(decoded.object().alias.is_none());
-
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
         let mut transaction = block.transaction();
         super::Executor::Initial
             .execute_instruction(&mut transaction, &ALICE_ID, InstructionBox::from(decoded))
             .expect("explicit owning domain must authorize after wire decoding");
-
         assert!(transaction.world.asset_definition(&opaque_id).is_ok());
         assert_eq!(
             transaction.world.asset_definition_domains.get(&opaque_id),
@@ -17571,7 +16719,6 @@ mod tests {
             "registration must derive the domain index from explicit ownership"
         );
     }
-
     #[test]
     fn initial_executor_enforces_exact_pkr_mint_and_metadata_permissions() {
         let owner = ALICE_ID.clone();
@@ -17609,7 +16756,6 @@ mod tests {
         let mut stx = block.transaction();
         let executor = super::Executor::Initial;
         let retail_pkr = AssetId::new(pkr.clone(), retail.clone());
-
         stx.world.account_permissions.insert(
             retail.clone(),
             BTreeSet::from([Permission::new(
@@ -17630,7 +16776,6 @@ mod tests {
             ),
             "the retired CanMintAsset token must be inert"
         );
-
         stx.world.account_permissions.insert(
             retail.clone(),
             BTreeSet::from([Permission::from(
@@ -17653,7 +16798,6 @@ mod tests {
             ),
             "a destination-scoped permission must not authorize another account"
         );
-
         let metadata_key: Name = "display.category".parse().expect("metadata key");
         let unprivileged_metadata = executor.execute_instruction(
             &mut stx,
@@ -17672,7 +16816,6 @@ mod tests {
             ),
             "unexpected unprivileged PKR metadata result: {unprivileged_metadata:?}"
         );
-
         stx.world.account_permissions.insert(
             retail.clone(),
             BTreeSet::from([
@@ -17705,7 +16848,6 @@ mod tests {
                 )),
             )
             .expect("the exact PKR metadata grant must authorize metadata changes");
-
         assert_eq!(
             stx.world
                 .assets
@@ -17723,7 +16865,6 @@ mod tests {
             Some(&Json::new("retail")),
         );
     }
-
     #[test]
     fn extract_transfer_asset_definition_ignores_register_asset_definition_instruction() {
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
@@ -17737,13 +16878,11 @@ mod tests {
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )));
-
         assert!(
             extract_transfer_asset_definition(&instruction).is_none(),
             "register asset-definition instruction must not decode as transfer"
         );
     }
-
     #[test]
     fn extract_register_asset_definition_accepts_register_asset_definition_instruction() {
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
@@ -17757,12 +16896,10 @@ mod tests {
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )));
-
         let reg = extract_register_asset_definition(&instruction)
             .expect("expected to extract register asset-definition instruction");
         assert_eq!(reg.object().id(), &asset_definition_id);
     }
-
     #[test]
     fn initial_executor_denies_transfer_domain_without_ownership() {
         let alice_id = ALICE_ID.clone();
@@ -17771,13 +16908,11 @@ mod tests {
         let foo_domain_id: DomainId = DomainId::try_new("foo", "universal").expect("foo domain id");
         let user1 = checked_account_id();
         let user2 = checked_account_id();
-
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let foo_domain = Domain::new(foo_domain_id.clone()).build(&user1);
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let user1_account = Account::new(user1.clone()).build(&user1);
         let user2_account = Account::new(user2.clone()).build(&user2);
-
         let world = World::with(
             [users_domain, foo_domain],
             [alice_account, user1_account, user2_account],
@@ -17793,7 +16928,6 @@ mod tests {
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let executor = super::Executor::Initial;
         let instruction = InstructionBox::from(Transfer::domain(
             user1.clone(),
@@ -17802,7 +16936,6 @@ mod tests {
         ));
         let transfer = extract_transfer_domain(&instruction)
             .expect("expected to extract domain transfer from instruction");
-
         let mut stx = block.transaction();
         assert_eq!(
             stx.world
@@ -17834,7 +16967,6 @@ mod tests {
             "initial executor should deny domain transfer from another account, got: {res:?}"
         );
     }
-
     #[test]
     fn initial_executor_denies_transfer_asset_by_asset_definition_domain_owner() {
         let alice_id = ALICE_ID.clone();
@@ -17842,7 +16974,6 @@ mod tests {
             DomainId::try_new("users", "universal").expect("users domain id");
         let user1 = checked_account_id();
         let user2 = checked_account_id();
-
         let users_domain = Domain::new(users_domain_id.clone()).build(&alice_id);
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let user1_account = Account::new(user1.clone()).build(&user1);
@@ -17860,7 +16991,6 @@ mod tests {
         .build(&user1);
         let transfer_asset_id = AssetId::new(asset_definition_id, user1.clone());
         let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10_u64));
-
         let world = World::with_assets(
             [users_domain],
             [alice_account, user1_account, user2_account],
@@ -17878,7 +17008,6 @@ mod tests {
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let instruction = InstructionBox::from(Transfer::asset_quantity(
             transfer_asset_id,
             1_u32,
@@ -17886,7 +17015,6 @@ mod tests {
         ));
         let transfer = extract_transfer_asset(&instruction)
             .expect("expected to extract asset transfer from instruction");
-
         let mut stx = block.transaction();
         let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer)
             .expect("asset transfer permission check");
@@ -17904,7 +17032,6 @@ mod tests {
             "asset-definition domain owner bypass must fail before applying the transfer: {result:?}"
         );
     }
-
     #[test]
     fn initial_executor_denies_transfer_asset_by_active_alias_domain_owner_for_all_shapes() {
         use iroha_data_model::{
@@ -17915,7 +17042,6 @@ mod tests {
             nexus::DataSpaceCatalog,
             sns::{NameControllerV1, NameRecordV1},
         };
-
         let alias_domain_owner = ALICE_ID.clone();
         let source = checked_account_id();
         let destination = checked_account_id();
@@ -17976,13 +17102,11 @@ mod tests {
             alias.clone(),
             iroha_data_model::account::rekey::AccountRekeyRecord::new(alias, source.clone()),
         );
-
         assert!(
             authority_owns_any_alias_domain(&world.view(), &alias_domain_owner, &source, 50)
                 .expect("active alias-domain ownership check"),
             "fixture must prove that the attacker owns an active alias domain for the source"
         );
-
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -17993,7 +17117,6 @@ mod tests {
         let transfer = Transfer::asset_quantity(source_asset_id, 1_u32, destination.clone());
         let boxed = InstructionBox::from(transfer.clone());
         let concrete = concrete_instruction_box!(Transfer<Asset, Quantity, Account>, transfer);
-
         let boxed_result = super::Executor::Initial.execute_instruction(
             &mut transaction,
             &alias_domain_owner,
@@ -18007,7 +17130,6 @@ mod tests {
             ),
             "active alias-domain ownership must not authorize TransferBox::Asset: {boxed_result:?}"
         );
-
         let concrete_result = super::Executor::Initial.execute_borrowed_overlay_instruction(
             &mut transaction,
             &alias_domain_owner,
@@ -18019,7 +17141,6 @@ mod tests {
             "active alias-domain ownership must not authorize a borrowed concrete transfer: {concrete_result:?}"
         );
     }
-
     #[test]
     fn initial_executor_denies_transfer_asset_without_owner_signature() {
         let alice_id = ALICE_ID.clone();
@@ -18027,12 +17148,10 @@ mod tests {
             DomainId::try_new("users", "universal").expect("users domain id");
         let user1 = checked_account_id();
         let user2 = checked_account_id();
-
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let user1_account = Account::new(user1.clone()).build(&user1);
         let user2_account = Account::new(user2.clone()).build(&user2);
-
         let world = World::with(
             [users_domain],
             [alice_account, user1_account, user2_account],
@@ -18048,7 +17167,6 @@ mod tests {
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let executor = super::Executor::Initial;
         let transfer_asset_id = AssetId::new(
             iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -18064,7 +17182,6 @@ mod tests {
         ));
         let transfer = extract_transfer_asset(&instruction)
             .expect("expected to extract asset transfer from instruction");
-
         let mut stx = block.transaction();
         let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer)
             .expect("asset transfer permission check");
@@ -18087,7 +17204,6 @@ mod tests {
             ),
         }
     }
-
     #[test]
     fn initial_executor_allows_source_owner_and_both_exact_transfer_permissions() {
         let asset_domain_id = DomainId::try_new("assets", "universal").expect("asset domain id");
@@ -18100,7 +17216,6 @@ mod tests {
             "coin".parse().unwrap(),
         );
         let source_asset_id = AssetId::new(asset_definition_id.clone(), source.clone());
-
         let authorities = [
             ("source owner", source.clone(), None),
             (
@@ -18122,7 +17237,6 @@ mod tests {
                 )),
             ),
         ];
-
         for (case, authority, permission) in authorities {
             let mut world = World::with_assets(
                 [Domain::new(asset_domain_id.clone()).build(&definition_owner)],
@@ -18167,7 +17281,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn initial_executor_requires_an_active_consistent_contract_context_for_contract_assets() {
         let deployer = checked_account_id();
@@ -18216,7 +17329,6 @@ mod tests {
         world
             .contract_subject_addresses
             .insert(contract_subject.clone(), contract_address.clone());
-
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
@@ -18235,7 +17347,6 @@ mod tests {
             Transfer::asset_quantity(source_asset_id.clone(), 1_u32, destination.clone());
         let boxed = InstructionBox::from(transfer.clone());
         let concrete = concrete_instruction_box!(Transfer<Asset, Quantity, Account>, transfer);
-
         super::Executor::Initial
             .execute_borrowed_overlay_instruction(
                 &mut transaction,
@@ -18255,7 +17366,6 @@ mod tests {
             "borrowed concrete transfers must remain outside the admitted native surface: \
              {concrete_result:?}"
         );
-
         transaction
             .world
             .contract_subject_addresses
@@ -18280,7 +17390,6 @@ mod tests {
             .world
             .contract_subject_addresses
             .insert(contract_subject.clone(), contract_address.clone());
-
         let inactive_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -18307,7 +17416,6 @@ mod tests {
             "an inactive or inconsistent contract context must fail closed: {rejected:?}"
         );
     }
-
     #[test]
     fn contract_runtime_context_alias_does_not_bypass_asset_transfer_authorization() {
         let alice_id = ALICE_ID.clone();
@@ -18319,7 +17427,6 @@ mod tests {
             DomainId::try_new("wonderland", "universal").expect("domain id");
         let user1 = checked_account_id();
         let user2 = checked_account_id();
-
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let defs_domain = Domain::new(defs_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
@@ -18339,7 +17446,6 @@ mod tests {
         .build(&user1);
         let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
         let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10_u64));
-
         let world = World::with_assets(
             [alice_domain, users_domain, defs_domain],
             [alice_account, user1_account, user2_account],
@@ -18357,7 +17463,6 @@ mod tests {
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let executor = super::Executor::Initial;
         let instruction = InstructionBox::from(Transfer::asset_quantity(
             transfer_asset_id,
@@ -18379,7 +17484,6 @@ mod tests {
             contract_alias: Some("benefit::benefit".parse().expect("benefit alias")),
             entrypoint: "spend_to_merchant".to_owned(),
         };
-
         let mut stx = block.transaction();
         stx.tx_call_hash = Some(Hash::prehashed([0xE6; Hash::LENGTH]));
         let result = executor.execute_instruction_with_contract_runtime_context(
@@ -18397,7 +17501,6 @@ mod tests {
             "contract alias must not bypass source-owner authorization: {result:?}"
         );
     }
-
     #[test]
     fn contract_runtime_context_does_not_bypass_non_benefit_spend_entrypoints() {
         let alice_id = ALICE_ID.clone();
@@ -18409,7 +17512,6 @@ mod tests {
             DomainId::try_new("wonderland", "universal").expect("domain id");
         let user1 = checked_account_id();
         let user2 = checked_account_id();
-
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let defs_domain = Domain::new(defs_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
@@ -18429,7 +17531,6 @@ mod tests {
         .build(&user1);
         let transfer_asset_id = AssetId::new(asset_definition_id.clone(), user1.clone());
         let source_balance = Asset::new(transfer_asset_id.clone(), Quantity::from(10_u64));
-
         let world = World::with_assets(
             [alice_domain, users_domain, defs_domain],
             [alice_account, user1_account, user2_account],
@@ -18447,7 +17548,6 @@ mod tests {
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let executor = super::Executor::Initial;
         let instruction = InstructionBox::from(Transfer::asset_quantity(
             transfer_asset_id,
@@ -18469,7 +17569,6 @@ mod tests {
             contract_alias: Some("benefit::benefit".parse().expect("benefit alias")),
             entrypoint: "create_tranche".to_owned(),
         };
-
         let mut stx = block.transaction();
         let res = executor.execute_instruction_with_contract_runtime_context(
             &mut stx,
@@ -18487,7 +17586,6 @@ mod tests {
             ),
         }
     }
-
     #[test]
     fn contract_runtime_context_alias_does_not_bypass_permission_grant_authorization() {
         let alice_id = ALICE_ID.clone();
@@ -18507,7 +17605,6 @@ mod tests {
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(
             generate_denied_program("executor denies permission grants"),
         ));
@@ -18552,7 +17649,6 @@ mod tests {
             "contract alias must not bypass the common permission boundary: {result:?}"
         );
     }
-
     #[test]
     fn initial_executor_contract_alias_never_bypasses_permission_grant_validation() {
         fn execute_case(
@@ -18607,7 +17703,6 @@ mod tests {
                 Some(&context),
             )
         }
-
         for entrypoint in ["create_tranche", "set_beneficiary_spend_authority"] {
             assert!(matches!(
                 execute_case("bisp_bisp::sbp", entrypoint, "BispSpend"),
@@ -18633,7 +17728,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn initial_executor_contract_alias_never_bypasses_transfer_control_validation() {
         fn assert_rejected(result: Result<(), ValidationFail>, context: &str) {
@@ -18648,7 +17742,6 @@ mod tests {
                 "{context} must be rejected by authorization or the matching execution invariant: {result:?}"
             );
         }
-
         fn execute_case(
             alias: &str,
             entrypoint: &str,
@@ -18729,7 +17822,6 @@ mod tests {
                 Some(&context),
             )
         }
-
         assert_rejected(
             execute_case(
                 "apps_freeze::sbp",
@@ -18748,7 +17840,6 @@ mod tests {
             ),
             "unprivileged branded limit update",
         );
-
         for (alias, entrypoint, kind, window) in [
             (
                 "apps_freeze::sbp",
@@ -18787,7 +17878,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn initial_executor_denies_transfer_asset_definition_without_ownership() {
         let alice_id = ALICE_ID.clone();
@@ -18799,14 +17889,12 @@ mod tests {
         let user2 = checked_account_id();
         let alice_domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
-
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let defs_domain = Domain::new(defs_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let user1_account = Account::new(user1.clone()).build(&user1);
         let user2_account = Account::new(user2.clone()).build(&user2);
-
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             defs_domain_id.clone(),
             "bond".parse().expect("asset definition name"),
@@ -18818,7 +17906,6 @@ mod tests {
             None,
         )
         .build(&user1);
-
         let world = World::with(
             [alice_domain, users_domain, defs_domain],
             [alice_account, user1_account, user2_account],
@@ -18834,7 +17921,6 @@ mod tests {
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let executor = super::Executor::Initial;
         let instruction = InstructionBox::from(Transfer::asset_definition(
             user1.clone(),
@@ -18843,7 +17929,6 @@ mod tests {
         ));
         let transfer = extract_transfer_asset_definition(&instruction)
             .expect("expected to extract asset-definition transfer from instruction");
-
         let mut stx = block.transaction();
         let allowed = can_transfer_asset_definition(&stx.world, &alice_id, &transfer)
             .expect("asset-definition transfer permission check");
@@ -18862,7 +17947,6 @@ mod tests {
             ),
         }
     }
-
     #[test]
     fn initial_executor_denies_transfer_asset_definition_by_definition_domain_owner() {
         let alice_id = ALICE_ID.clone();
@@ -18874,14 +17958,12 @@ mod tests {
         let user2 = checked_account_id();
         let alice_domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
-
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let defs_domain = Domain::new(defs_domain_id.clone()).build(&alice_id);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
         let user1_account = Account::new(user1.clone()).build(&user1);
         let user2_account = Account::new(user2.clone()).build(&user2);
-
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
             defs_domain_id.clone(),
             "bond".parse().expect("asset definition name"),
@@ -18893,7 +17975,6 @@ mod tests {
             None,
         )
         .build(&user1);
-
         let world = World::with(
             [alice_domain, users_domain, defs_domain],
             [alice_account, user1_account, user2_account],
@@ -18909,7 +17990,6 @@ mod tests {
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let instruction = InstructionBox::from(Transfer::asset_definition(
             user1.clone(),
             asset_definition_id.clone(),
@@ -18917,7 +17997,6 @@ mod tests {
         ));
         let transfer = extract_transfer_asset_definition(&instruction)
             .expect("expected to extract asset-definition transfer from instruction");
-
         let mut stx = block.transaction();
         let allowed = can_transfer_asset_definition(&stx.world, &alice_id, &transfer)
             .expect("asset-definition transfer permission check");
@@ -18936,7 +18015,6 @@ mod tests {
             ),
         }
     }
-
     #[test]
     fn initial_executor_denies_transfer_nft_without_ownership() {
         let alice_id = ALICE_ID.clone();
@@ -18946,7 +18024,6 @@ mod tests {
         let user2 = checked_account_id();
         let alice_domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
-
         let users_domain = Domain::new(users_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
@@ -18954,7 +18031,6 @@ mod tests {
         let user2_account = Account::new(user2.clone()).build(&user2);
         let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
-
         let world = World::with_assets(
             [alice_domain, users_domain],
             [alice_account, user1_account, user2_account],
@@ -18972,13 +18048,11 @@ mod tests {
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let executor = super::Executor::Initial;
         let instruction =
             InstructionBox::from(Transfer::nft(user1.clone(), nft_id.clone(), user2.clone()));
         let transfer = extract_transfer_nft(&instruction)
             .expect("expected to extract nft transfer from instruction");
-
         let mut stx = block.transaction();
         let allowed = can_transfer_nft(&stx.world, &alice_id, &transfer)
             .expect("nft transfer permission check");
@@ -18997,7 +18071,6 @@ mod tests {
             ),
         }
     }
-
     #[test]
     fn initial_executor_allows_transfer_nft_by_nft_domain_owner() {
         let alice_id = ALICE_ID.clone();
@@ -19007,7 +18080,6 @@ mod tests {
         let user2 = checked_account_id();
         let alice_domain_id: DomainId =
             DomainId::try_new("wonderland", "universal").expect("domain id");
-
         let users_domain = Domain::new(users_domain_id.clone()).build(&alice_id);
         let alice_domain = Domain::new(alice_domain_id.clone()).build(&alice_id);
         let alice_account = Account::new(alice_id.clone()).build(&alice_id);
@@ -19015,7 +18087,6 @@ mod tests {
         let user2_account = Account::new(user2.clone()).build(&user2);
         let nft_id: NftId = "ticket$users.universal".parse().expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&user1);
-
         let world = World::with_assets(
             [alice_domain, users_domain],
             [alice_account, user1_account, user2_account],
@@ -19033,12 +18104,10 @@ mod tests {
             .expect("commit bootstrap block");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let instruction =
             InstructionBox::from(Transfer::nft(user1.clone(), nft_id.clone(), user2.clone()));
         let transfer = extract_transfer_nft(&instruction)
             .expect("expected to extract nft transfer from instruction");
-
         let mut stx = block.transaction();
         let allowed = can_transfer_nft(&stx.world, &alice_id, &transfer)
             .expect("nft transfer permission check");
@@ -19049,7 +18118,6 @@ mod tests {
         let res = super::Executor::Initial.execute_instruction(&mut stx, &alice_id, instruction);
         assert!(res.is_ok(), "expected transfer to succeed, got {res:?}");
     }
-
     #[test]
     fn initial_executor_denies_nft_metadata_edit_in_transaction() {
         let (bob_id, bob_kp) = gen_account_in("wonderland");
@@ -19061,7 +18129,6 @@ mod tests {
             .parse()
             .expect("nft id");
         let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&bob_id);
-
         let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
@@ -19069,7 +18136,6 @@ mod tests {
         let state = State::new_with_chain(world, kura, query_handle, chain);
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
-
         let instruction = SetKeyValue::nft(nft_id, "foo".parse().expect("key"), "value");
         let tx = TransactionBuilder::new(
             state.network_id,
@@ -19078,7 +18144,6 @@ mod tests {
         )
         .with_instructions([instruction])
         .sign(bob_kp.private_key());
-
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let mut stx = block.transaction();
@@ -19088,7 +18153,6 @@ mod tests {
             "initial executor should deny NFT metadata edits by non-domain owners"
         );
     }
-
     #[test]
     fn bench_profile_runs_without_logger() {
         let authority = ALICE_ID.clone();
@@ -19101,7 +18165,6 @@ mod tests {
         let mut tx = block.transaction();
         let executor = super::Executor::default();
         let instr: InstructionBox = Log::new(Level::INFO, "bench profile".to_owned()).into();
-
         executor
             .execute_instruction_with_profile(
                 &mut tx,
@@ -19111,7 +18174,6 @@ mod tests {
             )
             .expect("bench profile should execute without logger");
     }
-
     #[test]
     fn multisig_account_direct_signing_is_rejected() {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -19121,17 +18183,14 @@ mod tests {
         let policy =
             iroha_data_model::account::MultisigPolicy::new(1, vec![member]).expect("policy");
         let multisig_id = AccountId::new_multisig(policy);
-
         let domain: Domain = Domain::new(domain_id.clone()).build(&multisig_id);
         let multisig_account = Account::new(multisig_id.clone()).build(&multisig_id);
-
         let world = World::with([domain], [multisig_account], []);
         let kura = Kura::blank_kura_for_testing();
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
-
         let builder = TransactionBuilder::new(
             state.network_id,
             multisig_id.clone(),
@@ -19141,10 +18200,8 @@ mod tests {
         let signature = Signature::try_new(signer.private_key(), &builder.payload_hash_bytes())
             .expect("fixture signer should sign the multisig-authority payload prehash");
         let tx = builder.build_with_signature(signature);
-
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-
         let mut stx = block.transaction();
         let res = executor.execute_transaction(&mut stx, &multisig_id, tx, &mut ivm_cache);
         match res {
@@ -19165,7 +18222,6 @@ mod tests {
             );
         }
     }
-
     // Shared test helpers for generating or loading executor bytecode
     fn read_default_bytecode() -> Option<Vec<u8>> {
         std::env::var_os("IROHA_TEST_USE_DEFAULT_EXECUTOR")?;
@@ -19179,7 +18235,6 @@ mod tests {
         }
         None
     }
-
     fn generate_migration_program(
         verdict: &Result<ExecutorDataModel, iroha_data_model::ValidationFail>,
     ) -> Vec<u8> {
@@ -19191,19 +18246,16 @@ mod tests {
         let verdict_bytes = payload.encode();
         build_program_from_encoded_result(&verdict_bytes)
     }
-
     fn generate_ok_program() -> Vec<u8> {
         let verdict = Ok(());
         generate_verdict_program(&verdict)
     }
-
     fn executor_result_test_context() -> ExecutorContext {
         ExecutorContext {
             authority: ALICE_ID.clone(),
             curr_block: BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0),
         }
     }
-
     fn loaded_executor_with_result_prefix(
         declared_len: u64,
         encoded_payload: &[u8],
@@ -19218,7 +18270,6 @@ mod tests {
         let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(program));
         LoadedExecutor::load(raw).expect("load executor test program")
     }
-
     fn loaded_executor_returning_past_heap_result() -> LoadedExecutor {
         let metadata = ivm::ProgramMetadata {
             version_major: 1,
@@ -19246,11 +18297,9 @@ mod tests {
         program.extend_from_slice(&ivm::kotodama::wide::encode_addi(11, 11, 16).to_le_bytes());
         program.extend_from_slice(&ivm::kotodama::wide::encode_store64(10, 11, 0).to_le_bytes());
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-
         let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(program));
         LoadedExecutor::load(raw).expect("load past-heap executor test program")
     }
-
     fn assert_executor_result_length_rejected_by_validation_and_migration(
         declared_len: u64,
         expected_message: &str,
@@ -19276,7 +18325,6 @@ mod tests {
             validation_error.to_string().contains(expected_message),
             "unexpected validation error: {validation_error}"
         );
-
         let migration_error =
             run_executor_migration(&loaded, &context, 1_000_000, Memory::HEAP_MAX_SIZE)
                 .expect_err("hostile migration result must be rejected");
@@ -19285,7 +18333,6 @@ mod tests {
             "unexpected migration error: {migration_error}"
         );
     }
-
     #[test]
     fn executor_result_reader_rejects_short_and_gigabyte_prefixes_in_both_paths() {
         assert_executor_result_length_rejected_by_validation_and_migration(
@@ -19301,7 +18348,6 @@ mod tests {
             "length exceeds the 1048576-byte limit",
         );
     }
-
     #[test]
     fn executor_result_reader_rejects_ranges_past_readable_memory_in_both_paths() {
         let loaded = loaded_executor_returning_past_heap_result();
@@ -19326,7 +18372,6 @@ mod tests {
                 .contains("is not fully readable"),
             "unexpected validation error: {validation_error}"
         );
-
         let migration_error =
             run_executor_migration(&loaded, &context, 100_000, Memory::HEAP_MAX_SIZE)
                 .expect_err("past-heap migration result must be rejected");
@@ -19337,7 +18382,6 @@ mod tests {
             "unexpected migration error: {migration_error}"
         );
     }
-
     #[test]
     fn migration_result_requires_a_canonical_complete_payload() {
         let discriminant_only = [0_u8; 4];
@@ -19346,7 +18390,6 @@ mod tests {
             MigrationResultPayload::decode(&mut discriminant_only_slice).is_err(),
             "an Ok discriminant without an ExecutorDataModel must not decode"
         );
-
         let canonical_unit = MigrationUnitPayload::Ok(()).encode();
         assert_eq!(
             canonical_unit.as_slice(),
@@ -19364,7 +18407,6 @@ mod tests {
             None,
             "the unit-success payload must not install an empty data model"
         );
-
         let model = initial_executor_data_model_fallback();
         let canonical = MigrationResultPayload::Ok(model.clone()).encode();
         let declared_len = EXECUTOR_LENGTH_PREFIX_BYTES_U64
@@ -19375,7 +18417,6 @@ mod tests {
                 .expect("a canonical complete migration result must be accepted"),
             Some(model)
         );
-
         let mut non_canonical = canonical;
         non_canonical.push(0);
         let declared_len = EXECUTOR_LENGTH_PREFIX_BYTES_U64
@@ -19391,7 +18432,6 @@ mod tests {
             "unexpected non-canonical migration result error: {trailing_error}"
         );
     }
-
     #[test]
     fn executor_result_reader_preserves_legitimate_validation_and_migration_results() {
         let context = executor_result_test_context();
@@ -19413,7 +18453,6 @@ mod tests {
         )
         .expect("legitimate validation result is readable");
         assert!(report.verdict.is_ok());
-
         let migration_verdict = MigrationUnitPayload::Ok(()).encode();
         let migration = loaded_executor_with_result_prefix(
             EXECUTOR_LENGTH_PREFIX_BYTES_U64
@@ -19426,7 +18465,6 @@ mod tests {
             None
         );
     }
-
     fn contract_program_with_entrypoint(
         entrypoint: &str,
         permission: Option<&str>,
@@ -19435,7 +18473,6 @@ mod tests {
 
         contract_program_with_entrypoint_kind(entrypoint, EntryPointKind::Kotoage, permission)
     }
-
     fn contract_program_with_entrypoint_kind(
         entrypoint: &str,
         kind: iroha_data_model::smart_contract::manifest::EntryPointKind,
@@ -19485,7 +18522,6 @@ mod tests {
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         (program, expected_entrypoint_pc)
     }
-
     fn contract_program_with_private_input_entrypoint(
         entrypoint: &str,
         kind: iroha_data_model::smart_contract::manifest::EntryPointKind,
@@ -19540,7 +18576,6 @@ mod tests {
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
         program
     }
-
     fn prepared_parameterized_trigger_contract() -> ivm::PreparedContract {
         let source = r#"
 seiyaku TriggerArguments {
@@ -19555,7 +18590,6 @@ seiyaku TriggerArguments {
         ivm::prepare_contract(Arc::<[u8]>::from(code))
             .expect("prepare parameterized trigger callback")
     }
-
     #[test]
     fn protected_contract_call_is_denied_before_argument_record_decode() {
         const REQUIRED_PERMISSION: &str = "CanInvokeContractEntrypoint";
@@ -19594,7 +18628,6 @@ seiyaku GuardedValue {
         let arguments =
             iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(arguments)
                 .expect("bounded protected arguments");
-
         let chain_id = ChainId::from("protected-direct-call");
         let authority = ALICE_ID.clone();
         let domain =
@@ -19646,7 +18679,6 @@ seiyaku GuardedValue {
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
         let mut state_tx = block.transaction();
         let mut ivm_cache = IvmCache::new();
-
         ivm::reset_argument_record_decode_count();
         let error = super::Executor::Initial
             .execute_transaction(
@@ -19656,7 +18688,6 @@ seiyaku GuardedValue {
                 &mut ivm_cache,
             )
             .expect_err("missing entrypoint permission must deny the direct call");
-
         assert!(
             error.to_string().contains(REQUIRED_PERMISSION),
             "unexpected direct contract authorization error: {error}"
@@ -19676,7 +18707,6 @@ seiyaku GuardedValue {
                 .is_none(),
             "denied direct contract call must apply no queued effect"
         );
-
         let entrypoint_permission: Permission =
             iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
                 contract: contract_address.clone(),
@@ -19708,7 +18738,6 @@ seiyaku GuardedValue {
             .get(&metadata_marker)
             .cloned()
             .expect("authorized direct call writes its metadata marker");
-
         let live_code = state_tx
             .world
             .contract_code
@@ -19736,7 +18765,6 @@ seiyaku GuardedValue {
             "missing live bytecode must apply no queued effect"
         );
         state_tx.world.contract_code.insert(code_hash, live_code);
-
         let live_manifest = state_tx
             .world
             .contract_manifests
@@ -19767,7 +18795,6 @@ seiyaku GuardedValue {
             .world
             .contract_manifests
             .insert(code_hash, live_manifest);
-
         Revoke::account_permission(entrypoint_permission.clone(), authority.clone())
             .execute(&authority, &mut state_tx)
             .expect("revoke direct-call entrypoint permission");
@@ -19796,11 +18823,9 @@ seiyaku GuardedValue {
             Some(&authorized_marker),
             "revoked direct contract call must preserve authorized state"
         );
-
         Grant::account_permission(entrypoint_permission, authority.clone())
             .execute(&authority, &mut state_tx)
             .expect("restore direct-call entrypoint permission");
-
         let (rebound_program, rebound_manifest) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest(
                 r#"
@@ -19874,7 +18899,6 @@ seiyaku GuardedValueRebound {
             .contract_manifests
             .remove(rebound_code_hash)
             .expect("remove rebound manifest after restoring the original binding");
-
         state_tx
             .world
             .contract_instances
@@ -19903,7 +18927,6 @@ seiyaku GuardedValueRebound {
             "deactivated direct contract call must apply no queued effect"
         );
     }
-
     #[test]
     fn mixed_batch_observes_ordered_permission_state_and_rolls_back_on_failure() {
         let (program, manifest) = ivm::KotodamaCompiler::new()
@@ -19941,7 +18964,6 @@ seiyaku OrderedBatchGuard {
         let arguments =
             iroha_data_model::transaction::executable::ContractArgumentRecord::try_new(arguments)
                 .expect("bounded mixed-batch arguments");
-
         let chain_id = ChainId::from("ordered-mixed-batch");
         let authority = ALICE_ID.clone();
         let domain = Domain::new(DomainId::try_new("wonderland", "universal").expect("domain id"))
@@ -20007,14 +19029,12 @@ seiyaku OrderedBatchGuard {
             .into(),
         ))
         .sign(ALICE_KEYPAIR.private_key());
-
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
         let mut state_tx = block.transaction();
         let mut ivm_cache = IvmCache::new();
         super::Executor::Initial
             .execute_transaction(&mut state_tx, &authority, transaction, &mut ivm_cache)
             .expect("grant-call-revoke batch must execute in order");
-
         let marker: Name = "mixed_batch_marker".parse().expect("marker name");
         assert!(
             state_tx
@@ -20039,7 +19059,6 @@ seiyaku OrderedBatchGuard {
             "aggregate batch gas must include contract execution"
         );
         state_tx.apply();
-
         let capped_transaction = TransactionBuilder::new(
             state.network_id,
             authority.clone(),
@@ -20053,7 +19072,6 @@ seiyaku OrderedBatchGuard {
             .into(),
         ))
         .sign(ALICE_KEYPAIR.private_key());
-
         let mut instruction_capped_state_tx = block.transaction();
         instruction_capped_state_tx
             .pipeline
@@ -20072,7 +19090,6 @@ seiyaku OrderedBatchGuard {
             "unexpected mixed-batch instruction-cap error: {instruction_cap_error}"
         );
         drop(instruction_capped_state_tx);
-
         let explicit_overlay_bytes =
             super::live_batch_overlay_byte_size(&explicit_instructions[..1]);
         let mut byte_capped_state_tx = block.transaction();
@@ -20093,7 +19110,6 @@ seiyaku OrderedBatchGuard {
             "unexpected mixed-batch byte-cap error: {byte_cap_error}"
         );
         drop(byte_capped_state_tx);
-
         let cap_verification_tx = block.transaction();
         assert!(
             !cap_verification_tx
@@ -20104,7 +19120,6 @@ seiyaku OrderedBatchGuard {
             "dropping a cap-rejected mixed batch must roll back its permission grant"
         );
         drop(cap_verification_tx);
-
         let rollback_marker: Name = "mixed_batch_rollback_marker"
             .parse()
             .expect("rollback marker name");
@@ -20136,7 +19151,6 @@ seiyaku OrderedBatchGuard {
             .expect_err("the revoked permission must reject the later call");
         assert!(error.to_string().contains("CanInvokeContractEntrypoint"));
         drop(failed_state_tx);
-
         let verification_tx = block.transaction();
         assert!(
             verification_tx
@@ -20149,7 +19163,6 @@ seiyaku OrderedBatchGuard {
             "dropping the failed batch transaction must roll back its preceding native write"
         );
     }
-
     #[test]
     fn resolved_contract_invocation_releases_cache_and_records_vm_error_gas() {
         let (program, manifest) = ivm::KotodamaCompiler::new()
@@ -20225,7 +19238,6 @@ seiyaku MeteredFailure {
             cache.try_lock().is_some(),
             "the resolved invocation must not retain the outer cache mutex"
         );
-
         let error = executor
             .execute_resolved_contract_invocation(
                 &mut state_transaction,
@@ -20237,7 +19249,6 @@ seiyaku MeteredFailure {
                 None,
             )
             .expect_err("ten units of gas cannot complete the contract");
-
         assert!(
             error.to_string().contains("gas"),
             "unexpected VM failure: {error}"
@@ -20248,7 +19259,6 @@ seiyaku MeteredFailure {
             state_transaction.last_tx_gas_used
         );
     }
-
     #[test]
     fn identityless_raw_and_proved_dispatch_reject_before_argument_decode_or_proof_work() {
         let program =
@@ -20325,7 +19335,6 @@ seiyaku IdentityRequired {
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect::<Vec<_>>()
         };
-
         for (label, transaction) in [("raw", raw), ("proved", proved)] {
             let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
             let mut state_tx = block.transaction();
@@ -20357,7 +19366,6 @@ seiyaku IdentityRequired {
             );
         }
     }
-
     fn contract_permission_context(
         contract_address: ContractAddress,
         entrypoint: &str,
@@ -20373,7 +19381,6 @@ seiyaku IdentityRequired {
             argument_record: None,
         }
     }
-
     #[test]
     fn contract_invocation_rejects_a_live_code_rebind() {
         let contract_address = ContractAddress::derive(
@@ -20393,7 +19400,6 @@ seiyaku IdentityRequired {
             entrypoint: "run".to_owned(),
             arguments: None,
         };
-
         let error = ensure_contract_invocation_code_hash(&invocation, live_hash)
             .expect_err("a signed call must not cross a live code rebind");
         assert!(
@@ -20403,7 +19409,6 @@ seiyaku IdentityRequired {
             "unexpected binding error: {error}"
         );
     }
-
     #[test]
     fn contract_dispatch_context_carries_entrypoint_permission() {
         let (program, expected_entrypoint_pc) =
@@ -20413,7 +19418,6 @@ seiyaku IdentityRequired {
             Name::from_str("contract_entrypoint").expect("static name"),
             Json::new("admin".to_owned()),
         );
-
         let metadata_context = parse_contract_call_execution_context(&metadata, &program)
             .expect("parse metadata dispatch")
             .expect("metadata dispatch context");
@@ -20426,7 +19430,6 @@ seiyaku IdentityRequired {
             metadata_context.entrypoint_permission(),
             Some("ContractAdmin")
         );
-
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
                 .parse()
@@ -20458,7 +19461,6 @@ seiyaku IdentityRequired {
             Some("ContractAdmin")
         );
     }
-
     #[test]
     fn nested_contract_dispatch_accepts_view_without_relaxing_top_level_calls() {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
@@ -20485,7 +19487,6 @@ seiyaku IdentityRequired {
             entrypoint: "configuration".to_owned(),
             arguments: None,
         };
-
         let top_level_err = parse_prepared_contract_invocation_execution_context(
             &invocation,
             &prepared,
@@ -20498,7 +19499,6 @@ seiyaku IdentityRequired {
             top_level_err,
             ValidationFail::NotPermitted(message) if message.contains("read-only")
         ));
-
         let nested = parse_prepared_nested_contract_invocation_execution_context(
             &invocation,
             &prepared,
@@ -20513,7 +19513,6 @@ seiyaku IdentityRequired {
             nested.entrypoint_permission(),
             Some("CanInspectConfiguration")
         );
-
         for (selector, kind) in [
             ("hajimari", EntryPointKind::Hajimari),
             ("始まり", EntryPointKind::Hajimari),
@@ -20543,7 +19542,6 @@ seiyaku IdentityRequired {
             );
         }
     }
-
     #[test]
     fn prepared_view_resolver_accepts_only_views_and_preserves_exact_permission() {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
@@ -20565,7 +19563,6 @@ seiyaku IdentityRequired {
             resolve_prepared_contract_entrypoint(&prepared, "inspect").is_err(),
             "transaction resolution must continue to reject read-only views"
         );
-
         for (selector, kind) in [
             ("write", EntryPointKind::Kotoage),
             ("hajimari", EntryPointKind::Hajimari),
@@ -20586,7 +19583,6 @@ seiyaku IdentityRequired {
             );
         }
     }
-
     #[test]
     fn prepared_resolvers_reject_private_witness_entrypoints_before_host_execution() {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
@@ -20611,7 +19607,6 @@ seiyaku IdentityRequired {
                 "unexpected private-input admission error: {error}"
             );
         }
-
         let view_program =
             contract_program_with_private_input_entrypoint("inspect", EntryPointKind::View);
         let view_contract = ivm::prepare_contract(Arc::<[u8]>::from(view_program))
@@ -20626,7 +19621,6 @@ seiyaku IdentityRequired {
             "unexpected private-input view error: {error}"
         );
     }
-
     #[test]
     fn raw_contract_dispatch_rejects_lifecycle_entrypoints() {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
@@ -20641,7 +19635,6 @@ seiyaku IdentityRequired {
                 Name::from_str("contract_entrypoint").expect("static name"),
                 Json::new(selector.to_owned()),
             );
-
             let error = parse_contract_call_execution_context(&metadata, &program)
                 .expect_err("raw transaction dispatch must not invoke lifecycle hooks");
             assert!(
@@ -20649,7 +19642,6 @@ seiyaku IdentityRequired {
             );
         }
     }
-
     #[test]
     fn top_level_contract_invocation_uses_branded_lifecycle_permissions() {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
@@ -20696,7 +19688,6 @@ seiyaku IdentityRequired {
             );
         }
     }
-
     #[test]
     fn contract_transaction_dispatch_rejects_view_entrypoints() {
         use iroha_data_model::smart_contract::manifest::EntryPointKind;
@@ -20708,7 +19699,6 @@ seiyaku IdentityRequired {
             Name::from_str("contract_entrypoint").expect("static name"),
             Json::new("inspect".to_owned()),
         );
-
         let err = parse_contract_call_execution_context(&metadata, &program)
             .expect_err("view transaction dispatch must reject");
         assert!(matches!(
@@ -20717,12 +19707,10 @@ seiyaku IdentityRequired {
                 if message.contains("read-only")
         ));
     }
-
     #[test]
     fn contract_dispatch_context_rejects_implicit_main_for_self_describing_artifact() {
         let (program, _) = contract_program_with_entrypoint("main", Some("ContractAdmin"));
         let metadata = Metadata::default();
-
         let err = parse_contract_call_execution_context(&metadata, &program)
             .expect_err("implicit main dispatch must reject");
         assert!(matches!(
@@ -20731,16 +19719,13 @@ seiyaku IdentityRequired {
                 if message.contains("require explicit contract_entrypoint")
         ));
     }
-
     #[test]
     fn contract_dispatch_context_keeps_generic_raw_ivm_without_selector_unclassified() {
         let metadata = Metadata::default();
         let context = parse_contract_call_execution_context(&metadata, &generate_ok_program())
             .expect("parse generic raw ivm context");
-
         assert!(context.is_none());
     }
-
     #[test]
     fn direct_generic_ivm_remains_reachable_and_rejects_contract_metadata() {
         let chain_id = ChainId::from("generic-direct-ivm");
@@ -20779,7 +19764,6 @@ seiyaku IdentityRequired {
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0));
         let mut state_transaction = block.transaction();
         let mut ivm_cache = IvmCache::new();
-
         super::Executor::Initial
             .execute_transaction(
                 &mut state_transaction,
@@ -20788,7 +19772,6 @@ seiyaku IdentityRequired {
                 &mut ivm_cache,
             )
             .expect("contract-less generic IVM must execute at pc zero");
-
         let mut reserved_metadata = generic_metadata;
         reserved_metadata.insert(
             "contract_manifest"
@@ -20808,7 +19791,6 @@ seiyaku IdentityRequired {
             error.to_string().contains("reserved `contract_manifest`"),
             "unexpected generic-metadata rejection: {error}"
         );
-
         state_transaction.world.contract_manifests.insert(
             generic_code_hash,
             iroha_data_model::smart_contract::manifest::ContractManifest {
@@ -20840,7 +19822,6 @@ seiyaku IdentityRequired {
             .world
             .contract_manifests
             .remove(generic_code_hash);
-
         state_transaction.pipeline.ivm_max_cycles_upper_bound = nonzero!(50_u64);
         let error = super::Executor::Initial
             .execute_transaction(
@@ -20857,6 +19838,5 @@ seiyaku IdentityRequired {
             )
         ));
     }
-
     include!("executor_contract_dispatch_tests.rs");
 }

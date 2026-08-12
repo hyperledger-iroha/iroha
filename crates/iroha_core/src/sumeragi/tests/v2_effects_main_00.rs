@@ -338,7 +338,7 @@ impl EffectRuntime for FakeRuntime {
         &mut self,
         tag: EventTag,
         manifest: &wire::PayloadManifest,
-    ) -> Result<RuntimeEffectOwnership, String> {
+    ) -> Result<LocalProposalEffectOwnership, String> {
         let mut semantic = Vec::from(b"body-pipeline".as_slice());
         semantic.extend_from_slice(&manifest.round.encode());
         semantic.extend_from_slice(&manifest.subject.encode());
@@ -352,14 +352,20 @@ impl EffectRuntime for FakeRuntime {
             self.effect_owners.insert(identity, ownership.clone());
             ownership
         };
-        let effect = AdapterEffect::StoreBody {
+        let store_effect = AdapterEffect::StoreBody {
             tag,
             round: manifest.round,
             subject: manifest.subject,
         };
-        bind_adapter_effect_batch_ownership(std::slice::from_ref(&effect), vec![ownership])?
-            .pop()
-            .ok_or_else(|| "fake local proposal StoreBody binding was empty".to_owned())
+        let raw = bind_adapter_effect_batch_ownership(
+            std::slice::from_ref(&store_effect),
+            vec![ownership],
+        )?
+        .pop()
+        .ok_or_else(|| "fake local proposal StoreBody binding was empty".to_owned())?;
+        LocalProposalEffectOwnership::for_test(raw, &store_effect, manifest).ok_or_else(|| {
+            "fake local proposal StoreBody replay seal did not match its owner".to_owned()
+        })
     }
 
     fn take_scheduler_ownership(&mut self) -> Result<(), String> {

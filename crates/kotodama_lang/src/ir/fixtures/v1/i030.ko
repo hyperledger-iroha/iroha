@@ -1,0 +1,11 @@
+
+            seiyaku Demo {
+                #[test]
+                fn drive_helpers() {
+                    let acct = test::actor_account("issuer");
+                    let pk = test::actor_public_key("issuer");
+                    let sig = test::actor_sign("issuer", b"demo");
+                    let _ = (acct, pk, sig);
+                }
+            }
+        

@@ -112,7 +112,7 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
             kind == "theorem"
             for _, kind, _, _ in checker._top_level_declarations(sources[recovery])
         )
-        == 150
+        == 146
     )
     boundary_continuation_theorems = tuple(
         name
@@ -127,7 +127,7 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
             kind == "theorem"
             for _, kind, _, _ in checker._top_level_declarations(sources[continuation])
         )
-        == 24
+        == 28
     )
     corridor_theorems = [
         name
@@ -160,7 +160,7 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
         + sources[continuation][len(continuation_header) : -len(footer)]
     )
     assert hashlib.sha256(combined_body.encode("utf-8")).hexdigest() == (
-        "6705cf2c69b1c2e81b9e30596d3c9bd81cbf38032caaebf15c92010ffb533997"
+        "b65d1129d878e583e0628a236670e648f3697f0644bf8f7d739b15db86dd8945"
     )
 
     errors, providers = checker._async_liveness_shard_contract(sources)
@@ -169,6 +169,7 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
         providers[theorem] == boundary_continuation
         for theorem in RECOVERY_BOUNDARY_CONTINUATION_THEOREMS
     )
+    assert providers["AsyncNextPreservesCandidateLifecycleSchedulerCoverage"] == recovery
     for theorem in (
         "AsyncTimeoutRecoveryEpisodeAfterTransitionPreservesCurrentBoundary",
         "AsyncNextPreservesStrongTypeInvariant",
@@ -177,6 +178,10 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
     ):
         assert providers[theorem] == boundary_continuation
     for theorem in (
+        "AsyncServeProducerEpisodeTransitionPreservesTypeInvariant",
+        "AsyncStrongTypeProjectsControlServiceStateType",
+        "FreshReplayCandidateIsDisjointFromScheduled",
+        "ReplayingOrdinaryStepPreservesRecoveryCorridor",
         "HistoricalVoteAdmissionIsExactLockedCommit",
         "HistoricalCommitFormationIsExactLockedRound",
         "HistoricalLockedCommitUsesProgressReserve",
@@ -186,6 +191,19 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
     assert checker._module_extends(sources[boundary_continuation]) == (recovery,)
     assert checker._module_extends(sources[continuation]) == (boundary_continuation,)
     assert checker._module_extends(sources[fair_service]) == (continuation,)
+    sources[recovery] = sources[recovery].replace(
+        footer,
+        "".join(
+                f"THEOREM ReviewedRecoveryCeilingMutation{index} == TRUE\nBY PTL\n\n"
+                for index in range(5)
+        ) + footer,
+        1,
+    )
+    errors, _ = checker._async_liveness_shard_contract(sources)
+    assert any(
+        f"{recovery}.tla exceeds 150 top-level theorems: found 151" in error
+        for error in errors
+    ), errors
 
     base_seals = checker._TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256[f"{recovery}.tla"]
     boundary_continuation_seals = checker._TIMEOUT_VOTE_EPISODE_TLA_THEOREM_SHA256[
@@ -222,6 +240,9 @@ def test_recovery_boundary_partition_rejects_wrong_ownership() -> None:
     first_start = sources[boundary_continuation].index(first_marker)
     first_end = sources[boundary_continuation].index(second_marker)
     first_theorem = sources[boundary_continuation][first_start:first_end]
+    seventh_marker = f"THEOREM {RECOVERY_BOUNDARY_CONTINUATION_THEOREMS[6]} =="
+    first_six_end = sources[boundary_continuation].index(seventh_marker)
+    first_six_theorems = sources[boundary_continuation][first_start:first_six_end]
 
     omitted = dict(sources)
     omitted[boundary_continuation] = omitted[boundary_continuation].replace(
@@ -244,10 +265,10 @@ def test_recovery_boundary_partition_rejects_wrong_ownership() -> None:
 
     wrong_shard = dict(sources)
     wrong_shard[recovery] = wrong_shard[recovery].replace(
-        footer, first_theorem + footer, 1
+        footer, first_six_theorems + footer, 1
     )
     wrong_shard[boundary_continuation] = wrong_shard[boundary_continuation].replace(
-        first_theorem, "", 1
+        first_six_theorems, "", 1
     )
     errors, providers = checker._async_liveness_shard_contract(wrong_shard)
     assert providers[RECOVERY_BOUNDARY_CONTINUATION_THEOREMS[0]] == recovery
@@ -331,7 +352,7 @@ def test_global_mechanical_body_reconstruction_is_exact() -> None:
         checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256
     )
     assert checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 == (
-        "429688a8ab3b0ec5d4359d0a1f266ec50f3b75c136fa06a641a2be2a9afecefc"
+        "ee6735723a4cd1aa6f4a061a7d15dc857b5cc90dec095c6d6a081e7564e53922"
     )
 
 

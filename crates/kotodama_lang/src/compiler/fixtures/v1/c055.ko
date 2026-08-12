@@ -1,0 +1,10 @@
+
+seiyaku CompilerFixture {
+
+kotoage fn inspect() -> int authorize("DebugContract") {
+  debug::info("ready");
+  debug::info(42);
+  return 1;
+}
+
+}

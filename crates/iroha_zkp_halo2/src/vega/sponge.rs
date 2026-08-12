@@ -92,6 +92,7 @@ impl Keccak256 {
     /// Fork the exact internal absorb state without exposing a general-purpose
     /// `Clone` capability. Both descendants retain independent zeroizing owners
     /// and produce the same digest until different suffixes are absorbed.
+    #[cfg(test)]
     pub(super) fn fork_v1(&self) -> Self {
         Self {
             state: self.state,
@@ -119,8 +120,8 @@ impl Keccak256 {
         xor_rate_block(&mut self.state, &self.pending);
         keccakf(&mut self.state);
 
-        for index in 0..output.len() {
-            output[index] = (self.state[index / 8] >> (8 * (index % 8))) as u8;
+        for (index, byte) in output.iter_mut().enumerate() {
+            *byte = (self.state[index / 8] >> (8 * (index % 8))) as u8;
         }
     }
 }
@@ -230,12 +231,14 @@ fn sponge(input: &[u8], delimiter: u8, output_len: usize) -> Vec<u8> {
 /// This keeps only one Keccak rate block in memory, which is required by the
 /// release-size deterministic RNS samplers.  Reading the same total number of
 /// bytes in any chunking produces the exact one-shot `shake256` stream.
+#[cfg(test)]
 pub(super) struct Shake256Reader {
     state: [u64; 25],
     block: [u8; KECCAK_256_RATE],
     cursor: usize,
 }
 
+#[cfg(test)]
 impl Shake256Reader {
     pub(super) fn new(input: &[u8]) -> Self {
         let mut reader = Self {
@@ -271,6 +274,7 @@ impl Shake256Reader {
     }
 }
 
+#[cfg(test)]
 impl Drop for Shake256Reader {
     fn drop(&mut self) {
         clear_sensitive_lanes_v1(&mut self.state);
@@ -402,11 +406,11 @@ mod tests {
         assert_eq!(one_shot_sponge_zeroized_drops_v1(), 2);
 
         reset_one_shot_sponge_zeroized_drops_v1();
-        let failed = (|| -> Result<(), ()> {
+        let failed: Result<(), ()> = {
             let mut state = ZeroizingSpongeStateV1::zeroed();
             absorb_and_finalize_into(b"abandoned one-shot state", 0x1f, state.as_mut_array());
             Err(())
-        })();
+        };
         assert_eq!(failed, Err(()));
         assert_eq!(one_shot_sponge_zeroized_drops_v1(), 1);
 
@@ -492,11 +496,11 @@ mod tests {
         assert_eq!(shake256_reader_zeroized_drops_v1(), 1);
 
         reset_shake256_reader_zeroized_drops_v1();
-        let failed = (|| -> Result<(), ()> {
+        let failed: Result<(), ()> = {
             let mut reader = Shake256Reader::new(b"secret abandoned sampler prefix");
             reader.read(&mut [0_u8; 17]);
             Err(())
-        })();
+        };
         assert_eq!(failed, Err(()));
         assert_eq!(shake256_reader_zeroized_drops_v1(), 1);
 

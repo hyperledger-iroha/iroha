@@ -1,0 +1,10 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  let asset = AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
+  ledger::asset::transfer_batch((context::authority(), context::authority(), asset, 5));
+  ledger::asset::transfer_batch((context::authority(), context::authority(), asset, 7));
+}
+
+}

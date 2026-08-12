@@ -139,14 +139,15 @@ pub fn write_base64_json_to(
     output: &mut dyn JsonWriteSink,
 ) -> Result<(), BoundedJsonError> {
     output.push('"')?;
-    let mut base64 = Base64Writer::new(output);
-    if base64.write_all(bytes).is_err() {
-        return Err(base64
-            .sink_error()
-            .unwrap_or(BoundedJsonError::LengthMismatch));
+    {
+        let mut base64 = Base64Writer::new(output);
+        if base64.write_all(bytes).is_err() {
+            return Err(base64
+                .sink_error()
+                .unwrap_or(BoundedJsonError::LengthMismatch));
+        }
+        base64.finish()?;
     }
-    base64.finish()?;
-    drop(base64);
     output.push('"')
 }
 
@@ -165,14 +166,15 @@ pub fn write_bare_norito_base64_json_to<T: NoritoSerialize>(
     output: &mut dyn JsonWriteSink,
 ) -> Result<(), BoundedJsonError> {
     output.push('"')?;
-    let mut base64 = Base64Writer::new(output);
-    if crate::codec::encode_adaptive_into(value, &mut base64).is_err() {
-        return Err(base64
-            .sink_error()
-            .unwrap_or(BoundedJsonError::LengthMismatch));
+    {
+        let mut base64 = Base64Writer::new(output);
+        if crate::codec::encode_adaptive_into(value, &mut base64).is_err() {
+            return Err(base64
+                .sink_error()
+                .unwrap_or(BoundedJsonError::LengthMismatch));
+        }
+        base64.finish()?;
     }
-    base64.finish()?;
-    drop(base64);
     output.push('"')
 }
 
@@ -194,14 +196,15 @@ pub fn write_canonical_base64_json_to<T: NoritoSerialize>(
     output: &mut dyn JsonWriteSink,
 ) -> Result<(), BoundedJsonError> {
     output.push('"')?;
-    let mut base64 = Base64Writer::new(output);
-    if write_canonical_to_writer(value, &mut base64).is_err() {
-        return Err(base64
-            .sink_error()
-            .unwrap_or(BoundedJsonError::LengthMismatch));
+    {
+        let mut base64 = Base64Writer::new(output);
+        if write_canonical_to_writer(value, &mut base64).is_err() {
+            return Err(base64
+                .sink_error()
+                .unwrap_or(BoundedJsonError::LengthMismatch));
+        }
+        base64.finish()?;
     }
-    base64.finish()?;
-    drop(base64);
     output.push('"')
 }
 

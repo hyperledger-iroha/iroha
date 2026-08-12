@@ -33,7 +33,6 @@ pub const VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1: usize = 8 * 1024 * 1024;
 const VERIFYING_KEY_BOX_MAX_FIELD_BYTES_V1: usize = VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1 + 16;
 /// Maximum byte length for portable verifier-key registry id fields.
 pub const VERIFYING_KEY_ID_MAX_FIELD_BYTES: usize = 256;
-
 /// Read a length‑prefixed field produced by Norito struct serializers.
 fn take_len_prefixed_slice<'a>(
     bytes: &'a [u8],
@@ -53,7 +52,6 @@ fn take_len_prefixed_slice<'a>(
     *offset = end;
     Ok(field)
 }
-
 /// Opaque zero-knowledge proof bytes tagged with a backend identifier.
 ///
 /// - `backend`: schema identifier for the proof backend (e.g., "halo2/ipa",
@@ -73,7 +71,6 @@ pub struct ProofBox {
     /// Opaque proof bytes.
     pub bytes: Vec<u8>,
 }
-
 fn proof_box_canonical_encoded_len_for_lengths_v1(
     backend_len: usize,
     proof_len: usize,
@@ -94,7 +91,6 @@ fn proof_box_canonical_encoded_len_for_lengths_v1(
         ncore::varint_len_prefix_len(proof_value_len).checked_add(proof_value_len)?;
     backend_field_len.checked_add(proof_field_len)
 }
-
 /// Return the largest proof payload that keeps the complete canonical nested
 /// [`ProofBox`] payload within [`PROOF_BOX_MAX_ENCODED_BYTES_V1`] for the
 /// supplied UTF-8 backend id.
@@ -108,7 +104,6 @@ pub fn proof_box_max_proof_bytes_v1(backend: &str) -> Option<usize> {
     {
         return None;
     }
-
     // Prefix widths make the exact size monotone but piecewise-linear. A
     // bounded binary search avoids duplicating those transition points and
     // never allocates proof storage.
@@ -127,13 +122,11 @@ pub fn proof_box_max_proof_bytes_v1(backend: &str) -> Option<usize> {
     }
     Some(lower)
 }
-
 impl ProofBox {
     /// Construct a new proof container.
     pub fn new(backend: iroha_schema::Ident, bytes: Vec<u8>) -> Self {
         Self { backend, bytes }
     }
-
     /// Return the exact canonical nested payload length of this proof box.
     #[must_use]
     pub fn canonical_encoded_len_v1(&self) -> Option<usize> {
@@ -143,13 +136,11 @@ impl ProofBox {
         )
     }
 }
-
 impl<'de> norito::NoritoDeserialize<'de> for ProofBox {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("ProofBox deserialization must succeed for canonical archives")
     }
-
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
@@ -166,7 +157,6 @@ impl<'de> norito::NoritoDeserialize<'de> for ProofBox {
         Ok(value)
     }
 }
-
 impl<'a> ncore::DecodeFromSlice<'a> for ProofBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         let mut offset = 0usize;
@@ -202,7 +192,6 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofBox {
         ))
     }
 }
-
 /// Opaque verifying key bytes tagged with a backend identifier.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -216,20 +205,17 @@ pub struct VerifyingKeyBox {
     /// Opaque verifying key bytes.
     pub bytes: Vec<u8>,
 }
-
 impl VerifyingKeyBox {
     /// Construct a new verifying key container.
     pub fn new(backend: iroha_schema::Ident, bytes: Vec<u8>) -> Self {
         Self { backend, bytes }
     }
 }
-
 impl<'de> norito::NoritoDeserialize<'de> for VerifyingKeyBox {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("VerifyingKeyBox deserialization must succeed for canonical archives")
     }
-
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
@@ -246,7 +232,6 @@ impl<'de> norito::NoritoDeserialize<'de> for VerifyingKeyBox {
         Ok(value)
     }
 }
-
 impl<'a> ncore::DecodeFromSlice<'a> for VerifyingKeyBox {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         let mut offset = 0usize;
@@ -275,7 +260,6 @@ impl<'a> ncore::DecodeFromSlice<'a> for VerifyingKeyBox {
         ))
     }
 }
-
 /// Identifier for a registered verifying key in WSV.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -289,7 +273,6 @@ pub struct VerifyingKeyId {
     /// Human-readable key name under backend namespace.
     pub name: String,
 }
-
 impl VerifyingKeyId {
     /// Create a new verifying key identifier using an explicit backend namespace and name.
     pub fn new(backend: impl Into<iroha_schema::Ident>, name: impl Into<String>) -> Self {
@@ -298,7 +281,6 @@ impl VerifyingKeyId {
             name: name.into(),
         }
     }
-
     /// Returns true when both id components use bounded portable registry syntax.
     #[must_use]
     pub fn is_portable_registry_id(&self) -> bool {
@@ -306,7 +288,6 @@ impl VerifyingKeyId {
             && verifying_key_id_field_is_portable(&self.name)
     }
 }
-
 /// Returns true when a verifier-key registry id component is bounded and portable.
 #[must_use]
 pub fn verifying_key_id_field_is_portable(field: &str) -> bool {
@@ -314,31 +295,25 @@ pub fn verifying_key_id_field_is_portable(field: &str) -> bool {
         && field.len() <= VERIFYING_KEY_ID_MAX_FIELD_BYTES
         && crate::zk::open_verify_circuit_id_is_portable(field)
 }
-
 impl<'a> ncore::DecodeFromSlice<'a> for VerifyingKeyId {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         let mut offset = 0usize;
-
         let backend_bytes = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
         let (backend, used) = <Ident as ncore::DecodeFromSlice>::decode_from_slice(backend_bytes)?;
         if used != backend_bytes.len() {
             return Err(ncore::Error::LengthMismatch);
         }
-
         let name_bytes = take_len_prefixed_slice(bytes, &mut offset, MAX_REF_FIELD_BYTES)?;
         let (name, used) = <String as ncore::DecodeFromSlice>::decode_from_slice(name_bytes)?;
         if used != name_bytes.len() {
             return Err(ncore::Error::LengthMismatch);
         }
-
         if offset != bytes.len() {
             return Err(ncore::Error::LengthMismatch);
         }
-
         Ok((Self { backend, name }, offset))
     }
 }
-
 /// Registry record for a verifying key with governance versioning.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -397,7 +372,6 @@ pub struct VerifyingKeyRecord {
     /// Status of the verifying key record.
     pub status: ConfidentialStatus,
 }
-
 impl VerifyingKeyRecord {
     /// Create a new verifier record with baseline metadata. Optional fields
     /// default to `None` and can be filled in by governance instructions.
@@ -421,7 +395,6 @@ impl VerifyingKeyRecord {
             commitment,
         )
     }
-
     /// Create a new verifier record with explicit owner/namespace metadata.
     #[must_use]
     #[allow(clippy::too_many_arguments)]
@@ -455,13 +428,11 @@ impl VerifyingKeyRecord {
             status: ConfidentialStatus::Proposed,
         }
     }
-
     /// Returns true if the record is permitted for verification at the current height.
     #[must_use]
     pub fn is_active(&self) -> bool {
         self.status.is_active()
     }
-
     /// Returns true if the record is permitted for verification at `height`.
     #[must_use]
     pub fn is_active_at(&self, height: u64) -> bool {
@@ -474,7 +445,6 @@ impl VerifyingKeyRecord {
                 .is_none_or(|withdraw| height < withdraw)
     }
 }
-
 /// Attachment of a zero-knowledge proof to a transaction.
 ///
 /// Proof attachments carry only a registry reference to the verifying key.
@@ -519,7 +489,6 @@ pub struct ProofAttachment {
     #[norito(default)]
     pub lane_privacy: Option<crate::nexus::LanePrivacyProof>,
 }
-
 impl ProofAttachment {
     /// Construct an attachment referencing a verifying key stored in WSV.
     pub fn new_ref(backend: Ident, proof: ProofBox, vk_ref: VerifyingKeyId) -> Self {
@@ -532,7 +501,6 @@ impl ProofAttachment {
             lane_privacy: None,
         }
     }
-
     fn backend_consistency_error(&self) -> Option<&'static str> {
         if self.proof.backend != self.backend {
             Some("proof.backend")
@@ -542,7 +510,6 @@ impl ProofAttachment {
             None
         }
     }
-
     /// Return the first structural field error for this attachment, if any.
     ///
     /// This predicate is intentionally pure and layout-neutral so Norito
@@ -556,7 +523,6 @@ impl ProofAttachment {
             |field| Some((field, "must match attachment backend")),
         )
     }
-
     fn field_content_error(&self) -> Option<(&'static str, &'static str)> {
         if self.backend.as_str().trim().is_empty() {
             Some(("backend", "must be non-empty"))
@@ -605,10 +571,8 @@ impl ProofAttachment {
         }
     }
 }
-
 #[cfg(feature = "json")]
 const PROOF_ATTACHMENT_JSON_HASH_LITERAL_BYTES_V1: usize = 74;
-
 #[cfg(feature = "json")]
 fn proof_attachment_json_value_invalid(
     field: &'static str,
@@ -619,7 +583,6 @@ fn proof_attachment_json_value_invalid(
         message: message.into(),
     }
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_json_value_object<'a>(
     value: &'a norito::json::Value,
@@ -629,7 +592,6 @@ fn proof_attachment_json_value_object<'a>(
         .as_object()
         .ok_or_else(|| proof_attachment_json_value_invalid(field, "expected object"))
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_json_value_exact_fields(
     object: &norito::json::Map,
@@ -647,7 +609,6 @@ fn proof_attachment_json_value_exact_fields(
     }
     Ok(())
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_json_value_required<'a>(
     object: &'a norito::json::Map,
@@ -657,7 +618,6 @@ fn proof_attachment_json_value_required<'a>(
         .get(field)
         .ok_or_else(|| norito::json::Error::missing_field(field))
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_json_value_string<'a>(
     value: &'a norito::json::Value,
@@ -675,7 +635,6 @@ fn proof_attachment_json_value_string<'a>(
     }
     Ok(value)
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_json_value_u64(
     value: &norito::json::Value,
@@ -690,7 +649,6 @@ fn proof_attachment_json_value_u64(
         })?;
     Ok(value)
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_json_value_byte_array(
     value: &norito::json::Value,
@@ -719,14 +677,12 @@ fn proof_attachment_json_value_byte_array(
     }
     Ok(())
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_json_value_preflight_lane(
     value: &norito::json::Value,
 ) -> Result<(), norito::json::Error> {
     let lane = proof_attachment_json_value_object(value, "lane_privacy")?;
     proof_attachment_json_value_exact_fields(lane, &["commitment_id", "witness"], "lane_privacy")?;
-
     let commitment_id = proof_attachment_json_value_required(lane, "commitment_id")?
         .as_array()
         .ok_or_else(|| {
@@ -746,7 +702,6 @@ fn proof_attachment_json_value_preflight_lane(
         "lane_privacy.commitment_id",
         u64::from(u16::MAX),
     )?;
-
     let witness = proof_attachment_json_value_object(
         proof_attachment_json_value_required(lane, "witness")?,
         "lane_privacy.witness",
@@ -761,7 +716,6 @@ fn proof_attachment_json_value_preflight_lane(
         "lane_privacy.witness.kind",
         16,
     )?;
-
     let payload = proof_attachment_json_value_object(
         proof_attachment_json_value_required(witness, "payload")?,
         "lane_privacy.witness.payload",
@@ -777,7 +731,6 @@ fn proof_attachment_json_value_preflight_lane(
         Some(32),
         32,
     )?;
-
     let proof = proof_attachment_json_value_object(
         proof_attachment_json_value_required(payload, "proof")?,
         "lane_privacy.witness.payload.proof",
@@ -815,7 +768,6 @@ fn proof_attachment_json_value_preflight_lane(
     }
     Ok(())
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_json_value_preflight<const MAX_PROOF_BYTES: usize>(
     value: &norito::json::Value,
@@ -838,7 +790,6 @@ fn proof_attachment_json_value_preflight<const MAX_PROOF_BYTES: usize>(
         "backend",
         VERIFYING_KEY_ID_MAX_FIELD_BYTES,
     )?;
-
     let proof = proof_attachment_json_value_object(
         proof_attachment_json_value_required(attachment, "proof")?,
         "proof",
@@ -863,7 +814,6 @@ fn proof_attachment_json_value_preflight<const MAX_PROOF_BYTES: usize>(
         None,
         maximum_proof_bytes,
     )?;
-
     let vk_ref = proof_attachment_json_value_object(
         proof_attachment_json_value_required(attachment, "vk_ref")?,
         "vk_ref",
@@ -880,7 +830,6 @@ fn proof_attachment_json_value_preflight<const MAX_PROOF_BYTES: usize>(
             VERIFYING_KEY_ID_MAX_FIELD_BYTES,
         )?;
     }
-
     for field in ["vk_commitment", "envelope_hash"] {
         if let Some(value) = attachment.get(field) {
             proof_attachment_json_value_byte_array(value, field, Some(32), 32)?;
@@ -891,7 +840,6 @@ fn proof_attachment_json_value_preflight<const MAX_PROOF_BYTES: usize>(
     }
     Ok(())
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_json_mark_field(
     seen: &mut u8,
@@ -904,7 +852,6 @@ fn proof_attachment_json_mark_field(
     *seen |= field_bit;
     Ok(())
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_json_unknown_field(field: &str, parent: &str) -> norito::json::Error {
     let qualified = if parent.is_empty() {
@@ -927,12 +874,10 @@ fn proof_attachment_json_unknown_field(field: &str, parent: &str) -> norito::jso
         }
     }
 }
-
 /// A string whose exact decoded UTF-8 length is bounded before an owned
 /// allocation is created.
 #[cfg(feature = "json")]
 struct ProofAttachmentJsonBoundedStringV1<const MAX: usize>(String);
-
 #[cfg(feature = "json")]
 impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonBoundedStringV1<MAX> {
     fn json_deserialize(
@@ -940,7 +885,6 @@ impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonBoun
     ) -> Result<Self, norito::json::Error> {
         let mut probe = *parser;
         probe.skip_string_bounded(MAX)?;
-
         let value = String::json_deserialize(parser)?;
         if value.len() > MAX {
             return Err(norito::json::Error::Message(format!(
@@ -950,10 +894,8 @@ impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonBoun
         Ok(Self(value))
     }
 }
-
 #[cfg(feature = "json")]
 struct ProofAttachmentJsonBytes32V1([u8; 32]);
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ProofAttachmentJsonBytes32V1 {
     fn json_deserialize(
@@ -979,7 +921,6 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonBytes32V1 {
         Ok(Self(bytes))
     }
 }
-
 /// Streaming byte-array decoder used for proof payloads. The length check is
 /// performed before reserving or pushing the next byte, so an over-limit
 /// element can never grow the output allocation.
@@ -987,7 +928,6 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonBytes32V1 {
 struct ProofAttachmentJsonBoundedBytesVisitorV1 {
     maximum: usize,
 }
-
 #[cfg(feature = "json")]
 impl ProofAttachmentJsonBoundedBytesVisitorV1 {
     fn expected_array() -> norito::json::Error {
@@ -997,42 +937,33 @@ impl ProofAttachmentJsonBoundedBytesVisitorV1 {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl<'a> norito::json::Visitor<'a> for ProofAttachmentJsonBoundedBytesVisitorV1 {
     type Value = Vec<u8>;
-
     fn visit_null(self) -> Result<Self::Value, norito::json::Error> {
         Err(Self::expected_array())
     }
-
     fn visit_bool(self, _value: bool) -> Result<Self::Value, norito::json::Error> {
         Err(Self::expected_array())
     }
-
     fn visit_i64(self, _value: i64) -> Result<Self::Value, norito::json::Error> {
         Err(Self::expected_array())
     }
-
     fn visit_u64(self, _value: u64) -> Result<Self::Value, norito::json::Error> {
         Err(Self::expected_array())
     }
-
     fn visit_f64(self, _value: f64) -> Result<Self::Value, norito::json::Error> {
         Err(Self::expected_array())
     }
-
     fn visit_string(self, _value: String) -> Result<Self::Value, norito::json::Error> {
         Err(Self::expected_array())
     }
-
     fn visit_map(
         self,
         _visitor: norito::json::MapVisitor<'a, '_>,
     ) -> Result<Self::Value, norito::json::Error> {
         Err(Self::expected_array())
     }
-
     fn visit_seq(
         self,
         mut sequence: norito::json::SeqVisitor<'a, '_>,
@@ -1068,13 +999,11 @@ impl<'a> norito::json::Visitor<'a> for ProofAttachmentJsonBoundedBytesVisitorV1 
         Ok(bytes)
     }
 }
-
 #[cfg(feature = "json")]
 struct ProofAttachmentJsonProofBoxV1<const MAX: usize> {
     backend: String,
     bytes: Vec<u8>,
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_json_probe_proof_backend(
     parser: &norito::json::Parser<'_>,
@@ -1104,7 +1033,6 @@ fn proof_attachment_json_probe_proof_backend(
     object.finish()?;
     backend.ok_or_else(|| norito::json::Error::missing_field("proof.backend"))
 }
-
 #[cfg(feature = "json")]
 impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonProofBoxV1<MAX> {
     fn json_deserialize(
@@ -1112,7 +1040,6 @@ impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonProo
     ) -> Result<Self, norito::json::Error> {
         const BACKEND: u8 = 1 << 0;
         const BYTES: u8 = 1 << 1;
-
         let probed_backend = proof_attachment_json_probe_proof_backend(parser)?;
         let maximum_proof_bytes = proof_box_max_proof_bytes_v1(&probed_backend)
             .ok_or_else(|| norito::json::Error::InvalidField {
@@ -1153,7 +1080,6 @@ impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonProo
             }
         }
         object.finish()?;
-
         let backend = backend.ok_or_else(|| norito::json::Error::missing_field("proof.backend"))?;
         let bytes = bytes.ok_or_else(|| norito::json::Error::missing_field("proof.bytes"))?;
         if backend != probed_backend {
@@ -1165,13 +1091,11 @@ impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonProo
         Ok(Self { backend, bytes })
     }
 }
-
 #[cfg(feature = "json")]
 struct ProofAttachmentJsonVerifyingKeyRefV1 {
     backend: String,
     name: String,
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ProofAttachmentJsonVerifyingKeyRefV1 {
     fn json_deserialize(
@@ -1179,7 +1103,6 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonVerifyingKeyRefV1 {
     ) -> Result<Self, norito::json::Error> {
         const BACKEND: u8 = 1 << 0;
         const NAME: u8 = 1 << 1;
-
         let mut object = norito::json::MapVisitor::new(parser)?;
         let mut seen = 0_u8;
         let mut backend = None;
@@ -1218,10 +1141,8 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonVerifyingKeyRefV1 {
         })
     }
 }
-
 #[cfg(feature = "json")]
 struct ProofAttachmentJsonLaneCommitmentIdV1(u16);
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneCommitmentIdV1 {
     fn json_deserialize(
@@ -1245,10 +1166,8 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneCommitmentIdV1 {
         Ok(Self(commitment_id))
     }
 }
-
 #[cfg(feature = "json")]
 struct ProofAttachmentJsonMerkleSiblingV1([u8; 32]);
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ProofAttachmentJsonMerkleSiblingV1 {
     fn json_deserialize(
@@ -1294,10 +1213,8 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonMerkleSiblingV1 {
         Ok(Self(bytes))
     }
 }
-
 #[cfg(feature = "json")]
 struct ProofAttachmentJsonAuditPathV1<const MAX: usize>(Vec<[u8; 32]>);
-
 #[cfg(feature = "json")]
 impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonAuditPathV1<MAX> {
     fn json_deserialize(
@@ -1327,13 +1244,11 @@ impl<const MAX: usize> norito::json::JsonDeserialize for ProofAttachmentJsonAudi
         Ok(Self(path))
     }
 }
-
 #[cfg(feature = "json")]
 struct ProofAttachmentJsonLaneMerkleProofV1 {
     leaf_index: u32,
     audit_path: ProofAttachmentJsonAuditPathV1<{ crate::nexus::LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 }>,
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneMerkleProofV1 {
     fn json_deserialize(
@@ -1341,7 +1256,6 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneMerkleProofV1 {
     ) -> Result<Self, norito::json::Error> {
         const LEAF_INDEX: u8 = 1 << 0;
         const AUDIT_PATH: u8 = 1 << 1;
-
         let mut object = norito::json::MapVisitor::new(parser)?;
         let mut seen = 0_u8;
         let mut leaf_index = None;
@@ -1377,13 +1291,11 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneMerkleProofV1 {
         })
     }
 }
-
 #[cfg(feature = "json")]
 struct ProofAttachmentJsonLaneMerklePayloadV1 {
     leaf: [u8; 32],
     proof: ProofAttachmentJsonLaneMerkleProofV1,
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneMerklePayloadV1 {
     fn json_deserialize(
@@ -1391,7 +1303,6 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneMerklePayloadV1 {
     ) -> Result<Self, norito::json::Error> {
         const LEAF: u8 = 1 << 0;
         const PROOF: u8 = 1 << 1;
-
         let mut object = norito::json::MapVisitor::new(parser)?;
         let mut seen = 0_u8;
         let mut leaf = None;
@@ -1425,13 +1336,11 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneMerklePayloadV1 {
         })
     }
 }
-
 #[cfg(feature = "json")]
 struct ProofAttachmentJsonLaneWitnessV1 {
     kind: String,
     payload: ProofAttachmentJsonLaneMerklePayloadV1,
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneWitnessV1 {
     fn json_deserialize(
@@ -1439,7 +1348,6 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneWitnessV1 {
     ) -> Result<Self, norito::json::Error> {
         const KIND: u8 = 1 << 0;
         const PAYLOAD: u8 = 1 << 1;
-
         let mut object = norito::json::MapVisitor::new(parser)?;
         let mut seen = 0_u8;
         let mut kind = None;
@@ -1476,13 +1384,11 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonLaneWitnessV1 {
         })
     }
 }
-
 #[cfg(feature = "json")]
 struct ProofAttachmentJsonLanePrivacyV1 {
     commitment_id: u16,
     witness: ProofAttachmentJsonLaneWitnessV1,
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ProofAttachmentJsonLanePrivacyV1 {
     fn json_deserialize(
@@ -1490,7 +1396,6 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonLanePrivacyV1 {
     ) -> Result<Self, norito::json::Error> {
         const COMMITMENT_ID: u8 = 1 << 0;
         const WITNESS: u8 = 1 << 1;
-
         let mut object = norito::json::MapVisitor::new(parser)?;
         let mut seen = 0_u8;
         let mut commitment_id = None;
@@ -1523,7 +1428,6 @@ impl norito::json::JsonDeserialize for ProofAttachmentJsonLanePrivacyV1 {
         })
     }
 }
-
 #[cfg(feature = "json")]
 impl ProofAttachmentJsonLanePrivacyV1 {
     fn into_lane_privacy_proof(
@@ -1552,7 +1456,6 @@ impl ProofAttachmentJsonLanePrivacyV1 {
         })
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ProofAttachment {
     fn json_deserialize(
@@ -1564,7 +1467,6 @@ impl norito::json::JsonDeserialize for ProofAttachment {
         const VK_COMMITMENT: u8 = 1 << 3;
         const ENVELOPE_HASH: u8 = 1 << 4;
         const LANE_PRIVACY: u8 = 1 << 5;
-
         let mut object = norito::json::MapVisitor::new(parser)?;
         let mut seen = 0_u8;
         let mut backend = None;
@@ -1614,7 +1516,6 @@ impl norito::json::JsonDeserialize for ProofAttachment {
             }
         }
         object.finish()?;
-
         let backend = backend.ok_or_else(|| norito::json::Error::missing_field("backend"))?;
         let proof = proof.ok_or_else(|| norito::json::Error::missing_field("proof"))?;
         let vk_ref = vk_ref.ok_or_else(|| norito::json::Error::missing_field("vk_ref"))?;
@@ -1636,7 +1537,6 @@ impl norito::json::JsonDeserialize for ProofAttachment {
         }
         Ok(attachment)
     }
-
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
         // A Value supplied by an API caller already owns its storage. Walk it
         // by reference first so hostile oversized fields cannot trigger the
@@ -1647,7 +1547,6 @@ impl norito::json::JsonDeserialize for ProofAttachment {
         norito::json::from_str(&canonical_json)
     }
 }
-
 impl norito::NoritoSerialize for ProofAttachment {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         fn write_prefixed<W: Write, T: norito::NoritoSerialize>(
@@ -1657,12 +1556,10 @@ impl norito::NoritoSerialize for ProofAttachment {
         ) -> Result<(), ncore::Error> {
             ncore::write_len_prefixed_exact(writer, value, scratch)
         }
-
         let mut scratch = ncore::DeriveSmallBuf::new();
         write_prefixed(writer, &self.backend, &mut scratch)?;
         write_prefixed(writer, &self.proof, &mut scratch)?;
         write_prefixed(writer, &self.vk_ref, &mut scratch)?;
-
         // Omit trailing default fields to keep payloads compact and deterministic.
         let tail = if self.lane_privacy.is_some() {
             3
@@ -1682,11 +1579,9 @@ impl norito::NoritoSerialize for ProofAttachment {
         }
         Ok(())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         fn add_field<T: norito::NoritoSerialize>(total: &mut usize, value: &T) -> Option<()> {
             let field_len = value.encoded_len_exact()?;
@@ -1695,7 +1590,6 @@ impl norito::NoritoSerialize for ProofAttachment {
                 .checked_add(field_len)?;
             Some(())
         }
-
         let mut total = 0_usize;
         add_field(&mut total, &self.backend)?;
         add_field(&mut total, &self.proof)?;
@@ -1719,13 +1613,11 @@ impl norito::NoritoSerialize for ProofAttachment {
         Some(total)
     }
 }
-
 impl<'de> norito::NoritoDeserialize<'de> for ProofAttachment {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("ProofAttachment deserialization must succeed for canonical archives")
     }
-
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
@@ -1742,31 +1634,26 @@ impl<'de> norito::NoritoDeserialize<'de> for ProofAttachment {
         Ok(value)
     }
 }
-
 impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachment {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         let mut offset = 0usize;
-
         let backend_bytes = take_len_prefixed_slice(bytes, &mut offset, MAX_BACKEND_FIELD_BYTES)?;
         let (backend, used) = <Ident as ncore::DecodeFromSlice>::decode_from_slice(backend_bytes)?;
         if used != backend_bytes.len() {
             return Err(ncore::Error::LengthMismatch);
         }
-
         let proof_slice =
             take_len_prefixed_slice(bytes, &mut offset, MAX_LEN_PREFIXED_FIELD_BYTES)?;
         let (proof, used) = <ProofBox as ncore::DecodeFromSlice>::decode_from_slice(proof_slice)?;
         if used != proof_slice.len() {
             return Err(ncore::Error::LengthMismatch);
         }
-
         let vk_ref_slice = take_len_prefixed_slice(bytes, &mut offset, MAX_REF_FIELD_BYTES)?;
         let (vk_ref, used) =
             <VerifyingKeyId as ncore::DecodeFromSlice>::decode_from_slice(vk_ref_slice)?;
         if used != vk_ref_slice.len() {
             return Err(ncore::Error::LengthMismatch);
         }
-
         // Optional fields may be omitted in compact payloads; treat missing tail as `None`.
         let mut present_tail_fields = 0_usize;
         let vk_commitment = if offset == bytes.len() {
@@ -1781,7 +1668,6 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachment {
             }
             value
         };
-
         let envelope_hash = if offset == bytes.len() {
             None
         } else {
@@ -1794,7 +1680,6 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachment {
             }
             value
         };
-
         let lane_privacy = if offset == bytes.len() {
             None
         } else {
@@ -1824,7 +1709,6 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachment {
                 "non-canonical redundant ProofAttachment optional tail".into(),
             ));
         }
-
         let attachment = Self {
             backend,
             proof,
@@ -1836,11 +1720,9 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachment {
         if let Some((field, message)) = attachment.structural_error() {
             return Err(ncore::Error::Message(format!("{field} {message}")));
         }
-
         Ok((attachment, offset))
     }
 }
-
 /// Maximum complete canonical Norito frame for a first-release proof attachment list.
 ///
 /// This intrinsic 8 MiB binary ceiling leaves room beneath Taira's governed
@@ -1853,13 +1735,11 @@ pub const PROOF_ATTACHMENT_LIST_MAX_CANONICAL_FRAME_BYTES_V1: usize = 8 * 1024 *
 ///
 /// This matches the governed `zk.halo2.verifier_max_batch` default.
 pub const PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1: usize = 16;
-
 #[cfg(test)]
 std::thread_local! {
     static PROOF_ATTACHMENT_LIST_AUTHORITATIVE_LENGTH_PASSES: std::cell::Cell<usize> =
         const { std::cell::Cell::new(0) };
 }
-
 /// Failure to construct a bounded first-release proof attachment list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ProofAttachmentListError {
@@ -1890,7 +1770,6 @@ pub enum ProofAttachmentListError {
         maximum: usize,
     },
 }
-
 /// A list of proof attachments for a transaction.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
 #[norito(reuse_archived)]
@@ -1898,7 +1777,6 @@ pub struct ProofAttachmentList(
     /// Ordered attachments that make up the proof payload.
     Vec<ProofAttachment>,
 );
-
 impl ProofAttachmentList {
     fn canonical_frame_len_from_payload_len(payload_len: usize) -> Option<usize> {
         let alignment = ncore::archived_payload_align::<Self>();
@@ -1912,10 +1790,8 @@ impl ProofAttachmentList {
             .checked_add(padding)?
             .checked_add(payload_len)
     }
-
     fn canonical_frame_len_v1(&self) -> Result<usize, ProofAttachmentListError> {
         let _canonical_flags = ncore::DecodeFlagsGuard::enter(ncore::default_encode_flags());
-
         // `ProofAttachment::serialize` stages nested fields in temporary
         // vectors. Use its allocation-free exact-length arithmetic only as a
         // fail-fast rejection gate so a caller-provided 64 MiB proof cannot
@@ -1929,7 +1805,6 @@ impl ProofAttachmentList {
         if hinted_frame_len > PROOF_ATTACHMENT_LIST_MAX_CANONICAL_FRAME_BYTES_V1 {
             return Ok(hinted_frame_len);
         }
-
         #[cfg(test)]
         PROOF_ATTACHMENT_LIST_AUTHORITATIVE_LENGTH_PASSES.with(|passes| {
             passes.set(passes.get().saturating_add(1));
@@ -1937,35 +1812,29 @@ impl ProofAttachmentList {
         ncore::encoded_frame_len(self)
             .map_err(|_| ProofAttachmentListError::CanonicalEncodingFailed)
     }
-
     #[cfg(test)]
     fn reset_authoritative_length_passes_for_current_test_thread() {
         PROOF_ATTACHMENT_LIST_AUTHORITATIVE_LENGTH_PASSES.with(|passes| passes.set(0));
     }
-
     #[cfg(test)]
     fn authoritative_length_passes_for_current_test_thread() -> usize {
         PROOF_ATTACHMENT_LIST_AUTHORITATIVE_LENGTH_PASSES.with(std::cell::Cell::get)
     }
-
     /// Borrow the ordered attachments.
     #[must_use]
     pub fn as_slice(&self) -> &[ProofAttachment] {
         &self.0
     }
-
     /// Return the attachment count.
     #[must_use]
     pub fn len(&self) -> usize {
         self.0.len()
     }
-
     /// Return the allocated attachment capacity.
     #[must_use]
     pub fn capacity(&self) -> usize {
         self.0.capacity()
     }
-
     /// Return whether this list is empty.
     ///
     /// Valid constructed values always return `false`; the method is provided
@@ -1974,13 +1843,11 @@ impl ProofAttachmentList {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-
     /// Consume the wrapper and return its ordered attachments.
     #[must_use]
     pub fn into_vec(self) -> Vec<ProofAttachment> {
         self.0
     }
-
     /// Append one attachment while preserving the first-release count and
     /// canonical-frame bounds.
     ///
@@ -2001,7 +1868,6 @@ impl ProofAttachmentList {
                 maximum: PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1,
             });
         }
-
         self.0.push(attachment);
         let validation = match self.canonical_frame_len_v1() {
             Ok(canonical_frame_len)
@@ -2021,10 +1887,8 @@ impl ProofAttachmentList {
         validation
     }
 }
-
 impl TryFrom<Vec<ProofAttachment>> for ProofAttachmentList {
     type Error = ProofAttachmentListError;
-
     fn try_from(attachments: Vec<ProofAttachment>) -> Result<Self, Self::Error> {
         if attachments.is_empty() {
             return Err(ProofAttachmentListError::Empty);
@@ -2046,7 +1910,6 @@ impl TryFrom<Vec<ProofAttachment>> for ProofAttachmentList {
         Ok(list)
     }
 }
-
 impl norito::NoritoSerialize for ProofAttachmentList {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let field_len = norito::NoritoSerialize::encoded_len_exact(&self.0)
@@ -2057,23 +1920,19 @@ impl norito::NoritoSerialize for ProofAttachmentList {
         )?;
         norito::NoritoSerialize::serialize(&self.0, writer)
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         self.encoded_len_exact()
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         let field_len = norito::NoritoSerialize::encoded_len_exact(&self.0)?;
         ncore::len_prefix_len(field_len).checked_add(field_len)
     }
 }
-
 impl<'de> norito::NoritoDeserialize<'de> for ProofAttachmentList {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("ProofAttachmentList deserialization requires a canonical bounded archive")
     }
-
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
         let bytes = ncore::payload_slice_from_ptr(ptr)?;
@@ -2084,7 +1943,6 @@ impl<'de> norito::NoritoDeserialize<'de> for ProofAttachmentList {
         Ok(list)
     }
 }
-
 impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachmentList {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         let canonical_frame_len = Self::canonical_frame_len_from_payload_len(bytes.len())
@@ -2094,7 +1952,6 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachmentList {
                 "ProofAttachmentList canonical frame exceeds the first-release byte limit".into(),
             ));
         }
-
         let mut offset = 0_usize;
         let field = take_len_prefixed_slice(
             bytes,
@@ -2104,7 +1961,6 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachmentList {
         if offset != bytes.len() {
             return Err(ncore::Error::LengthMismatch);
         }
-
         // Inspect the fixed V1 sequence count before Vec's planner can reserve
         // storage or inspect attacker-controlled element spans.
         let (attachments, _) = ncore::inspect_seq_len_slice(field)?;
@@ -2118,7 +1974,6 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachmentList {
                 "ProofAttachmentList attachment count {attachments} exceeds the first-release maximum of {PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1}"
             )));
         }
-
         let (attachments, used) =
             <Vec<ProofAttachment> as ncore::DecodeFromSlice>::decode_from_slice(field)?;
         if used != field.len() {
@@ -2129,7 +1984,6 @@ impl<'a> ncore::DecodeFromSlice<'a> for ProofAttachmentList {
         Ok((list, offset))
     }
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_list_base64_encoded_len(decoded_len: usize) -> Option<usize> {
     decoded_len
@@ -2137,7 +1991,6 @@ fn proof_attachment_list_base64_encoded_len(decoded_len: usize) -> Option<usize>
         .and_then(|length| length.checked_div(3))
         .and_then(|length| length.checked_mul(4))
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_list_base64_sextet(byte: u8) -> Option<u8> {
     match byte {
@@ -2149,7 +2002,6 @@ fn proof_attachment_list_base64_sextet(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_list_json_error(message: &'static str) -> norito::json::Error {
     norito::json::Error::InvalidField {
@@ -2157,7 +2009,6 @@ fn proof_attachment_list_json_error(message: &'static str) -> norito::json::Erro
         message: message.into(),
     }
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_list_base64_decoded_len(
     encoded: &str,
@@ -2173,7 +2024,6 @@ fn proof_attachment_list_base64_decoded_len(
             "base64 token has a non-canonical length",
         ));
     }
-
     let padding = match encoded.as_bytes() {
         [.., b'=', b'='] => 2,
         [.., b'='] => 1,
@@ -2190,7 +2040,6 @@ fn proof_attachment_list_base64_decoded_len(
             "expected canonical padded standard base64",
         ));
     }
-
     let tail_is_canonical = match padding {
         0 => true,
         1 => {
@@ -2210,7 +2059,6 @@ fn proof_attachment_list_base64_decoded_len(
             "base64 token has non-canonical tail bits",
         ));
     }
-
     let decoded_len = encoded
         .len()
         .checked_div(4)
@@ -2224,7 +2072,6 @@ fn proof_attachment_list_base64_decoded_len(
     }
     Ok(decoded_len)
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_list_borrowed_base64_token<'a>(
     parser: &mut norito::json::Parser<'a>,
@@ -2248,7 +2095,6 @@ fn proof_attachment_list_borrowed_base64_token<'a>(
     let decoded_len = proof_attachment_list_base64_decoded_len(encoded, maximum_decoded_bytes)?;
     Ok((encoded, decoded_len))
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_list_validate_limits(
     canonical_frame_bytes: usize,
@@ -2273,7 +2119,6 @@ fn proof_attachment_list_validate_limits(
     }
     Ok(())
 }
-
 #[cfg(feature = "json")]
 fn proof_attachment_list_frame_attachment_count(
     canonical_frame: &[u8],
@@ -2295,7 +2140,6 @@ fn proof_attachment_list_frame_attachment_count(
         .filter(|start| *start >= ncore::Header::SIZE)
         .ok_or_else(|| proof_attachment_list_json_error("truncated Norito frame payload"))?;
     let payload = &canonical_frame[payload_start..];
-
     // ProofAttachmentList is a one-field tuple struct. Canonical V1 uses one
     // compact field length followed by the Vec's fixed-width sequence count
     // and elements. This mirrors the bounded custom Norito decoder.
@@ -2317,13 +2161,11 @@ fn proof_attachment_list_frame_attachment_count(
     })?;
     Ok(attachments)
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for ProofAttachmentList {
     fn json_serialize(&self, out: &mut String) {
         norito::json::write_canonical_base64_json(self, out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -2331,7 +2173,6 @@ impl norito::json::JsonSerialize for ProofAttachmentList {
         norito::json::write_canonical_base64_json_to(self, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ProofAttachmentList {
     fn json_deserialize(
@@ -2366,7 +2207,6 @@ impl norito::json::JsonDeserialize for ProofAttachmentList {
         )?;
         Ok(list)
     }
-
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
         let encoded = value
             .as_str()
@@ -2379,7 +2219,6 @@ impl norito::json::JsonDeserialize for ProofAttachmentList {
         norito::json::from_str(&canonical_json)
     }
 }
-
 /// Identifier of a proof for storage and deduplication.
 /// Combines backend identifier with a stable 32-byte proof hash.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
@@ -2397,7 +2236,6 @@ pub struct ProofId {
     )]
     pub proof_hash: [u8; 32],
 }
-
 #[inline]
 fn hex_val(c: u8) -> Option<u8> {
     match c {
@@ -2407,7 +2245,6 @@ fn hex_val(c: u8) -> Option<u8> {
         _ => None,
     }
 }
-
 impl core::fmt::Display for ProofId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         // Print as backend:HEX
@@ -2418,14 +2255,12 @@ impl core::fmt::Display for ProofId {
         Ok(())
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for ProofId {
     fn json_serialize(&self, out: &mut String) {
         let repr = self.to_string();
         norito::json::JsonSerialize::json_serialize(&repr, out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -2455,7 +2290,6 @@ impl norito::json::JsonSerialize for ProofId {
             }
             Ok(())
         }
-
         const UPPER_HEX: &[u8; 16] = b"0123456789ABCDEF";
         out.push('"')?;
         write_escaped_fragment(self.backend.as_str(), out)?;
@@ -2467,10 +2301,8 @@ impl norito::json::JsonSerialize for ProofId {
         out.push('"')
     }
 }
-
 impl core::str::FromStr for ProofId {
     type Err = &'static str;
-
     /// Parse a stable string form produced by Display: `"<backend>:<hex32bytes>"`.
     ///
     /// - `backend` is parsed as `iroha_schema::Ident` (verbatim substring before the last ':').
@@ -2500,7 +2332,6 @@ impl core::str::FromStr for ProofId {
         })
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ProofId {
     fn json_deserialize(
@@ -2512,7 +2343,6 @@ impl norito::json::JsonDeserialize for ProofId {
             .map_err(|err: &str| norito::json::Error::Message(err.to_owned()))
     }
 }
-
 #[cfg(test)]
 mod parse_tests {
     use super::*;
@@ -2541,19 +2371,16 @@ mod parse_tests {
         let parsed3 = with0x.parse::<ProofId>().expect("parse 0x");
         assert_eq!(parsed3, id);
     }
-
     #[test]
     fn proof_id_parse_roundtrips_backend_labels_with_colons() {
         let id = ProofId {
             backend: "halo2/ipa:colon-profile".into(),
             proof_hash: [0xCD; 32],
         };
-
         let parsed = id.to_string().parse::<ProofId>().expect("parse");
         assert_eq!(parsed, id);
     }
 }
-
 /// Verification status of a submitted proof artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -2565,7 +2392,6 @@ pub enum ProofStatus {
     /// Proof failed to verify.
     Rejected,
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonSerialize for ProofStatus {
     fn json_serialize(&self, out: &mut String) {
@@ -2576,7 +2402,6 @@ impl norito::json::JsonSerialize for ProofStatus {
         };
         norito::json::write_json_string(label, out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn norito::json::JsonWriteSink,
@@ -2589,7 +2414,6 @@ impl norito::json::JsonSerialize for ProofStatus {
         norito::json::write_json_string_to(label, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ProofStatus {
     fn json_deserialize(
@@ -2604,7 +2428,6 @@ impl norito::json::JsonDeserialize for ProofStatus {
         }
     }
 }
-
 /// Stored record for a proof verification outcome.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -2633,7 +2456,6 @@ pub struct ProofRecord {
     /// Optional bridge-proof payload and metadata when the proof records a bridge artifact.
     pub bridge: Option<crate::bridge::BridgeProofRecord>,
 }
-
 /// Wrapper for attaching an optional proof to a committed transaction response.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
@@ -2643,14 +2465,12 @@ pub struct ProofedCommittedTransaction {
     /// Optional proof attached to the transaction result.
     pub proof: Option<ProofBox>,
 }
-
 impl ProofedCommittedTransaction {
     /// Wrap a committed transaction with an optional proof payload.
     pub fn new(base: crate::query::CommittedTransaction, proof: Option<ProofBox>) -> Self {
         Self { base, proof }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Hash, HashOf, LaneCommitmentId, MerkleProof};
@@ -2663,11 +2483,9 @@ mod tests {
         ncore::write_len_header_to_vec(encoded, field.len() as u64);
         encoded.extend_from_slice(&field);
     }
-
     fn proof_bytes_hash(bytes: &[u8]) -> [u8; 32] {
         iroha_crypto::Hash::new(bytes).into()
     }
-
     #[cfg(feature = "json")]
     fn hash_json(hash: &[u8; 32]) -> String {
         let body = hash
@@ -2677,7 +2495,6 @@ mod tests {
             .join(", ");
         format!("[{body}]")
     }
-
     fn lane_privacy_with_path(
         leaf_index: u32,
         audit_path: Vec<Option<HashOf<[u8; 32]>>>,
@@ -2692,19 +2509,15 @@ mod tests {
             ),
         }
     }
-
     fn canonical_lane_sibling(seed: u8) -> HashOf<[u8; 32]> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
     }
-
     fn bounded_attachment_list(attachments: Vec<ProofAttachment>) -> ProofAttachmentList {
         ProofAttachmentList::try_from(attachments).expect("valid bounded attachment-list fixture")
     }
-
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
     #[norito(reuse_archived, decode_from_slice)]
     struct ReferenceProofAttachmentList(Vec<ProofAttachment>);
-
     #[test]
     fn proof_attachment_list_roundtrip_bare() {
         let mut attachment = ProofAttachment::new_ref(
@@ -2739,7 +2552,6 @@ mod tests {
             .expect("decode canonical lane attachment list");
         assert_eq!(decoded, list);
     }
-
     #[test]
     fn proof_attachment_list_custom_wire_matches_independent_derived_tuple_codec() {
         let first = ProofAttachment::new_ref(
@@ -2754,7 +2566,6 @@ mod tests {
         );
         let list = bounded_attachment_list(vec![first.clone(), second.clone()]);
         let reference = ReferenceProofAttachmentList(vec![first, second]);
-
         let _canonical_flags = ncore::DecodeFlagsGuard::enter(ncore::default_encode_flags());
         let mut custom_bare = Vec::new();
         ncore::serialize_to_buffer(&list, &mut custom_bare)
@@ -2766,7 +2577,6 @@ mod tests {
             custom_bare, reference_bare,
             "custom first-release codec must preserve the original one-field tuple wire"
         );
-
         let (decoded_reference, reference_used) =
             <ReferenceProofAttachmentList as ncore::DecodeFromSlice>::decode_from_slice(
                 &custom_bare,
@@ -2774,14 +2584,12 @@ mod tests {
             .expect("derived reference decoder accepts custom payload");
         assert_eq!(reference_used, custom_bare.len());
         assert_eq!(decoded_reference, reference);
-
         let (decoded_custom, custom_used) =
             <ProofAttachmentList as ncore::DecodeFromSlice>::decode_from_slice(&reference_bare)
                 .expect("custom bounded decoder accepts derived reference payload");
         assert_eq!(custom_used, reference_bare.len());
         assert_eq!(decoded_custom, list);
     }
-
     #[test]
     fn proof_attachment_list_constructor_enforces_first_release_cardinality() {
         let attachment = ProofAttachment::new_ref(
@@ -2789,12 +2597,10 @@ mod tests {
             ProofBox::new("halo2/ipa".into(), vec![1]),
             VerifyingKeyId::new("halo2/ipa", "vk_1"),
         );
-
         assert!(matches!(
             ProofAttachmentList::try_from(Vec::new()),
             Err(ProofAttachmentListError::Empty)
         ));
-
         let maximum = ProofAttachmentList::try_from(vec![
             attachment.clone();
             PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1
@@ -2807,7 +2613,6 @@ mod tests {
         let decoded = norito::decode_canonical::<ProofAttachmentList>(&frame)
             .expect("maximum-count list must round-trip canonically");
         assert_eq!(decoded, maximum);
-
         assert!(matches!(
             ProofAttachmentList::try_from(vec![
                 attachment;
@@ -2819,7 +2624,6 @@ mod tests {
             }) if actual == PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1 + 1
         ));
     }
-
     #[test]
     fn proof_attachment_list_try_push_preserves_order_and_rolls_back_cardinality_failure() {
         let attachment = |byte| {
@@ -2835,7 +2639,6 @@ mod tests {
         list.try_push(second.clone())
             .expect("second attachment remains within all list limits");
         assert_eq!(list.as_slice(), [first, second]);
-
         let mut maximum = bounded_attachment_list(vec![
             attachment(3);
             PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1
@@ -2855,7 +2658,6 @@ mod tests {
             "failed cardinality append must leave the list byte-for-byte unchanged"
         );
     }
-
     #[test]
     fn proof_attachment_list_exact_frame_boundary_and_try_push_rollback() {
         let attachment = |proof_bytes| {
@@ -2865,7 +2667,6 @@ mod tests {
                 VerifyingKeyId::new("halo2/ipa", "vk_1"),
             )
         };
-
         let mut low = 1_usize;
         let mut high = PROOF_ATTACHMENT_LIST_MAX_CANONICAL_FRAME_BYTES_V1;
         while low < high {
@@ -2910,7 +2711,6 @@ mod tests {
                 list
             );
         }
-
         let next_error = ProofAttachmentList::try_from(vec![attachment(low + 1)])
             .expect_err("the next proof byte must cross the frame ceiling");
         assert!(matches!(
@@ -2920,7 +2720,6 @@ mod tests {
                 maximum: PROOF_ATTACHMENT_LIST_MAX_CANONICAL_FRAME_BYTES_V1,
             } if actual == PROOF_ATTACHMENT_LIST_MAX_CANONICAL_FRAME_BYTES_V1 + 1
         ));
-
         ProofAttachmentList::reset_authoritative_length_passes_for_current_test_thread();
         let error = list
             .try_push(attachment(1))
@@ -2944,7 +2743,6 @@ mod tests {
             "failed byte-limit append must leave the list byte-for-byte unchanged"
         );
     }
-
     #[test]
     fn proof_attachment_list_constructor_rejects_frame_above_byte_cap() {
         let attachment = ProofAttachment::new_ref(
@@ -2965,7 +2763,6 @@ mod tests {
             } if actual > PROOF_ATTACHMENT_LIST_MAX_CANONICAL_FRAME_BYTES_V1
         ));
     }
-
     #[test]
     fn proof_attachment_list_gross_oversize_rejects_before_authoritative_serialization() {
         let mut attachment = ProofAttachment::new_ref(
@@ -2981,7 +2778,6 @@ mod tests {
             vec![Some(canonical_lane_sibling(0xBB))],
         ));
         assert!(attachment.structural_error().is_none());
-
         ProofAttachmentList::reset_authoritative_length_passes_for_current_test_thread();
         assert!(matches!(
             ProofAttachmentList::try_from(vec![attachment]),
@@ -2996,7 +2792,6 @@ mod tests {
             "an oversized but otherwise valid lane proof must fail without staging serializer buffers"
         );
     }
-
     #[test]
     fn proof_attachment_list_decode_rejects_forged_count_before_vec_decode() {
         let attachment = ProofAttachment::new_ref(
@@ -3008,7 +2803,6 @@ mod tests {
         let mut bare = Vec::new();
         ncore::serialize_to_buffer(&list, &mut bare).expect("serialize list payload");
         let (_, field_header_len) = ncore::read_len_dyn_slice(&bare).expect("list field header");
-
         for forged_count in [0, PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1 + 1, usize::MAX] {
             let mut forged = bare.clone();
             let count = u64::try_from(forged_count).unwrap_or(u64::MAX);
@@ -3024,7 +2818,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn proof_attachment_list_decode_rejects_frame_cap_plus_one_before_field_parsing() {
         let alignment = ncore::archived_payload_align::<ProofAttachmentList>();
@@ -3048,7 +2841,6 @@ mod tests {
             "unexpected cap+1 payload rejection: {error}"
         );
     }
-
     #[test]
     fn proofbox_norito_roundtrip() {
         let backend: iroha_schema::Ident = "halo2/ipa".into();
@@ -3060,7 +2852,6 @@ mod tests {
         assert_eq!(dec.backend, "halo2/ipa".to_owned());
         assert_eq!(dec.bytes, bytes);
     }
-
     #[test]
     fn verifying_key_roundtrip() {
         let backend: iroha_schema::Ident = "halo2/ipa".into();
@@ -3071,7 +2862,6 @@ mod tests {
         assert_eq!(dec.backend, "halo2/ipa".to_owned());
         assert_eq!(dec.bytes, vec![7, 7, 7]);
     }
-
     #[test]
     fn verifying_key_id_decode_from_slice_roundtrip() {
         let id = VerifyingKeyId::new("halo2/ipa", "vk_transfer");
@@ -3079,11 +2869,9 @@ mod tests {
         let (decoded, used) =
             <VerifyingKeyId as ncore::DecodeFromSlice>::decode_from_slice(&encoded)
                 .expect("decode verifying key id from exact slice");
-
         assert_eq!(used, encoded.len());
         assert_eq!(decoded, id);
     }
-
     #[test]
     fn verifying_key_id_portable_registry_id_predicate_is_fail_closed() {
         for (backend, name) in [
@@ -3098,7 +2886,6 @@ mod tests {
                 "portable verifier-key id `{backend}` / `{name}` must be accepted"
             );
         }
-
         for (label, backend, name) in [
             ("blank-backend", " ", "vk_transfer"),
             ("blank-name", "halo2/ipa", " "),
@@ -3127,12 +2914,10 @@ mod tests {
                 "case {label} must reject verifier-key id `{backend}` / `{name}`"
             );
         }
-
         let oversized = "a".repeat(VERIFYING_KEY_ID_MAX_FIELD_BYTES + 1);
         assert!(!VerifyingKeyId::new("halo2/ipa", oversized.as_str()).is_portable_registry_id());
         assert!(!VerifyingKeyId::new(oversized.as_str(), "vk_transfer").is_portable_registry_id());
     }
-
     #[test]
     fn vk_record_roundtrip() {
         let rec = VerifyingKeyRecord {
@@ -3164,7 +2949,6 @@ mod tests {
         assert_eq!(dec.commitment, [0x11; 32]);
         assert!(dec.key.is_some());
     }
-
     #[test]
     fn vk_record_new_defaults() {
         let rec = VerifyingKeyRecord::new(
@@ -3181,7 +2965,6 @@ mod tests {
         assert!(rec.max_proof_bytes == 0);
         assert!(rec.key.is_none());
     }
-
     #[test]
     fn verifying_key_record_active_at_respects_height_window() {
         let mut rec = VerifyingKeyRecord::new(
@@ -3194,19 +2977,15 @@ mod tests {
         );
         rec.status = ConfidentialStatus::Active;
         assert!(rec.is_active_at(1));
-
         rec.activation_height = Some(2);
         assert!(!rec.is_active_at(1));
         assert!(rec.is_active_at(2));
-
         rec.withdraw_height = Some(4);
         assert!(rec.is_active_at(3));
         assert!(!rec.is_active_at(4));
-
         rec.status = ConfidentialStatus::Proposed;
         assert!(!rec.is_active_at(3));
     }
-
     #[test]
     fn proof_attachment_roundtrip() {
         let p = ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]);
@@ -3218,7 +2997,6 @@ mod tests {
         assert_eq!(dec.backend, "halo2/ipa".to_owned());
         assert_eq!(dec.vk_ref.name.as_str(), "vk_1");
     }
-
     #[test]
     fn proof_attachment_decode_accepts_matching_envelope_hash() {
         let proof = ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]);
@@ -3228,13 +3006,11 @@ mod tests {
             VerifyingKeyId::new("halo2/ipa", "vk_1"),
         );
         attachment.envelope_hash = Some(proof_bytes_hash(&proof.bytes));
-
         let encoded = norito::to_bytes(&attachment).expect("encode attachment");
         let decoded = norito::decode_from_bytes::<ProofAttachment>(&encoded)
             .expect("matching envelope hash must decode");
         assert_eq!(decoded.envelope_hash, attachment.envelope_hash);
     }
-
     #[test]
     fn proof_attachment_decode_rejects_missing_vk_ref_field() {
         let backend: iroha_schema::Ident = "halo2/ipa".into();
@@ -3242,11 +3018,9 @@ mod tests {
         let mut encoded = Vec::new();
         write_test_field(&mut encoded, &backend);
         write_test_field(&mut encoded, &proof);
-
         let result = <ProofAttachment as ncore::DecodeFromSlice>::decode_from_slice(&encoded);
         assert!(matches!(result, Err(ncore::Error::LengthMismatch)));
     }
-
     #[test]
     fn proof_attachment_decode_rejects_legacy_optional_vk_ref_slot() {
         let backend: iroha_schema::Ident = "halo2/ipa".into();
@@ -3258,14 +3032,12 @@ mod tests {
         write_test_field(&mut encoded, &proof);
         write_test_field(&mut encoded, &legacy_vk_ref);
         write_test_field(&mut encoded, &legacy_vk_inline);
-
         let result = <ProofAttachment as ncore::DecodeFromSlice>::decode_from_slice(&encoded);
         assert!(
             result.is_err(),
             "legacy optional vk_ref/vk_inline payload must not decode as registry-only attachment"
         );
     }
-
     #[test]
     fn proof_attachment_decode_rejects_legacy_some_vk_ref_inline_slots() {
         let backend: iroha_schema::Ident = "halo2/ipa".into();
@@ -3277,14 +3049,12 @@ mod tests {
         write_test_field(&mut encoded, &proof);
         write_test_field(&mut encoded, &legacy_vk_ref);
         write_test_field(&mut encoded, &legacy_vk_inline);
-
         let result = <ProofAttachment as ncore::DecodeFromSlice>::decode_from_slice(&encoded);
         assert!(
             result.is_err(),
             "legacy Some(vk_ref)/Some(vk_inline) payload must not decode as registry-only attachment"
         );
     }
-
     #[test]
     fn proof_attachment_decode_rejects_inline_vk_tail_after_vk_ref() {
         let backend: iroha_schema::Ident = "halo2/ipa".into();
@@ -3296,14 +3066,12 @@ mod tests {
         write_test_field(&mut encoded, &proof);
         write_test_field(&mut encoded, &vk_ref);
         write_test_field(&mut encoded, &legacy_vk_inline);
-
         let result = <ProofAttachment as ncore::DecodeFromSlice>::decode_from_slice(&encoded);
         assert!(
             result.is_err(),
             "inline verifying-key tail must not decode as optional vk_commitment"
         );
     }
-
     #[test]
     fn proof_attachment_decode_rejects_extra_tail_after_allowed_fields() {
         let backend: iroha_schema::Ident = "halo2/ipa".into();
@@ -3321,14 +3089,12 @@ mod tests {
         write_test_field(&mut encoded, &envelope_hash);
         write_test_field(&mut encoded, &lane_privacy);
         write_test_field(&mut encoded, &extra);
-
         let result = <ProofAttachment as ncore::DecodeFromSlice>::decode_from_slice(&encoded);
         assert!(
             matches!(result, Err(ncore::Error::LengthMismatch)),
             "extra tail field after lane_privacy must be rejected, got {result:?}"
         );
     }
-
     #[test]
     fn proof_attachment_decode_rejects_redundant_none_tail_fields() {
         let backend: iroha_schema::Ident = "halo2/ipa".into();
@@ -3341,34 +3107,28 @@ mod tests {
             write_test_field(&mut encoded, &vk_ref);
             encoded
         };
-
         let absent_hash: Option<[u8; 32]> = None;
         let present_vk_commitment = Some([0x11; 32]);
         let present_envelope_hash = Some(proof_bytes_hash(&proof.bytes));
         let absent_lane: Option<crate::nexus::LanePrivacyProof> = None;
         let mut malformed = Vec::new();
-
         let mut trailing_vk_none = required_prefix();
         write_test_field(&mut trailing_vk_none, &absent_hash);
         malformed.push(trailing_vk_none);
-
         let mut trailing_envelope_none = required_prefix();
         write_test_field(&mut trailing_envelope_none, &present_vk_commitment);
         write_test_field(&mut trailing_envelope_none, &absent_hash);
         malformed.push(trailing_envelope_none);
-
         let mut trailing_lane_none = required_prefix();
         write_test_field(&mut trailing_lane_none, &absent_hash);
         write_test_field(&mut trailing_lane_none, &present_envelope_hash);
         write_test_field(&mut trailing_lane_none, &absent_lane);
         malformed.push(trailing_lane_none);
-
         let mut three_redundant_nones = required_prefix();
         write_test_field(&mut three_redundant_nones, &absent_hash);
         write_test_field(&mut three_redundant_nones, &absent_hash);
         write_test_field(&mut three_redundant_nones, &absent_lane);
         malformed.push(three_redundant_nones);
-
         for encoded in malformed {
             let error = <ProofAttachment as ncore::DecodeFromSlice>::decode_from_slice(&encoded)
                 .expect_err("redundant trailing None fields must not have a second wire spelling");
@@ -3378,7 +3138,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn proof_attachment_decode_accepts_none_placeholders_before_later_some_fields() {
         let proof = ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]);
@@ -3388,7 +3147,6 @@ mod tests {
             VerifyingKeyId::new("halo2/ipa", "vk_1"),
         );
         envelope_only.envelope_hash = Some(proof_bytes_hash(&proof.bytes));
-
         let mut lane_only = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             proof,
@@ -3398,7 +3156,6 @@ mod tests {
             0,
             vec![Some(canonical_lane_sibling(0x23))],
         ));
-
         for attachment in [envelope_only, lane_only] {
             let encoded = norito::to_bytes(&attachment).expect("encode canonical sparse tail");
             let decoded = norito::decode_from_bytes::<ProofAttachment>(&encoded)
@@ -3406,7 +3163,6 @@ mod tests {
             assert_eq!(decoded, attachment);
         }
     }
-
     #[test]
     fn proof_attachment_decode_rejects_malformed_lane_privacy_paths() {
         let sibling = canonical_lane_sibling(0x22);
@@ -3419,7 +3175,6 @@ mod tests {
                 vec![Some(sibling); crate::nexus::LANE_PRIVACY_MAX_MERKLE_DEPTH_V1 + 1],
             ),
         ];
-
         for lane_privacy in malformed {
             let mut attachment = ProofAttachment::new_ref(
                 "halo2/ipa".into(),
@@ -3433,7 +3188,6 @@ mod tests {
             assert!(error.to_string().contains("lane_privacy"));
         }
     }
-
     #[test]
     fn proof_attachment_decode_rejects_blank_verifying_key_name() {
         let attachment = ProofAttachment::new_ref(
@@ -3446,7 +3200,6 @@ mod tests {
             .expect_err("blank verifying key names must not decode");
         assert!(err.to_string().contains("vk_ref.name"));
     }
-
     #[test]
     fn proof_attachment_decode_rejects_blank_backend_fields() {
         let cases = [
@@ -3475,7 +3228,6 @@ mod tests {
                 "vk_ref.backend",
             ),
         ];
-
         for (attachment, expected_field) in cases {
             let encoded = norito::to_bytes(&attachment).expect("encode blank backend attachment");
             let err = norito::decode_from_bytes::<ProofAttachment>(&encoded)
@@ -3486,7 +3238,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn proof_attachment_decode_rejects_nonportable_refs_empty_proofs_and_zero_hashes() {
         let mut zero_vk_commitment = ProofAttachment::new_ref(
@@ -3495,14 +3246,12 @@ mod tests {
             VerifyingKeyId::new("halo2/ipa", "vk_1"),
         );
         zero_vk_commitment.vk_commitment = Some([0u8; 32]);
-
         let mut zero_envelope_hash = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
             VerifyingKeyId::new("halo2/ipa", "vk_1"),
         );
         zero_envelope_hash.envelope_hash = Some([0u8; 32]);
-
         let mut forged_envelope_hash = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
@@ -3511,7 +3260,6 @@ mod tests {
         let mut forged_hash = proof_bytes_hash(&forged_envelope_hash.proof.bytes);
         forged_hash[0] ^= 0x80;
         forged_envelope_hash.envelope_hash = Some(forged_hash);
-
         let cases = [
             (
                 ProofAttachment::new_ref(
@@ -3549,7 +3297,6 @@ mod tests {
             (zero_envelope_hash, "envelope_hash"),
             (forged_envelope_hash, "envelope_hash"),
         ];
-
         for (attachment, expected_field) in cases {
             let encoded = norito::to_bytes(&attachment).expect("encode malformed attachment");
             let err = norito::decode_from_bytes::<ProofAttachment>(&encoded)
@@ -3560,7 +3307,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn proof_box_canonical_size_limit_accounts_for_backend_and_framing() {
         let backend = "halo2/ipa::transfer_v1";
@@ -3579,7 +3325,6 @@ mod tests {
             proof_box_max_proof_bytes_v1(backend),
             Some(PROOF_BOX_MAX_ENCODED_BYTES_V1 - 36)
         );
-
         let maximum = proof_box_max_proof_bytes_v1(backend).expect("bounded backend");
         let mut maximum_sized_proof = Vec::with_capacity(maximum + 1);
         maximum_sized_proof.resize(maximum, 0xA5);
@@ -3598,7 +3343,6 @@ mod tests {
             PROOF_BOX_MAX_ENCODED_BYTES_V1
         );
         assert_eq!(attachment.structural_error(), None);
-
         attachment.proof.bytes.push(0x5A);
         assert_eq!(
             ncore::encoded_payload_len(&attachment.proof)
@@ -3610,7 +3354,6 @@ mod tests {
             Some(("proof", "canonical encoding exceeds the 64 MiB limit"))
         );
     }
-
     #[test]
     fn proof_box_size_accounting_matches_norito_at_compact_prefix_transitions() {
         let _canonical_flags = ncore::DecodeFlagsGuard::enter(ncore::default_encode_flags());
@@ -3628,7 +3371,6 @@ mod tests {
                 );
             }
         }
-
         for backend_len in [1, 127, 128, 256, 4_094] {
             let backend = "b".repeat(backend_len);
             let maximum = proof_box_max_proof_bytes_v1(&backend).expect("bounded backend");
@@ -3641,7 +3383,6 @@ mod tests {
                     .is_some_and(|length| length > PROOF_BOX_MAX_ENCODED_BYTES_V1)
             );
         }
-
         let largest_backend = "c".repeat(4_094);
         let proof = ProofBox::new(largest_backend.clone().into(), vec![0x5A]);
         assert!(proof.canonical_encoded_len_v1().is_some());
@@ -3650,7 +3391,6 @@ mod tests {
         let decoded = norito::decode_from_bytes::<ProofBox>(&encoded)
             .expect("maximum backend field must round-trip");
         assert_eq!(decoded, proof);
-
         for backend_len in [4_095, 4_096] {
             let backend = "d".repeat(backend_len);
             let proof = ProofBox::new(backend.clone().into(), vec![0x5A]);
@@ -3663,7 +3403,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn proof_attachment_decode_rejects_backend_mismatches() {
         for (proof_backend, vk_backend, expected_field) in [
@@ -3684,7 +3423,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_list_json_rejects_backend_mismatch_inside_wire_payload() {
@@ -3697,12 +3435,10 @@ mod tests {
         )]);
         let encoded = norito::to_bytes(&list).expect("encode mismatched attachment list");
         let json = format!("\"{}\"", STANDARD.encode(encoded));
-
         let err = norito::json::from_str::<ProofAttachmentList>(&json)
             .expect_err("base64 Norito list with backend mismatch must be rejected");
         assert!(err.to_string().contains("vk_ref.backend"));
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_list_json_rejects_single_attachment_wire_payload() {
@@ -3715,11 +3451,9 @@ mod tests {
         );
         let encoded = norito::to_bytes(&attachment).expect("encode single attachment");
         let json = format!("\"{}\"", STANDARD.encode(encoded));
-
         norito::json::from_str::<ProofAttachmentList>(&json)
             .expect_err("single ProofAttachment wire payload must not decode as a list");
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_list_json_is_canonical_and_ambient_independent() {
@@ -3758,7 +3492,6 @@ mod tests {
                 canonical_json
             );
         }
-
         let alternate_frame = {
             let _alternate = norito::core::DecodeFlagsGuard::enter(alternate_flags);
             norito::to_bytes(&list).expect("encode alternate-layout proof-attachment list")
@@ -3766,7 +3499,6 @@ mod tests {
         let alternate_json = format!("\"{}\"", STANDARD.encode(alternate_frame));
         norito::json::from_str::<ProofAttachmentList>(&alternate_json)
             .expect_err("alternate-layout proof-attachment list JSON must be rejected");
-
         let value = norito::json::parse_value(&canonical_json)
             .expect("parse canonical list as a borrowed generic value");
         let frame = STANDARD
@@ -3782,7 +3514,6 @@ mod tests {
                 .expect("canonical list Value must pass bounded preflight");
         assert_eq!(from_value, list);
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_manual_json_writers_preserve_bytes_and_closed_limits() {
@@ -3798,7 +3529,6 @@ mod tests {
                 Err(norito::json::BoundedJsonError::BodyTooLarge)
             );
         }
-
         let mut attachment = ProofAttachment::new_ref(
             "halo2/ipa".into(),
             ProofBox::new("halo2/ipa".into(), vec![1, 2, 3]),
@@ -3806,7 +3536,6 @@ mod tests {
         );
         attachment.vk_commitment = Some([0xBC; 32]);
         assert_bounded(&attachment);
-
         let id = ProofId {
             backend: "halo2/ipa:profile".into(),
             proof_hash: [0xAB; 32],
@@ -3832,7 +3561,6 @@ mod tests {
             assert_bounded(&status);
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_list_json_limit_helpers_use_closed_boundaries() {
@@ -3843,7 +3571,6 @@ mod tests {
         assert!(proof_attachment_list_validate_limits(9, 2, 8, 2).is_err());
         assert!(proof_attachment_list_validate_limits(8, 0, 8, 2).is_err());
         assert!(proof_attachment_list_validate_limits(8, 3, 8, 2).is_err());
-
         let at_limit = STANDARD.encode([0_u8; 6]);
         assert_eq!(
             proof_attachment_list_base64_decoded_len(&at_limit, 6)
@@ -3853,7 +3580,6 @@ mod tests {
         let over_limit = STANDARD.encode([0_u8; 7]);
         proof_attachment_list_base64_decoded_len(&over_limit, 6)
             .expect_err("encoded token above the decoded-byte limit must reject");
-
         let json = format!("\"{at_limit}\"");
         let mut parser = norito::json::Parser::new(&json);
         let (borrowed, decoded_len) = proof_attachment_list_borrowed_base64_token(&mut parser, 6)
@@ -3861,7 +3587,6 @@ mod tests {
         assert_eq!(borrowed, at_limit);
         assert_eq!(decoded_len, 6);
         assert_eq!(parser.position(), json.len());
-
         let full_limit_plus_one = PROOF_ATTACHMENT_LIST_MAX_CANONICAL_FRAME_BYTES_V1 + 1;
         let encoded_len = proof_attachment_list_base64_encoded_len(full_limit_plus_one)
             .expect("full-size base64 arithmetic");
@@ -3880,7 +3605,6 @@ mod tests {
         norito::json::from_str::<ProofAttachmentList>(&full_over_limit_json)
             .expect_err("full-size cap+1 JSON token must fail before base64 allocation");
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_list_json_rejects_noncanonical_base64_before_decode() {
@@ -3898,16 +3622,13 @@ mod tests {
             let json = format!("\"{encoded}\"");
             norito::json::from_str::<ProofAttachmentList>(&json)
                 .expect_err("noncanonical base64 must fail bounded preflight");
-
             let value = norito::json::parse_value(&json).expect("valid generic JSON string");
             <ProofAttachmentList as norito::json::JsonDeserialize>::json_from_value(&value)
                 .expect_err("Value preflight must reject the same noncanonical base64");
         }
-
         norito::json::from_str::<ProofAttachmentList>(r#""\/w==""#)
             .expect_err("escaped base64 spelling must not alias its canonical wire spelling");
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_list_json_rejects_over_limit_attachment_count() {
@@ -3930,12 +3651,10 @@ mod tests {
             PROOF_ATTACHMENT_LIST_MAX_ATTACHMENTS_V1 + 1
         );
         let json = format!("\"{}\"", STANDARD.encode(frame));
-
         let error = norito::json::from_str::<ProofAttachmentList>(&json)
             .expect_err("canonical frame above the attachment-count limit must reject");
         assert!(error.to_string().contains("attachment count"));
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_list_json_rejects_forged_empty_frame() {
@@ -3950,7 +3669,6 @@ mod tests {
             .expect_err("empty attachment-list frame must reject");
         assert!(error.to_string().contains("must not be empty"));
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_accepts_reference_only_payload() {
@@ -3974,7 +3692,6 @@ mod tests {
         );
         assert!(attachment.envelope_hash.is_none());
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_uses_canonical_proof_byte_array() {
@@ -3985,7 +3702,6 @@ mod tests {
         }"#;
         let attachment: ProofAttachment = norito::json::from_str(json).expect("canonical JSON");
         assert_eq!(attachment.proof.bytes, vec![1, 2, 3]);
-
         let canonical = norito::json::to_json(&attachment).expect("serialize canonical JSON");
         assert!(canonical.contains("\"bytes\":[1,2,3]"));
         assert!(!canonical.contains("bytes_b64"));
@@ -4001,7 +3717,6 @@ mod tests {
                 .expect("canonical Value must use the streaming acceptance language");
         assert_eq!(from_value, attachment);
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_streaming_decoder_is_field_order_independent() {
@@ -4016,7 +3731,6 @@ mod tests {
         assert_eq!(attachment.proof.bytes, [1, 2, 3]);
         assert_eq!(attachment.vk_ref.name, "vk_1");
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_proof_bytes_are_bounded_while_streaming() {
@@ -4030,21 +3744,18 @@ mod tests {
         .expect("stream exactly at the test limit through the production proof decoder");
         assert_eq!(at_limit.backend, "halo2/ipa");
         assert_eq!(at_limit.bytes, [0, 1, 2, 3]);
-
         let error = norito::json::from_str::<ProofAttachmentJsonProofBoxV1<4>>(
             r#"{ "backend": "halo2/ipa", "bytes": [0, 1, 2, 3, 4] }"#,
         )
         .err()
         .expect("the fifth byte must be rejected before output growth");
         assert!(error.to_string().contains("4-byte streaming limit"));
-
         let error = norito::json::from_str::<ProofAttachmentJsonProofBoxV1<4>>(
             r#"{ "bytes": [0, 1, 2, 3, 4], "backend": "halo2/ipa" }"#,
         )
         .err()
         .expect("backend discovered after bytes must still bound the byte stream");
         assert!(error.to_string().contains("4-byte streaming limit"));
-
         let value = norito::json::parse_value(
             r#"{
                 "backend": "halo2/ipa",
@@ -4057,7 +3768,6 @@ mod tests {
             .expect_err("borrowed Value preflight must reject the fifth byte");
         assert!(error.to_string().contains("proof.bytes"));
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_lane_path_is_bounded_while_streaming() {
@@ -4067,14 +3777,12 @@ mod tests {
         let decoded = norito::json::from_str::<ProofAttachmentJsonAuditPathV1<2>>(&at_limit)
             .expect("path exactly at the test limit");
         assert_eq!(decoded.0.len(), 2);
-
         let over_limit = format!("[{sibling},{sibling},{sibling}]");
         let error = norito::json::from_str::<ProofAttachmentJsonAuditPathV1<2>>(&over_limit)
             .err()
             .expect("third sibling must be rejected before output growth");
         assert!(error.to_string().contains("2-sibling limit"));
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_rejects_present_null_fields() {
@@ -4125,7 +3833,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_value_preflight_rejects_wrong_shapes() {
@@ -4169,7 +3876,6 @@ mod tests {
                 .expect_err("borrowed preflight must reject wrong first-release shapes");
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_rejects_oversized_identifier_fields() {
@@ -4198,7 +3904,6 @@ mod tests {
                 .expect_err("borrowed Value preflight must reject oversized identifiers");
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_rejects_trailing_commas() {
@@ -4230,7 +3935,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_rejects_noncanonical_proof_byte_encodings() {
@@ -4251,7 +3955,6 @@ mod tests {
                 .expect_err("Value preflight or strict re-entry must reject proof shape");
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_accepts_matching_envelope_hash() {
@@ -4270,7 +3973,6 @@ mod tests {
             norito::json::from_str(&json).expect("matching envelope hash JSON");
         assert_eq!(attachment.envelope_hash, Some(envelope_hash));
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_rejects_retired_inline_vk_fields() {
@@ -4296,7 +3998,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_rejects_unknown_members_at_every_declared_layer() {
@@ -4327,7 +4028,6 @@ mod tests {
             assert!(error.to_string().contains("unknown"));
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_requires_exact_structural_lane_privacy() {
@@ -4346,7 +4046,6 @@ mod tests {
         let decoded = <ProofAttachment as norito::json::JsonDeserialize>::json_from_value(&value)
             .expect("canonical lane Value must pass preflight and strict re-entry");
         assert_eq!(decoded, attachment);
-
         let unknown = canonical.replacen("\"leaf_index\":1", "\"shadow\":0,\"leaf_index\":1", 1);
         let error = norito::json::from_str::<ProofAttachment>(&unknown)
             .expect_err("unknown nested lane field must reject");
@@ -4354,7 +4053,6 @@ mod tests {
         let value = norito::json::parse_value(&unknown).expect("unknown nested lane Value");
         <ProofAttachment as norito::json::JsonDeserialize>::json_from_value(&value)
             .expect_err("borrowed preflight must reject unknown nested lane fields");
-
         let duplicate = canonical.replacen(
             "\"commitment_id\":[5]",
             "\"commitment_id\":[5],\"commitment_id\":[5]",
@@ -4363,7 +4061,6 @@ mod tests {
         let error = norito::json::from_str::<ProofAttachment>(&duplicate)
             .expect_err("duplicate nested lane field must reject");
         assert!(error.to_string().contains("duplicate field"));
-
         for malformed in [
             lane_privacy_with_path(0, Vec::new()),
             lane_privacy_with_path(0, vec![None]),
@@ -4383,7 +4080,6 @@ mod tests {
                 .expect_err("Value preflight or strict re-entry must reject malformed lane data");
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_rejects_duplicate_declared_members() {
@@ -4410,7 +4106,6 @@ mod tests {
             assert!(err.to_string().contains("duplicate field"));
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_rejects_malformed_fixed_hashes() {
@@ -4442,7 +4137,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_rejects_invalid_fixed_hash_byte() {
@@ -4456,7 +4150,6 @@ mod tests {
             .expect_err("out-of-range envelope_hash byte must be rejected");
         assert!(err.to_string().contains("not a valid u8"));
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_rejects_backend_mismatches() {
@@ -4468,7 +4161,6 @@ mod tests {
         let err = norito::json::from_str::<ProofAttachment>(proof_backend_json)
             .expect_err("proof backend mismatch must be rejected");
         assert!(err.to_string().contains("proof.backend"));
-
         let vk_backend_json = r#"{
             "backend": "halo2/ipa",
             "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
@@ -4478,7 +4170,6 @@ mod tests {
             .expect_err("vk_ref backend mismatch must be rejected");
         assert!(err.to_string().contains("vk_ref.backend"));
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_rejects_nested_retired_inline_vk_fields() {
@@ -4490,7 +4181,6 @@ mod tests {
         let err = norito::json::from_str::<ProofAttachment>(proof_shadow_json)
             .expect_err("retired proof inline key must be rejected");
         assert!(err.to_string().contains("proof.vk_inline"));
-
         let vk_ref_shadow_json = r#"{
             "backend": "halo2/ipa",
             "proof": { "backend": "halo2/ipa", "bytes": [1, 2, 3] },
@@ -4500,7 +4190,6 @@ mod tests {
             .expect_err("retired vk_ref inline key must be rejected");
         assert!(err.to_string().contains("vk_ref.verifying_key_inline"));
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_rejects_blank_verifying_key_name() {
@@ -4513,7 +4202,6 @@ mod tests {
             .expect_err("blank verifying key names must be rejected");
         assert!(err.to_string().contains("vk_ref.name"));
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_rejects_blank_backend_fields() {
@@ -4543,7 +4231,6 @@ mod tests {
                 "vk_ref.backend",
             ),
         ];
-
         for (json, expected_field) in cases {
             let err = norito::json::from_str::<ProofAttachment>(json)
                 .expect_err("blank backend fields must be rejected");
@@ -4553,7 +4240,6 @@ mod tests {
             );
         }
     }
-
     #[cfg(feature = "json")]
     #[test]
     fn proof_attachment_json_rejects_nonportable_refs_empty_proofs_and_zero_hashes() {
@@ -4623,7 +4309,6 @@ mod tests {
                 "envelope_hash",
             ),
         ];
-
         for (json, expected_field) in cases {
             let err = norito::json::from_str::<ProofAttachment>(&json)
                 .expect_err("malformed proof attachment JSON must be rejected");
@@ -4633,7 +4318,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn proofed_committed_tx_roundtrip() {
         use iroha_crypto::{Hash, HashOf};
@@ -4692,7 +4376,6 @@ mod tests {
         assert!(dec.proof.is_some());
         let _ = tree; // silence unused
     }
-
     #[test]
     fn proof_record_roundtrip() {
         let id = ProofId {
@@ -4713,7 +4396,6 @@ mod tests {
         assert!(matches!(dec.status, ProofStatus::Verified));
         assert_eq!(dec.verified_at_height, Some(42));
     }
-
     #[test]
     fn take_len_prefixed_slice_rejects_fields_beyond_cap() {
         let mut encoded = Vec::new();
@@ -4722,7 +4404,6 @@ mod tests {
         let result = take_len_prefixed_slice(&encoded, &mut offset, MAX_BACKEND_FIELD_BYTES);
         assert!(matches!(result, Err(ncore::Error::LengthMismatch)));
     }
-
     #[test]
     fn proofbox_decode_rejects_oversized_len_prefixed_payloads() {
         let backend: iroha_schema::Ident = "halo2/ipa".into();
@@ -4734,7 +4415,6 @@ mod tests {
         let result = <ProofBox as ncore::DecodeFromSlice>::decode_from_slice(&encoded);
         assert!(matches!(result, Err(ncore::Error::LengthMismatch)));
     }
-
     #[test]
     fn verifying_key_box_decode_rejects_oversized_outer_field_before_decode() {
         let backend: iroha_schema::Ident = "halo2/ipa".into();
@@ -4749,7 +4429,6 @@ mod tests {
         let result = <VerifyingKeyBox as ncore::DecodeFromSlice>::decode_from_slice(&encoded);
         assert!(matches!(result, Err(ncore::Error::LengthMismatch)));
     }
-
     #[test]
     fn verifying_key_box_decode_rejects_oversized_declared_vector_before_allocation() {
         let backend: iroha_schema::Ident = "halo2/ipa".into();
@@ -4760,13 +4439,11 @@ mod tests {
             (VERIFYING_KEY_BOX_MAX_PAYLOAD_BYTES_V1 as u64) + 1,
         )
         .expect("encode declared verifier-key length");
-
         let mut encoded = Vec::new();
         ncore::write_len_header_to_vec(&mut encoded, backend_bytes.len() as u64);
         encoded.extend_from_slice(&backend_bytes);
         ncore::write_len_header_to_vec(&mut encoded, vk_field.len() as u64);
         encoded.extend_from_slice(&vk_field);
-
         let result = <VerifyingKeyBox as ncore::DecodeFromSlice>::decode_from_slice(&encoded);
         assert!(matches!(result, Err(ncore::Error::LengthMismatch)));
     }

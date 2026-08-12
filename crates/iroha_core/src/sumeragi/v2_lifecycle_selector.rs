@@ -1228,10 +1228,10 @@ mod tests {
 
     use super::super::schema::{
         AdmissionDecision, AdmissionRequest, CandidateAdmission, CapacityClass, CapacityGeometry,
-        CoordinatorFault, DurablePayloadReference, InitialLifecycleState, LeaseId, LifecycleRound,
-        LifecycleStage, LifecycleStageKind, OwnerId, PhysicalGeometry, PhysicalSlot,
-        PhysicalSlotId, PredecessorScope, SchedulerInputs, SchedulerReadyInputs, TerminalOutcome,
-        TurnOutcome, TurnPlan, WaitToken,
+        CoordinatorFault, DurablePayloadReference, InitialLifecycleState, LeaseId, LifecycleStage,
+        LifecycleStageKind, OwnerId, PhysicalGeometry, PhysicalSlot, PhysicalSlotId,
+        PredecessorScope, SchedulerInputs, SchedulerReadyInputs, TerminalOutcome, TurnOutcome,
+        TurnPlan, WaitToken,
     };
     use super::*;
 
@@ -1248,14 +1248,12 @@ mod tests {
     }
 
     fn fetch_key(context: LifecycleContext, seed: u8) -> LifecycleKey {
-        LifecycleKey::new(
-            context.id(),
-            LifecycleRound::new(context.height(), u64::from(seed)),
-            Some(LifecycleRound::new(context.height(), u64::from(seed))),
-            Some(digest(seed.wrapping_add(1))),
-            LifecyclePhase::Fetch,
-            Some(digest(seed.wrapping_add(2))),
+        super::super::replay_authority::exact_record_fixture(
+            context,
+            LifecycleStageKind::FetchBody,
+            seed,
         )
+        .key
     }
 
     fn capacities(limit: usize) -> CapacityGeometry {
@@ -1272,6 +1270,12 @@ mod tests {
         let source = certified_fetch_wait_source(request_hash);
         let wait = WaitToken::new(source, generation);
         let slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
+        let replay = super::super::replay_authority::exact_record_fixture(
+            context,
+            LifecycleStageKind::FetchBody,
+            u8::try_from(key.round().view()).expect("fixture Fetch view fits u8"),
+        );
+        assert_eq!(replay.key, key);
         let candidate = CandidateAdmission::new(
             key,
             causal_root,
@@ -1280,6 +1284,7 @@ mod tests {
             InitialLifecycleState::Waiting(wait),
             causal_root.digest(),
             DurablePayloadReference::None,
+            replay.authority,
             PhysicalGeometry::new([PhysicalSlot::new(slot, digest(0xA1))], [slot]),
             None,
         );
@@ -1779,6 +1784,12 @@ mod tests {
         let other_key = fetch_key(context, 0x42);
         let other_root = CausalRoot::new(digest(0x43));
         let other_slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 1);
+        let replay = super::super::replay_authority::exact_record_fixture(
+            context,
+            LifecycleStageKind::FetchBody,
+            0x42,
+        );
+        assert_eq!(replay.key, other_key);
         let other = CandidateAdmission::new(
             other_key,
             other_root,
@@ -1787,6 +1798,7 @@ mod tests {
             InitialLifecycleState::Waiting(WaitToken::new(authority.wait_source(), 6)),
             other_root.digest(),
             DurablePayloadReference::None,
+            replay.authority,
             PhysicalGeometry::new([PhysicalSlot::new(other_slot, digest(0x44))], [other_slot]),
             None,
         );
@@ -1858,10 +1870,7 @@ mod tests {
         let record = &terminal.records[&ordinal];
         let inputs = SchedulerInputs::new(
             [],
-            [(
-                ordinal,
-                SchedulerReadyInputs::new(record.owner, record.key, 0, 0, 0, 0, 0, 0),
-            )],
+            [(ordinal, SchedulerReadyInputs::new(record, None, [0; 6]))],
         )
         .expect("one exact ready Fetch scheduler row");
         let TurnPlan::Execute(lease) = terminal.plan_turn(inputs) else {

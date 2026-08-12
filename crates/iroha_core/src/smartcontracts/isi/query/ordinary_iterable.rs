@@ -6,6 +6,8 @@
 //! before `ValidQuery::execute`; each admitted producer instead owns rows
 //! through its query-specific bounded adapter.
 
+#![allow(unsafe_code)]
+
 use std::{
     alloc::{Layout, alloc},
     any::TypeId,
@@ -16,11 +18,7 @@ use std::{
 
 use iroha_data_model::{
     peer::PeerId,
-    query::{
-        dsl::CompoundPredicate,
-        error::QueryExecutionFail as Error,
-        parameters::QueryParams,
-    },
+    query::{dsl::CompoundPredicate, error::QueryExecutionFail as Error, parameters::QueryParams},
 };
 use norito::{
     core::NoritoSerialize,
@@ -34,11 +32,14 @@ use crate::{
 };
 
 /// The world-state producer count admitted through a source-specific adapter.
+#[cfg(test)]
 pub(super) const ADMITTED_WORLD_PRODUCERS: usize = 1;
 /// The world-state producer count still awaiting source-specific bounded
 /// ownership and exact predicate parity.
+#[cfg(test)]
 pub(super) const WORLD_PRODUCER_RESIDUALS: usize = 36;
 /// The Kura producer count awaiting an authenticated bounded reader/projection.
+#[cfg(test)]
 pub(super) const KURA_PRODUCER_RESIDUALS: usize = 3;
 
 /// Execute a legacy iterable only for callers which did not attach the
@@ -60,8 +61,7 @@ where
     Q: ValidQuery<Item = T> + 'static,
 {
     if let Some(limits) = limits {
-        if TypeId::of::<Q>()
-            == TypeId::of::<iroha_data_model::query::peer::prelude::FindPeers>()
+        if TypeId::of::<Q>() == TypeId::of::<iroha_data_model::query::peer::prelude::FindPeers>()
             && TypeId::of::<T>() == TypeId::of::<PeerId>()
             && mode == OrdinaryCursorMode::Ephemeral
             && params.pagination.offset_value() == 0
@@ -124,7 +124,8 @@ fn cast_owned_exact<From: 'static, To: 'static>(value: From) -> Result<To, Error
     let value = core::mem::ManuallyDrop::new(value);
     // SAFETY: equality of `'static` TypeIds proves the concrete types match;
     // `ManuallyDrop` transfers the one owned value through this read.
-    Ok(unsafe { (&*value as *const From).cast::<To>().read() })
+    let source: *const From = &*value;
+    Ok(unsafe { source.cast::<To>().read() })
 }
 
 /// Serialize a predicate candidate through the checked ordinary JSON helper.
@@ -314,7 +315,10 @@ where
     let (decoded, usage) = norito::core::with_decode_limits_measured(limits, || {
         norito::decode_from_bytes_with_limits::<T>(frame, limits)
     });
-    Ok((decoded.map_err(|_| Error::CapacityLimit)?, usage.total_allocated_bytes()))
+    Ok((
+        decoded.map_err(|_| Error::CapacityLimit)?,
+        usage.total_allocated_bytes(),
+    ))
 }
 
 fn collect_peers(
@@ -322,8 +326,8 @@ fn collect_peers(
     limits: OrdinaryQueryExecutionLimits,
     state: &impl StateReadOnly,
 ) -> Result<ExactOwnedRows<PeerId>, Error> {
-    let maximum = usize::try_from(limits.max_source_item_bytes())
-        .map_err(|_| Error::CapacityLimit)?;
+    let maximum =
+        usize::try_from(limits.max_source_item_bytes()).map_err(|_| Error::CapacityLimit)?;
     let fetch = params
         .fetch_size
         .fetch_size
@@ -333,7 +337,12 @@ fn collect_peers(
         fetch,
         params.pagination.limit_value().map(|limit| limit.get()),
     )?;
-    if maximum_rows > limits.max_page_items().checked_add(1).ok_or(Error::CapacityLimit)? {
+    if maximum_rows
+        > limits
+            .max_page_items()
+            .checked_add(1)
+            .ok_or(Error::CapacityLimit)?
+    {
         return Err(Error::CapacityLimit);
     }
     let source_maximum = maximum_rows
@@ -601,7 +610,9 @@ mod tests {
             .split_once("pub(crate) fn predicate_json_value_for_execution")
             .expect("end of execution boundary")
             .0;
-        let limited = boundary.find("if let Some(limits) = limits").expect("limit gate");
+        let limited = boundary
+            .find("if let Some(limits) = limits")
+            .expect("limit gate");
         assert!(limited < boundary.find("ValidQuery::execute").expect("legacy path"));
         assert!(!source.contains(concat!("new_uninit_", "slice")));
         assert!(!source.contains(concat!("BinaryHeap", "::with_capacity")));

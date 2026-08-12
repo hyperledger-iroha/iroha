@@ -39,7 +39,6 @@ use crate::{
     },
     read_local_checkpoint_bounded, write_local_checkpoint_atomic_bounded,
 };
-
 /// Deployment-owned monotonic transparency producer for signed viewer state.
 pub mod transparency_producer;
 
@@ -71,7 +70,6 @@ pub const EVIDENCE_VIEWER_MAX_COMPACTION_RECORDS_V1: u32 = 1_024;
 pub const EVIDENCE_VIEWER_MIN_COMPACTION_INTERVAL_MS_V1: u64 = 1_000;
 /// Maximum supervised archive-compaction cadence.
 pub const EVIDENCE_VIEWER_MAX_COMPACTION_INTERVAL_MS_V1: u64 = 24 * 60 * 60 * 1_000;
-
 const CHALLENGE_BINDING_DOMAIN_V1: &[u8] = b"sorafs.evidence-viewer.challenge-binding.v1";
 const SESSION_REQUEST_DOMAIN_V1: &[u8] = b"sorafs.evidence-viewer.session-request.v1";
 const GRANT_CLAIMS_DOMAIN_V1: &[u8] = b"sorafs.evidence-viewer.grant-claims.v1";
@@ -101,7 +99,6 @@ const COMPACTION_ARCHIVE_MAX_OVERHEAD_BYTES_V1: u64 = 16 * 1024;
 const TRANSPARENCY_PROJECTION_DOMAIN_V1: &[u8] =
     b"sorafs.evidence-viewer.transparency-projection.v1";
 const PAYLOAD_FREE_PURPOSE_LABEL_V1: &str = "case_bound_review";
-
 /// Governed evidence-viewer service policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceViewerConfigV1 {
@@ -165,7 +162,6 @@ pub struct EvidenceViewerConfigV1 {
     /// Governed Ed25519 receipt-verification key.
     pub receipt_signer_public_key: [u8; 32],
 }
-
 impl EvidenceViewerConfigV1 {
     /// Validate bounded production invariants.
     ///
@@ -242,7 +238,6 @@ impl EvidenceViewerConfigV1 {
         Ok(())
     }
 }
-
 /// Exact role authorized for one finalized evidence assignment.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -255,7 +250,6 @@ pub enum EvidenceViewerRoleV1 {
     /// Account holding the explicit legal-reviewer role.
     Legal,
 }
-
 impl EvidenceViewerRoleV1 {
     /// Stable lower-case role label.
     #[must_use]
@@ -267,7 +261,6 @@ impl EvidenceViewerRoleV1 {
         }
     }
 }
-
 /// Finalized-chain authorization returned by the injected reader.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceViewerFinalizedAuthorizationV1 {
@@ -290,7 +283,6 @@ pub struct EvidenceViewerFinalizedAuthorizationV1 {
     /// Finalized block timestamp.
     pub finalized_at_unix_ms: u64,
 }
-
 /// Fixed finalized-reader failure classes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum EvidenceViewerAuthorizationErrorV1 {
@@ -304,7 +296,6 @@ pub enum EvidenceViewerAuthorizationErrorV1 {
     #[error("finalized moderation query bound exhausted")]
     ResourceExhausted,
 }
-
 /// Runtime-only reader for exact finalized moderation assignments and roles.
 pub trait EvidenceViewerFinalizedAuthorizationReaderV1: Send + Sync + fmt::Debug {
     /// Authorize one exact case/evidence/account/role tuple.
@@ -319,7 +310,6 @@ pub trait EvidenceViewerFinalizedAuthorizationReaderV1: Send + Sync + fmt::Debug
         evidence_bundle_digest: [u8; 32],
     ) -> Result<EvidenceViewerFinalizedAuthorizationV1, EvidenceViewerAuthorizationErrorV1>;
 }
-
 /// Successful WebAuthn assertion result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EvidenceViewerWebAuthnResultV1 {
@@ -330,7 +320,6 @@ pub struct EvidenceViewerWebAuthnResultV1 {
     /// Monotonic authenticator counter observed by the verifier.
     pub authenticator_counter: u64,
 }
-
 /// Fixed external security-provider failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum EvidenceViewerExternalErrorV1 {
@@ -344,7 +333,6 @@ pub enum EvidenceViewerExternalErrorV1 {
     #[error("external evidence-viewer provider backpressure")]
     Backpressure,
 }
-
 /// Public, non-secret qualification for an evidence-viewer runtime provider.
 ///
 /// `revision` identifies the deployment-owned adapter and public policy
@@ -356,7 +344,6 @@ pub struct EvidenceViewerRuntimeProviderQualificationV1 {
     revision: u64,
     policy_digest: [u8; 32],
 }
-
 impl EvidenceViewerRuntimeProviderQualificationV1 {
     /// Construct one provider qualification observation.
     ///
@@ -369,24 +356,20 @@ impl EvidenceViewerRuntimeProviderQualificationV1 {
             policy_digest,
         }
     }
-
     /// Return the non-zero deployment adapter/policy revision.
     #[must_use]
     pub const fn revision(self) -> u64 {
         self.revision
     }
-
     /// Return the non-zero digest of the public provider policy.
     #[must_use]
     pub const fn policy_digest(self) -> [u8; 32] {
         self.policy_digest
     }
-
     fn is_valid(self) -> bool {
         self.revision != 0 && !is_zero_digest(self.policy_digest)
     }
 }
-
 /// Stable, payload-free evidence-viewer provider qualification failures.
 ///
 /// Provider implementations retain credentials, key identifiers, and vendor
@@ -434,7 +417,6 @@ pub enum EvidenceViewerRuntimeProviderQualificationErrorV1 {
     #[error("evidence-viewer compaction archive public key does not match configuration")]
     ArchivePublicKeyChanged,
 }
-
 /// Fixed readiness failures returned by an evidence-viewer runtime provider.
 ///
 /// Implementations retain vendor diagnostics inside protected provider
@@ -448,7 +430,6 @@ pub enum EvidenceViewerRuntimeProviderReadinessErrorV1 {
     #[error("evidence-viewer runtime provider rejected qualification")]
     Rejected,
 }
-
 /// Stable identity and readiness exposed by an external evidence-viewer provider.
 ///
 /// Implementations own all credentials, signing keys, authentication material,
@@ -459,7 +440,6 @@ pub enum EvidenceViewerRuntimeProviderReadinessErrorV1 {
 pub trait EvidenceViewerRuntimeProviderV1: Send + Sync + fmt::Debug {
     /// Return the stable opaque deployment handle for this provider.
     fn handle(&self) -> &str;
-
     /// Qualify the active adapter and its public policy revision.
     fn qualification(
         &self,
@@ -468,7 +448,6 @@ pub trait EvidenceViewerRuntimeProviderV1: Send + Sync + fmt::Debug {
         EvidenceViewerRuntimeProviderReadinessErrorV1,
     >;
 }
-
 /// Runtime-only WebAuthn boundary.
 pub trait EvidenceViewerWebAuthnBoundaryV1: EvidenceViewerRuntimeProviderV1 {
     /// Issue an unpredictable challenge bound to exact non-secret claims.
@@ -477,7 +456,6 @@ pub trait EvidenceViewerWebAuthnBoundaryV1: EvidenceViewerRuntimeProviderV1 {
         binding_digest: [u8; 32],
         expires_at_unix_ms: u64,
     ) -> Result<OpaqueEvidenceViewerSecretV1, EvidenceViewerExternalErrorV1>;
-
     /// Verify and consume one challenge/assertion pair.
     fn verify_and_consume(
         &self,
@@ -489,7 +467,6 @@ pub trait EvidenceViewerWebAuthnBoundaryV1: EvidenceViewerRuntimeProviderV1 {
         now_unix_ms: u64,
     ) -> Result<EvidenceViewerWebAuthnResultV1, EvidenceViewerExternalErrorV1>;
 }
-
 /// Claims bound into every rotating grant.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerGrantClaimsV1 {
@@ -514,7 +491,6 @@ pub struct EvidenceViewerGrantClaimsV1 {
     /// Grant expiry timestamp.
     pub expires_at_unix_ms: u64,
 }
-
 /// Runtime-only rotating-grant boundary.
 pub trait EvidenceViewerGrantBoundaryV1: EvidenceViewerRuntimeProviderV1 {
     /// Issue one unforgeable grant for exact claims.
@@ -522,7 +498,6 @@ pub trait EvidenceViewerGrantBoundaryV1: EvidenceViewerRuntimeProviderV1 {
         &self,
         claims: &EvidenceViewerGrantClaimsV1,
     ) -> Result<OpaqueEvidenceViewerSecretV1, EvidenceViewerExternalErrorV1>;
-
     /// Verify an unexpired grant against exact claims.
     fn verify(
         &self,
@@ -530,14 +505,11 @@ pub trait EvidenceViewerGrantBoundaryV1: EvidenceViewerRuntimeProviderV1 {
         claims: &EvidenceViewerGrantClaimsV1,
         now_unix_ms: u64,
     ) -> Result<(), EvidenceViewerExternalErrorV1>;
-
     /// Revoke a previously issued token digest. Implementations must be
     /// idempotent.
     fn revoke(&self, token_digest: [u8; 32]) -> Result<(), EvidenceViewerExternalErrorV1>;
 }
-
 include!("evidence_viewer/receipt_signing.rs");
-
 /// Runtime-only erasure/KMS boundary.
 pub trait EvidenceViewerErasureBoundaryV1: EvidenceViewerRuntimeProviderV1 {
     /// Irreversibly erase or cryptographically destroy one exact object.
@@ -555,7 +527,6 @@ pub trait EvidenceViewerErasureBoundaryV1: EvidenceViewerRuntimeProviderV1 {
         evidence_digest: [u8; 32],
     ) -> Result<[u8; 32], EvidenceViewerExternalErrorV1>;
 }
-
 /// Fixed payload-free failures returned by the authoritative checkpoint store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum EvidenceViewerCheckpointStoreExternalErrorV1 {
@@ -569,7 +540,6 @@ pub enum EvidenceViewerCheckpointStoreExternalErrorV1 {
     #[error("evidence-viewer checkpoint store CAS outcome is ambiguous")]
     Ambiguous,
 }
-
 /// Signed canonical record retained by the authoritative checkpoint store.
 ///
 /// The record carries no credentials or private material. Its generation and
@@ -606,7 +576,6 @@ pub struct EvidenceViewerCheckpointStoreRecordV1 {
     /// Deterministic content-addressed CAS revision.
     pub revision: [u8; 32],
 }
-
 impl fmt::Debug for EvidenceViewerCheckpointStoreRecordV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -633,7 +602,6 @@ impl fmt::Debug for EvidenceViewerCheckpointStoreRecordV1 {
             .finish()
     }
 }
-
 /// Runtime-only linearizable authority for evidence-viewer checkpoints.
 ///
 /// Implementations must retain exact records across restarts and enforce CAS
@@ -652,7 +620,6 @@ pub trait EvidenceViewerCheckpointStoreV1: EvidenceViewerRuntimeProviderV1 {
         Option<EvidenceViewerCheckpointStoreRecordV1>,
         EvidenceViewerCheckpointStoreExternalErrorV1,
     >;
-
     /// Install `next` only when the current deterministic revision matches.
     ///
     /// Implementations must return
@@ -668,7 +635,6 @@ pub trait EvidenceViewerCheckpointStoreV1: EvidenceViewerRuntimeProviderV1 {
         next: &EvidenceViewerCheckpointStoreRecordV1,
     ) -> Result<(), EvidenceViewerCheckpointStoreExternalErrorV1>;
 }
-
 /// Authenticated exact readback from the immutable compaction archive.
 #[derive(Clone, PartialEq, Eq)]
 pub struct EvidenceViewerCompactionArchiveReadbackV1 {
@@ -677,7 +643,6 @@ pub struct EvidenceViewerCompactionArchiveReadbackV1 {
     /// Archive Ed25519 signature emitted only after durable installation.
     pub signature: [u8; 64],
 }
-
 impl fmt::Debug for EvidenceViewerCompactionArchiveReadbackV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -688,7 +653,6 @@ impl fmt::Debug for EvidenceViewerCompactionArchiveReadbackV1 {
             .finish()
     }
 }
-
 /// Deployment-owned immutable archive for signed compaction artifacts.
 ///
 /// `install` must durably bind one exact canonical artifact to `operation_id`
@@ -702,10 +666,8 @@ impl fmt::Debug for EvidenceViewerCompactionArchiveReadbackV1 {
 pub trait EvidenceViewerCompactionArchiveV1: EvidenceViewerRuntimeProviderV1 {
     /// Return the stable non-secret archive namespace identity.
     fn archive_id(&self) -> [u8; 32];
-
     /// Return the exact current-epoch Ed25519 key authenticating new installs.
     fn signing_public_key(&self) -> [u8; 32];
-
     /// Durably install one exact signed archive artifact.
     ///
     /// `receipt_message` is the service-derived fixed digest bound to the
@@ -721,7 +683,6 @@ pub trait EvidenceViewerCompactionArchiveV1: EvidenceViewerRuntimeProviderV1 {
         receipt_message: [u8; 32],
         canonical_artifact: &[u8],
     ) -> Result<[u8; 64], EvidenceViewerExternalErrorV1>;
-
     /// Read back the exact artifact bound to `operation_id`.
     ///
     /// `Ok(None)` is valid only when the identifier has never been installed.
@@ -737,7 +698,6 @@ pub trait EvidenceViewerCompactionArchiveV1: EvidenceViewerRuntimeProviderV1 {
         operation_id: [u8; 32],
     ) -> Result<Option<EvidenceViewerCompactionArchiveReadbackV1>, EvidenceViewerExternalErrorV1>;
 }
-
 /// Runtime-only dependencies for the evidence-viewer service.
 #[derive(Clone)]
 pub struct EvidenceViewerRuntimeDepsV1 {
@@ -754,7 +714,6 @@ pub struct EvidenceViewerRuntimeDepsV1 {
     /// Immutable authenticated compaction archive.
     pub compaction_archive: Arc<dyn EvidenceViewerCompactionArchiveV1>,
 }
-
 impl fmt::Debug for EvidenceViewerRuntimeDepsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -768,13 +727,11 @@ impl fmt::Debug for EvidenceViewerRuntimeDepsV1 {
             .finish()
     }
 }
-
 struct QualifiedEvidenceViewerProviderV1<P: EvidenceViewerRuntimeProviderV1 + ?Sized> {
     handle: String,
     qualification: EvidenceViewerRuntimeProviderQualificationV1,
     provider: Arc<P>,
 }
-
 impl<P: EvidenceViewerRuntimeProviderV1 + ?Sized> QualifiedEvidenceViewerProviderV1<P> {
     fn try_new(
         expected_handle: &str,
@@ -798,7 +755,6 @@ impl<P: EvidenceViewerRuntimeProviderV1 + ?Sized> QualifiedEvidenceViewerProvide
             provider,
         })
     }
-
     fn revalidate(&self) -> Result<(), EvidenceViewerRuntimeProviderQualificationErrorV1> {
         assert_evidence_viewer_runtime_provider_qualification(
             &self.handle,
@@ -806,7 +762,6 @@ impl<P: EvidenceViewerRuntimeProviderV1 + ?Sized> QualifiedEvidenceViewerProvide
             self.provider.as_ref(),
         )
     }
-
     fn invoke<T>(
         &self,
         operation: impl FnOnce(&P) -> Result<T, EvidenceViewerExternalErrorV1>,
@@ -819,7 +774,6 @@ impl<P: EvidenceViewerRuntimeProviderV1 + ?Sized> QualifiedEvidenceViewerProvide
         result
     }
 }
-
 impl<P: EvidenceViewerRuntimeProviderV1 + ?Sized> fmt::Debug
     for QualifiedEvidenceViewerProviderV1<P>
 {
@@ -832,7 +786,6 @@ impl<P: EvidenceViewerRuntimeProviderV1 + ?Sized> fmt::Debug
             .finish()
     }
 }
-
 impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerCheckpointStoreV1> {
     fn load_latest(
         &self,
@@ -847,7 +800,6 @@ impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerCheckpointStoreV1> {
             .map_err(|_| EvidenceViewerCheckpointStoreExternalErrorV1::Unavailable)?;
         result
     }
-
     fn compare_and_swap_latest(
         &self,
         expected_revision: Option<[u8; 32]>,
@@ -863,7 +815,6 @@ impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerCheckpointStoreV1> {
         result
     }
 }
-
 impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerWebAuthnBoundaryV1> {
     fn issue_challenge(
         &self,
@@ -872,7 +823,6 @@ impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerWebAuthnBoundaryV1> {
     ) -> Result<OpaqueEvidenceViewerSecretV1, EvidenceViewerExternalErrorV1> {
         self.invoke(|provider| provider.issue_challenge(binding_digest, expires_at_unix_ms))
     }
-
     fn verify_and_consume(
         &self,
         challenge: &str,
@@ -894,7 +844,6 @@ impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerWebAuthnBoundaryV1> {
         })
     }
 }
-
 impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerGrantBoundaryV1> {
     fn issue(
         &self,
@@ -902,7 +851,6 @@ impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerGrantBoundaryV1> {
     ) -> Result<OpaqueEvidenceViewerSecretV1, EvidenceViewerExternalErrorV1> {
         self.invoke(|provider| provider.issue(claims))
     }
-
     fn verify(
         &self,
         token: &str,
@@ -911,12 +859,10 @@ impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerGrantBoundaryV1> {
     ) -> Result<(), EvidenceViewerExternalErrorV1> {
         self.invoke(|provider| provider.verify(token, claims, now_unix_ms))
     }
-
     fn revoke(&self, token_digest: [u8; 32]) -> Result<(), EvidenceViewerExternalErrorV1> {
         self.invoke(|provider| provider.revoke(token_digest))
     }
 }
-
 impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerErasureBoundaryV1> {
     fn erase(
         &self,
@@ -930,13 +876,11 @@ impl QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerErasureBoundaryV1> {
         })
     }
 }
-
 struct QualifiedEvidenceViewerCompactionArchiveV1 {
     inner: QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerCompactionArchiveV1>,
     archive_id: [u8; 32],
     public_key: [u8; 32],
 }
-
 impl QualifiedEvidenceViewerCompactionArchiveV1 {
     fn try_new(
         expected_handle: &str,
@@ -963,7 +907,6 @@ impl QualifiedEvidenceViewerCompactionArchiveV1 {
             public_key: expected_public_key,
         })
     }
-
     fn read_qualified_identity(
         inner: &QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerCompactionArchiveV1>,
     ) -> Result<([u8; 32], [u8; 32]), EvidenceViewerRuntimeProviderQualificationErrorV1> {
@@ -975,7 +918,6 @@ impl QualifiedEvidenceViewerCompactionArchiveV1 {
         inner.revalidate()?;
         Ok(identity)
     }
-
     fn revalidate_identity(&self) -> Result<(), EvidenceViewerExternalErrorV1> {
         let (archive_id, public_key) = Self::read_qualified_identity(&self.inner)
             .map_err(|_| EvidenceViewerExternalErrorV1::Unavailable)?;
@@ -984,7 +926,6 @@ impl QualifiedEvidenceViewerCompactionArchiveV1 {
         }
         Ok(())
     }
-
     fn install(
         &self,
         operation_id: [u8; 32],
@@ -999,7 +940,6 @@ impl QualifiedEvidenceViewerCompactionArchiveV1 {
         self.revalidate_identity()?;
         result
     }
-
     fn read(
         &self,
         operation_id: [u8; 32],
@@ -1010,16 +950,13 @@ impl QualifiedEvidenceViewerCompactionArchiveV1 {
         self.revalidate_identity()?;
         result
     }
-
     fn handle(&self) -> &str {
         &self.inner.handle
     }
-
     fn qualification(&self) -> EvidenceViewerRuntimeProviderQualificationV1 {
         self.inner.qualification
     }
 }
-
 impl fmt::Debug for QualifiedEvidenceViewerCompactionArchiveV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1030,7 +967,6 @@ impl fmt::Debug for QualifiedEvidenceViewerCompactionArchiveV1 {
             .finish()
     }
 }
-
 struct QualifiedEvidenceViewerRuntimeDepsV1 {
     authorization_reader: Arc<dyn EvidenceViewerFinalizedAuthorizationReaderV1>,
     webauthn: QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerWebAuthnBoundaryV1>,
@@ -1039,7 +975,6 @@ struct QualifiedEvidenceViewerRuntimeDepsV1 {
     erasure: QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerErasureBoundaryV1>,
     compaction_archive: QualifiedEvidenceViewerCompactionArchiveV1,
 }
-
 impl QualifiedEvidenceViewerRuntimeDepsV1 {
     fn try_new(
         config: &EvidenceViewerConfigV1,
@@ -1091,7 +1026,6 @@ impl QualifiedEvidenceViewerRuntimeDepsV1 {
         })
     }
 }
-
 impl fmt::Debug for QualifiedEvidenceViewerRuntimeDepsV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1105,10 +1039,8 @@ impl fmt::Debug for QualifiedEvidenceViewerRuntimeDepsV1 {
             .finish()
     }
 }
-
 /// Secret token returned exactly once to an authenticated caller.
 pub struct OpaqueEvidenceViewerSecretV1(String);
-
 impl OpaqueEvidenceViewerSecretV1 {
     /// Construct a bounded opaque token at a runtime trust boundary.
     ///
@@ -1128,24 +1060,20 @@ impl OpaqueEvidenceViewerSecretV1 {
         }
         Ok(Self(value))
     }
-
     /// Borrow the token for the immediate response or provider call.
     #[must_use]
     pub fn expose(&self) -> &str {
         &self.0
     }
-
     fn digest(&self) -> [u8; 32] {
         *blake3::hash(self.0.as_bytes()).as_bytes()
     }
 }
-
 impl fmt::Debug for OpaqueEvidenceViewerSecretV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("OpaqueEvidenceViewerSecretV1(<redacted>)")
     }
 }
-
 impl Drop for OpaqueEvidenceViewerSecretV1 {
     fn drop(&mut self) {
         let mut bytes = std::mem::take(&mut self.0).into_bytes();
@@ -1153,7 +1081,6 @@ impl Drop for OpaqueEvidenceViewerSecretV1 {
         let _ = std::hint::black_box(&bytes);
     }
 }
-
 /// Challenge issuance request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvidenceViewerChallengeRequestV1 {
@@ -1174,7 +1101,6 @@ pub struct EvidenceViewerChallengeRequestV1 {
     /// Runtime clock timestamp.
     pub now_unix_ms: u64,
 }
-
 /// Challenge issued to an authenticated browser.
 #[derive(Debug)]
 pub struct EvidenceViewerChallengeIssuedV1 {
@@ -1185,7 +1111,6 @@ pub struct EvidenceViewerChallengeIssuedV1 {
     /// Challenge expiry.
     pub expires_at_unix_ms: u64,
 }
-
 /// Session creation request.
 pub struct EvidenceViewerSessionRequestV1 {
     /// Exact case identifier.
@@ -1209,7 +1134,6 @@ pub struct EvidenceViewerSessionRequestV1 {
     /// Runtime clock timestamp.
     pub now_unix_ms: u64,
 }
-
 impl fmt::Debug for EvidenceViewerSessionRequestV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1228,14 +1152,12 @@ impl fmt::Debug for EvidenceViewerSessionRequestV1 {
             .finish()
     }
 }
-
 impl Drop for EvidenceViewerSessionRequestV1 {
     fn drop(&mut self) {
         self.webauthn_assertion.fill(0);
         let _ = std::hint::black_box(&self.webauthn_assertion);
     }
 }
-
 /// One case-bound session returned with a rotating grant.
 #[derive(Debug)]
 pub struct EvidenceViewerSessionIssuedV1 {
@@ -1246,7 +1168,6 @@ pub struct EvidenceViewerSessionIssuedV1 {
     /// Signed payload-free issuance receipt.
     pub receipt: EvidenceViewerSignedReceiptV1,
 }
-
 /// Payload-free case-bound security metadata for one session.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerSessionSecurityRecordV1 {
@@ -1285,7 +1206,6 @@ pub struct EvidenceViewerSessionSecurityRecordV1 {
     /// Whether the session was revoked or erased.
     pub revoked: bool,
 }
-
 /// Payload-free browser manifest.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerManifestV1 {
@@ -1324,7 +1244,6 @@ pub struct EvidenceViewerManifestV1 {
     /// Finalized authorization block hash.
     pub finalized_block_hash: [u8; 32],
 }
-
 /// One authenticated manifest response with a rotated grant.
 #[derive(Debug)]
 pub struct EvidenceViewerManifestOutcomeV1 {
@@ -1335,7 +1254,6 @@ pub struct EvidenceViewerManifestOutcomeV1 {
     /// Signed access receipt.
     pub receipt: EvidenceViewerSignedReceiptV1,
 }
-
 /// One authenticated range response with a rotated grant.
 pub struct EvidenceViewerRangeOutcomeV1 {
     /// Authenticated decrypted range. This value must never be formatted into a
@@ -1348,7 +1266,6 @@ pub struct EvidenceViewerRangeOutcomeV1 {
     /// Signed access receipt committed before bytes are returned.
     pub receipt: EvidenceViewerSignedReceiptV1,
 }
-
 impl fmt::Debug for EvidenceViewerRangeOutcomeV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1365,7 +1282,6 @@ impl fmt::Debug for EvidenceViewerRangeOutcomeV1 {
             .finish()
     }
 }
-
 /// Payload-free signed receipt kind.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
@@ -1392,7 +1308,6 @@ pub enum EvidenceViewerReceiptKindV1 {
     /// Erasure denied because a legal hold had precedence.
     ErasureDeniedLegalHold,
 }
-
 /// Canonical payload-free receipt body.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerReceiptBodyV1 {
@@ -1429,7 +1344,6 @@ pub struct EvidenceViewerReceiptBodyV1 {
     /// Previous receipt digest, or zeroes for the first receipt.
     pub previous_receipt_digest: [u8; 32],
 }
-
 /// Ed25519-authenticated payload-free receipt.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerSignedReceiptV1 {
@@ -1444,7 +1358,6 @@ pub struct EvidenceViewerSignedReceiptV1 {
     /// Ed25519 signature.
     pub signature: [u8; 64],
 }
-
 impl EvidenceViewerSignedReceiptV1 {
     /// Verify the body digest, chain-neutral signature, and governed identity.
     ///
@@ -1474,7 +1387,6 @@ impl EvidenceViewerSignedReceiptV1 {
             .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)
     }
 }
-
 /// Exact cursor into the durable signed evidence-viewer receipt chain.
 ///
 /// Consumers must persist both fields. A sequence without its exact digest is
@@ -1489,7 +1401,6 @@ pub struct EvidenceViewerReceiptCursorV1 {
     /// Exact signed receipt digest at `sequence`.
     pub receipt_digest: [u8; 32],
 }
-
 /// Public Ed25519-authenticated anchor for one exact durable checkpoint.
 ///
 /// The signature covers the checkpoint generation and predecessor, checkpoint
@@ -1528,7 +1439,6 @@ pub struct EvidenceViewerSignedCheckpointAnchorV1 {
     /// Ed25519 signature over the exact anchor fields.
     pub signature: [u8; 64],
 }
-
 impl EvidenceViewerSignedCheckpointAnchorV1 {
     /// Verify the exact signer identity, structural head/count binding, and
     /// Ed25519 signature.
@@ -1582,7 +1492,6 @@ impl EvidenceViewerSignedCheckpointAnchorV1 {
             .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)
     }
 }
-
 /// Exact caller fence for one signed compaction/archive transition.
 ///
 /// The signed checkpoint anchor and archive predecessor must both match the
@@ -1599,7 +1508,6 @@ pub struct EvidenceViewerCompactionArchiveRequestV1 {
     /// Maximum combined challenge/session records removed by this transition.
     pub maximum_records: u32,
 }
-
 /// Signed monotonic head for one immutable compaction archive artifact.
 ///
 /// The head contains only payload-free metadata. The archive artifact contains
@@ -1661,7 +1569,6 @@ pub struct EvidenceViewerSignedCompactionArchiveHeadV1 {
     /// Archive signature emitted only after durable exact installation.
     pub archive_signature: [u8; 64],
 }
-
 impl EvidenceViewerSignedCompactionArchiveHeadV1 {
     /// Verify structure, deterministic identities, and the governed signature.
     ///
@@ -1677,7 +1584,6 @@ impl EvidenceViewerSignedCompactionArchiveHeadV1 {
         verify_compaction_archive_head(self, expected_signer_handle, expected_signer_public_key)
     }
 }
-
 /// Bounded payload-free projection for transparency and durable readback.
 ///
 /// `receipts` is a contiguous suffix of the authoritative signed checkpoint
@@ -1712,7 +1618,6 @@ pub struct EvidenceViewerTransparencyProjectionV1 {
     /// marker.
     pub projection_digest: [u8; 32],
 }
-
 impl EvidenceViewerTransparencyProjectionV1 {
     /// Verify projection structure, exact receipt-chain continuation, every
     /// receipt signature, and the projection digest.
@@ -1802,7 +1707,6 @@ impl EvidenceViewerTransparencyProjectionV1 {
         Ok(())
     }
 }
-
 /// Legal-hold state for one evidence object.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerLegalHoldV1 {
@@ -1821,7 +1725,6 @@ pub struct EvidenceViewerLegalHoldV1 {
     /// Optional release timestamp.
     pub released_at_unix_ms: Option<u64>,
 }
-
 /// Payload-free erasure state.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerErasureRecordV1 {
@@ -1838,7 +1741,6 @@ pub struct EvidenceViewerErasureRecordV1 {
     /// Signed erasure receipt digest.
     pub receipt_digest: [u8; 32],
 }
-
 /// Payload-free signed retention decision.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerRetentionRecordV1 {
@@ -1857,7 +1759,6 @@ pub struct EvidenceViewerRetentionRecordV1 {
     /// Signed retention receipt digest.
     pub receipt_digest: [u8; 32],
 }
-
 /// Payload-free audit/status projection.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerAuditStatusV1 {
@@ -1879,7 +1780,6 @@ pub struct EvidenceViewerAuditStatusV1 {
     /// counters above.
     pub checkpoint_anchor: EvidenceViewerSignedCheckpointAnchorV1,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ChallengeRecordV1 {
     challenge_id: [u8; 16],
@@ -1899,14 +1799,12 @@ struct ChallengeRecordV1 {
     expires_at_unix_ms: u64,
     consumed_at_unix_ms: Option<u64>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct IdempotencyRecordV1 {
     idempotency_key: [u8; 32],
     request_digest: [u8; 32],
     outcome_digest: [u8; 32],
 }
-
 /// Durable write-ahead intent for one irreversible erasure.
 ///
 /// The intent is committed before crossing the KMS/object-store boundary and
@@ -1926,21 +1824,18 @@ struct EvidenceViewerErasureIntentV1 {
     request_digest: [u8; 32],
     requested_at_unix_ms: u64,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerCompactionArchivePayloadV1 {
     version: u16,
     challenges: Vec<ChallengeRecordV1>,
     sessions: Vec<EvidenceViewerSessionSecurityRecordV1>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerCompactionArchiveArtifactV1 {
     version: u16,
     head: EvidenceViewerSignedCompactionArchiveHeadV1,
     payload: EvidenceViewerCompactionArchivePayloadV1,
 }
-
 /// Payload-free minimum default-retention boundary retained after session
 /// compaction.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -1951,7 +1846,6 @@ struct EvidenceViewerDefaultRetentionFloorV1 {
     basis_session_expires_at_unix_ms: u64,
     retain_until_unix_ms: u64,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerCheckpointV1 {
     version: u16,
@@ -1966,14 +1860,12 @@ struct EvidenceViewerCheckpointV1 {
     idempotency: Vec<IdempotencyRecordV1>,
     compaction_archive_head: Option<EvidenceViewerSignedCompactionArchiveHeadV1>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerCheckpointEnvelopeV1 {
     version: u16,
     checkpoint: EvidenceViewerCheckpointV1,
     checkpoint_anchor: EvidenceViewerSignedCheckpointAnchorV1,
 }
-
 impl Default for EvidenceViewerCheckpointV1 {
     fn default() -> Self {
         Self {
@@ -1991,7 +1883,6 @@ impl Default for EvidenceViewerCheckpointV1 {
         }
     }
 }
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct EvidenceViewerStateV1 {
     challenges: BTreeMap<[u8; 16], ChallengeRecordV1>,
@@ -2009,13 +1900,11 @@ struct EvidenceViewerStateV1 {
     durability_uncertain: bool,
     authoritative_race_adopted: bool,
 }
-
 type VerifiedEvidenceViewerCheckpointV1 = (
     EvidenceViewerCheckpointStoreRecordV1,
     EvidenceViewerCheckpointV1,
     EvidenceViewerSignedCheckpointAnchorV1,
 );
-
 /// Production evidence-viewer service.
 pub struct EvidenceViewerServiceV1 {
     config: EvidenceViewerConfigV1,
@@ -2024,7 +1913,6 @@ pub struct EvidenceViewerServiceV1 {
     node: NodeHandle,
     state: Mutex<EvidenceViewerStateV1>,
 }
-
 impl fmt::Debug for EvidenceViewerServiceV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -2037,7 +1925,6 @@ impl fmt::Debug for EvidenceViewerServiceV1 {
             .finish()
     }
 }
-
 /// Evidence-viewer operation failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum EvidenceViewerErrorV1 {
@@ -2084,7 +1971,6 @@ pub enum EvidenceViewerErrorV1 {
     #[error("evidence-viewer state unavailable")]
     StateUnavailable,
 }
-
 #[derive(Debug)]
 enum EvidenceViewerCheckpointCommitFailureV1 {
     Unchanged,
@@ -2093,7 +1979,6 @@ enum EvidenceViewerCheckpointCommitFailureV1 {
     Ambiguous,
     Unavailable,
 }
-
 impl EvidenceViewerCheckpointCommitFailureV1 {
     const fn service_error(&self) -> EvidenceViewerErrorV1 {
         match self {
@@ -2103,12 +1988,10 @@ impl EvidenceViewerCheckpointCommitFailureV1 {
             Self::Ambiguous | Self::Unavailable => EvidenceViewerErrorV1::CheckpointUnavailable,
         }
     }
-
     const fn makes_state_uncertain(&self) -> bool {
         matches!(self, Self::Ambiguous)
     }
 }
-
 impl EvidenceViewerServiceV1 {
     /// Open against an exact qualified authoritative checkpoint store.
     ///
@@ -2191,13 +2074,11 @@ impl EvidenceViewerServiceV1 {
         }
         Ok(service)
     }
-
     /// Return the exact governed policy.
     #[must_use]
     pub fn config(&self) -> &EvidenceViewerConfigV1 {
         &self.config
     }
-
     /// Issue a single-use, case-bound WebAuthn challenge.
     ///
     /// # Errors
@@ -2330,7 +2211,6 @@ impl EvidenceViewerServiceV1 {
             expires_at_unix_ms,
         })
     }
-
     /// Verify WebAuthn and create one case-bound session and initial grant.
     ///
     /// # Errors
@@ -2641,7 +2521,6 @@ impl EvidenceViewerServiceV1 {
             receipt,
         })
     }
-
     /// Return a payload-free case manifest and rotate the grant.
     ///
     /// # Errors
@@ -2769,7 +2648,6 @@ impl EvidenceViewerServiceV1 {
             receipt,
         })
     }
-
     /// Authenticate, decrypt, durably log, and return one bounded range.
     ///
     /// The decrypted bytes are returned only after the signed access receipt is
@@ -2896,7 +2774,6 @@ impl EvidenceViewerServiceV1 {
             receipt,
         })
     }
-
     /// Record a bounded browser interaction and rotate the grant.
     ///
     /// # Errors
@@ -3006,7 +2883,6 @@ impl EvidenceViewerServiceV1 {
         let _ = self.deps.grants.revoke(grant.digest());
         Ok((rotated.token, receipt))
     }
-
     /// Place a legal hold. Only an exact finalized legal authorization is
     /// accepted.
     ///
@@ -3118,7 +2994,6 @@ impl EvidenceViewerServiceV1 {
         }
         Ok((hold, receipt))
     }
-
     /// Release one active legal hold under an exact finalized legal role.
     ///
     /// # Errors
@@ -3222,7 +3097,6 @@ impl EvidenceViewerServiceV1 {
         }
         Ok((released, receipt))
     }
-
     /// Record one signed retention decision under an exact finalized legal
     /// authorization.
     ///
@@ -3333,7 +3207,6 @@ impl EvidenceViewerServiceV1 {
         }
         Ok((retention, receipt))
     }
-
     /// Erase an object unless an active legal hold has precedence.
     ///
     /// Both successful erasure and legal-hold denial produce signed,
@@ -3503,7 +3376,6 @@ impl EvidenceViewerServiceV1 {
         }
         Ok((erasure, receipt))
     }
-
     fn reconcile_erasure_intents(&self) -> Result<(), EvidenceViewerErrorV1> {
         let mut state = self
             .state
@@ -3544,7 +3416,6 @@ impl EvidenceViewerServiceV1 {
         }
         Ok(())
     }
-
     fn finalize_erasure_locked(
         &self,
         state: &mut EvidenceViewerStateV1,
@@ -3611,7 +3482,6 @@ impl EvidenceViewerServiceV1 {
         state.default_retention_floors.remove(&intent.quarantine_id);
         Ok((erasure, receipt))
     }
-
     /// Return a bounded deterministic list of evidence objects whose governed
     /// retention deadline has elapsed and which are not protected by a legal
     /// hold.
@@ -3660,7 +3530,6 @@ impl EvidenceViewerServiceV1 {
             .take(limit)
             .collect())
     }
-
     /// Return bounded signed receipts after an exclusive sequence.
     ///
     /// # Errors
@@ -3688,7 +3557,6 @@ impl EvidenceViewerServiceV1 {
             .cloned()
             .collect())
     }
-
     /// Refresh one fenced replica from the exact authoritative checkpoint head.
     ///
     /// The current in-memory head and the local cache must each be either the
@@ -3729,7 +3597,6 @@ impl EvidenceViewerServiceV1 {
         }
         *state = refreshed_state;
         drop(state);
-
         self.reconcile_erasure_intents()?;
         let state = self
             .state
@@ -3738,7 +3605,6 @@ impl EvidenceViewerServiceV1 {
         self.ensure_authoritative_state_locked(&state)?;
         validated_checkpoint_anchor(&self.config, &state)
     }
-
     /// Durably archive and then prune a bounded expired-record prefix.
     ///
     /// The caller fences the exact signed checkpoint and archive predecessor.
@@ -3771,14 +3637,12 @@ impl EvidenceViewerServiceV1 {
             .lock()
             .map_err(|_| EvidenceViewerErrorV1::StateUnavailable)?;
         self.ensure_authoritative_state_locked(&state)?;
-
         if let Some(head) = state.compaction_archive_head.as_ref()
             && compaction_archive_head_matches_request(head, &request, archive)
         {
             self.verify_compaction_archive_lineage(head)?;
             return Ok(head.clone());
         }
-
         let source_anchor = validated_checkpoint_anchor(&self.config, &state)?;
         let predecessor_head_digest = state
             .compaction_archive_head
@@ -3802,7 +3666,6 @@ impl EvidenceViewerServiceV1 {
             .as_ref()
             .map(|predecessor| self.compaction_archive_identity_history(predecessor))
             .transpose()?;
-
         let maximum_records = usize::try_from(request.maximum_records)
             .map_err(|_| EvidenceViewerErrorV1::InvalidRequest)?;
         let challenges = state
@@ -3912,7 +3775,6 @@ impl EvidenceViewerServiceV1 {
         if verified_artifact != artifact {
             return Err(EvidenceViewerErrorV1::InvalidCheckpoint);
         }
-
         let install_result = archive.install(
             head.operation_id,
             compaction_archive_receipt_message(&head),
@@ -3944,7 +3806,6 @@ impl EvidenceViewerServiceV1 {
             &self.config.receipt_signer_handle,
             self.config.receipt_signer_public_key,
         )?;
-
         let previous = state.clone();
         let archived_challenge_digests = artifact
             .payload
@@ -3988,7 +3849,6 @@ impl EvidenceViewerServiceV1 {
         }
         Ok(head)
     }
-
     /// Run one bounded supervised compaction tick against the current exact
     /// checkpoint and archive head.
     ///
@@ -4029,13 +3889,11 @@ impl EvidenceViewerServiceV1 {
             Err(error) => Err(error),
         }
     }
-
     /// Return the bounded cadence for the shutdown-aware compaction worker.
     #[must_use]
     pub const fn compaction_interval_ms(&self) -> u64 {
         self.config.compaction_interval_ms
     }
-
     fn verify_current_compaction_archive_readback(&self) -> Result<(), EvidenceViewerErrorV1> {
         let head = self
             .state
@@ -4048,14 +3906,12 @@ impl EvidenceViewerServiceV1 {
         }
         Ok(())
     }
-
     fn verify_compaction_archive_lineage(
         &self,
         head: &EvidenceViewerSignedCompactionArchiveHeadV1,
     ) -> Result<(), EvidenceViewerErrorV1> {
         self.compaction_archive_identity_history(head).map(|_| ())
     }
-
     fn compaction_archive_identity_history(
         &self,
         head: &EvidenceViewerSignedCompactionArchiveHeadV1,
@@ -4077,7 +3933,6 @@ impl EvidenceViewerServiceV1 {
         }
         Ok(history)
     }
-
     fn load_verified_compaction_archive_head(
         &self,
         operation_id: [u8; 32],
@@ -4101,7 +3956,6 @@ impl EvidenceViewerServiceV1 {
         )?;
         Ok(head)
     }
-
     /// Return the exact signed compaction-archive head retained by the current
     /// authoritative checkpoint.
     ///
@@ -4124,7 +3978,6 @@ impl EvidenceViewerServiceV1 {
         }
         Ok(state.compaction_archive_head.clone())
     }
-
     /// Return a bounded, exact-cursor projection of the durable signed receipt
     /// chain for transparency publication or replica readback.
     ///
@@ -4211,7 +4064,6 @@ impl EvidenceViewerServiceV1 {
             projection_digest,
         })
     }
-
     /// Return a payload-free status projection.
     ///
     /// # Errors
@@ -4242,7 +4094,6 @@ impl EvidenceViewerServiceV1 {
             checkpoint_anchor,
         })
     }
-
     fn object_record(
         &self,
         quarantine_id: [u8; 16],
@@ -4260,7 +4111,6 @@ impl EvidenceViewerServiceV1 {
             .find(|record| record.quarantine_id == quarantine_id)
             .ok_or(EvidenceViewerErrorV1::NotFound)
     }
-
     fn authorize(
         &self,
         case_id: &str,
@@ -4294,7 +4144,6 @@ impl EvidenceViewerServiceV1 {
         }
         Ok(authorization)
     }
-
     fn active_session(
         &self,
         session_id: [u8; 16],
@@ -4327,7 +4176,6 @@ impl EvidenceViewerServiceV1 {
         }
         Ok(session)
     }
-
     fn reauthorize_session(
         &self,
         session: &EvidenceViewerSessionSecurityRecordV1,
@@ -4353,7 +4201,6 @@ impl EvidenceViewerServiceV1 {
         }
         Ok(authorization)
     }
-
     fn rotate_grant(
         &self,
         session: &EvidenceViewerSessionSecurityRecordV1,
@@ -4399,7 +4246,6 @@ impl EvidenceViewerServiceV1 {
             expires_at_unix_ms,
         })
     }
-
     fn append_receipt_locked(
         &self,
         state: &mut EvidenceViewerStateV1,
@@ -4460,7 +4306,6 @@ impl EvidenceViewerServiceV1 {
         state.receipts.push(receipt.clone());
         Ok(receipt)
     }
-
     fn load_authoritative_checkpoint(
         &self,
     ) -> Result<Option<VerifiedEvidenceViewerCheckpointV1>, EvidenceViewerErrorV1> {
@@ -4474,7 +4319,6 @@ impl EvidenceViewerServiceV1 {
             })
             .transpose()
     }
-
     fn ensure_authoritative_state_locked(
         &self,
         state: &EvidenceViewerStateV1,
@@ -4496,7 +4340,6 @@ impl EvidenceViewerServiceV1 {
         }
         Err(EvidenceViewerErrorV1::CheckpointChanged)
     }
-
     fn sign_checkpoint_store_record(
         &self,
         checkpoint_digest: [u8; 32],
@@ -4542,7 +4385,6 @@ impl EvidenceViewerServiceV1 {
         verify_checkpoint_store_record(&self.config, &self.checkpoint_store, &record)?;
         Ok(record)
     }
-
     fn commit_authoritative_checkpoint(
         &self,
         expected: Option<&EvidenceViewerCheckpointStoreRecordV1>,
@@ -4561,7 +4403,6 @@ impl EvidenceViewerServiceV1 {
         if before.as_ref() != expected {
             return Err(EvidenceViewerCheckpointCommitFailureV1::Stale);
         }
-
         let cas_result = self
             .checkpoint_store
             .compare_and_swap_latest(expected.map(|record| record.revision), next);
@@ -4602,7 +4443,6 @@ impl EvidenceViewerServiceV1 {
             checkpoint_anchor,
         ))))
     }
-
     fn persist_locked(
         &self,
         state: &mut EvidenceViewerStateV1,
@@ -4716,7 +4556,6 @@ impl EvidenceViewerServiceV1 {
                 return Err(failure.service_error());
             }
         }
-
         state.checkpoint_anchor = Some(checkpoint_anchor);
         state.checkpoint_record = Some(next_record.clone());
         if write_local_checkpoint_store_record(&self.config, &next_record).is_err() {
@@ -4726,7 +4565,6 @@ impl EvidenceViewerServiceV1 {
         Ok(())
     }
 }
-
 struct ReceiptSpecV1<'a> {
     kind: EvidenceViewerReceiptKindV1,
     session_id: Option<[u8; 16]>,
@@ -4741,14 +4579,12 @@ struct ReceiptSpecV1<'a> {
     range: Option<(u64, u64)>,
     issued_at_unix_ms: u64,
 }
-
 struct RotatedGrantV1 {
     token: OpaqueEvidenceViewerSecretV1,
     generation: u64,
     issued_at_unix_ms: u64,
     expires_at_unix_ms: u64,
 }
-
 fn apply_rotated_grant(
     state: &mut EvidenceViewerStateV1,
     expected: &EvidenceViewerSessionSecurityRecordV1,
@@ -4778,7 +4614,6 @@ fn apply_rotated_grant(
     session.active_grant_expires_at_unix_ms = rotated.expires_at_unix_ms;
     Ok(())
 }
-
 fn apply_reauthorized_anchor(
     state: &mut EvidenceViewerStateV1,
     expected: &EvidenceViewerSessionSecurityRecordV1,
@@ -4820,7 +4655,6 @@ fn apply_reauthorized_anchor(
     session.finalized_at_unix_ms = authorization.finalized_at_unix_ms;
     Ok(())
 }
-
 fn authorization_extends_challenge(
     authorization: &EvidenceViewerFinalizedAuthorizationV1,
     challenge: &ChallengeRecordV1,
@@ -4833,7 +4667,6 @@ fn authorization_extends_challenge(
         challenge.finalized_at_unix_ms,
     )
 }
-
 fn authorization_anchor_extends(
     authorization: &EvidenceViewerFinalizedAuthorizationV1,
     expected_policy_digest: [u8; 32],
@@ -4855,7 +4688,6 @@ fn authorization_anchor_extends(
         }
     }
 }
-
 fn grant_claims(
     session: &EvidenceViewerSessionSecurityRecordV1,
     now_unix_ms: u64,
@@ -4886,7 +4718,6 @@ fn grant_claims(
         expires_at_unix_ms: session.active_grant_expires_at_unix_ms,
     })
 }
-
 fn checkpoint_from_state(state: &EvidenceViewerStateV1) -> EvidenceViewerCheckpointV1 {
     EvidenceViewerCheckpointV1 {
         version: EVIDENCE_VIEWER_CHECKPOINT_VERSION_V1,
@@ -4902,7 +4733,6 @@ fn checkpoint_from_state(state: &EvidenceViewerStateV1) -> EvidenceViewerCheckpo
         compaction_archive_head: state.compaction_archive_head.clone(),
     }
 }
-
 fn checkpoint_payload_digest(
     checkpoint: &EvidenceViewerCheckpointV1,
 ) -> Result<[u8; 32], EvidenceViewerErrorV1> {
@@ -4913,7 +4743,6 @@ fn checkpoint_payload_digest(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn checkpoint_sequence_limit(config: &EvidenceViewerConfigV1) -> usize {
     config
         .max_challenges
@@ -4922,30 +4751,25 @@ fn checkpoint_sequence_limit(config: &EvidenceViewerConfigV1) -> usize {
         .saturating_add(config.max_idempotency_records)
         .saturating_add(config.max_sessions.saturating_mul(5))
 }
-
 fn checkpoint_store_record_max_bytes(config: &EvidenceViewerConfigV1) -> u64 {
     config
         .checkpoint_max_bytes
         .saturating_add(CHECKPOINT_STORE_RECORD_MAX_OVERHEAD_BYTES_V1)
 }
-
 fn checkpoint_store_record_sequence_limit(config: &EvidenceViewerConfigV1) -> usize {
     checkpoint_sequence_limit(config)
         .max(usize::try_from(config.checkpoint_max_bytes).unwrap_or(usize::MAX))
 }
-
 fn compaction_archive_max_bytes(config: &EvidenceViewerConfigV1) -> u64 {
     config
         .checkpoint_max_bytes
         .saturating_add(COMPACTION_ARCHIVE_MAX_OVERHEAD_BYTES_V1)
 }
-
 fn compaction_archive_sequence_limit(config: &EvidenceViewerConfigV1) -> usize {
     usize::try_from(config.compaction_max_records)
         .unwrap_or(usize::MAX)
         .max(1)
 }
-
 fn hash_optional_checkpoint_digest(hasher: &mut blake3::Hasher, digest: Option<[u8; 32]>) {
     match digest {
         Some(digest) => {
@@ -4957,7 +4781,6 @@ fn hash_optional_checkpoint_digest(hasher: &mut blake3::Hasher, digest: Option<[
         }
     }
 }
-
 fn hash_checkpoint_store_record_fields(
     hasher: &mut blake3::Hasher,
     record: &EvidenceViewerCheckpointStoreRecordV1,
@@ -4977,7 +4800,6 @@ fn hash_checkpoint_store_record_fields(
     hasher.update(record.signer_handle.as_bytes());
     hasher.update(&record.signer_public_key);
 }
-
 fn checkpoint_store_record_signature_message(
     record: &EvidenceViewerCheckpointStoreRecordV1,
 ) -> [u8; 32] {
@@ -4986,7 +4808,6 @@ fn checkpoint_store_record_signature_message(
     hash_checkpoint_store_record_fields(&mut hasher, record);
     *hasher.finalize().as_bytes()
 }
-
 fn checkpoint_store_record_revision(record: &EvidenceViewerCheckpointStoreRecordV1) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(CHECKPOINT_STORE_RECORD_REVISION_DOMAIN_V1);
@@ -4994,7 +4815,6 @@ fn checkpoint_store_record_revision(record: &EvidenceViewerCheckpointStoreRecord
     hasher.update(&record.signature);
     *hasher.finalize().as_bytes()
 }
-
 fn compaction_archive_payload_digest(
     payload: &EvidenceViewerCompactionArchivePayloadV1,
 ) -> Result<[u8; 32], EvidenceViewerErrorV1> {
@@ -5005,7 +4825,6 @@ fn compaction_archive_payload_digest(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn hash_compaction_archive_head_fields(
     hasher: &mut blake3::Hasher,
     head: &EvidenceViewerSignedCompactionArchiveHeadV1,
@@ -5036,7 +4855,6 @@ fn hash_compaction_archive_head_fields(
     hasher.update(&head.signer_public_key);
     Ok(())
 }
-
 fn compaction_archive_operation_id(
     head: &EvidenceViewerSignedCompactionArchiveHeadV1,
 ) -> Result<[u8; 32], EvidenceViewerErrorV1> {
@@ -5045,7 +4863,6 @@ fn compaction_archive_operation_id(
     hash_compaction_archive_head_fields(&mut hasher, head)?;
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn compaction_archive_signature_message(
     head: &EvidenceViewerSignedCompactionArchiveHeadV1,
 ) -> Result<[u8; 32], EvidenceViewerErrorV1> {
@@ -5055,7 +4872,6 @@ fn compaction_archive_signature_message(
     hasher.update(&head.operation_id);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn compaction_archive_head_digest(
     head: &EvidenceViewerSignedCompactionArchiveHeadV1,
 ) -> Result<[u8; 32], EvidenceViewerErrorV1> {
@@ -5066,7 +4882,6 @@ fn compaction_archive_head_digest(
     hasher.update(&head.signature);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn compaction_archive_receipt_message(
     head: &EvidenceViewerSignedCompactionArchiveHeadV1,
 ) -> [u8; 32] {
@@ -5078,7 +4893,6 @@ fn compaction_archive_receipt_message(
     hasher.update(&head.head_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn verify_compaction_archive_head(
     head: &EvidenceViewerSignedCompactionArchiveHeadV1,
     expected_signer_handle: &str,
@@ -5096,7 +4910,6 @@ fn verify_compaction_archive_head(
         .verify(&key, &compaction_archive_receipt_message(head))
         .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)
 }
-
 fn verify_compaction_archive_head_core(
     head: &EvidenceViewerSignedCompactionArchiveHeadV1,
     expected_signer_handle: &str,
@@ -5158,13 +4971,11 @@ fn verify_compaction_archive_head_core(
         .verify(&key, &compaction_archive_signature_message(head)?)
         .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)
 }
-
 struct CompactionArchiveIdentityHistoryV1 {
     public_keys: BTreeSet<[u8; 32]>,
     policy_digests: BTreeSet<[u8; 32]>,
     key_policy_tuples: BTreeSet<([u8; 32], [u8; 32])>,
 }
-
 impl CompactionArchiveIdentityHistoryV1 {
     fn new(head: &EvidenceViewerSignedCompactionArchiveHeadV1) -> Self {
         Self {
@@ -5176,7 +4987,6 @@ impl CompactionArchiveIdentityHistoryV1 {
             )]),
         }
     }
-
     fn observe_predecessor(
         &mut self,
         successor: &EvidenceViewerSignedCompactionArchiveHeadV1,
@@ -5208,7 +5018,6 @@ impl CompactionArchiveIdentityHistoryV1 {
         }
         Ok(())
     }
-
     fn verify_successor(
         &self,
         successor: &EvidenceViewerSignedCompactionArchiveHeadV1,
@@ -5241,7 +5050,6 @@ impl CompactionArchiveIdentityHistoryV1 {
         Ok(())
     }
 }
-
 fn verify_compaction_archive_current_provider_binding(
     head: &EvidenceViewerSignedCompactionArchiveHeadV1,
     archive: &QualifiedEvidenceViewerCompactionArchiveV1,
@@ -5256,7 +5064,6 @@ fn verify_compaction_archive_current_provider_binding(
     }
     Ok(())
 }
-
 fn verify_compaction_archive_checkpoint_binding(
     config: &EvidenceViewerConfigV1,
     head: &EvidenceViewerSignedCompactionArchiveHeadV1,
@@ -5285,7 +5092,6 @@ fn verify_compaction_archive_checkpoint_binding(
     }
     Ok(())
 }
-
 fn verify_compaction_archive_lineage_link(
     successor: &EvidenceViewerSignedCompactionArchiveHeadV1,
     predecessor: &EvidenceViewerSignedCompactionArchiveHeadV1,
@@ -5327,7 +5133,6 @@ fn verify_compaction_archive_lineage_link(
     }
     Ok(())
 }
-
 // Historical artifacts intentionally carry their epoch-specific key and
 // policy rather than the configured current identity. Every caller reads
 // through the currently qualified stable handle/namespace boundary; the
@@ -5405,7 +5210,6 @@ fn verify_compaction_archive_artifact(
     }
     Ok(artifact)
 }
-
 fn verify_checkpoint_store_record(
     config: &EvidenceViewerConfigV1,
     checkpoint_store: &QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerCheckpointStoreV1>,
@@ -5456,7 +5260,6 @@ fn verify_checkpoint_store_record(
     signature
         .verify(&key, &checkpoint_store_record_signature_message(record))
         .map_err(|_| EvidenceViewerErrorV1::InvalidCheckpoint)?;
-
     let envelope = decode_local_checkpoint_canonical::<EvidenceViewerCheckpointEnvelopeV1>(
         &record.checkpoint_bytes,
         config.checkpoint_max_bytes,
@@ -5491,7 +5294,6 @@ fn verify_checkpoint_store_record(
     }
     Ok((checkpoint, checkpoint_anchor))
 }
-
 fn read_local_checkpoint_store_record(
     config: &EvidenceViewerConfigV1,
     checkpoint_store: &QualifiedEvidenceViewerProviderV1<dyn EvidenceViewerCheckpointStoreV1>,
@@ -5513,7 +5315,6 @@ fn read_local_checkpoint_store_record(
     verify_checkpoint_store_record(config, checkpoint_store, &record)?;
     Ok(Some(record))
 }
-
 fn write_local_checkpoint_store_record(
     config: &EvidenceViewerConfigV1,
     record: &EvidenceViewerCheckpointStoreRecordV1,
@@ -5529,7 +5330,6 @@ fn write_local_checkpoint_store_record(
     )
     .map_err(|_| EvidenceViewerErrorV1::CheckpointUnavailable)
 }
-
 fn validate_checkpoint_cache_lineage(
     local: Option<&EvidenceViewerCheckpointStoreRecordV1>,
     authoritative: &EvidenceViewerCheckpointStoreRecordV1,
@@ -5548,7 +5348,6 @@ fn validate_checkpoint_cache_lineage(
     }
     Err(EvidenceViewerErrorV1::CheckpointChanged)
 }
-
 fn checkpoint_store_record_is_direct_successor(
     predecessor: Option<&EvidenceViewerCheckpointStoreRecordV1>,
     successor: &EvidenceViewerCheckpointStoreRecordV1,
@@ -5566,7 +5365,6 @@ fn checkpoint_store_record_is_direct_successor(
         }
     }
 }
-
 fn validated_checkpoint_anchor(
     config: &EvidenceViewerConfigV1,
     state: &EvidenceViewerStateV1,
@@ -5603,7 +5401,6 @@ fn validated_checkpoint_anchor(
     }
     Ok(anchor)
 }
-
 fn checkpoint_anchor_head_is_valid(
     receipt_count: u64,
     chain_head: Option<EvidenceViewerReceiptCursorV1>,
@@ -5616,7 +5413,6 @@ fn checkpoint_anchor_head_is_valid(
         }
     }
 }
-
 fn legal_hold_digest(
     quarantine_id: [u8; 16],
     object_id: [u8; 16],
@@ -5631,7 +5427,6 @@ fn legal_hold_digest(
     hasher.update(&authority_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn checkpoint_anchor_signature_message(anchor: &EvidenceViewerSignedCheckpointAnchorV1) -> Vec<u8> {
     let mut message = Vec::with_capacity(
         CHECKPOINT_SIGNATURE_DOMAIN_V1.len()
@@ -5688,7 +5483,6 @@ fn checkpoint_anchor_signature_message(anchor: &EvidenceViewerSignedCheckpointAn
     message.extend_from_slice(&anchor.signer_public_key);
     message
 }
-
 fn hash_optional_checkpoint_digest_bytes(output: &mut Vec<u8>, digest: Option<[u8; 32]>) {
     match digest {
         Some(digest) => {
@@ -5698,7 +5492,6 @@ fn hash_optional_checkpoint_digest_bytes(output: &mut Vec<u8>, digest: Option<[u
         None => output.push(0),
     }
 }
-
 fn hash_optional_receipt_cursor_bytes(
     output: &mut Vec<u8>,
     cursor: Option<EvidenceViewerReceiptCursorV1>,
@@ -5712,7 +5505,6 @@ fn hash_optional_receipt_cursor_bytes(
         None => output.push(0),
     }
 }
-
 fn verify_checkpoint_envelope(
     config: &EvidenceViewerConfigV1,
     envelope: EvidenceViewerCheckpointEnvelopeV1,
@@ -5741,7 +5533,6 @@ fn verify_checkpoint_envelope(
     validate_checkpoint(config, &envelope.checkpoint)?;
     Ok((envelope.checkpoint, envelope.checkpoint_anchor))
 }
-
 fn state_from_checkpoint(
     config: &EvidenceViewerConfigV1,
     checkpoint: EvidenceViewerCheckpointV1,
@@ -5798,7 +5589,6 @@ fn state_from_checkpoint(
         authoritative_race_adopted: false,
     })
 }
-
 fn validate_checkpoint(
     config: &EvidenceViewerConfigV1,
     checkpoint: &EvidenceViewerCheckpointV1,
@@ -6172,7 +5962,6 @@ fn validate_checkpoint(
     }
     Ok(())
 }
-
 fn validate_compaction_archive_request(
     config: &EvidenceViewerConfigV1,
     request: &EvidenceViewerCompactionArchiveRequestV1,
@@ -6192,7 +5981,6 @@ fn validate_compaction_archive_request(
     }
     Ok(())
 }
-
 fn compaction_archive_head_matches_request(
     head: &EvidenceViewerSignedCompactionArchiveHeadV1,
     request: &EvidenceViewerCompactionArchiveRequestV1,
@@ -6208,7 +5996,6 @@ fn compaction_archive_head_matches_request(
         && head.archive_id == archive.archive_id
         && head.archive_public_key == archive.public_key
 }
-
 fn validate_challenge_request(
     request: &EvidenceViewerChallengeRequestV1,
 ) -> Result<(), EvidenceViewerErrorV1> {
@@ -6221,7 +6008,6 @@ fn validate_challenge_request(
     }
     Ok(())
 }
-
 fn validate_session_request(
     request: &EvidenceViewerSessionRequestV1,
 ) -> Result<(), EvidenceViewerErrorV1> {
@@ -6238,7 +6024,6 @@ fn validate_session_request(
     }
     Ok(())
 }
-
 fn validate_label(value: &str) -> Result<(), EvidenceViewerErrorV1> {
     if value.is_empty()
         || value.len() > 256
@@ -6252,7 +6037,6 @@ fn validate_label(value: &str) -> Result<(), EvidenceViewerErrorV1> {
     }
     Ok(())
 }
-
 fn validate_purpose(value: &str) -> Result<(), EvidenceViewerErrorV1> {
     if value.is_empty()
         || value.len() > 256
@@ -6264,7 +6048,6 @@ fn validate_purpose(value: &str) -> Result<(), EvidenceViewerErrorV1> {
     }
     Ok(())
 }
-
 fn validate_evidence_viewer_runtime_provider_handle(
     handle: &str,
     configured: bool,
@@ -6283,7 +6066,6 @@ fn validate_evidence_viewer_runtime_provider_handle(
         }),
     }
 }
-
 fn qualify_evidence_viewer_runtime_provider<P: EvidenceViewerRuntimeProviderV1 + ?Sized>(
     expected_handle: &str,
     expected_qualification: EvidenceViewerRuntimeProviderQualificationV1,
@@ -6307,7 +6089,6 @@ fn qualify_evidence_viewer_runtime_provider<P: EvidenceViewerRuntimeProviderV1 +
     }
     Ok(())
 }
-
 fn assert_evidence_viewer_runtime_provider_qualification<
     P: EvidenceViewerRuntimeProviderV1 + ?Sized,
 >(
@@ -6329,7 +6110,6 @@ fn assert_evidence_viewer_runtime_provider_qualification<
     }
     Ok(())
 }
-
 fn ensure_unique_sorted<const N: usize>(
     values: impl Iterator<Item = [u8; N]>,
 ) -> Result<(), EvidenceViewerErrorV1> {
@@ -6342,7 +6122,6 @@ fn ensure_unique_sorted<const N: usize>(
     }
     Ok(())
 }
-
 fn ensure_new_idempotency(
     state: &EvidenceViewerStateV1,
     maximum_records: usize,
@@ -6363,7 +6142,6 @@ fn ensure_new_idempotency(
     }
     Ok(())
 }
-
 fn ensure_session_commit_slot(
     state: &EvidenceViewerStateV1,
     config: &EvidenceViewerConfigV1,
@@ -6398,7 +6176,6 @@ fn ensure_session_commit_slot(
     }
     Ok(())
 }
-
 fn ensure_durability(state: &EvidenceViewerStateV1) -> Result<(), EvidenceViewerErrorV1> {
     if state.durability_uncertain {
         Err(EvidenceViewerErrorV1::CheckpointUnavailable)
@@ -6406,11 +6183,9 @@ fn ensure_durability(state: &EvidenceViewerStateV1) -> Result<(), EvidenceViewer
         Ok(())
     }
 }
-
 fn can_restore_process_local_snapshot(state: &EvidenceViewerStateV1) -> bool {
     !state.durability_uncertain && !state.authoritative_race_adopted
 }
-
 fn retention_deadline_for(
     state: &EvidenceViewerStateV1,
     config: &EvidenceViewerConfigV1,
@@ -6436,7 +6211,6 @@ fn retention_deadline_for(
         .flatten()
         .max()
 }
-
 fn projected_default_retention_floors(
     state: &EvidenceViewerStateV1,
     config: &EvidenceViewerConfigV1,
@@ -6481,7 +6255,6 @@ fn projected_default_retention_floors(
     }
     Ok(projected)
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EvidenceViewerChallengeBindingContextV1 {
     object_id: [u8; 16],
@@ -6492,7 +6265,6 @@ struct EvidenceViewerChallengeBindingContextV1 {
     finalized_block_hash: [u8; 32],
     finalized_at_unix_ms: u64,
 }
-
 fn challenge_binding_digest(
     request: &EvidenceViewerChallengeRequestV1,
     context: EvidenceViewerChallengeBindingContextV1,
@@ -6513,7 +6285,6 @@ fn challenge_binding_digest(
     hasher.update(&context.finalized_at_unix_ms.to_le_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn session_request_digest(
     request: &EvidenceViewerSessionRequestV1,
     challenge_digest: [u8; 32],
@@ -6540,7 +6311,6 @@ fn session_request_digest(
     hasher.update(&request.idempotency_key);
     *hasher.finalize().as_bytes()
 }
-
 fn request_binding_digest(label: &[u8], idempotency_key: &[u8; 32], body: &[u8]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(REQUEST_BINDING_DOMAIN_V1);
@@ -6551,7 +6321,6 @@ fn request_binding_digest(label: &[u8], idempotency_key: &[u8; 32], body: &[u8])
     hasher.update(body);
     *hasher.finalize().as_bytes()
 }
-
 fn erasure_operation_id(
     idempotency_key: [u8; 32],
     request_digest: [u8; 32],
@@ -6568,7 +6337,6 @@ fn erasure_operation_id(
     hasher.update(&evidence_digest);
     *hasher.finalize().as_bytes()
 }
-
 fn watermark_digest(
     case_id: &str,
     round_id: &str,
@@ -6587,7 +6355,6 @@ fn watermark_digest(
     hasher.update(&issued_at_unix_ms.to_le_bytes());
     *hasher.finalize().as_bytes()
 }
-
 fn receipt_body_digest(
     body: &EvidenceViewerReceiptBodyV1,
 ) -> Result<[u8; 32], EvidenceViewerErrorV1> {
@@ -6597,21 +6364,18 @@ fn receipt_body_digest(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn receipt_signature_message(receipt_digest: [u8; 32]) -> Vec<u8> {
     let mut message = Vec::with_capacity(RECEIPT_SIGNATURE_DOMAIN_V1.len() + receipt_digest.len());
     message.extend_from_slice(RECEIPT_SIGNATURE_DOMAIN_V1);
     message.extend_from_slice(&receipt_digest);
     message
 }
-
 fn receipt_cursor(receipt: &EvidenceViewerSignedReceiptV1) -> EvidenceViewerReceiptCursorV1 {
     EvidenceViewerReceiptCursorV1 {
         sequence: receipt.body.sequence,
         receipt_digest: receipt.receipt_digest,
     }
 }
-
 fn transparency_projection_digest(
     checkpoint_anchor: &EvidenceViewerSignedCheckpointAnchorV1,
     compaction_archive_head: Option<&EvidenceViewerSignedCompactionArchiveHeadV1>,
@@ -6669,7 +6433,6 @@ fn transparency_projection_digest(
     hasher.update(&[u8::from(has_more)]);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn hash_optional_receipt_cursor(
     hasher: &mut blake3::Hasher,
     cursor: Option<EvidenceViewerReceiptCursorV1>,
@@ -6685,33 +6448,27 @@ fn hash_optional_receipt_cursor(
         }
     }
 }
-
 fn text_digest(value: &str) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(GRANT_CLAIMS_DOMAIN_V1);
     hash_text(&mut hasher, value);
     *hasher.finalize().as_bytes()
 }
-
 fn hash_text(hasher: &mut blake3::Hasher, value: &str) {
     hasher.update(&(value.len() as u64).to_le_bytes());
     hasher.update(value.as_bytes());
 }
-
 fn digest_id16(digest: [u8; 32]) -> [u8; 16] {
     let mut id = [0; 16];
     id.copy_from_slice(&digest[..16]);
     id
 }
-
 fn is_zero_digest(digest: [u8; 32]) -> bool {
     digest.iter().all(|byte| *byte == 0)
 }
-
 fn len_u64(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
 }
-
 fn map_provider_qualification_error(
     error: EvidenceViewerRuntimeProviderQualificationErrorV1,
 ) -> EvidenceViewerErrorV1 {
@@ -6735,7 +6492,6 @@ fn map_provider_qualification_error(
         }
     }
 }
-
 fn map_external_error(error: EvidenceViewerExternalErrorV1) -> EvidenceViewerErrorV1 {
     match error {
         EvidenceViewerExternalErrorV1::Unavailable
@@ -6743,17 +6499,14 @@ fn map_external_error(error: EvidenceViewerExternalErrorV1) -> EvidenceViewerErr
         EvidenceViewerExternalErrorV1::Rejected => EvidenceViewerErrorV1::AuthenticationRejected,
     }
 }
-
 fn map_archive_external_error(_error: EvidenceViewerExternalErrorV1) -> EvidenceViewerErrorV1 {
     EvidenceViewerErrorV1::RuntimeUnavailable
 }
-
 fn map_checkpoint_store_external_error(
     _error: EvidenceViewerCheckpointStoreExternalErrorV1,
 ) -> EvidenceViewerErrorV1 {
     EvidenceViewerErrorV1::CheckpointUnavailable
 }
-
 #[cfg(test)]
 mod tests {
     use std::{
@@ -6775,7 +6528,6 @@ mod tests {
         ModerationQuarantineObjectInput, ModerationScreeningInput, ModerationScreeningVerdict,
         config::StorageConfig,
     };
-
     const CASE_ID: &str = "case-1";
     const ROUND_ID: &str = "round-1";
     const JUROR_ACCOUNT: &str = "juror@review.example";
@@ -6797,7 +6549,6 @@ mod tests {
         ModerationQuarantineKeyProviderQualificationV1 =
         ModerationQuarantineKeyProviderQualificationV1::new(1, [0x51; 32]);
     static EVIDENCE_VIEWER_FIXTURE_SETUP_LOCK: Mutex<()> = Mutex::new(());
-
     fn test_quarantine_key_provider_config()
     -> iroha_config::parameters::actual::SorafsModerationQuarantineKeyProviderBinding {
         iroha_config::parameters::actual::SorafsModerationQuarantineKeyProviderBinding {
@@ -6806,7 +6557,6 @@ mod tests {
             policy_digest: TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION.policy_digest(),
         }
     }
-
     fn valid_config(public_key: [u8; 32]) -> EvidenceViewerConfigV1 {
         EvidenceViewerConfigV1 {
             checkpoint_path: PathBuf::from("/var/lib/iroha/sorafs/evidence-viewer.to"),
@@ -6850,7 +6600,6 @@ mod tests {
             receipt_signer_public_key: public_key,
         }
     }
-
     #[derive(Clone)]
     struct MockAuthorizationPolicy {
         evidence_digest: [u8; 32],
@@ -6860,17 +6609,14 @@ mod tests {
         finalized_at_unix_ms: u64,
         allowed: BTreeSet<(String, EvidenceViewerRoleV1)>,
     }
-
     struct MockAuthorizationReader {
         policy: Mutex<MockAuthorizationPolicy>,
     }
-
     impl fmt::Debug for MockAuthorizationReader {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str(MOCK_PROVIDER_SECRET)
         }
     }
-
     impl MockAuthorizationReader {
         fn new(evidence_digest: [u8; 32]) -> Self {
             Self {
@@ -6887,7 +6633,6 @@ mod tests {
                 }),
             }
         }
-
         fn set_allowed(&self, account: &str, role: EvidenceViewerRoleV1, allowed: bool) {
             let mut policy = self.policy.lock().expect("authorization policy lock");
             if allowed {
@@ -6896,14 +6641,12 @@ mod tests {
                 policy.allowed.remove(&(account.to_owned(), role));
             }
         }
-
         fn set_policy_digest(&self, policy_digest: [u8; 32]) {
             self.policy
                 .lock()
                 .expect("authorization policy lock")
                 .policy_digest = policy_digest;
         }
-
         fn set_finalized_anchor(
             &self,
             finalized_height: u64,
@@ -6916,7 +6659,6 @@ mod tests {
             policy.finalized_at_unix_ms = finalized_at_unix_ms;
         }
     }
-
     impl EvidenceViewerFinalizedAuthorizationReaderV1 for MockAuthorizationReader {
         fn authorize(
             &self,
@@ -6952,21 +6694,18 @@ mod tests {
             })
         }
     }
-
     #[derive(Clone)]
     struct MockChallenge {
         binding_digest: [u8; 32],
         expires_at_unix_ms: u64,
         consumed: bool,
     }
-
     struct MockProviderQualification {
         revision: AtomicU64,
         policy_digest: Mutex<[u8; 32]>,
         failure: Mutex<Option<EvidenceViewerRuntimeProviderReadinessErrorV1>>,
         policy_drift_after_operation: Mutex<Option<[u8; 32]>>,
     }
-
     impl MockProviderQualification {
         fn new(policy_byte: u8) -> Self {
             Self {
@@ -6976,7 +6715,6 @@ mod tests {
                 policy_drift_after_operation: Mutex::new(None),
             }
         }
-
         fn observe(
             &self,
         ) -> Result<
@@ -7001,39 +6739,32 @@ mod tests {
                 policy_digest,
             ))
         }
-
         fn set_revision(&self, revision: u64) {
             self.revision.store(revision, Ordering::SeqCst);
         }
-
         fn set_policy_digest(&self, policy_digest: [u8; 32]) {
             *self
                 .policy_digest
                 .lock()
                 .expect("provider qualification policy lock") = policy_digest;
         }
-
         fn set_failure(&self, failure: Option<EvidenceViewerRuntimeProviderReadinessErrorV1>) {
             *self
                 .failure
                 .lock()
                 .expect("provider qualification failure lock") = failure;
         }
-
         fn drift_policy_after_next_operation(&self, policy_digest: [u8; 32]) {
             *self
                 .policy_drift_after_operation
                 .lock()
                 .expect("provider qualification drift lock") = Some(policy_digest);
         }
-
         fn operation_guard(&self) -> MockProviderOperationGuard<'_> {
             MockProviderOperationGuard(self)
         }
     }
-
     struct MockProviderOperationGuard<'a>(&'a MockProviderQualification);
-
     impl Drop for MockProviderOperationGuard<'_> {
         fn drop(&mut self) {
             if let Some(policy_digest) = self
@@ -7047,20 +6778,17 @@ mod tests {
             }
         }
     }
-
     struct MockWebAuthn {
         handle: String,
         qualification: MockProviderQualification,
         sequence: AtomicU64,
         challenges: Mutex<BTreeMap<String, MockChallenge>>,
     }
-
     impl fmt::Debug for MockWebAuthn {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str(MOCK_PROVIDER_SECRET)
         }
     }
-
     impl MockWebAuthn {
         fn new(handle: &str) -> Self {
             Self {
@@ -7070,17 +6798,14 @@ mod tests {
                 challenges: Mutex::new(BTreeMap::new()),
             }
         }
-
         fn issue_call_count(&self) -> u64 {
             self.sequence.load(Ordering::SeqCst)
         }
     }
-
     impl EvidenceViewerRuntimeProviderV1 for MockWebAuthn {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -7090,7 +6815,6 @@ mod tests {
             self.qualification.observe()
         }
     }
-
     impl EvidenceViewerWebAuthnBoundaryV1 for MockWebAuthn {
         fn issue_challenge(
             &self,
@@ -7113,7 +6837,6 @@ mod tests {
                 );
             OpaqueEvidenceViewerSecretV1::new(token)
         }
-
         fn verify_and_consume(
             &self,
             challenge: &str,
@@ -7156,7 +6879,6 @@ mod tests {
             })
         }
     }
-
     struct MockGrantBoundary {
         handle: String,
         qualification: MockProviderQualification,
@@ -7164,13 +6886,11 @@ mod tests {
         issued: Mutex<BTreeMap<String, EvidenceViewerGrantClaimsV1>>,
         revoked: Mutex<BTreeSet<[u8; 32]>>,
     }
-
     impl fmt::Debug for MockGrantBoundary {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str(MOCK_PROVIDER_SECRET)
         }
     }
-
     impl MockGrantBoundary {
         fn new(handle: &str) -> Self {
             Self {
@@ -7181,14 +6901,12 @@ mod tests {
                 revoked: Mutex::new(BTreeSet::new()),
             }
         }
-
         fn was_revoked(&self, token: &str) -> bool {
             self.revoked
                 .lock()
                 .expect("grant revocation lock")
                 .contains(blake3::hash(token.as_bytes()).as_bytes())
         }
-
         fn issued_tokens(&self) -> Vec<String> {
             self.issued
                 .lock()
@@ -7198,12 +6916,10 @@ mod tests {
                 .collect()
         }
     }
-
     impl EvidenceViewerRuntimeProviderV1 for MockGrantBoundary {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -7213,7 +6929,6 @@ mod tests {
             self.qualification.observe()
         }
     }
-
     impl EvidenceViewerGrantBoundaryV1 for MockGrantBoundary {
         fn issue(
             &self,
@@ -7233,7 +6948,6 @@ mod tests {
                 .insert(token.clone(), claims.clone());
             OpaqueEvidenceViewerSecretV1::new(token)
         }
-
         fn verify(
             &self,
             token: &str,
@@ -7261,7 +6975,6 @@ mod tests {
             }
             Ok(())
         }
-
         fn revoke(&self, token_digest: [u8; 32]) -> Result<(), EvidenceViewerExternalErrorV1> {
             let _operation = self.qualification.operation_guard();
             self.revoked
@@ -7271,7 +6984,6 @@ mod tests {
             Ok(())
         }
     }
-
     struct MockReceiptSigner {
         handle: String,
         qualification: MockProviderQualification,
@@ -7280,13 +6992,11 @@ mod tests {
         public_key_calls: AtomicUsize,
         sign_calls: AtomicUsize,
     }
-
     impl fmt::Debug for MockReceiptSigner {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str(MOCK_PROVIDER_SECRET)
         }
     }
-
     impl MockReceiptSigner {
         fn new(handle: &str, signing_key: SigningKey) -> Self {
             Self {
@@ -7298,25 +7008,20 @@ mod tests {
                 sign_calls: AtomicUsize::new(0),
             }
         }
-
         fn set_corrupt_signatures(&self, corrupt: bool) {
             self.corrupt_signatures.store(corrupt, Ordering::SeqCst);
         }
-
         fn sign_call_count(&self) -> usize {
             self.sign_calls.load(Ordering::SeqCst)
         }
-
         fn public_key_call_count(&self) -> usize {
             self.public_key_calls.load(Ordering::SeqCst)
         }
     }
-
     impl EvidenceViewerRuntimeProviderV1 for MockReceiptSigner {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -7326,14 +7031,12 @@ mod tests {
             self.qualification.observe()
         }
     }
-
     impl EvidenceViewerReceiptSignerV1 for MockReceiptSigner {
         fn public_key(&self) -> [u8; 32] {
             let _operation = self.qualification.operation_guard();
             self.public_key_calls.fetch_add(1, Ordering::SeqCst);
             self.signing_key.verifying_key().to_bytes()
         }
-
         fn sign(
             &self,
             _purpose: EvidenceViewerSigningPurposeV1,
@@ -7348,9 +7051,7 @@ mod tests {
             Ok(signature)
         }
     }
-
     type MockErasureCallV1 = ([u8; 32], [u8; 16], [u8; 16], [u8; 32]);
-
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum MockErasureInjectedResult {
         Pass,
@@ -7358,7 +7059,6 @@ mod tests {
         ZeroDigest,
         CommitThenUnavailable,
     }
-
     struct MockErasureBoundary {
         handle: String,
         qualification: MockProviderQualification,
@@ -7367,13 +7067,11 @@ mod tests {
         injected_results: Mutex<VecDeque<MockErasureInjectedResult>>,
         commit_then_unavailable_once: AtomicBool,
     }
-
     impl fmt::Debug for MockErasureBoundary {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str(MOCK_PROVIDER_SECRET)
         }
     }
-
     impl MockErasureBoundary {
         fn new(handle: &str) -> Self {
             Self {
@@ -7385,20 +7083,16 @@ mod tests {
                 commit_then_unavailable_once: AtomicBool::new(false),
             }
         }
-
         fn call_count(&self) -> usize {
             self.calls.lock().expect("erasure calls lock").len()
         }
-
         fn commit_count(&self) -> usize {
             self.commits.lock().expect("erasure commits lock").len()
         }
-
         fn commit_then_unavailable_once(&self) {
             self.commit_then_unavailable_once
                 .store(true, Ordering::SeqCst);
         }
-
         fn inject_results(&self, results: &[MockErasureInjectedResult]) {
             *self
                 .injected_results
@@ -7406,12 +7100,10 @@ mod tests {
                 .expect("erasure injected results lock") = results.iter().copied().collect();
         }
     }
-
     impl EvidenceViewerRuntimeProviderV1 for MockErasureBoundary {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -7421,7 +7113,6 @@ mod tests {
             self.qualification.observe()
         }
     }
-
     impl EvidenceViewerErasureBoundaryV1 for MockErasureBoundary {
         fn erase(
             &self,
@@ -7477,7 +7168,6 @@ mod tests {
             Ok(commit_digest)
         }
     }
-
     #[derive(Clone, Default)]
     enum MockCheckpointCasMode {
         #[default]
@@ -7487,7 +7177,6 @@ mod tests {
         RejectedNoCommit,
         RaceWith(Box<EvidenceViewerCheckpointStoreRecordV1>),
     }
-
     struct MockCheckpointStore {
         handle: String,
         qualification: MockProviderQualification,
@@ -7496,13 +7185,11 @@ mod tests {
         load_calls: AtomicUsize,
         cas_calls: AtomicUsize,
     }
-
     impl fmt::Debug for MockCheckpointStore {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str(MOCK_PROVIDER_SECRET)
         }
     }
-
     impl MockCheckpointStore {
         fn new(handle: &str) -> Self {
             Self {
@@ -7514,39 +7201,32 @@ mod tests {
                 cas_calls: AtomicUsize::new(0),
             }
         }
-
         fn current(&self) -> Option<EvidenceViewerCheckpointStoreRecordV1> {
             self.latest
                 .lock()
                 .expect("checkpoint-store latest lock")
                 .clone()
         }
-
         fn replace_latest(&self, record: Option<EvidenceViewerCheckpointStoreRecordV1>) {
             *self.latest.lock().expect("checkpoint-store latest lock") = record;
         }
-
         fn set_next_cas_mode(&self, mode: MockCheckpointCasMode) {
             *self
                 .next_cas_mode
                 .lock()
                 .expect("checkpoint-store CAS mode lock") = mode;
         }
-
         fn load_call_count(&self) -> usize {
             self.load_calls.load(Ordering::SeqCst)
         }
-
         fn cas_call_count(&self) -> usize {
             self.cas_calls.load(Ordering::SeqCst)
         }
     }
-
     impl EvidenceViewerRuntimeProviderV1 for MockCheckpointStore {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -7556,7 +7236,6 @@ mod tests {
             self.qualification.observe()
         }
     }
-
     impl EvidenceViewerCheckpointStoreV1 for MockCheckpointStore {
         fn load_latest(
             &self,
@@ -7572,7 +7251,6 @@ mod tests {
                 .map_err(|_| EvidenceViewerCheckpointStoreExternalErrorV1::Unavailable)?;
             Ok(latest.clone())
         }
-
         fn compare_and_swap_latest(
             &self,
             expected_revision: Option<[u8; 32]>,
@@ -7615,10 +7293,8 @@ mod tests {
             }
         }
     }
-
     type MockCompactionArchiveArtifacts =
         BTreeMap<[u8; 32], ([u8; 32], EvidenceViewerCompactionArchiveReadbackV1)>;
-
     struct MockCompactionArchive {
         handle: String,
         qualification: MockProviderQualification,
@@ -7629,13 +7305,11 @@ mod tests {
         read_calls: AtomicUsize,
         append_trailing_on_next_read: AtomicBool,
     }
-
     impl fmt::Debug for MockCompactionArchive {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter.write_str(MOCK_PROVIDER_SECRET)
         }
     }
-
     impl MockCompactionArchive {
         fn new(handle: &str) -> Self {
             Self::with_identity(
@@ -7644,7 +7318,6 @@ mod tests {
                 TEST_COMPACTION_ARCHIVE_SIGNING_SEED,
             )
         }
-
         fn with_identity(handle: &str, archive_id: [u8; 32], signing_seed: [u8; 32]) -> Self {
             Self {
                 handle: handle.to_owned(),
@@ -7657,22 +7330,18 @@ mod tests {
                 append_trailing_on_next_read: AtomicBool::new(false),
             }
         }
-
         fn install_call_count(&self) -> usize {
             self.install_calls.load(Ordering::SeqCst)
         }
-
         fn read_call_count(&self) -> usize {
             self.read_calls.load(Ordering::SeqCst)
         }
-
         fn retained_artifact_count(&self) -> usize {
             self.artifacts
                 .lock()
                 .expect("compaction archive artifacts lock")
                 .len()
         }
-
         fn sole_operation_id(&self) -> [u8; 32] {
             *self
                 .artifacts
@@ -7682,7 +7351,6 @@ mod tests {
                 .next()
                 .expect("installed compaction operation")
         }
-
         fn artifact(&self, operation_id: [u8; 32]) -> Vec<u8> {
             self.artifacts
                 .lock()
@@ -7691,7 +7359,6 @@ mod tests {
                 .map(|(_, readback)| readback.canonical_artifact.clone())
                 .expect("installed compaction artifact")
         }
-
         fn replace_artifact(&self, operation_id: [u8; 32], bytes: Vec<u8>) {
             self.artifacts
                 .lock()
@@ -7701,7 +7368,6 @@ mod tests {
                 .1
                 .canonical_artifact = bytes;
         }
-
         fn remove_artifact(&self, operation_id: [u8; 32]) {
             self.artifacts
                 .lock()
@@ -7709,12 +7375,10 @@ mod tests {
                 .remove(&operation_id)
                 .expect("installed compaction artifact");
         }
-
         fn append_trailing_on_next_read(&self) {
             self.append_trailing_on_next_read
                 .store(true, Ordering::SeqCst);
         }
-
         fn corrupt_signature(&self, operation_id: [u8; 32]) {
             let mut artifacts = self
                 .artifacts
@@ -7725,7 +7389,6 @@ mod tests {
                 .expect("installed compaction artifact");
             readback.signature[0] ^= 1;
         }
-
         fn copy_artifacts_from(&self, source: &Self) {
             let artifacts = source
                 .artifacts
@@ -7738,12 +7401,10 @@ mod tests {
                 .expect("destination compaction archive artifacts lock") = artifacts;
         }
     }
-
     impl EvidenceViewerRuntimeProviderV1 for MockCompactionArchive {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -7753,16 +7414,13 @@ mod tests {
             self.qualification.observe()
         }
     }
-
     impl EvidenceViewerCompactionArchiveV1 for MockCompactionArchive {
         fn archive_id(&self) -> [u8; 32] {
             self.archive_id
         }
-
         fn signing_public_key(&self) -> [u8; 32] {
             self.signing_key.verifying_key().to_bytes()
         }
-
         fn install(
             &self,
             operation_id: [u8; 32],
@@ -7799,7 +7457,6 @@ mod tests {
                 }
             }
         }
-
         fn read(
             &self,
             operation_id: [u8; 32],
@@ -7823,13 +7480,11 @@ mod tests {
             Ok(bytes)
         }
     }
-
     #[derive(Debug)]
     struct TestQuarantineKeyWrapper {
         key_id: String,
         key: [u8; 32],
     }
-
     impl TestQuarantineKeyWrapper {
         fn nonce(&self, context_digest: [u8; 32]) -> [u8; 12] {
             let mut hasher = blake3::Hasher::new_keyed(&self.key);
@@ -7841,12 +7496,10 @@ mod tests {
             nonce
         }
     }
-
     impl ModerationQuarantineKeyWrapper for TestQuarantineKeyWrapper {
         fn provider_handle(&self) -> &str {
             TEST_QUARANTINE_KEY_PROVIDER_HANDLE
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -7855,11 +7508,9 @@ mod tests {
         > {
             Ok(TEST_QUARANTINE_KEY_PROVIDER_QUALIFICATION)
         }
-
         fn active_key_id(&self) -> &str {
             &self.key_id
         }
-
         fn wrap_dek(
             &self,
             context_digest: [u8; 32],
@@ -7882,7 +7533,6 @@ mod tests {
                         .after_scrubbing_provider_diagnostic(error.to_string())
                 })
         }
-
         fn unwrap_dek(
             &self,
             key_id: &str,
@@ -7912,7 +7562,6 @@ mod tests {
                 .map_err(|_| ModerationQuarantineKeyOperationErrorV1::Rejected)
         }
     }
-
     struct EvidenceViewerFixture {
         _temp_dir: TempDir,
         config: EvidenceViewerConfigV1,
@@ -7928,7 +7577,6 @@ mod tests {
         quarantine_id: [u8; 16],
         object: ModerationQuarantineObjectRecord,
     }
-
     impl EvidenceViewerFixture {
         fn new() -> Self {
             // `NodeHandle` owns a process-wide, non-blocking PDP checkpoint
@@ -7983,7 +7631,6 @@ mod tests {
                     notes: None,
                 })
                 .expect("seal test evidence");
-
             let authorization = Arc::new(MockAuthorizationReader::new(object.payload_digest));
             let webauthn = Arc::new(MockWebAuthn::new("webauthn:prod-evidence-viewer"));
             let grants = Arc::new(MockGrantBoundary::new("kms:prod-evidence-grants"));
@@ -8022,12 +7669,10 @@ mod tests {
                 object,
             }
         }
-
         fn open(&self) -> EvidenceViewerServiceV1 {
             self.open_with(self.config.clone(), self.deps.clone())
                 .expect("open evidence-viewer service")
         }
-
         fn open_with(
             &self,
             config: EvidenceViewerConfigV1,
@@ -8042,7 +7687,6 @@ mod tests {
                 self.checkpoint_store.clone(),
             )
         }
-
         fn issue_challenge(
             &self,
             service: &EvidenceViewerServiceV1,
@@ -8064,7 +7708,6 @@ mod tests {
                 })
                 .expect("issue evidence challenge")
         }
-
         fn create_session(
             &self,
             service: &EvidenceViewerServiceV1,
@@ -8087,7 +7730,6 @@ mod tests {
                 now_unix_ms,
             })
         }
-
         fn successor_checkpoint_bytes(
             &self,
             predecessor: &EvidenceViewerCheckpointStoreRecordV1,
@@ -8114,11 +7756,9 @@ mod tests {
             norito::to_bytes(&envelope).expect("encode successor checkpoint envelope")
         }
     }
-
     fn opaque(value: &str) -> OpaqueEvidenceViewerSecretV1 {
         OpaqueEvidenceViewerSecretV1::new(value.to_owned()).expect("valid test token")
     }
-
     fn current_checkpoint_digest(service: &EvidenceViewerServiceV1) -> [u8; 32] {
         service
             .audit_status()
@@ -8126,7 +7766,6 @@ mod tests {
             .checkpoint_anchor
             .checkpoint_digest
     }
-
     fn current_compaction_archive_head(
         service: &EvidenceViewerServiceV1,
     ) -> Option<EvidenceViewerSignedCompactionArchiveHeadV1> {
@@ -8137,7 +7776,6 @@ mod tests {
             .compaction_archive_head
             .clone()
     }
-
     fn rotated_archive_deployment(
         fixture: &EvidenceViewerFixture,
         source: &MockCompactionArchive,
@@ -8165,7 +7803,6 @@ mod tests {
         deps.compaction_archive = archive.clone();
         (config, deps, archive)
     }
-
     fn fixture_with_first_archive_generation() -> (
         EvidenceViewerFixture,
         EvidenceViewerSignedCompactionArchiveHeadV1,
@@ -8187,7 +7824,6 @@ mod tests {
         drop(service);
         (fixture, first)
     }
-
     fn test_erasure_intent(
         quarantine_id: [u8; 16],
         object_id: [u8; 16],
@@ -8215,7 +7851,6 @@ mod tests {
             requested_at_unix_ms,
         }
     }
-
     fn persist_test_erasure_intents(
         service: &EvidenceViewerServiceV1,
         intents: impl IntoIterator<Item = EvidenceViewerErasureIntentV1>,
@@ -8234,7 +7869,6 @@ mod tests {
             .persist_locked(&mut state)
             .expect("persist test erasure intents");
     }
-
     fn assert_live_refresh_rejects_historical_archive_damage(
         corrupt_artifact: bool,
         expected_error: EvidenceViewerErrorV1,
@@ -8260,7 +7894,6 @@ mod tests {
             .compact_expired_tick(cutoff)
             .expect("second live-refresh archive transition")
             .expect("second expired challenge");
-
         let mut stale_config = fixture.config.clone();
         stale_config.checkpoint_path =
             fixture
@@ -8277,7 +7910,6 @@ mod tests {
         let stale_state = stale.state.lock().expect("stale state lock").clone();
         let stale_cache =
             fs::read(&stale_config.checkpoint_path).expect("read pre-refresh replica cache");
-
         fixture.issue_challenge(
             &writer,
             JUROR_ACCOUNT,
@@ -8298,7 +7930,6 @@ mod tests {
                 .generation
                 + 1
         );
-
         if corrupt_artifact {
             let mut corrupt = fixture.compaction_archive.artifact(first.operation_id);
             let last = corrupt
@@ -8313,7 +7944,6 @@ mod tests {
                 .compaction_archive
                 .remove_artifact(first.operation_id);
         }
-
         assert_eq!(
             stale
                 .refresh_authoritative_checkpoint()
@@ -8331,7 +7961,6 @@ mod tests {
             "archive verification must precede local-cache replacement"
         );
     }
-
     fn assert_receipt_chain(
         receipts: &[EvidenceViewerSignedReceiptV1],
         config: &EvidenceViewerConfigV1,
@@ -8349,7 +7978,6 @@ mod tests {
             previous = receipt.receipt_digest;
         }
     }
-
     fn signed_receipt(signing_key: &SigningKey) -> EvidenceViewerSignedReceiptV1 {
         let body = EvidenceViewerReceiptBodyV1 {
             version: EVIDENCE_VIEWER_RECEIPT_VERSION_V1,
@@ -8380,7 +8008,6 @@ mod tests {
                 .to_bytes(),
         }
     }
-
     fn signed_checkpoint_envelope(
         signing_key: &SigningKey,
         config: &EvidenceViewerConfigV1,
@@ -8414,7 +8041,6 @@ mod tests {
             checkpoint_anchor,
         }
     }
-
     #[test]
     fn opaque_secrets_are_bounded_ascii_and_redacted() {
         let secret =
@@ -8432,7 +8058,6 @@ mod tests {
             .is_err()
         );
     }
-
     #[test]
     fn config_enforces_fifteen_minute_ceiling_and_https_origin() {
         let key = SigningKey::from_bytes(&[0x41; 32]);
@@ -8450,7 +8075,6 @@ mod tests {
             "https://review.example".to_owned(),
         ];
         assert_eq!(config.validate(), Err(EvidenceViewerErrorV1::InvalidConfig));
-
         for unsafe_handle in [
             "",
             "kms:prod evidence",
@@ -8525,9 +8149,7 @@ mod tests {
             Err(EvidenceViewerErrorV1::InvalidConfig)
         );
     }
-
     include!("evidence_viewer/webauthn_session_transparency_tests.rs");
-
     #[test]
     fn missing_checkpoint_capacity_fails_closed_before_service_exposure() {
         let fixture = EvidenceViewerFixture::new();
@@ -8540,7 +8162,6 @@ mod tests {
             EvidenceViewerErrorV1::ResourceExhausted
         );
     }
-
     #[test]
     fn poisoned_quarantine_object_index_fails_closed_instead_of_masking_not_found() {
         let fixture = EvidenceViewerFixture::new();
@@ -8578,7 +8199,6 @@ mod tests {
             "object-state failure must precede every external challenge operation"
         );
     }
-
     #[test]
     fn checkpoint_genesis_and_successor_use_cas_with_mandatory_readback() {
         let fixture = EvidenceViewerFixture::new();
@@ -8623,7 +8243,6 @@ mod tests {
         );
         assert_eq!(fixture.checkpoint_store.cas_call_count(), 1);
         assert_eq!(fixture.checkpoint_store.load_call_count(), 4);
-
         fixture.issue_challenge(
             &service,
             JUROR_ACCOUNT,
@@ -8656,7 +8275,6 @@ mod tests {
         assert_eq!(fixture.checkpoint_store.cas_call_count(), 2);
         assert_eq!(fixture.checkpoint_store.load_call_count(), 8);
     }
-
     #[test]
     fn stale_replica_fails_closed_until_verified_authoritative_refresh() {
         let fixture = EvidenceViewerFixture::new();
@@ -8727,7 +8345,6 @@ mod tests {
             committed_cas_calls,
             "a fenced replica must not attempt a checkpoint CAS"
         );
-
         let refreshed_anchor = stale_replica
             .refresh_authoritative_checkpoint()
             .expect("verify and install the exact successor");
@@ -8744,7 +8361,6 @@ mod tests {
                 .challenge_count,
             1
         );
-
         fixture.issue_challenge(
             &stale_replica,
             JUROR_ACCOUNT,
@@ -8786,7 +8402,6 @@ mod tests {
             "a rejected refresh must leave the local cache unchanged"
         );
     }
-
     #[test]
     fn signed_archive_compaction_installs_before_prune_and_replays_idempotently() {
         let fixture = EvidenceViewerFixture::new();
@@ -8817,7 +8432,6 @@ mod tests {
             compacted_through_unix_ms: BASE_UNIX_MS + 1 + EVIDENCE_VIEWER_MAX_SESSION_TTL_MS_V1,
             maximum_records: 2,
         };
-
         fixture
             .checkpoint_store
             .set_next_cas_mode(MockCheckpointCasMode::RejectedNoCommit);
@@ -8843,7 +8457,6 @@ mod tests {
         );
         assert_eq!(archive.retained_artifact_count(), 1);
         assert_eq!(archive.install_call_count(), 1);
-
         let head = service
             .compact_expired_with_archive(request.clone())
             .expect("exact archive replay and checkpoint commit");
@@ -8903,7 +8516,6 @@ mod tests {
             ),
             Err(EvidenceViewerErrorV1::InvalidCheckpoint)
         );
-
         let install_calls = archive.install_call_count();
         let read_calls = archive.read_call_count();
         assert_eq!(
@@ -8914,7 +8526,6 @@ mod tests {
         );
         assert_eq!(archive.install_call_count(), install_calls);
         assert_eq!(archive.read_call_count(), read_calls + 1);
-
         let webauthn_calls = fixture.webauthn.issue_call_count();
         assert_eq!(
             service
@@ -8936,7 +8547,6 @@ mod tests {
             webauthn_calls,
             "archive compaction must retain a replay tombstone"
         );
-
         let reopened = fixture.open();
         assert_eq!(
             reopened
@@ -8959,7 +8569,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn supervised_compaction_tick_honors_the_configured_work_bound() {
         let mut fixture = EvidenceViewerFixture::new();
@@ -9015,7 +8624,6 @@ mod tests {
             None
         );
     }
-
     #[test]
     fn restart_verifies_every_archive_generation_and_rejects_lineage_gaps() {
         fn build_two_generation_archive(
@@ -9046,7 +8654,6 @@ mod tests {
                 .expect("second expired record");
             (service, first, second)
         }
-
         let mut missing_fixture = EvidenceViewerFixture::new();
         missing_fixture.config.compaction_max_records = 1;
         let (missing_service, first, second) = build_two_generation_archive(&missing_fixture);
@@ -9075,7 +8682,6 @@ mod tests {
                 .expect_err("restart must fail when an old generation is missing"),
             EvidenceViewerErrorV1::RuntimeUnavailable
         );
-
         let mut corrupt_fixture = EvidenceViewerFixture::new();
         corrupt_fixture.config.compaction_max_records = 1;
         let (corrupt_service, corrupt_first, _) = build_two_generation_archive(&corrupt_fixture);
@@ -9097,7 +8703,6 @@ mod tests {
             EvidenceViewerErrorV1::InvalidCheckpoint
         );
     }
-
     #[test]
     fn archive_key_and_policy_rotation_preserves_authenticated_history() {
         let (fixture, first) = fixture_with_first_archive_generation();
@@ -9117,7 +8722,6 @@ mod tests {
             current_compaction_archive_head(&service),
             Some(first.clone())
         );
-
         fixture.issue_challenge(
             &service,
             JUROR_ACCOUNT,
@@ -9141,7 +8745,6 @@ mod tests {
         verify_compaction_archive_lineage_link(&second, &first)
             .expect("service-signed exactly-next archive transition");
         drop(service);
-
         let reopened = fixture
             .open_with(second_config, second_deps)
             .expect("restart verifies both historical archive identities");
@@ -9153,7 +8756,6 @@ mod tests {
                 .is_some()
         );
     }
-
     #[test]
     fn archive_rotation_rejects_skipped_epoch() {
         let (fixture, _) = fixture_with_first_archive_generation();
@@ -9171,7 +8773,6 @@ mod tests {
             EvidenceViewerErrorV1::InvalidCheckpoint
         );
     }
-
     #[test]
     fn archive_rotation_rejects_same_revision_identity_substitution() {
         let (fixture, _) = fixture_with_first_archive_generation();
@@ -9189,7 +8790,6 @@ mod tests {
             EvidenceViewerErrorV1::InvalidCheckpoint
         );
     }
-
     #[test]
     fn archive_rotation_keeps_handle_and_namespace_stable() {
         let (fixture, _) = fixture_with_first_archive_generation();
@@ -9215,7 +8815,6 @@ mod tests {
             EvidenceViewerErrorV1::InvalidCheckpoint
         );
     }
-
     #[test]
     fn archive_rotation_rejects_revision_rollback() {
         let (fixture, first) = fixture_with_first_archive_generation();
@@ -9242,7 +8841,6 @@ mod tests {
             .expect("one expired challenge");
         assert_eq!(second.predecessor_head_digest, Some(first.head_digest));
         drop(service);
-
         let (rollback_config, rollback_deps, _) = rotated_archive_deployment(
             &fixture,
             second_archive.as_ref(),
@@ -9257,7 +8855,6 @@ mod tests {
             EvidenceViewerErrorV1::InvalidCheckpoint
         );
     }
-
     #[test]
     fn archive_rotation_rejects_retired_key_reuse_before_install() {
         let (fixture, _) = fixture_with_first_archive_generation();
@@ -9283,7 +8880,6 @@ mod tests {
             .expect("second archive generation")
             .expect("one expired challenge");
         drop(service);
-
         let (third_config, third_deps, third_archive) = rotated_archive_deployment(
             &fixture,
             second_archive.as_ref(),
@@ -9316,7 +8912,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn archive_rotation_rejects_retired_policy_reuse_with_a_fresh_key() {
         let (fixture, _) = fixture_with_first_archive_generation();
@@ -9342,7 +8937,6 @@ mod tests {
             .expect("second archive policy generation")
             .expect("one expired challenge");
         drop(service);
-
         let (third_config, third_deps, third_archive) = rotated_archive_deployment(
             &fixture,
             second_archive.as_ref(),
@@ -9368,7 +8962,6 @@ mod tests {
         );
         assert_eq!(third_archive.install_call_count(), 0);
     }
-
     #[test]
     fn archive_rotation_rejects_bad_governance_signature() {
         let (fixture, first) = fixture_with_first_archive_generation();
@@ -9403,7 +8996,6 @@ mod tests {
             "an archive receipt cannot authorize a transition without the governed service signature"
         );
     }
-
     #[test]
     fn live_refresh_rejects_a_missing_historical_archive_before_adoption() {
         assert_live_refresh_rejects_historical_archive_damage(
@@ -9411,7 +9003,6 @@ mod tests {
             EvidenceViewerErrorV1::RuntimeUnavailable,
         );
     }
-
     #[test]
     fn live_refresh_rejects_a_corrupt_historical_archive_before_adoption() {
         assert_live_refresh_rejects_historical_archive_damage(
@@ -9419,14 +9010,12 @@ mod tests {
             EvidenceViewerErrorV1::InvalidCheckpoint,
         );
     }
-
     #[test]
     fn compaction_archive_decode_rejects_a_maximal_nested_length_prefix() {
         let mut fixture = EvidenceViewerFixture::new();
         fixture.config.compaction_max_records = 7;
         let sequence_limit = compaction_archive_sequence_limit(&fixture.config);
         assert_eq!(sequence_limit, 7);
-
         let framed = norito::core::frame_bare_with_header_flags::<Vec<ChallengeRecordV1>>(
             &u64::MAX.to_le_bytes(),
             0,
@@ -9452,7 +9041,6 @@ mod tests {
             }
         ));
     }
-
     #[test]
     fn archive_policy_drift_during_install_never_prunes_state() {
         let fixture = EvidenceViewerFixture::new();
@@ -9482,7 +9070,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn archive_compaction_rejects_forgery_forks_rollback_and_trailing_data() {
         let fixture = EvidenceViewerFixture::new();
@@ -9516,7 +9103,6 @@ mod tests {
             EvidenceViewerErrorV1::InvalidConfig
         );
         assert_eq!(substituted_archive.install_call_count(), 0);
-
         let checkpoint_cas_calls = fixture.checkpoint_store.cas_call_count();
         archive.append_trailing_on_next_read();
         assert_eq!(
@@ -9536,7 +9122,6 @@ mod tests {
                 .challenge_count,
             1
         );
-
         let operation_id = archive.sole_operation_id();
         let canonical = archive.artifact(operation_id);
         let mut forged =
@@ -9568,7 +9153,6 @@ mod tests {
                 .challenge_count,
             1
         );
-
         archive.replace_artifact(operation_id, canonical);
         let head = service
             .compact_expired_with_archive(request)
@@ -9600,7 +9184,6 @@ mod tests {
                 .expect_err("restart must re-read and verify the current archive artifact"),
             EvidenceViewerErrorV1::InvalidCheckpoint
         );
-
         let mut skipped_generation = head.clone();
         skipped_generation.generation = 2;
         skipped_generation.predecessor_head_digest = None;
@@ -9632,7 +9215,6 @@ mod tests {
             Err(EvidenceViewerErrorV1::InvalidCheckpoint),
             "even a correctly signed skipped generation must be rejected"
         );
-
         fixture.issue_challenge(
             &service,
             JUROR_ACCOUNT,
@@ -9664,7 +9246,6 @@ mod tests {
             "forked or rolled-back fences must fail before archive installation"
         );
     }
-
     #[test]
     fn ambiguous_checkpoint_cas_is_resolved_only_by_exact_readback() {
         let committed_fixture = EvidenceViewerFixture::new();
@@ -9694,7 +9275,6 @@ mod tests {
                 .generation,
             2
         );
-
         let unchanged_fixture = EvidenceViewerFixture::new();
         let unchanged_service = unchanged_fixture.open();
         let predecessor = unchanged_fixture
@@ -9731,7 +9311,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn two_live_replicas_adopt_a_verified_authoritative_cas_successor() {
         let fixture = EvidenceViewerFixture::new();
@@ -9759,7 +9338,6 @@ mod tests {
         fixture
             .checkpoint_store
             .set_next_cas_mode(MockCheckpointCasMode::RaceWith(Box::new(competing.clone())));
-
         assert_eq!(
             writer
                 .issue_challenge(EvidenceViewerChallengeRequestV1 {
@@ -9813,7 +9391,6 @@ mod tests {
             0
         );
     }
-
     #[test]
     fn checkpoint_race_with_a_generation_jump_remains_poisoned() {
         let fixture = EvidenceViewerFixture::new();
@@ -9859,7 +9436,6 @@ mod tests {
         fixture
             .checkpoint_store
             .set_next_cas_mode(MockCheckpointCasMode::RaceWith(Box::new(jumped)));
-
         assert_eq!(
             service
                 .issue_challenge(EvidenceViewerChallengeRequestV1 {
@@ -9882,7 +9458,6 @@ mod tests {
             EvidenceViewerErrorV1::CheckpointUnavailable
         );
     }
-
     #[test]
     fn restart_accepts_only_exact_or_single_predecessor_local_cache() {
         let fixture = EvidenceViewerFixture::new();
@@ -9899,7 +9474,6 @@ mod tests {
         write_local_checkpoint_store_record(&fixture.config, &genesis)
             .expect("install one-generation-behind cache");
         drop(service);
-
         let restarted = fixture.open();
         assert_eq!(
             restarted
@@ -9914,7 +9488,6 @@ mod tests {
             Some(authoritative.clone())
         );
         drop(restarted);
-
         std::fs::remove_file(&fixture.config.checkpoint_path).expect("remove local cache");
         let cacheless_restart = fixture.open();
         assert_eq!(
@@ -9927,7 +9500,6 @@ mod tests {
             Some(&authoritative)
         );
     }
-
     #[test]
     fn restart_rejects_a_local_cache_more_than_one_generation_behind() {
         let fixture = EvidenceViewerFixture::new();
@@ -9965,7 +9537,6 @@ mod tests {
             EvidenceViewerErrorV1::CheckpointChanged
         );
     }
-
     #[test]
     fn tampered_authoritative_checkpoint_records_fail_before_local_cache_use() {
         let fixture = EvidenceViewerFixture::new();
@@ -9993,7 +9564,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn checkpoint_store_substitution_and_staleness_fail_before_cache_access() {
         let substituted_fixture = EvidenceViewerFixture::new();
@@ -10014,7 +9584,6 @@ mod tests {
         );
         assert_eq!(substituted.load_call_count(), 0);
         assert!(!substituted_fixture.config.checkpoint_path.exists());
-
         let test_marked_fixture = EvidenceViewerFixture::new();
         let test_marked = Arc::new(MockCheckpointStore::new("sealed:test-evidence-checkpoints"));
         assert_eq!(
@@ -10031,7 +9600,6 @@ mod tests {
         );
         assert_eq!(test_marked.load_call_count(), 0);
         assert!(!test_marked_fixture.config.checkpoint_path.exists());
-
         let stale_fixture = EvidenceViewerFixture::new();
         let stale = Arc::new(MockCheckpointStore::new(TEST_CHECKPOINT_STORE_HANDLE));
         stale.qualification.set_failure(Some(
@@ -10052,7 +9620,6 @@ mod tests {
         assert_eq!(stale.load_call_count(), 0);
         assert!(!stale_fixture.config.checkpoint_path.exists());
     }
-
     #[test]
     fn rejected_checkpoint_cas_rolls_back_receipt_grant_and_anchor() {
         let fixture = EvidenceViewerFixture::new();
@@ -10081,7 +9648,6 @@ mod tests {
         fixture
             .checkpoint_store
             .set_next_cas_mode(MockCheckpointCasMode::RejectedNoCommit);
-
         fixture
             .authorization
             .set_finalized_anchor(78, [0xA2; 32], BASE_UNIX_MS);
@@ -10121,7 +9687,6 @@ mod tests {
             .expect("replacement grant was attempted");
         assert!(fixture.grants.was_revoked(replacement));
         assert!(!fixture.grants.was_revoked(&initial_grant));
-
         drop(service);
         let restarted = fixture.open();
         assert_eq!(
@@ -10144,7 +9709,6 @@ mod tests {
             )
             .expect("original grant remains usable after rollback and restart");
     }
-
     #[test]
     fn challenge_assertion_role_account_and_purpose_substitution_are_denied() {
         let fixture = EvidenceViewerFixture::new();
@@ -10173,7 +9737,6 @@ mod tests {
             substituted.expect_err("purpose substitution must fail"),
             EvidenceViewerErrorV1::AuthenticationRejected
         );
-
         let issued = fixture
             .create_session(
                 &service,
@@ -10195,7 +9758,6 @@ mod tests {
                 .expect_err("consumed challenge must not replay"),
             EvidenceViewerErrorV1::AuthenticationRejected
         );
-
         let second_challenge = fixture.issue_challenge(
             &service,
             JUROR_ACCOUNT,
@@ -10263,7 +9825,6 @@ mod tests {
             EvidenceViewerErrorV1::Forbidden
         );
     }
-
     #[test]
     fn legal_hold_precedes_retention_and_erasure_then_release_allows_exactly_once_commit() {
         let fixture = EvidenceViewerFixture::new();
@@ -10286,7 +9847,6 @@ mod tests {
             .expect("create session protected by legal hold");
         let session_id = issued.session.local_session.session_id;
         let active_grant = issued.grant.expose().to_owned();
-
         let (hold, placement) = service
             .place_legal_hold(
                 CASE_ID,
@@ -10323,7 +9883,6 @@ mod tests {
                 .expect("evaluate retention under hold")
                 .is_empty()
         );
-
         assert_eq!(
             service
                 .erase(
@@ -10344,7 +9903,6 @@ mod tests {
             denial_receipts.last().map(|receipt| receipt.body.kind),
             Some(EvidenceViewerReceiptKindV1::ErasureDeniedLegalHold)
         );
-
         let (released, _) = service
             .release_legal_hold(
                 CASE_ID,
@@ -10433,7 +9991,6 @@ mod tests {
                 .expect_err("erasure must revoke active sessions"),
             EvidenceViewerErrorV1::SessionInactive
         );
-
         drop(service);
         let restarted = fixture.open();
         let status = restarted.audit_status().expect("restart audit projection");
@@ -10459,7 +10016,6 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn default_retention_uses_latest_session_expiry_and_never_erases_without_a_deadline() {
         let fixture = EvidenceViewerFixture::new();
@@ -10479,7 +10035,6 @@ mod tests {
             EvidenceViewerErrorV1::RetentionActive
         );
         assert_eq!(fixture.erasure.call_count(), 0);
-
         let first_challenge = fixture.issue_challenge(
             &service,
             JUROR_ACCOUNT,
@@ -10558,7 +10113,6 @@ mod tests {
             .expect("erase at exact latest-session retention boundary");
         assert_eq!(fixture.erasure.call_count(), 1);
     }
-
     #[test]
     fn session_expiry_compaction_preserves_default_retention_until_erasure() {
         let fixture = EvidenceViewerFixture::new();
@@ -10598,7 +10152,6 @@ mod tests {
             );
         }
         drop(service);
-
         let reopened = fixture.open();
         assert_eq!(
             reopened
@@ -10643,7 +10196,6 @@ mod tests {
             "a completed erasure removes the no-longer-needed retention floor"
         );
     }
-
     #[test]
     fn erasure_before_compaction_does_not_recreate_a_retention_floor() {
         let fixture = EvidenceViewerFixture::new();
@@ -10682,7 +10234,6 @@ mod tests {
             .current()
             .expect("post-erasure checkpoint")
             .generation;
-
         let head = service
             .compact_expired_tick(retention_deadline)
             .expect("compaction after terminal erasure")
@@ -10710,7 +10261,6 @@ mod tests {
             );
         }
         drop(service);
-
         let reopened = fixture.open();
         assert_eq!(
             reopened
@@ -10728,7 +10278,6 @@ mod tests {
                 .is_empty()
         );
     }
-
     #[test]
     fn ambiguous_erasure_commit_recovers_from_durable_intent_without_repeating_commit() {
         let fixture = EvidenceViewerFixture::new();
@@ -10746,7 +10295,6 @@ mod tests {
                 BASE_UNIX_MS,
             )
             .expect("record erasure recovery retention");
-
         fixture.erasure.commit_then_unavailable_once();
         assert_eq!(
             service
@@ -10770,7 +10318,6 @@ mod tests {
                 .expect_err("uncertain in-process state must remain unavailable"),
             EvidenceViewerErrorV1::CheckpointUnavailable
         );
-
         drop(service);
         let recovered = fixture.open();
         let status = recovered
@@ -10786,7 +10333,6 @@ mod tests {
         assert_eq!(status.retention_count, 1);
         assert_eq!(status.receipt_count, 2);
         drop(recovered);
-
         let stable_restart = fixture.open();
         assert_eq!(
             stable_restart
@@ -10798,7 +10344,6 @@ mod tests {
         assert_eq!(fixture.erasure.call_count(), 2);
         assert_eq!(fixture.erasure.commit_count(), 1);
     }
-
     #[test]
     fn live_refresh_reconciliation_failures_poison_the_adopted_state() {
         for (label, injected_result, expected_commits) in [
@@ -10838,7 +10383,6 @@ mod tests {
             );
             persist_test_erasure_intents(&writer, [intent]);
             fixture.erasure.inject_results(&[injected_result]);
-
             assert_eq!(
                 stale
                     .refresh_authoritative_checkpoint()
@@ -10871,7 +10415,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn partial_multi_intent_live_refresh_reconciliation_remains_poisoned() {
         let fixture = EvidenceViewerFixture::new();
@@ -10905,7 +10448,6 @@ mod tests {
             MockErasureInjectedResult::Pass,
             MockErasureInjectedResult::Unavailable,
         ]);
-
         assert_eq!(
             stale
                 .refresh_authoritative_checkpoint()
@@ -10944,7 +10486,6 @@ mod tests {
             EvidenceViewerErrorV1::CheckpointUnavailable
         );
     }
-
     #[test]
     fn provider_identity_and_signature_drift_fail_closed_across_restart() {
         let fixture = EvidenceViewerFixture::new();
@@ -10957,7 +10498,6 @@ mod tests {
             BASE_UNIX_MS,
         );
         drop(valid_service);
-
         let drifted_webauthn = EvidenceViewerRuntimeDepsV1 {
             webauthn: Arc::new(MockWebAuthn::new("webauthn:unexpected-provider")),
             ..fixture.deps.clone()
@@ -11030,7 +10570,6 @@ mod tests {
                 .expect_err("archive verification-key substitution must fail closed"),
             EvidenceViewerErrorV1::InvalidConfig
         );
-
         let service = fixture.open();
         let challenge = fixture.issue_challenge(
             &service,
@@ -11061,12 +10600,10 @@ mod tests {
         assert_eq!(status.session_count, 0);
         assert_eq!(status.receipt_count, 0);
     }
-
     #[test]
     fn provider_qualification_fails_before_checkpoint_access() {
         let fixture = EvidenceViewerFixture::new();
         assert!(!fixture.config.checkpoint_path.exists());
-
         let test_marked_webauthn = Arc::new(MockWebAuthn::new("webauthn:test-evidence-viewer"));
         let test_marked_deps = EvidenceViewerRuntimeDepsV1 {
             webauthn: test_marked_webauthn,
@@ -11078,7 +10615,6 @@ mod tests {
                 .expect_err("test-marked WebAuthn provider must fail startup"),
             EvidenceViewerErrorV1::InvalidConfig
         );
-
         let mismatched_grants = Arc::new(MockGrantBoundary::new(&fixture.config.grant_handle));
         mismatched_grants.qualification.set_revision(2);
         let mismatched_deps = EvidenceViewerRuntimeDepsV1 {
@@ -11091,7 +10627,6 @@ mod tests {
                 .expect_err("provider revision outside deployment policy must fail startup"),
             EvidenceViewerErrorV1::RuntimeUnavailable
         );
-
         let stale_grants = Arc::new(MockGrantBoundary::new(&fixture.config.grant_handle));
         stale_grants.qualification.set_failure(Some(
             EvidenceViewerRuntimeProviderReadinessErrorV1::Unavailable,
@@ -11105,7 +10640,6 @@ mod tests {
             .expect_err("stale grant provider must fail startup");
         assert_eq!(stale_error, EvidenceViewerErrorV1::RuntimeUnavailable);
         assert!(!format!("{stale_error:?} {stale_error}").contains(MOCK_PROVIDER_SECRET));
-
         let unavailable_signer = Arc::new(MockReceiptSigner::new(
             &fixture.config.receipt_signer_handle,
             SigningKey::from_bytes(&[0x51; 32]),
@@ -11128,7 +10662,6 @@ mod tests {
             0,
             "signer metadata must not be trusted before expected qualification"
         );
-
         let drifting_signer = Arc::new(MockReceiptSigner::new(
             &fixture.config.receipt_signer_handle,
             SigningKey::from_bytes(&[0x51; 32]),
@@ -11148,7 +10681,6 @@ mod tests {
         );
         assert_eq!(drifting_signer.public_key_call_count(), 1);
         assert_eq!(drifting_signer.sign_call_count(), 0);
-
         let invalid_signer = Arc::new(MockReceiptSigner::new(
             &fixture.config.receipt_signer_handle,
             SigningKey::from_bytes(&[0x51; 32]),
@@ -11164,7 +10696,6 @@ mod tests {
                 .expect_err("zero signer policy digest must fail startup"),
             EvidenceViewerErrorV1::RuntimeUnavailable
         );
-
         let invalid_erasure = Arc::new(MockErasureBoundary::new(&fixture.config.erasure_handle));
         invalid_erasure.qualification.set_revision(0);
         let invalid_erasure_deps = EvidenceViewerRuntimeDepsV1 {
@@ -11177,7 +10708,6 @@ mod tests {
                 .expect_err("zero erasure-provider revision must fail startup"),
             EvidenceViewerErrorV1::RuntimeUnavailable
         );
-
         let stale_archive = Arc::new(MockCompactionArchive::new(
             &fixture.config.compaction_archive_handle,
         ));
@@ -11194,7 +10724,6 @@ mod tests {
                 .expect_err("unqualified immutable archive must fail startup"),
             EvidenceViewerErrorV1::RuntimeUnavailable
         );
-
         assert!(
             !fixture.config.checkpoint_path.exists(),
             "qualification must finish before checkpoint creation or loading"
@@ -11205,7 +10734,6 @@ mod tests {
             "qualification failure must precede signer operations"
         );
     }
-
     // Keep provider-policy, redaction, and signed-state tamper regressions in this
     // test module so their libtest paths and private-helper access remain stable.
     include!("evidence_viewer/provider_security_tests.rs");

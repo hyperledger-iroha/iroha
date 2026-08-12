@@ -1545,6 +1545,7 @@ PROOF
            DEF TypeInvariant
       <3> QED BY <1>1, <2>1, <3>1, SMT
            DEF AsyncUntrustedTransportCompletionItem,
+               AsyncUntrustedCertifiedResponseItem,
                AsyncUntrustedCompletionRequestWitness,
                AsyncItemTyped, AsyncNetworkItem,
                AsyncBodyEnvelopeTyped, AsyncBodyEnvelope,

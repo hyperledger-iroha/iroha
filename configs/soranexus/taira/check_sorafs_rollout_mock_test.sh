@@ -871,7 +871,7 @@ run_expected_preflight_failure_case \
   'sumeragi/status restart_required must be a boolean'
 run_expected_preflight_failure_case \
   sumeragi_3_validators \
-  'sumeragi/status frozen only 3 validators'
+  'sumeragi/status froze 3 validators; Taira requires exactly 4'
 run_expected_preflight_failure_case \
   sumeragi_canonical_behind \
   'sumeragi/status reducer/commit frontier is inconsistent'

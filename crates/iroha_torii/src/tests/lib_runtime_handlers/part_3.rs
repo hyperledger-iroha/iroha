@@ -1129,6 +1129,7 @@ async fn queue_plan_synced_certificate_requires_canonical_distinct_authority_quo
         vec![ToriiProxyCandidate::P2p(authorities[0].clone())],
         route,
         request.clone(),
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
         Duration::ZERO,
         {
             let one_receipt_snapshot = one_receipt_snapshot.clone();
@@ -1171,6 +1172,7 @@ async fn queue_plan_synced_certificate_requires_canonical_distinct_authority_quo
             .collect(),
         route,
         request.clone(),
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
         Duration::ZERO,
         move |candidate, _request| {
             let snapshot = snapshots
@@ -1286,6 +1288,7 @@ async fn queue_plan_synced_max_roster_reaches_honest_quorum_past_byzantine_prefi
                 .collect(),
             route,
             request,
+            TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
             Duration::from_millis(250),
             move |candidate, _request| {
                 let snapshots = snapshots.clone();
@@ -1370,6 +1373,7 @@ async fn queue_plan_synced_first_quorum_never_waits_for_pending_equivocation_evi
             .collect(),
         route,
         request,
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
         Duration::ZERO,
         move |candidate, _request| {
             let snapshot = snapshots.get(candidate.peer_id()).cloned();
@@ -1522,6 +1526,7 @@ async fn queue_plan_synced_candidates_use_exact_bound_roster_and_count_local_quo
         ],
         route,
         request,
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
         Duration::ZERO,
         move |candidate, _request| {
             let snapshot = snapshots
@@ -1642,6 +1647,7 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
         ],
         route,
         request,
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
         Duration::ZERO,
         move |candidate, candidate_request| {
             let app = Arc::clone(&app_for_local);
@@ -1653,9 +1659,10 @@ async fn queue_plan_synced_real_local_journal_receipt_combines_with_remote_quoru
                         super::execute_torii_proxy_request_locally(
                             &app,
                             peer_id,
-                            candidate_request.into_owned(),
+                            Arc::unwrap_or_clone(candidate_request.into_arc()),
                         )
                         .await
+                        .map(|admitted| admitted.snapshot)
                     }
                     ToriiProxyCandidate::P2p(peer_id) if peer_id == remote_peer_id => {
                         Ok(remote_snapshot)
@@ -2195,8 +2202,7 @@ async fn incoming_torii_proxy_rejects_malformed_v6_hop_chain_before_dispatch() {
 
     let mut revisit = base_request;
     revisit.visited_peer_ids = vec![local_peer];
-    let response =
-        super::forward_incoming_torii_proxy_request(&app, &sender, route, &revisit).await;
+    let response = super::forward_incoming_torii_proxy_request(&app, &sender, route, revisit).await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     assert_eq!(app.queue.active_len(), 0);
 }
@@ -2441,7 +2447,7 @@ async fn incoming_submit_queue_plan_synced_succeeds_with_installed_journal() {
         .await
         .expect("local strict proxy execution must produce a bounded response");
 
-    assert_eq!(snapshot.status_code, StatusCode::ACCEPTED.as_u16());
+    assert_eq!(snapshot.snapshot.status_code, StatusCode::ACCEPTED.as_u16());
     assert_eq!(app.queue.active_len(), 1);
     assert!(
         std::fs::metadata(&journal_path)
@@ -2453,7 +2459,7 @@ async fn incoming_submit_queue_plan_synced_succeeds_with_installed_journal() {
     let expected = super::queue_plan_synced_acceptance_expectation(&request)
         .expect("strict incoming request expectation must be valid")
         .expect("strict incoming request must have an acceptance expectation");
-    super::validate_queue_plan_synced_acceptance(&snapshot, &expected)
+    super::validate_queue_plan_synced_acceptance(&snapshot.snapshot, &expected)
         .expect("production strict response must attest the exact durable request and peer");
 }
 
@@ -2924,6 +2930,7 @@ async fn signed_query_proxy_does_not_retry_after_ambiguous_dispatch() {
         ],
         route,
         request,
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
         Duration::from_millis(50),
         move |candidate, _request| {
             let attempts = attempts_ref.clone();

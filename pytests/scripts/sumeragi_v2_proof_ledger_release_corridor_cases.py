@@ -6,23 +6,23 @@ def test_release_inventory_constants_match_current_source_seal(
     """Every release consumer binds the current production and focus seals."""
 
     module = load_checker()
-    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 861
+    assert module._PRODUCTION_LIVENESS_RELEASE_COUNT == 854
     assert module._PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 == (
-        "8c39cb3717a9cab79e4d442e8179030c3af5af74947864d45838b80864290d2f"
+        "df90ef7d94284bc805ff55ead6c6d938ba0f681a1d39e7b929fc275e8019aefa"
     )
     assert module._PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 == (
-        "9c0644e3a8243176f680467f7b841fc43854707473cb100f17587a054c1e602b"
+        "dd4e606d09316b0734ac686311412b564e9f3a1467618558ac4b4dff2cd6d8ba"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 == (
-        "3c48c972b94ed16b8bf51a847148b9c5c2c90d1bd4459ca0ac8a9be71c87fed0"
+        "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
     )
     assert module._SUMERAGI_V2_PACKAGE_LAYOUT_VERIFIER_SHA256 == (
         "42fc1fb789e115df9f54c230ee6bfc1e1c20504a904aa20f945b6369df6d7679"
     )
-    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 524
-    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 525
+    assert module._PRODUCTION_MULTILANE_FOCUS_TEST_COUNT == 525
+    assert module._PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT == 526
     assert module._PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 == (
-        "bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8"
+        "dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352"
     )
     assert (
         "_production_liveness_release_inventory_guard_errors"
@@ -182,23 +182,23 @@ def test_release_inventory_constants_match_current_source_seal(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert receipt_module._PRODUCTION_TEST_COUNT == 861
-    assert receipt_module._G_UNIT_TEST_COUNT == 524
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 861
+    assert receipt_module._PRODUCTION_TEST_COUNT == 854
+    assert receipt_module._G_UNIT_TEST_COUNT == 525
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 854
     receipt_module_counts = {
         module_name: count
         for _leg_id, module_name, count in receipt_module._PRODUCTION_MODULES
     }
     assert receipt_module_counts["sumeragi::authoritative_runtime_gate_tests"] == 43
     assert receipt_module_counts["sumeragi::v2_effects::tests"] == 72
-    assert receipt_module_counts["sumeragi::v2_lane_work::tests"] == 60
+    assert receipt_module_counts["sumeragi::v2_lane_work::tests"] == 61
     assert receipt_module_counts["sumeragi::v2_runtime::tests"] == 68
     assert receipt_module_counts["sumeragi::v2_runner::tests"] == 37
     assert receipt_module_counts["sumeragi::v2_worker::tests"] == 133
-    assert receipt_module_counts["sumeragi::v2_core::network_simulation"] == 10
+    assert "sumeragi::v2_core::network_simulation" not in receipt_module_counts
     assert (
         sum(count for _, _, _, count, _ in receipt_module._G_UNIT_GROUPS)
-        == 524
+        == 525
     )
 
 
@@ -288,9 +288,12 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     formal_launcher_source = (
         ROOT_DIR / "scripts" / "run_sumeragi_v2_formal_release.sh"
     ).read_text(encoding="utf-8")
-    receipt_source = (
-        ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py"
-    ).read_text(encoding="utf-8")
+    receipt_source = read_source_bundle(
+        "scripts/write_sumeragi_v2_release_receipt.py",
+        "scripts/write_sumeragi_v2_release_receipt_formal_artifacts.py",
+        "scripts/write_sumeragi_v2_release_receipt_corridor_log.py",
+        "scripts/write_sumeragi_v2_release_receipt_publish_helpers.py",
+    )
     taira_source = read_reviewed_source_bundle(
         "integration_tests/tests/taira_public_localnet.rs"
     )
@@ -315,8 +318,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     state_tests_source = read_source_bundle(
         "crates/iroha_core/src/state/tests.rs"
     )
-    # The production runner owns its inline cfg(test) module. The separately
-    # sealed legacy split harness is not part of that Rust module's closure.
+    # The production runner owns the split cfg(test) module and its reviewed
+    # include closure; seal both the production parent and live test owner.
     runner_source = read_reviewed_source_bundle(
         "crates/iroha_core/src/sumeragi/v2_runner.rs"
     )
@@ -328,9 +331,6 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     )
     core_source = read_reviewed_source_bundle(
         "crates/iroha_core/src/sumeragi/v2_core/tests.rs"
-    )
-    network_simulation_source = read_reviewed_source_bundle(
-        "crates/iroha_core/src/sumeragi/v2_core/network_simulation.rs"
     )
     refinement_source = "\n".join(
         (
@@ -658,7 +658,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
                 """
 kura.claim_autonomous_lifecycle_process_generation(
     context.network_id,
-    local_peer,
+    local_peer
 )
 """
             ),
@@ -1796,26 +1796,6 @@ kura.claim_autonomous_lifecycle_process_generation(
         ),
     )
     assert len(deterministic_ownership_inventory_additions) == 13
-    network_simulation_inventory_additions = tuple(
-        (
-            "sumeragi::v2_core::network_simulation::",
-            test_name,
-            network_simulation_source,
-        )
-        for test_name in (
-            "lossy_offline_leader_simulations_commit_for_4_7_and_10_validators",
-            "two_by_two_partition_cannot_advance_but_healing_retransmits_tc_and_commits",
-            "historical_prepare_qc_uses_current_consumer_tag_after_timeout_install",
-            "responsive_source_redelivers_exact_prepare_qc_after_lagger_installs_tc",
-            "asymmetric_partition_stalls_without_dual_quorum_then_heals_and_applies",
-            "leader_crash_after_proposal_broadcast_does_not_block_the_remaining_quorum",
-            "leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum",
-            "corrupted_chunks_and_withheld_commit_evidence_recover_by_bounded_retransmission",
-            "crash_after_proposal_wal_before_signature_replays_exact_intent",
-            "taira_divergent_views_converge_and_commit_within_one_rotation",
-        )
-    )
-    assert len(network_simulation_inventory_additions) == 10
     production_inventory_additions = tuple(
         item
         for item in (
@@ -1828,7 +1808,6 @@ kura.claim_autonomous_lifecycle_process_generation(
             + latest_h_geometry_and_daemon_inventory_additions
             + apply_authority_inventory_additions
             + deterministic_ownership_inventory_additions
-            + network_simulation_inventory_additions
         )
         if f"{item[0]}{item[1]}"
         not in module._PRODUCTION_LIVENESS_RETIRED_REGRESSIONS
@@ -1964,8 +1943,8 @@ kura.claim_autonomous_lifecycle_process_generation(
             )
         )
     )
-    assert len(production_inventory) == 861
-    assert len(set(production_inventory)) == 861
+    assert len(production_inventory) == 854
+    assert len(set(production_inventory)) == 854
     native_merge_projection_regressions = {
         "sumeragi::v2_lane_work::tests::native_amx_manifest_projects_finality_bound_merge_batch_in_canonical_order",
         "sumeragi::v2_lane_work::tests::native_amx_merge_projection_rejects_multiple_participant_heights_in_one_carrier",
@@ -1979,29 +1958,24 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert native_merge_projection_regressions <= set(
         module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     )
+    deferred_terminal_regressions = {
+        "sumeragi::v2_apply::tests::deferred_canonical_carrier_owned_and_absent_groups_complete_before_gate_publication",
+        "sumeragi::v2_apply::tests::deferred_canonical_carrier_missing_after_queue_cleanup_keeps_startup_gate_closed",
+    }
+    assert deferred_terminal_regressions <= set(production_inventory)
+    assert deferred_terminal_regressions <= set(
+        module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
+    )
     terminal_sweep_regression = (
         "sumeragi::v2_runner::tests::"
         "terminal_sweep_source_partitions_whole_units_before_any_mutation"
     )
     assert terminal_sweep_regression in production_inventory
     assert terminal_sweep_regression in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
-    network_simulation_regressions = tuple(
-        f"{module_name}{test_name}"
-        for module_name, test_name, _ in network_simulation_inventory_additions
-    )
-    assert tuple(
-        test
+    assert not any(
+        test.startswith("sumeragi::v2_core::network_simulation::")
         for test in production_inventory
-        if test.startswith("sumeragi::v2_core::network_simulation::")
-    ) == network_simulation_regressions
-    last_core_test = max(
-        index
-        for index, test in enumerate(production_inventory)
-        if test.startswith("sumeragi::v2_core::tests::")
     )
-    assert production_inventory[
-        last_core_test + 1 : last_core_test + 11
-    ] == network_simulation_regressions
     leader_wire_slot_product_regression = (
         "sumeragi::serviced_candidate_store::tests::"
         "leader_wire_gate_retains_independent_cross_origin_phase_and_chunk_slots"
@@ -2079,17 +2053,14 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert deterministic_ownership_regressions <= set(
         module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
     )
-    assert set(network_simulation_regressions) <= set(
-        module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
-    )
     late_passive_fetch_regression = (
         "sumeragi::v2_effects::tests::"
         "late_passive_fetch_completion_issues_one_serve_predecessor_episode_and_steps"
     )
     assert late_passive_fetch_regression in production_inventory
     assert late_passive_fetch_regression in module._PRODUCTION_LIVENESS_NEW_REGRESSIONS
-    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 443
-    assert "readonly expected_production_liveness_test_count=861" in release_source
+    assert len(module._PRODUCTION_LIVENESS_NEW_REGRESSIONS) == 436
+    assert "readonly expected_production_liveness_test_count=854" in release_source
     assert (
         "readonly expected_typed_rollover_formal_mutation_count=45"
         in release_source
@@ -2099,7 +2070,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         'root-anchored V3 matrix passed"'
         in release_source
     )
-    assert "_PRODUCTION_TEST_COUNT = 861" in receipt_source
+    assert "_PRODUCTION_TEST_COUNT = 854" in receipt_source
     receipt_spec = importlib.util.spec_from_file_location(
         "sumeragi_v2_release_receipt_inventory",
         ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py",
@@ -2109,28 +2080,19 @@ kura.claim_autonomous_lifecycle_process_generation(
     receipt_module = importlib.util.module_from_spec(receipt_spec)
     sys.modules[receipt_spec.name] = receipt_module
     receipt_spec.loader.exec_module(receipt_module)
-    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 861
+    assert sum(count for _, _, count in receipt_module._PRODUCTION_MODULES) == 854
     assert (
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
     )
-    assert receipt_module._PRODUCTION_MODULES.count(
-        (
-            "production-v2-core-network-simulation",
-            "sumeragi::v2_core::network_simulation",
-            10,
-        )
-    ) == 1
+    assert all(
+        module_name != "sumeragi::v2_core::network_simulation"
+        for _leg_id, module_name, _count in receipt_module._PRODUCTION_MODULES
+    )
     assert (
         len(receipt_module._corridor_legs())
         == module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT
-        == 89
-    )
-    assert receipt_module._production_module_command(
-        "sumeragi::v2_core::network_simulation"
-    ) == (
-        "cargo test --locked --offline -p iroha_core --lib "
-        "sumeragi::v2_core::network_simulation -- --test-threads=1"
+        == 88
     )
     assert len(receipt_module._TAIRA_CONTRACT_TESTS) == 6
     assert receipt_module._TAIRA_CONTRACT_TESTS[-1] == (
@@ -2274,6 +2236,7 @@ kura.claim_autonomous_lifecycle_process_generation(
                 "kura::",
                 "nexus::",
                 "merge_sidecar::",
+                "state::",
                 "zk::",
                 "block::",
                 "offline::",
@@ -2291,10 +2254,7 @@ kura.claim_autonomous_lifecycle_process_generation(
     assert "kura::tests" in production_modules
     assert "kura::lane_geometry::tests" in production_modules
     assert "sumeragi::authoritative_runtime_gate_tests" in production_modules
-    assert "sumeragi::v2_core::network_simulation" in production_modules
-    assert production_modules.index("sumeragi::v2_core::network_simulation") == (
-        production_modules.index("sumeragi::v2_core::tests") + 1
-    )
+    assert "sumeragi::v2_core::network_simulation" not in production_modules
     assert "sumeragi::v2_block_sync::tests" in production_modules
     assert "sumeragi::v2_apply::tests" in production_modules
     assert "sumeragi_v2_runner" in production_modules
@@ -2431,10 +2391,10 @@ kura.claim_autonomous_lifecycle_process_generation(
         '"preflight-release-receipt",\n                "pytest",\n                363,'
         in receipt_source
     )
-    assert "did not run exactly 5227 passing tests" in release_source
-    assert "preflight-proof-fidelity pytest 5227" in release_source
+    assert "did not run exactly 5291 passing tests" in release_source
+    assert "preflight-proof-fidelity pytest 5291" in release_source
     assert (
-        "^5227 passed in [0-9]+([.][0-9]+)?s( "
+        "^5291 passed in [0-9]+([.][0-9]+)?s( "
         r"\([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$"
         in release_source
     )
@@ -2462,6 +2422,31 @@ kura.claim_autonomous_lifecycle_process_generation(
     ]
     assert len(proof_fidelity_receipt_commands) == 1
     proof_fidelity_receipt_command = proof_fidelity_receipt_commands[0]
+    proof_fidelity_array_start = release_source.index(
+        "proof_fidelity_contract_files=(\n"
+    ) + len("proof_fidelity_contract_files=(\n")
+    proof_fidelity_array_end = release_source.index(
+        "\n)", proof_fidelity_array_start
+    )
+    proof_fidelity_runner_nodes = tuple(
+        line.strip()
+        for line in release_source[
+            proof_fidelity_array_start:proof_fidelity_array_end
+        ].splitlines()
+        if line.strip()
+    )
+    proof_fidelity_command_prefix = (
+        "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
+        "-q -p no:cacheprovider "
+    )
+    assert proof_fidelity_receipt_command.startswith(proof_fidelity_command_prefix)
+    proof_fidelity_receipt_nodes = tuple(
+        proof_fidelity_receipt_command[len(proof_fidelity_command_prefix) :].split()
+    )
+    assert len(proof_fidelity_runner_nodes) == 18
+    assert len(set(proof_fidelity_runner_nodes)) == 18
+    assert proof_fidelity_runner_nodes == proof_fidelity_receipt_nodes
+    assert "Collection is source-bound as 5,189 ledger/checker cases" in release_source
     for selector in (
         "pytests/scripts/sumeragi_v2_multilane_models_test.py::"
         "test_inflight_composed_contract_rejects_legacy_layout_only_claim",
@@ -2491,7 +2476,7 @@ kura.claim_autonomous_lifecycle_process_generation(
         assert selector in release_source
         assert selector in proof_fidelity_receipt_command
     assert (
-        '"preflight-proof-fidelity",\n                "pytest",\n                5227,'
+        '"preflight-proof-fidelity",\n                "pytest",\n                5291,'
         in receipt_source
     )
     assert "did not run exactly 26 passing tests" in release_source
@@ -2620,28 +2605,37 @@ kura.claim_autonomous_lifecycle_process_generation(
         f"{module._PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT}"
         in release_source
     )
+    assert 'export IROHA_RELEASE_CARGO_BIN="$release_cargo_bin"' in release_source
+    assert (
+        'corridor_cargo_path="$(canonical_path "$IROHA_RELEASE_CARGO_BIN")"'
+        in release_source
+    )
+    assert (
+        'expected_legs = _corridor_legs(fields["cargo_path"])'
+        in receipt_source
+    )
     for leg_id, command in (
         (
             "source-sealed-workspace-build",
-            "cargo +1.93.1 build -j1 --locked --offline --workspace",
+            "${IROHA_RELEASE_CARGO_BIN} build -j1 --locked --offline --workspace",
         ),
         (
             "source-sealed-workspace-tests",
-            "cargo +1.93.1 test -j1 --locked --offline --workspace",
+            "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline --workspace",
         ),
         (
             "source-sealed-irohad-tests",
-            "cargo +1.93.1 test -j1 --locked --offline -p irohad --bin irohad "
+            "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline -p irohad --bin irohad "
             "--features test-network-message-control",
         ),
         (
             "source-sealed-workspace-clippy",
-            "cargo +1.93.1 clippy -j1 --locked --offline --workspace --all-targets "
+            "${IROHA_RELEASE_CARGO_BIN} clippy -j1 --locked --offline --workspace --all-targets "
             "-- -D warnings",
         ),
         (
             "source-sealed-workspace-format",
-            "cargo +1.93.1 fmt --all -- --check",
+            "${IROHA_RELEASE_CARGO_BIN} fmt --all -- --check",
         ),
         (
             "source-sealed-legacy-codec-guard",
@@ -2678,9 +2672,9 @@ kura.claim_autonomous_lifecycle_process_generation(
         assert expected_flag in release_source
     assert (
         '--g4p-completion "$multilane_four_peer_completion_path" \\\n'
-        '  --g12-seed-completion "$nexus_cross_completion_path" \\\n'
-        '  --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \\\n'
-        '  --scaling-evidence-manifest "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"'
+        '      --g12-seed-completion "$nexus_cross_completion_path" \\\n'
+        '      --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \\\n'
+        '      --scaling-evidence-manifest "$release_scaling_evidence_manifest"'
         in release_source
     )
     for expected_flag in (
@@ -3351,7 +3345,7 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     helper_start = checker_source.index("require_exact_token() {")
     helper_end = checker_source.index("\n}\n", helper_start) + 3
     helper = checker_source[helper_start:helper_end]
-    canonical_declaration = "readonly canonical_production_test_count=861"
+    canonical_declaration = "readonly canonical_production_test_count=854"
     count_guard = (
         "require_exact_token \\\n"
         '  "$release_runner" \\\n'
@@ -3373,8 +3367,8 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     bash = shutil.which("bash")
     assert bash is not None
     runner = tmp_path / "run_sumeragi_v2_release_gates.sh"
-    canonical = "readonly expected_production_liveness_test_count=861"
-    weakened = "readonly expected_production_liveness_test_count=860"
+    canonical = "readonly expected_production_liveness_test_count=854"
+    weakened = "readonly expected_production_liveness_test_count=853"
     runner.write_text(f"{canonical}\n", encoding="utf-8")
 
     baseline = subprocess.run(
@@ -3424,8 +3418,8 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
     guard_mutations = (
         (
             canonical_declaration,
-            "readonly canonical_production_test_count=860",
-            "must seal exactly 861 production tests",
+            "readonly canonical_production_test_count=853",
+            "must seal exactly 854 production tests",
         ),
         (
             '    "sumeragi::v2_effects::tests": 72,',
@@ -3443,29 +3437,29 @@ def test_multilane_inventory_checker_rejects_weakened_production_count(
             "independent inventory guard source SHA-256 must equal",
         ),
         (
+            '    "sumeragi::v2_lane_work::tests": 61,',
             '    "sumeragi::v2_lane_work::tests": 60,',
-            '    "sumeragi::v2_lane_work::tests": 59,',
             "changed-module counts must equal the exact reviewed release inventory",
-        ),
-        (
-            '    "8c39cb3717a9cab79e4d442e8179030c3"',
-            '    "00000000000000000000000000000000"',
-            "canonical production TSV SHA-256 must equal",
-        ),
+            ),
+            (
+                '    "df90ef7d94284bc805ff55ead6c6d938"',
+                '    "00000000000000000000000000000000"',
+                "canonical production TSV SHA-256 must equal",
+            ),
         (
             "readonly expected_production_liveness_test_count="
             '${canonical_production_test_count}"',
-            "readonly expected_production_liveness_test_count=860\"",
+            "readonly expected_production_liveness_test_count=853\"",
             "must bind the release-runner production count exactly once",
         ),
         (
             '_PRODUCTION_TEST_COUNT = ${canonical_production_test_count}"',
-            '_PRODUCTION_TEST_COUNT = 860"',
+            '_PRODUCTION_TEST_COUNT = 853"',
             "must bind the receipt-writer production count exactly once",
         ),
         (
-            '    "sumeragi::v2_core::network_simulation": 10,',
-            '    "sumeragi::v2_core::network_simulation": 9,',
+            'if "sumeragi::v2_core::network_simulation" in module_counts:',
+            'if "sumeragi::v2_core::network_simulation" not in module_counts:',
             "independent inventory guard source SHA-256 must equal",
         ),
         (

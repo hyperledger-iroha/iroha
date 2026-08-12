@@ -77,11 +77,11 @@ fn account_address_len(owner: &AccountId) -> Result<usize, InstructionExecutionE
                 corrupt_state(format!("invalid orderbook owner public key: {error}"))
             })?;
             if u8::try_from(payload.len()).is_ok() {
-                3
+                3_usize
             } else {
                 u16::try_from(payload.len())
                     .map_err(|_| corrupt_state("orderbook owner public key is too long"))?;
-                4
+                4_usize
             }
             .checked_add(payload.len())
             .ok_or_else(|| corrupt_state("orderbook owner address length overflow"))?
@@ -347,7 +347,7 @@ fn i105_symbol(digit: u8) -> Result<&'static str, InstructionExecutionError> {
         .ok_or_else(|| corrupt_state("orderbook owner has an invalid I105 digit"))
 }
 
-fn consume_exact<'a>(remaining: &mut &'a [u8], expected: &[u8]) -> bool {
+fn consume_exact(remaining: &mut &[u8], expected: &[u8]) -> bool {
     if !remaining.starts_with(expected) {
         return false;
     }

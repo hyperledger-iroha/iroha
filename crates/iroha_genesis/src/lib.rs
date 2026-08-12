@@ -82,25 +82,20 @@ use norito::{
     codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
 };
-
 const CONSENSUS_PROTOCOL_VERSION: u32 =
     iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as u32;
-
 #[cfg(test)]
 fn checked_genesis_fixture_keypair() -> KeyPair {
     KeyPair::try_random().expect("genesis fixture key generation should succeed")
 }
-
 #[cfg(test)]
 fn checked_genesis_fixture_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
     KeyPair::try_random_with_algorithm(algorithm)
         .expect("genesis fixture key generation should succeed")
 }
-
 /// Domain of the genesis account, technically required for the pre-genesis state
 pub static GENESIS_DOMAIN_ID: LazyLock<DomainId> =
     LazyLock::new(|| DomainId::parse_fully_qualified("genesis.universal").unwrap());
-
 /// Construct an [`InstructionRegistry`] with all built-in Iroha instructions and
 /// set it as the global registry.
 ///
@@ -110,13 +105,11 @@ pub static GENESIS_DOMAIN_ID: LazyLock<DomainId> =
 pub fn init_instruction_registry() {
     set_instruction_registry(default_instruction_registry());
 }
-
 /// Create an [`InstructionRegistry`] populated with all instructions supported
 /// by Iroha out of the box.
 pub fn default_instruction_registry() -> InstructionRegistry {
     iroha_data_model::instruction_registry::default()
 }
-
 /// Canonically decoded and independently verified signed-genesis bundle.
 #[derive(Debug, Clone)]
 pub struct ValidatedGenesisBundle {
@@ -127,45 +120,38 @@ pub struct ValidatedGenesisBundle {
     validator_pops: BTreeMap<PublicKey, Vec<u8>>,
     consensus_metadata: ConsensusHandshakeMetadata,
 }
-
 impl ValidatedGenesisBundle {
     /// Return the verified signed block.
     #[must_use]
     pub fn block(&self) -> &SignedBlock {
         &self.block
     }
-
     /// Return the canonical framed Norito bytes for the signed block.
     #[must_use]
     pub fn canonical_wire(&self) -> &[u8] {
         &self.canonical_wire
     }
-
     /// Return the verifier key bound to the signed block.
     #[must_use]
     pub fn public_key(&self) -> &PublicKey {
         &self.public_key
     }
-
     /// Return the exact verified block hash.
     #[must_use]
     pub const fn expected_hash(&self) -> HashOf<BlockHeader> {
         self.expected_hash
     }
-
     /// Return the validator-key to proof-of-possession roster signed into genesis.
     #[must_use]
     pub fn validator_pops(&self) -> &BTreeMap<PublicKey, Vec<u8>> {
         &self.validator_pops
     }
-
     /// Return the unique consensus handshake metadata signed into genesis.
     #[must_use]
     pub const fn consensus_metadata(&self) -> &ConsensusHandshakeMetadata {
         &self.consensus_metadata
     }
 }
-
 /// Decode and independently validate a complete signed-genesis bundle.
 ///
 /// The validator rejects non-canonical Norito, a mismatched verifier key or
@@ -195,7 +181,6 @@ pub fn validate_prepared_genesis_bundle(
             expected_hash
         ));
     }
-
     let first = block
         .external_transactions()
         .next()
@@ -209,7 +194,6 @@ pub fn validate_prepared_genesis_bundle(
             "signed genesis signer {embedded_signer} differs from verifier key {public_key}"
         ));
     }
-
     {
         let mut signatures = block.signatures();
         let signature = signatures
@@ -230,7 +214,6 @@ pub fn validate_prepared_genesis_bundle(
             .verify_signature()
             .map_err(|error| eyre!("verify genesis transaction signature: {error}"))?;
     }
-
     let mut validator_pops = BTreeMap::new();
     for transaction in block.external_transactions() {
         let Executable::Instructions(instructions) = transaction.instructions() else {
@@ -265,10 +248,8 @@ pub fn validate_prepared_genesis_bundle(
             validator_pops.len()
         ));
     }
-
     let consensus_metadata = signed_genesis_consensus_metadata(&block)?;
     validate_signed_manifest_binding(manifest, &block, public_key, &consensus_metadata)?;
-
     Ok(ValidatedGenesisBundle {
         block,
         canonical_wire,
@@ -278,7 +259,6 @@ pub fn validate_prepared_genesis_bundle(
         consensus_metadata,
     })
 }
-
 fn signed_genesis_consensus_metadata(block: &SignedBlock) -> Result<ConsensusHandshakeMetadata> {
     let mut metadata = None;
     for transaction in block.external_transactions() {
@@ -308,7 +288,6 @@ fn signed_genesis_consensus_metadata(block: &SignedBlock) -> Result<ConsensusHan
     }
     metadata.ok_or_else(|| eyre!("signed genesis contains no consensus metadata instruction"))
 }
-
 fn validate_signed_manifest_binding(
     manifest: &RawGenesisTransaction,
     block: &SignedBlock,
@@ -339,7 +318,6 @@ fn validate_signed_manifest_binding(
             "genesis manifest Sumeragi v2 context differs from signed body"
         ));
     }
-
     let expected = manifest
         .clone()
         .with_consensus_meta()
@@ -423,7 +401,6 @@ fn validate_signed_manifest_binding(
     }
     Ok(())
 }
-
 /// Genesis block, represented as a thin wrapper around the signed block emitted
 /// by the builder.
 ///
@@ -437,7 +414,6 @@ fn validate_signed_manifest_binding(
 #[derive(Debug, Clone)]
 #[repr(transparent)]
 pub struct GenesisBlock(pub SignedBlock);
-
 /// Format of `genesis.json` user file that tooling consumes before producing
 /// the canonical [`GenesisBlock`].
 ///
@@ -482,7 +458,6 @@ pub struct RawGenesisTransaction {
     #[norito(default)]
     crypto: ManifestCrypto,
 }
-
 /// Cryptography defaults advertised in the genesis manifest.
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, IntoSchema, Encode, Decode, PartialEq, Eq,
@@ -512,7 +487,6 @@ pub struct ManifestCrypto {
     #[norito(default)]
     pub allowed_curve_ids: Vec<u8>,
 }
-
 impl Default for ManifestCrypto {
     fn default() -> Self {
         use iroha_config::parameters::defaults::crypto as defaults;
@@ -527,7 +501,6 @@ impl Default for ManifestCrypto {
         }
     }
 }
-
 impl ManifestCrypto {
     /// Validate the manifest crypto configuration is internally consistent.
     ///
@@ -546,25 +519,21 @@ impl ManifestCrypto {
                 "`allowed_signing` must include `ed25519` for control-plane operations"
             ));
         }
-
         let has_sm2 = self
             .allowed_signing
             .iter()
             .any(|algo| algo.as_static_str().eq_ignore_ascii_case("sm2"));
-
         if has_sm2 && !cfg!(feature = "sm") {
             return Err(eyre!(
                 "`allowed_signing` includes `sm2`, but this build lacks SM support"
             ));
         }
-
         if has_sm2 {
             if !self.default_hash.trim().eq_ignore_ascii_case("sm3-256") {
                 return Err(eyre!(
                     "`default_hash` must be `sm3-256` when `allowed_signing` contains `sm2`"
                 ));
             }
-
             if self.sm2_distid_default.trim().is_empty() {
                 return Err(eyre!(
                     "`sm2_distid_default` must be non-empty when `allowed_signing` contains `sm2`"
@@ -575,23 +544,19 @@ impl ManifestCrypto {
                 "`default_hash` is `sm3-256`, but `allowed_signing` does not include `sm2`; add `sm2` to enable SM cryptography"
             ));
         }
-
         if self.sm_openssl_preview && !cfg!(feature = "sm-ffi-openssl") {
             return Err(eyre!(
                 "`sm_openssl_preview` requires building with the `sm-ffi-openssl` feature"
             ));
         }
-
         // Validate SM intrinsic policy string.
         SmIntrinsicsPolicyConfig::from_str(self.sm_intrinsics.as_str())?;
-
         let allowed_curves = self.resolved_allowed_curve_ids();
         if allowed_curves.is_empty() {
             return Err(eyre!(
                 "`allowed_curve_ids` resolved to an empty set; enable at least one curve (ed25519)"
             ));
         }
-
         for id in &allowed_curves {
             let curve = CurveId::try_from(*id).map_err(|err| {
                 eyre!("`allowed_curve_ids` contains unknown identifier {id:#04X}: {err}")
@@ -605,10 +570,8 @@ impl ManifestCrypto {
                 ));
             }
         }
-
         Ok(())
     }
-
     /// Determine whether SM helper syscalls should be enabled based on the manifest.
     #[must_use]
     pub fn sm_helpers_enabled(&self) -> bool {
@@ -624,7 +587,6 @@ impl ManifestCrypto {
             false
         }
     }
-
     fn resolved_allowed_curve_ids(&self) -> Vec<u8> {
         let mut ids = if self.allowed_curve_ids.is_empty() {
             iroha_config::parameters::defaults::crypto::derive_curve_ids_from_algorithms(
@@ -638,7 +600,6 @@ impl ManifestCrypto {
         ids
     }
 }
-
 impl From<ManifestCrypto> for ActualCrypto {
     fn from(value: ManifestCrypto) -> Self {
         let allowed_curve_ids = value.resolved_allowed_curve_ids();
@@ -660,13 +621,11 @@ impl From<ManifestCrypto> for ActualCrypto {
         }
     }
 }
-
 #[derive(Default)]
 struct GenesisVkRegistry {
     entries: BTreeMap<VerifyingKeyId, VerifyingKeyRecord>,
     by_circuit: BTreeMap<(String, u32), VerifyingKeyId>,
 }
-
 /// Compute the verifying-key set hash derived from the provided genesis instructions.
 ///
 /// # Errors
@@ -678,7 +637,6 @@ where
 {
     GenesisVkRegistry::build(instructions).map(|registry| registry.vk_set_hash())
 }
-
 impl GenesisVkRegistry {
     fn build<'a, I>(instructions: I) -> eyre::Result<Self>
     where
@@ -690,7 +648,6 @@ impl GenesisVkRegistry {
         }
         Ok(registry)
     }
-
     fn apply_instruction(&mut self, instr: &InstructionBox) -> eyre::Result<()> {
         if let Some(register) = instr
             .as_any()
@@ -705,7 +662,6 @@ impl GenesisVkRegistry {
         }
         Ok(())
     }
-
     fn apply_register(
         &mut self,
         id: &VerifyingKeyId,
@@ -750,7 +706,6 @@ impl GenesisVkRegistry {
         self.by_circuit.insert(key, id.clone());
         Ok(())
     }
-
     fn apply_update(
         &mut self,
         id: &VerifyingKeyId,
@@ -805,7 +760,6 @@ impl GenesisVkRegistry {
         self.by_circuit.insert(new_key, id.clone());
         Ok(())
     }
-
     fn vk_set_hash(&self) -> Option<[u8; 32]> {
         let mut entries: Vec<_> = self
             .entries
@@ -841,12 +795,10 @@ impl GenesisVkRegistry {
         }
         Some(Hash::new(&buf).into())
     }
-
     fn id_display(id: &VerifyingKeyId) -> String {
         format!("{}::{}", id.backend.as_str(), id.name)
     }
 }
-
 /// Norito-compatible JSON helpers for serializing and deserializing genesis instruction lists.
 pub mod genesis_instructions_json {
     use std::{collections::BTreeMap, str::FromStr};
@@ -893,7 +845,6 @@ pub mod genesis_instructions_json {
         }
         out.push(']');
     }
-
     /// Convert a slice of instructions into a structured JSON value array.
     #[must_use]
     pub fn instructions_to_value(instructions: &[InstructionBox]) -> Value {
@@ -904,12 +855,10 @@ pub mod genesis_instructions_json {
                 .collect::<Vec<_>>(),
         )
     }
-
     /// Convert an instruction into a structured JSON value, falling back to base64 if JSON conversion fails.
     pub fn instruction_value(instruction: &InstructionBox) -> Value {
         instruction_value_inner(instruction, None)
     }
-
     #[cfg(test)]
     #[allow(dead_code)]
     fn instruction_value_with_override(
@@ -918,7 +867,6 @@ pub mod genesis_instructions_json {
     ) -> Value {
         instruction_value_inner(instruction, override_value)
     }
-
     fn instruction_value_inner(
         instruction: &InstructionBox,
         override_value: Option<Result<Value, json::Error>>,
@@ -926,13 +874,11 @@ pub mod genesis_instructions_json {
         if let Some(value) = instruction_to_value(instruction) {
             return value;
         }
-
         let value_result = override_value
             .unwrap_or_else(|| norito::json::value::to_value(instruction))
             .expect("serialize genesis instruction to JSON");
         value_result
     }
-
     /// Deserialize a sequence of genesis instructions from a JSON parser.
     ///
     /// # Errors
@@ -954,7 +900,6 @@ pub mod genesis_instructions_json {
         seq.finish()?;
         Ok(instructions)
     }
-
     fn value_to_instruction(value: Value) -> Result<InstructionBox, json::Error> {
         match value {
             Value::Array(_) => Err(json::Error::Message(
@@ -1017,7 +962,6 @@ pub mod genesis_instructions_json {
             ))),
         }
     }
-
     fn decode_base64_instruction(encoded: &str) -> Result<InstructionBox, json::Error> {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(encoded)
@@ -1030,7 +974,6 @@ pub mod genesis_instructions_json {
             ))
         })
     }
-
     fn try_decode_register(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
         let map = match inner {
             Value::Object(map) => map,
@@ -1088,7 +1031,6 @@ pub mod genesis_instructions_json {
         };
         Ok(Some(instruction))
     }
-
     fn try_decode_mint(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
         let variants = match inner {
             Value::Object(map) => map,
@@ -1122,7 +1064,6 @@ pub mod genesis_instructions_json {
         let instruction = InstructionBox::from(Mint::asset_quantity(quantity, asset_id));
         Ok(Some(instruction))
     }
-
     fn try_decode_transfer(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
         let variants = match inner {
             Value::Object(map) => map,
@@ -1167,7 +1108,6 @@ pub mod genesis_instructions_json {
         };
         Ok(Some(instruction))
     }
-
     fn try_decode_set_parameter(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
         let mut fields = match inner {
             Value::Object(map) => map,
@@ -1180,7 +1120,6 @@ pub mod genesis_instructions_json {
         let parameter: Parameter = norito::json::value::from_value(parameter_value)?;
         Ok(Some(InstructionBox::from(SetParameter::new(parameter))))
     }
-
     fn try_decode_grant(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
         let variants = match inner {
             Value::Object(map) => map,
@@ -1235,7 +1174,6 @@ pub mod genesis_instructions_json {
         let instruction = InstructionBox::from(Grant::account_permission(permission, destination));
         Ok(Some(instruction))
     }
-
     fn try_decode_set_asset_definition_alias(
         inner: Value,
     ) -> Result<Option<InstructionBox>, json::Error> {
@@ -1260,7 +1198,6 @@ pub mod genesis_instructions_json {
                 ));
             }
         };
-
         let alias = match fields.remove("alias") {
             None | Some(Value::Null) => None,
             Some(Value::String(value)) => Some(value.parse().map_err(|err| {
@@ -1274,7 +1211,6 @@ pub mod genesis_instructions_json {
                 )));
             }
         };
-
         let lease_expiry_ms = match fields.remove("lease_expiry_ms") {
             None | Some(Value::Null) => None,
             Some(Value::Number(Number::U64(value))) => Some(value),
@@ -1285,14 +1221,12 @@ pub mod genesis_instructions_json {
                 )));
             }
         };
-
         if !fields.is_empty() {
             return Err(json::Error::Message(format!(
                 "unexpected SetAssetDefinitionAlias fields: {}",
                 fields.keys().cloned().collect::<Vec<_>>().join(",")
             )));
         }
-
         let instruction = match alias {
             Some(alias) => {
                 SetAssetDefinitionAlias::bind(asset_definition_id, alias, lease_expiry_ms)
@@ -1301,7 +1235,6 @@ pub mod genesis_instructions_json {
         };
         Ok(Some(InstructionBox::from(instruction)))
     }
-
     fn try_decode_custom(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
         let mut fields = match inner {
             Value::Object(map) => map,
@@ -1315,7 +1248,6 @@ pub mod genesis_instructions_json {
             iroha_primitives::json::Json::new(payload),
         ))))
     }
-
     fn try_decode_register_citizen(inner: Value) -> Result<Option<InstructionBox>, json::Error> {
         let mut fields = object_fields(inner, "RegisterCitizen")?;
         let owner = parse_account_id(&take_string(&mut fields, "owner")?, "RegisterCitizen owner")?;
@@ -1333,7 +1265,6 @@ pub mod genesis_instructions_json {
             amount,
         })))
     }
-
     fn try_decode_register_public_lane_validator(
         inner: Value,
     ) -> Result<Option<InstructionBox>, json::Error> {
@@ -1382,7 +1313,6 @@ pub mod genesis_instructions_json {
         );
         Ok(Some(InstructionBox::from(register)))
     }
-
     fn try_decode_activate_public_lane_validator(
         inner: Value,
     ) -> Result<Option<InstructionBox>, json::Error> {
@@ -1404,7 +1334,6 @@ pub mod genesis_instructions_json {
         let activate = ActivatePublicLaneValidator::new(lane_id, validator);
         Ok(Some(InstructionBox::from(activate)))
     }
-
     fn object_fields(
         inner: Value,
         instruction: &str,
@@ -1416,7 +1345,6 @@ pub mod genesis_instructions_json {
             ))),
         }
     }
-
     fn take_typed<T>(
         fields: &mut BTreeMap<String, Value>,
         field: &'static str,
@@ -1430,7 +1358,6 @@ pub mod genesis_instructions_json {
                 .ok_or_else(|| json::Error::missing_field(field))?,
         )
     }
-
     fn try_decode_create_fee_sponsor_program(
         inner: Value,
     ) -> Result<Option<InstructionBox>, json::Error> {
@@ -1441,7 +1368,6 @@ pub mod genesis_instructions_json {
             program,
         })))
     }
-
     fn try_decode_stage_fee_sponsor_program_revision(
         inner: Value,
     ) -> Result<Option<InstructionBox>, json::Error> {
@@ -1452,7 +1378,6 @@ pub mod genesis_instructions_json {
             revision,
         })))
     }
-
     fn try_decode_enroll_fee_sponsor_beneficiary(
         inner: Value,
     ) -> Result<Option<InstructionBox>, json::Error> {
@@ -1468,7 +1393,6 @@ pub mod genesis_instructions_json {
             beneficiary,
         })))
     }
-
     fn try_decode_fund_fee_sponsor_program(
         inner: Value,
     ) -> Result<Option<InstructionBox>, json::Error> {
@@ -1490,7 +1414,6 @@ pub mod genesis_instructions_json {
             amount,
         })))
     }
-
     fn try_decode_activate_fee_sponsor_program_revision(
         inner: Value,
     ) -> Result<Option<InstructionBox>, json::Error> {
@@ -1517,7 +1440,6 @@ pub mod genesis_instructions_json {
             },
         )))
     }
-
     fn take_string(
         fields: &mut BTreeMap<String, Value>,
         field: &'static str,
@@ -1530,14 +1452,12 @@ pub mod genesis_instructions_json {
             None => Err(json::Error::missing_field(field)),
         }
     }
-
     fn ensure_no_extra_fields(fields: &BTreeMap<String, Value>) -> Result<(), json::Error> {
         if let Some(field) = fields.keys().next().cloned() {
             return Err(json::Error::UnknownField { field });
         }
         Ok(())
     }
-
     fn ensure_only_keys(
         fields: &BTreeMap<String, Value>,
         allowed: &[&str],
@@ -1549,7 +1469,6 @@ pub mod genesis_instructions_json {
         }
         Ok(())
     }
-
     fn parse_id<T>(value: &str, label: &'static str) -> Result<T, json::Error>
     where
         T: FromStr,
@@ -1559,7 +1478,6 @@ pub mod genesis_instructions_json {
             .parse::<T>()
             .map_err(|err| json::Error::Message(format!("invalid {label}: {err}")))
     }
-
     fn parse_account_id(value: &str, label: &'static str) -> Result<AccountId, json::Error> {
         match AccountId::parse_encoded(value) {
             Ok(parsed) => Ok(parsed.into_account_id()),
@@ -1569,12 +1487,10 @@ pub mod genesis_instructions_json {
                 .map_err(|_| json::Error::Message(format!("invalid {label}: {err}"))),
         }
     }
-
     fn parse_domain_id(value: &str, label: &'static str) -> Result<DomainId, json::Error> {
         DomainId::parse_fully_qualified(value)
             .map_err(|err| json::Error::Message(format!("invalid {label}: {err}")))
     }
-
     fn parse_u32(value: Value, label: &'static str) -> Result<u32, json::Error> {
         match value {
             Value::String(s) => s
@@ -1591,7 +1507,6 @@ pub mod genesis_instructions_json {
             ))),
         }
     }
-
     fn parse_u64(value: Value, label: &'static str) -> Result<u64, json::Error> {
         match value {
             Value::String(s) => s
@@ -1605,7 +1520,6 @@ pub mod genesis_instructions_json {
             ))),
         }
     }
-
     fn parse_account_alias(
         value: Value,
         label: &'static str,
@@ -1618,7 +1532,6 @@ pub mod genesis_instructions_json {
                 )));
             }
         };
-
         let alias_label = match fields.remove("label") {
             Some(Value::String(value)) => value
                 .parse()
@@ -1630,7 +1543,6 @@ pub mod genesis_instructions_json {
             }
             None => return Err(json::Error::Message(format!("missing {label}.label"))),
         };
-
         let domain = match fields.remove("domain") {
             None | Some(Value::Null) => None,
             Some(Value::String(value)) => Some(value.parse().map_err(|err| {
@@ -1642,7 +1554,6 @@ pub mod genesis_instructions_json {
                 )));
             }
         };
-
         let dataspace = match fields.remove("dataspace") {
             Some(value) => iroha_data_model::nexus::DataSpaceId::new(u64::from(parse_u32(
                 value,
@@ -1650,16 +1561,13 @@ pub mod genesis_instructions_json {
             )?)),
             None => return Err(json::Error::Message(format!("missing {label}.dataspace"))),
         };
-
         ensure_no_extra_fields(&fields)?;
-
         Ok(iroha_data_model::account::rekey::AccountAlias::new(
             alias_label,
             domain,
             dataspace,
         ))
     }
-
     fn parse_numeric(value: Value) -> Result<Numeric, json::Error> {
         match value {
             Value::String(s) => s
@@ -1679,15 +1587,12 @@ pub mod genesis_instructions_json {
             ))),
         }
     }
-
     fn account_literal(account: &AccountId) -> Option<String> {
         account.canonical_i105().ok()
     }
-
     fn asset_literal(asset: &AssetId) -> String {
         asset.canonical_literal()
     }
-
     #[allow(clippy::too_many_lines)]
     fn instruction_to_value(instruction: &InstructionBox) -> Option<Value> {
         use norito::json::Map;
@@ -1699,7 +1604,6 @@ pub mod genesis_instructions_json {
             outer.insert(kind.to_string(), Value::Object(variant_map));
             Value::Object(outer)
         }
-
         if let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() {
             return match register {
                 RegisterBox::Domain(domain) => norito::json::value::to_value(domain.object())
@@ -1716,7 +1620,6 @@ pub mod genesis_instructions_json {
                 _ => None,
             };
         }
-
         if let Some(mint) = instruction.as_any().downcast_ref::<MintBox>() {
             return match mint {
                 MintBox::Asset(mint_asset) => {
@@ -1732,7 +1635,6 @@ pub mod genesis_instructions_json {
                 _ => None,
             };
         }
-
         if let Some(transfer) = instruction.as_any().downcast_ref::<TransferBox>() {
             return match transfer {
                 TransferBox::AssetDefinition(tr) => {
@@ -1756,7 +1658,6 @@ pub mod genesis_instructions_json {
                 _ => None,
             };
         }
-
         if let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>() {
             return norito::json::value::to_value(set_parameter.inner())
                 .ok()
@@ -1768,7 +1669,6 @@ pub mod genesis_instructions_json {
                     Value::Object(outer)
                 });
         }
-
         if let Some(set_asset_definition_alias) = instruction
             .as_any()
             .downcast_ref::<SetAssetDefinitionAlias>()
@@ -1796,7 +1696,6 @@ pub mod genesis_instructions_json {
             outer.insert("SetAssetDefinitionAlias".to_string(), Value::Object(fields));
             return Some(Value::Object(outer));
         }
-
         if let Some(custom) = instruction.as_any().downcast_ref::<CustomInstruction>() {
             let payload = norito::json::parse_value(custom.payload().get()).ok()?;
             let mut inner = Map::new();
@@ -1805,7 +1704,6 @@ pub mod genesis_instructions_json {
             outer.insert("Custom".to_string(), Value::Object(inner));
             return Some(Value::Object(outer));
         }
-
         if let Some(citizen) = instruction.as_any().downcast_ref::<RegisterCitizen>() {
             let mut fields = Map::new();
             fields.insert(
@@ -1820,7 +1718,6 @@ pub mod genesis_instructions_json {
             outer.insert("RegisterCitizen".to_string(), Value::Object(fields));
             return Some(Value::Object(outer));
         }
-
         if let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() {
             return match grant {
                 GrantBox::Permission(grant_perm) => {
@@ -1834,7 +1731,6 @@ pub mod genesis_instructions_json {
                 _ => None,
             };
         }
-
         if let Some(register) = instruction
             .as_any()
             .downcast_ref::<RegisterPublicLaneValidator>()
@@ -1865,7 +1761,6 @@ pub mod genesis_instructions_json {
             );
             return Some(Value::Object(outer));
         }
-
         if let Some(activate) = instruction
             .as_any()
             .downcast_ref::<ActivatePublicLaneValidator>()
@@ -1884,7 +1779,6 @@ pub mod genesis_instructions_json {
             );
             return Some(Value::Object(outer));
         }
-
         if let Some(create) = instruction
             .as_any()
             .downcast_ref::<CreateFeeSponsorProgram>()
@@ -1898,7 +1792,6 @@ pub mod genesis_instructions_json {
             outer.insert("CreateFeeSponsorProgram".to_owned(), Value::Object(fields));
             return Some(Value::Object(outer));
         }
-
         if let Some(stage) = instruction
             .as_any()
             .downcast_ref::<StageFeeSponsorProgramRevision>()
@@ -1915,7 +1808,6 @@ pub mod genesis_instructions_json {
             );
             return Some(Value::Object(outer));
         }
-
         if let Some(enroll) = instruction
             .as_any()
             .downcast_ref::<EnrollFeeSponsorBeneficiary>()
@@ -1936,7 +1828,6 @@ pub mod genesis_instructions_json {
             );
             return Some(Value::Object(outer));
         }
-
         if let Some(fund) = instruction.as_any().downcast_ref::<FundFeeSponsorProgram>() {
             let mut fields = Map::new();
             fields.insert(
@@ -1955,7 +1846,6 @@ pub mod genesis_instructions_json {
             outer.insert("FundFeeSponsorProgram".to_owned(), Value::Object(fields));
             return Some(Value::Object(outer));
         }
-
         if let Some(activate) = instruction
             .as_any()
             .downcast_ref::<ActivateFeeSponsorProgramRevision>()
@@ -1980,10 +1870,8 @@ pub mod genesis_instructions_json {
             );
             return Some(Value::Object(outer));
         }
-
         None
     }
-
     /// Parse genesis instructions from a JSON value.
     ///
     /// # Errors
@@ -2000,7 +1888,6 @@ pub mod genesis_instructions_json {
         }
         Ok(instructions)
     }
-
     fn pos_from_offset(s: &str, pos: usize) -> (usize, usize, usize) {
         let bytes = s.as_bytes();
         let mut line = 1usize;
@@ -2017,7 +1904,6 @@ pub mod genesis_instructions_json {
         }
         (pos, line, col)
     }
-
     #[cfg(test)]
     mod tests {
         use std::{collections::BTreeSet, num::NonZeroU64, path::PathBuf};
@@ -2070,7 +1956,6 @@ pub mod genesis_instructions_json {
             let outer = arr[0].as_object().expect("outer object");
             assert!(outer.contains_key("Register"));
         }
-
         #[test]
         fn serialize_register_uses_structured_json() {
             let domain = Register::domain(Domain::new(
@@ -2083,7 +1968,6 @@ pub mod genesis_instructions_json {
             let array = parsed.as_array().expect("instructions array");
             assert!(array.first().unwrap().is_object());
         }
-
         #[test]
         fn fee_sponsor_lifecycle_uses_structured_genesis_json() {
             let program_id = FeeSponsorProgramId::new(
@@ -2138,7 +2022,6 @@ pub mod genesis_instructions_json {
                     activate_at_height: 1,
                 }),
             ];
-
             let value = instructions_to_value(&instructions);
             let array = value.as_array().expect("instruction array");
             for (value, expected_key) in array.iter().zip([
@@ -2155,7 +2038,6 @@ pub mod genesis_instructions_json {
                     "missing structured {expected_key}: {value:?}"
                 );
             }
-
             let decoded = from_value(&value).expect("decode structured fee sponsor lifecycle");
             assert_eq!(decoded.len(), instructions.len());
             assert!(
@@ -2171,7 +2053,6 @@ pub mod genesis_instructions_json {
                     .is_some()
             );
         }
-
         #[test]
         fn register_citizen_uses_structured_genesis_json() {
             let instruction = InstructionBox::from(RegisterCitizen {
@@ -2190,7 +2071,6 @@ pub mod genesis_instructions_json {
                 ALICE_ID.canonical_i105().ok().as_deref()
             );
             assert_eq!(fields.get("amount").and_then(Value::as_str), Some("10000"));
-
             let decoded = from_value(&value).expect("decode structured RegisterCitizen");
             assert_eq!(decoded.len(), 1);
             assert_eq!(
@@ -2198,21 +2078,18 @@ pub mod genesis_instructions_json {
                 instruction.as_any().downcast_ref::<RegisterCitizen>()
             );
         }
-
         #[test]
         fn value_to_instruction_rejects_bytes() {
             let value = Value::Array(vec![Value::Number(Number::U64(1))]);
             let err = value_to_instruction(value).expect_err("byte arrays should be rejected");
             assert!(err.to_string().contains("byte arrays"));
         }
-
         #[test]
         fn value_to_instruction_rejects_invalid_base64_string() {
             let value = Value::String("***".to_string());
             let err = value_to_instruction(value).expect_err("invalid base64 should fail");
             assert!(err.to_string().contains("invalid base64"));
         }
-
         #[test]
         fn value_to_instruction_accepts_base64_string_for_custom_instruction() {
             super::super::init_instruction_registry();
@@ -2223,13 +2100,11 @@ pub mod genesis_instructions_json {
             let instruction = InstructionBox::from(
                 iroha_data_model::isi::zk::RegisterZkAsset::new(asset_definition_id, None, None),
             );
-
             let value = instruction_value(&instruction);
             assert!(
                 value.is_string(),
                 "custom instruction should fall back to base64"
             );
-
             let decoded =
                 value_to_instruction(value).expect("base64-encoded instruction should decode");
             assert_eq!(
@@ -2237,7 +2112,6 @@ pub mod genesis_instructions_json {
                 norito::codec::encode_adaptive(&instruction)
             );
         }
-
         #[test]
         fn base64_instruction_rejects_valid_noncanonical_norito_layout() {
             super::super::init_instruction_registry();
@@ -2252,7 +2126,6 @@ pub mod genesis_instructions_json {
             );
             value_to_instruction(canonical_value)
                 .expect("canonical base64 genesis instruction must decode");
-
             let alternate_flags =
                 norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
             let alternate = {
@@ -2264,12 +2137,10 @@ pub mod genesis_instructions_json {
             let alternate_value = Value::String(
                 base64::engine::general_purpose::STANDARD.encode(alternate.as_slice()),
             );
-
             let error = value_to_instruction(alternate_value)
                 .expect_err("noncanonical base64 genesis instruction must be rejected");
             assert!(error.to_string().contains("canonical"));
         }
-
         #[test]
         fn structured_genesis_rejects_negative_asset_mint_quantity() {
             let asset_id = AssetId::new(
@@ -2283,12 +2154,10 @@ pub mod genesis_instructions_json {
                 r#"{{"Mint":{{"Asset":{{"object":"-0.01","destination":"{asset_id}"}}}}}}"#
             );
             let value = norito::json::from_str(&source).expect("parse structured mint");
-
             let error = value_to_instruction(value)
                 .expect_err("negative asset quantity must not enter genesis instructions");
             assert!(error.to_string().contains("invalid asset mint quantity"));
         }
-
         #[test]
         fn deserialize_structured_instructions_roundtrip() {
             let account_id = ALICE_ID.clone();
@@ -2300,11 +2169,9 @@ pub mod genesis_instructions_json {
             );
             let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());
             let asset_alias: AssetDefinitionAlias = "coin#wonderland.universal".parse().unwrap();
-
             let parameter = Parameter::Transaction(TransactionParameter::MaxInstructions(
                 NonZeroU64::new(64).unwrap(),
             ));
-
             let instructions: Vec<InstructionBox> = vec![
                 Register::domain(domain.clone()).into(),
                 Mint::asset_quantity(42u32, asset_id.clone()).into(),
@@ -2319,14 +2186,12 @@ pub mod genesis_instructions_json {
                 SetAssetDefinitionAlias::bind(asset_def_id.clone(), asset_alias.clone(), None)
                     .into(),
             ];
-
             let mut json_text = String::new();
             serialize(&instructions, &mut json_text);
             let parsed =
                 norito::json::from_str::<Value>(&json_text).expect("parse serialized JSON");
             let instructions = from_value(&parsed).expect("deserialize instructions");
             assert_eq!(instructions.len(), 6);
-
             match instructions[0].as_any().downcast_ref::<RegisterBox>() {
                 Some(RegisterBox::Domain(reg)) => assert_eq!(reg.object(), &domain),
                 other => panic!("unexpected register instruction: {other:?}"),
@@ -2368,7 +2233,6 @@ pub mod genesis_instructions_json {
                 other => panic!("unexpected set-asset-definition-alias instruction: {other:?}"),
             }
         }
-
         #[test]
         fn scoped_alias_permission_grants_preserve_payloads_through_genesis_json() {
             let account_id = ALICE_ID.clone();
@@ -2402,7 +2266,6 @@ pub mod genesis_instructions_json {
                     Grant::account_permission(permission.clone(), account_id.clone()).into()
                 })
                 .collect::<Vec<InstructionBox>>();
-
             let encoded = instructions_to_value(&instructions);
             for instruction in encoded.as_array().expect("instruction array") {
                 let payload = instruction
@@ -2417,7 +2280,6 @@ pub mod genesis_instructions_json {
                     "scoped permission payload must not collapse to null"
                 );
             }
-
             let decoded = from_value(&encoded).expect("decode structured permission grants");
             assert_eq!(decoded.len(), cases.len());
             let mut unique = BTreeSet::new();
@@ -2452,7 +2314,6 @@ pub mod genesis_instructions_json {
                 }
             }
         }
-
         #[test]
         fn deserialize_structured_register_account_with_label() {
             let account_id = ALICE_ID.clone();
@@ -2481,7 +2342,6 @@ pub mod genesis_instructions_json {
             );
             let register_value =
                 norito::json::from_str(&register_json).expect("parse register instruction");
-
             let instruction =
                 super::value_to_instruction(register_value).expect("structured account decodes");
             let RegisterBox::Account(account) = instruction
@@ -2491,11 +2351,9 @@ pub mod genesis_instructions_json {
             else {
                 panic!("expected account registration");
             };
-
             assert_eq!(account.object().id(), &account_id);
             assert_eq!(account.object().label(), Some(&expected_label));
         }
-
         #[test]
         fn deserialize_grant_without_payload_defaults_to_null() {
             let account_id = ALICE_ID.clone();
@@ -2505,7 +2363,6 @@ pub mod genesis_instructions_json {
             );
             let grant_value =
                 norito::json::from_str(&grant_json).expect("parse grant instruction literal");
-
             let instruction =
                 super::value_to_instruction(grant_value).expect("structured grant decodes");
             let GrantBox::Permission(grant) = instruction
@@ -2519,7 +2376,6 @@ pub mod genesis_instructions_json {
             assert_eq!(grant.object().name(), "CanSetParameters");
             assert_eq!(grant.object().payload(), &Json::default());
         }
-
         #[test]
         fn deserialize_structured_instructions_supports_npos_bootstrap() {
             let validator_id = ALICE_ID.clone();
@@ -2537,14 +2393,12 @@ pub mod genesis_instructions_json {
                 InstructionBox::from(register),
                 InstructionBox::from(activate),
             ];
-
             let mut json_text = String::new();
             serialize(&instructions, &mut json_text);
             let parsed =
                 norito::json::from_str::<Value>(&json_text).expect("parse serialized JSON");
             let instructions = from_value(&parsed).expect("deserialize instructions");
             assert_eq!(instructions.len(), 2);
-
             match instructions[0]
                 .as_any()
                 .downcast_ref::<RegisterPublicLaneValidator>()
@@ -2570,7 +2424,6 @@ pub mod genesis_instructions_json {
                 other => panic!("unexpected activate validator instruction: {other:?}"),
             }
         }
-
         #[test]
         fn deserialize_npos_bootstrap_rejects_negative_initial_stake() {
             let validator_id = ALICE_ID.clone();
@@ -2586,7 +2439,6 @@ pub mod genesis_instructions_json {
             serialize(&[InstructionBox::from(register)], &mut json_text);
             let negative = json_text.replace(r#""initial_stake":"10""#, r#""initial_stake":"-1""#);
             assert_ne!(negative, json_text, "fixture must replace the stake field");
-
             let parsed = norito::json::from_str::<Value>(&negative)
                 .expect("negative quantity remains syntactically valid JSON");
             let error = from_value(&parsed).expect_err("negative initial stake must be rejected");
@@ -2595,7 +2447,6 @@ pub mod genesis_instructions_json {
                 "unexpected error: {error}"
             );
         }
-
         fn assert_genesis_manifest_parses_structured_instructions(relative_path: &str) {
             super::super::init_instruction_registry();
             let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative_path);
@@ -2639,19 +2490,16 @@ pub mod genesis_instructions_json {
             super::RawGenesisTransaction::from_path(&path)
                 .unwrap_or_else(|error| panic!("{} should deserialize: {error}", path.display()));
         }
-
         #[test]
         fn defaults_genesis_manifest_parses_structured_instructions() {
             assert_genesis_manifest_parses_structured_instructions("../../defaults/genesis.json");
         }
-
         #[test]
         fn taira_genesis_manifest_parses_structured_instructions() {
             assert_genesis_manifest_parses_structured_instructions(
                 "../../configs/soranexus/taira/genesis.json",
             );
         }
-
         #[test]
         fn parse_allows_null_executor_in_canonical_manifest() {
             let mut manifest_fields = norito::json::Map::new();
@@ -2686,7 +2534,6 @@ pub mod genesis_instructions_json {
         }
     }
 }
-
 /// Individual genesis transaction as represented in JSON. A transaction may
 /// set parameters, execute instructions, schedule IVM triggers, or set the
 /// initial topology.
@@ -2714,7 +2561,6 @@ pub struct RawGenesisTx {
     #[norito(default)]
     topology: Vec<GenesisTopologyEntry>,
 }
-
 impl norito::json::JsonSerialize for RawGenesisTx {
     fn json_serialize(&self, out: &mut String) {
         fn write_field<F>(out: &mut String, first: &mut bool, key: &str, write_value: F)
@@ -2730,10 +2576,8 @@ impl norito::json::JsonSerialize for RawGenesisTx {
             out.push(':');
             write_value(out);
         }
-
         out.push('{');
         let mut first = true;
-
         // Preserve deterministic ordering (lexicographic by key) to match prior map output.
         write_field(out, &mut first, "instructions", |out| {
             genesis_instructions_json::instructions_to_value(&self.instructions)
@@ -2747,29 +2591,24 @@ impl norito::json::JsonSerialize for RawGenesisTx {
                 parameters.json_serialize(out);
             });
         }
-
         write_field(out, &mut first, "topology", |out| {
             self.topology.json_serialize(out);
         });
-
         out.push('}');
     }
 }
-
 impl RawGenesisTx {
     /// Instructions carried by this raw genesis transaction.
     #[must_use]
     pub fn instructions(&self) -> &[InstructionBox] {
         &self.instructions
     }
-
     /// Topology entries carried by this transaction.
     #[must_use]
     pub fn topology(&self) -> &[GenesisTopologyEntry] {
         &self.topology
     }
 }
-
 /// Peer PoP entry used to merge PoPs into topology entries.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize, IntoSchema, Encode, Decode,
@@ -2780,7 +2619,6 @@ pub struct GenesisPeerPop {
     /// Proof-of-possession bytes.
     pub pop: Vec<u8>,
 }
-
 /// Peer + proof-of-possession pair in genesis manifest.
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, IntoSchema, Encode, Decode)]
 pub struct GenesisTopologyEntry {
@@ -2790,7 +2628,6 @@ pub struct GenesisTopologyEntry {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub pop_hex: Option<String>,
 }
-
 impl From<PeerId> for GenesisTopologyEntry {
     fn from(peer: PeerId) -> Self {
         Self {
@@ -2799,7 +2636,6 @@ impl From<PeerId> for GenesisTopologyEntry {
         }
     }
 }
-
 impl GenesisTopologyEntry {
     /// Build a topology entry from raw PoP bytes.
     #[must_use]
@@ -2809,7 +2645,6 @@ impl GenesisTopologyEntry {
             pop_hex: Some(hex::encode(pop)),
         }
     }
-
     /// Decode the PoP hex string into bytes, if present.
     pub fn pop_bytes(&self) -> Result<Option<Vec<u8>>> {
         let Some(pop_hex) = self.pop_hex.as_deref() else {
@@ -2834,7 +2669,6 @@ impl GenesisTopologyEntry {
         Ok(Some(bytes))
     }
 }
-
 impl norito::json::JsonDeserialize for GenesisTopologyEntry {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -2871,7 +2705,6 @@ impl norito::json::JsonDeserialize for GenesisTopologyEntry {
         Ok(Self { peer, pop_hex })
     }
 }
-
 fn normalize_pop_hex(raw: &str) -> Result<String, norito::json::Error> {
     let trimmed = raw
         .strip_prefix("0x")
@@ -2886,7 +2719,6 @@ fn normalize_pop_hex(raw: &str) -> Result<String, norito::json::Error> {
     }
     Ok(hex::encode(bytes))
 }
-
 /// Fully expanded view of a genesis manifest after all automatic injections.
 #[derive(Debug, Clone)]
 pub struct NormalizedGenesis {
@@ -2911,7 +2743,6 @@ pub struct NormalizedGenesis {
     /// Final transaction batches that will be signed into the genesis block.
     pub transactions: Vec<Vec<InstructionBox>>,
 }
-
 impl NormalizedGenesis {
     /// Render the normalized manifest as a JSON value with structured instructions.
     #[must_use]
@@ -2963,7 +2794,6 @@ impl NormalizedGenesis {
             "crypto".to_string(),
             norito::json::value::to_value(&self.crypto).expect("serialize crypto"),
         );
-
         let transactions = self
             .transactions
             .iter()
@@ -2979,27 +2809,22 @@ impl NormalizedGenesis {
             })
             .collect();
         map.insert("transactions".to_string(), Value::Array(transactions));
-
         Value::Object(map)
     }
-
     /// Render normalized genesis as pretty JSON.
     pub fn to_pretty_json(&self) -> Result<String, norito::json::Error> {
         norito::json::to_json_pretty(&self.to_json_value())
     }
 }
-
 /// Path to IVM bytecode file or its directory
 #[derive(Debug, Clone, IntoSchema)]
 #[schema(transparent = "String")]
 pub struct IvmPath(PathBuf);
-
 impl Default for IvmPath {
     fn default() -> Self {
         Self(PathBuf::from("."))
     }
 }
-
 impl IvmPath {
     /// Access the underlying path.
     #[must_use]
@@ -3007,7 +2832,6 @@ impl IvmPath {
         &self.0
     }
 }
-
 fn parameter_targets_same_slot(lhs: &Parameter, rhs: &Parameter) -> bool {
     use core::mem::discriminant;
 
@@ -3025,11 +2849,9 @@ fn parameter_targets_same_slot(lhs: &Parameter, rhs: &Parameter) -> bool {
         _ => false,
     }
 }
-
 fn parameters_with_staging(parameters: &Parameters) -> Vec<Parameter> {
     parameters.parameters().collect()
 }
-
 fn has_set_parameter(instructions: &[InstructionBox], parameter: &Parameter) -> bool {
     instructions.iter().any(|instruction| {
         instruction
@@ -3038,12 +2860,10 @@ fn has_set_parameter(instructions: &[InstructionBox], parameter: &Parameter) -> 
             .is_some_and(|existing| parameter_targets_same_slot(existing.inner(), parameter))
     })
 }
-
 fn parameter_generation_priority(parameter: &Parameter, current: &Parameters) -> u8 {
     let _ = (parameter, current);
     25
 }
-
 fn collect_parameter_instructions(
     parameters: &Parameters,
     existing: &[InstructionBox],
@@ -3078,7 +2898,6 @@ fn collect_parameter_instructions(
         .map(|parameter| InstructionBox::from(SetParameter::new(parameter)))
         .collect()
 }
-
 fn collect_manual_set_parameters(transactions: &[RawGenesisTx]) -> Vec<Parameter> {
     let mut manual = Vec::new();
     for tx in transactions {
@@ -3094,7 +2913,6 @@ fn collect_manual_set_parameters(transactions: &[RawGenesisTx]) -> Vec<Parameter
     }
     manual
 }
-
 fn is_consensus_handshake_metadata_instruction(instruction: &InstructionBox) -> bool {
     instruction
         .as_any()
@@ -3106,14 +2924,12 @@ fn is_consensus_handshake_metadata_instruction(instruction: &InstructionBox) -> 
             )
         })
 }
-
 fn compute_consensus_parameters_fingerprint_v2(
     params: &iroha_data_model::block::consensus::ConsensusGenesisParams,
 ) -> Result<[u8; 32]> {
     iroha_data_model::block::consensus_v2::fingerprint::compute(params)
         .map_err(|error| eyre!("invalid signed consensus parameters: {error}"))
 }
-
 impl RawGenesisTransaction {
     fn validate_mode_specific_consensus_parameters(&self) -> Result<()> {
         self.validate_structured_parameter_blocks()?;
@@ -3133,7 +2949,6 @@ impl RawGenesisTransaction {
             )),
         }
     }
-
     fn validate_structured_parameter_blocks(&self) -> Result<()> {
         let positions = self
             .transactions
@@ -3148,7 +2963,6 @@ impl RawGenesisTransaction {
         }
         Ok(())
     }
-
     fn expect_object(
         value: norito::json::Value,
         context: &'static str,
@@ -3161,7 +2975,6 @@ impl RawGenesisTransaction {
             }),
         }
     }
-
     fn take_required_field<T>(
         map: &mut norito::json::Map,
         field: &'static str,
@@ -3174,7 +2987,6 @@ impl RawGenesisTransaction {
             .ok_or_else(|| norito::json::Error::missing_field(field))?;
         Self::decode_value(value, field)
     }
-
     fn take_optional_field<T>(
         map: &mut norito::json::Map,
         field: &'static str,
@@ -3187,7 +2999,6 @@ impl RawGenesisTransaction {
             Some(value) => Self::decode_value(value, field).map(Some),
         }
     }
-
     fn decode_value<T>(
         value: norito::json::Value,
         field: &'static str,
@@ -3199,7 +3010,6 @@ impl RawGenesisTransaction {
             norito::json::Error::Message(format!("failed to decode `{field}`: {err}"))
         })
     }
-
     fn reject_set_parameter_instructions(
         transactions: &[RawGenesisTx],
     ) -> Result<(), norito::json::Error> {
@@ -3218,7 +3028,6 @@ impl RawGenesisTransaction {
         }
         Ok(())
     }
-
     fn from_json_value(value: norito::json::Value) -> Result<Self, norito::json::Error> {
         let mut map = Self::expect_object(value, "RawGenesisTransaction")?;
         let chain = Self::take_required_field::<ChainId>(&mut map, "chain")?;
@@ -3283,7 +3092,6 @@ impl RawGenesisTransaction {
             crypto,
         })
     }
-
     /// Compute the effective parameter set after applying all structured sections and explicit `SetParameter` instructions.
     pub fn effective_parameters(&self) -> Result<Parameters> {
         self.validate_structured_parameter_blocks()?;
@@ -3316,7 +3124,6 @@ impl RawGenesisTransaction {
         }
         Ok(aggregated)
     }
-
     /// Populate consensus metadata fields with defaults and a computed v2 fingerprint.
     ///
     /// This helper is best-effort and does not alter existing transactions. It derives
@@ -3335,20 +3142,16 @@ impl RawGenesisTransaction {
         let custom = params.custom();
         let block_cadence_ms = sumeragi.block_cadence_ms();
         let block_max_transactions = block.max_transactions();
-
         // `effective_parameters()` already applies both structured parameter sections and
         // explicit SetParameter instructions in manifest transaction order.
-
         let npos_param_id = SumeragiNposParameters::parameter_id();
         let npos_payload = custom
             .get(&npos_param_id)
             .and_then(SumeragiNposParameters::from_custom_parameter);
-
         // Consensus mode is a first-release signed-genesis choice. Runtime
         // mode staging is unrepresentable, and the mere presence of NPoS
         // tuning data must never infer or flip the live protocol mode.
         let mode = self.consensus_mode;
-
         let mode = match (mode, npos_payload) {
             (SumeragiConsensusMode::Permissioned, None) => ConsensusGenesisModeParams::Permissioned,
             (SumeragiConsensusMode::Permissioned, Some(_))
@@ -3375,7 +3178,6 @@ impl RawGenesisTransaction {
                 })
             }
         };
-
         let dm_params = ConsensusGenesisParams {
             block_cadence_ms,
             block_max_transactions,
@@ -3391,7 +3193,6 @@ impl RawGenesisTransaction {
         self.consensus_fingerprint = Some(ConsensusFingerprint::new(fp));
         self
     }
-
     /// Expand the manifest into a normalized, fully-injected representation.
     ///
     /// The returned structure includes consensus/crypto metadata and the exact
@@ -3406,7 +3207,6 @@ impl RawGenesisTransaction {
         // Always refresh consensus metadata so fingerprints stay aligned with
         // effective parameters after manifest edits.
         let manifest = self.with_consensus_meta();
-
         let consensus_mode = manifest.consensus_mode;
         if manifest.wire_protocol_version != CONSENSUS_PROTOCOL_VERSION {
             return Err(eyre!(
@@ -3422,7 +3222,6 @@ impl RawGenesisTransaction {
         sumeragi_v2
             .validate()
             .map_err(|error| eyre!("invalid signed Sumeragi v2 context parameters: {error}"))?;
-
         let chain = manifest.chain.clone();
         let chain_discriminant = manifest.chain_discriminant;
         let executor = manifest.executor.clone();
@@ -3430,7 +3229,6 @@ impl RawGenesisTransaction {
         let wire_protocol_version = manifest.wire_protocol_version;
         let crypto = manifest.crypto.clone();
         let transactions = manifest.parse()?;
-
         Ok(NormalizedGenesis {
             chain,
             chain_discriminant,
@@ -3444,32 +3242,27 @@ impl RawGenesisTransaction {
             transactions,
         })
     }
-
     /// Chain identifier advertised in the manifest.
     #[must_use]
     pub fn chain_id(&self) -> &ChainId {
         &self.chain
     }
-
     /// Chain discriminant / i105 network prefix advertised in the manifest.
     #[must_use]
     pub const fn chain_discriminant(&self) -> u16 {
         self.chain_discriminant
     }
-
     /// Override the chain discriminant used when rendering this manifest.
     #[must_use]
     pub fn with_chain_discriminant(mut self, chain_discriminant: u16) -> Self {
         self.chain_discriminant = chain_discriminant;
         self
     }
-
     /// Raw genesis transactions preserved in the manifest.
     #[must_use]
     pub fn transactions(&self) -> &[RawGenesisTx] {
         &self.transactions
     }
-
     /// Replace one instruction-only raw transaction with one or more
     /// instruction-only transactions.
     ///
@@ -3496,7 +3289,6 @@ impl RawGenesisTransaction {
                 "replacement batch {batch_index} for raw genesis transaction {index} must not be empty"
             ));
         }
-
         let original = self.transactions.get(index).ok_or_else(|| {
             eyre!(
                 "raw genesis transaction index {index} is out of bounds for {} transactions",
@@ -3511,7 +3303,6 @@ impl RawGenesisTransaction {
                 "raw genesis transaction {index} is not instruction-only; refusing to move parameters, IVM triggers, or topology"
             ));
         }
-
         let replacements = replacement_batches
             .into_iter()
             .map(|instructions| RawGenesisTx {
@@ -3523,7 +3314,6 @@ impl RawGenesisTransaction {
         self.transactions.splice(index..=index, replacements);
         Ok(())
     }
-
     /// Remove topology entries from all transactions.
     #[must_use]
     pub fn clear_topology(mut self) -> Self {
@@ -3532,14 +3322,12 @@ impl RawGenesisTransaction {
         }
         self
     }
-
     /// Consensus mode advertised in the manifest.
     ///
     #[must_use]
     pub fn consensus_mode(&self) -> iroha_data_model::parameter::system::SumeragiConsensusMode {
         self.consensus_mode
     }
-
     /// Return a copy of the manifest with `consensus_mode` populated for handshake metadata.
     #[must_use]
     pub fn with_consensus_mode(
@@ -3549,26 +3337,22 @@ impl RawGenesisTransaction {
         self.consensus_mode = mode;
         self
     }
-
     /// Optional typed consensus fingerprint advertised in the manifest.
     #[must_use]
     pub const fn consensus_fingerprint(&self) -> Option<ConsensusFingerprint> {
         self.consensus_fingerprint
     }
-
     /// First-release consensus wire protocol version advertised in the manifest.
     #[must_use]
     pub const fn wire_protocol_version(&self) -> u32 {
         self.wire_protocol_version
     }
-
     /// Cryptography configuration snapshot advertised in the manifest.
     #[must_use]
     pub fn crypto(&self) -> &ManifestCrypto {
         &self.crypto
     }
 }
-
 #[cfg(test)]
 #[path = "genesis_manifest_tests.rs"]
 mod tests2;
@@ -3581,14 +3365,12 @@ impl RawGenesisTransaction {
             .iter()
             .flat_map(|tx| tx.instructions.iter())
     }
-
     /// Return the exact Sumeragi v2 context parameters selected by this
     /// manifest.
     #[must_use]
     pub const fn sumeragi_v2_context_parameters(&self) -> SumeragiV2GenesisContextParameters {
         self.sumeragi_v2
     }
-
     /// Replace the Sumeragi v2 context parameters that will be fingerprinted
     /// and signed with this manifest.
     #[must_use]
@@ -3599,7 +3381,6 @@ impl RawGenesisTransaction {
         self.sumeragi_v2 = parameters;
         self
     }
-
     /// Construct [`RawGenesisTransaction`] from a json file at `json_path`,
     /// resolving relative paths to `json_path`.
     ///
@@ -3621,14 +3402,12 @@ impl RawGenesisTransaction {
                     json_path.as_ref().display()
                 )
             })?;
-
         let mut value = Self::from_json_slice(&contents).map_err(|err| {
             eyre!(
                 "failed to deserialize raw genesis transaction from {}: {err}",
                 json_path.as_ref().display()
             )
         })?;
-
         if let Some(executor) = &mut value.executor {
             executor.resolve(here);
         }
@@ -3638,10 +3417,8 @@ impl RawGenesisTransaction {
                 .iter_mut()
                 .for_each(|trigger| trigger.action.executable.resolve(&value.ivm_dir.0));
         }
-
         Ok(value)
     }
-
     /// Revert to builder to add modifications.
     pub fn into_builder(self) -> GenesisBuilder {
         let block_cadence_ms = self
@@ -3665,7 +3442,6 @@ impl RawGenesisTransaction {
                 topology: tx.topology,
             })
             .collect();
-
         GenesisBuilder {
             chain: self.chain,
             executor: self.executor,
@@ -3680,7 +3456,6 @@ impl RawGenesisTransaction {
             sumeragi_v2: self.sumeragi_v2,
         }
     }
-
     /// Build and sign genesis block.
     ///
     /// # Errors
@@ -3690,7 +3465,6 @@ impl RawGenesisTransaction {
     pub fn build_and_sign(self, genesis_key_pair: &KeyPair) -> Result<GenesisBlock> {
         self.build_and_sign_with_da_proof_policies(genesis_key_pair, None)
     }
-
     /// Build and sign genesis block with an explicit confidential policy hash.
     ///
     /// This does not derive the hash from the manifest. Callers that know the
@@ -3711,7 +3485,6 @@ impl RawGenesisTransaction {
             confidential_policy_hash,
         )
     }
-
     /// Build and sign genesis block, overriding the embedded DA proof policies.
     ///
     /// # Errors
@@ -3728,7 +3501,6 @@ impl RawGenesisTransaction {
             None,
         )
     }
-
     /// Build and sign genesis block, overriding DA proof policies and the confidential policy hash.
     ///
     /// # Errors
@@ -3753,7 +3525,6 @@ impl RawGenesisTransaction {
             genesis_creation_base_ms,
         )
     }
-
     /// Build and sign genesis with explicit DA/confidential policy commitments
     /// and a deterministic transaction creation-time base.
     ///
@@ -3784,7 +3555,6 @@ impl RawGenesisTransaction {
                     instruction_batches.len()
                 )
             })?;
-
         let mut transactions = Vec::new();
         for (tx_index, instructions) in instruction_batches.into_iter().enumerate() {
             #[cfg(debug_assertions)]
@@ -3827,10 +3597,8 @@ impl RawGenesisTransaction {
             None,
             da_proof_policies,
         );
-
         Ok(GenesisBlock(block))
     }
-
     /// Parse [`RawGenesisTransaction`] to the list of source instructions of the genesis transactions
     ///
     /// # Errors
@@ -3843,14 +3611,11 @@ impl RawGenesisTransaction {
         // so stale or externally injected handshake metadata cannot survive
         // into the signed genesis block.
         let manifest = self.with_consensus_meta();
-
         manifest
             .crypto
             .validate()
             .map_err(|err| eyre!("invalid crypto configuration in genesis manifest: {err}"))?;
-
         let block_cadence_ms = manifest.effective_parameters()?.sumeragi.block_cadence_ms;
-
         let RawGenesisTransaction {
             chain: _,
             chain_discriminant: _,
@@ -3863,7 +3628,6 @@ impl RawGenesisTransaction {
             sumeragi_v2,
             crypto: _,
         } = manifest;
-
         for tx in &mut transactions {
             tx.instructions
                 .retain(|instruction| !is_consensus_handshake_metadata_instruction(instruction));
@@ -3881,7 +3645,6 @@ impl RawGenesisTransaction {
                 *parameters = Parameters::from_iter(filtered_parameters);
             }
         }
-
         let manual_parameters = collect_manual_set_parameters(&transactions);
         let meta_vec = Self::build_consensus_meta_instructions(
             consensus_mode,
@@ -3896,20 +3659,16 @@ impl RawGenesisTransaction {
         } else {
             Some(meta_vec)
         };
-
         let mut instructions_list = Vec::new();
         let mut aggregated_parameters = Parameters::default();
         let mut ivm_bytecode_total = 0_usize;
-
         if let Some(executor_path) = executor {
             let executor = load_genesis_ivm_bytecode(executor_path, &mut ivm_bytecode_total)?;
             let upgrade_executor = Upgrade::new(Executor::new(executor)).into();
             instructions_list.push(vec![upgrade_executor]);
         }
-
         for tx in transactions {
             let mut instructions = Vec::new();
-
             if let Some(parameters) = tx.parameters {
                 let generated = collect_parameter_instructions(
                     &parameters,
@@ -3924,7 +3683,6 @@ impl RawGenesisTransaction {
                 }
                 instructions.extend(generated);
             }
-
             if !tx.instructions.is_empty() {
                 for instruction in &tx.instructions {
                     if let Some(set_param) = instruction.as_any().downcast_ref::<SetParameter>() {
@@ -3933,12 +3691,10 @@ impl RawGenesisTransaction {
                 }
                 instructions.extend(tx.instructions);
             }
-
             for trigger in tx.ivm_triggers {
                 let trigger = trigger.try_into_with_ivm_bytecode_budget(&mut ivm_bytecode_total)?;
                 instructions.push(Register::trigger(trigger).into());
             }
-
             if !tx.topology.is_empty() {
                 let mut seen = BTreeSet::new();
                 for entry in tx.topology {
@@ -3956,7 +3712,6 @@ impl RawGenesisTransaction {
                     instructions.push(InstructionBox::from(register));
                 }
             }
-
             if let Some(meta) = pending_meta.take() {
                 if instructions.is_empty() {
                     instructions = meta;
@@ -3966,34 +3721,28 @@ impl RawGenesisTransaction {
                     continue;
                 }
             }
-
             if !instructions.is_empty() {
                 instructions_list.push(instructions);
             }
         }
-
         if let Some(meta) = pending_meta
             && !meta.is_empty()
         {
             instructions_list.push(meta);
         }
-
         Self::inject_crypto_manifest_param(
             &mut instructions_list,
             &manual_parameters,
             &manifest.crypto,
         )?;
-
         let registry = GenesisVkRegistry::build(instructions_list.iter().flatten())?;
         Self::inject_confidential_registry_param(
             &mut instructions_list,
             &manual_parameters,
             registry.vk_set_hash(),
         );
-
         Ok(instructions_list)
     }
-
     fn inject_confidential_registry_param(
         instructions_list: &mut Vec<Vec<InstructionBox>>,
         manual_parameters: &[Parameter],
@@ -4024,7 +3773,6 @@ impl RawGenesisTransaction {
         if already_present {
             return;
         }
-
         let mut meta_fields = norito::json::Map::new();
         let hash_field = vk_set_hash.map_or(norito::json::Value::Null, |hash| {
             let encoded = format!("0x{}", hex::encode(hash));
@@ -4038,7 +3786,6 @@ impl RawGenesisTransaction {
         ));
         instructions_list.push(vec![InstructionBox::from(SetParameter::new(param))]);
     }
-
     fn inject_crypto_manifest_param(
         instructions_list: &mut Vec<Vec<InstructionBox>>,
         manual_parameters: &[Parameter],
@@ -4057,7 +3804,6 @@ impl RawGenesisTransaction {
             }
             Ok(())
         };
-
         for param in manual_parameters {
             if let Parameter::Custom(custom) = param
                 && custom.id() == &meta_id
@@ -4065,7 +3811,6 @@ impl RawGenesisTransaction {
                 return ensure_matches(custom);
             }
         }
-
         for existing in instructions_list
             .iter()
             .flatten()
@@ -4077,7 +3822,6 @@ impl RawGenesisTransaction {
                 return ensure_matches(custom);
             }
         }
-
         let mut payload_map = norito::json::Map::new();
         payload_map.insert(
             "sm_openssl_preview".to_string(),
@@ -4117,7 +3861,6 @@ impl RawGenesisTransaction {
         instructions_list.push(vec![InstructionBox::from(SetParameter::new(param))]);
         Ok(())
     }
-
     fn build_consensus_meta_instructions(
         consensus_mode: SumeragiConsensusMode,
         block_cadence_ms: NonZeroU64,
@@ -4156,11 +3899,9 @@ impl RawGenesisTransaction {
         {
             instructions.push(InstructionBox::from(SetParameter::new(handshake_param)));
         }
-
         Ok(instructions)
     }
 }
-
 impl norito::json::JsonDeserialize for RawGenesisTransaction {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -4169,7 +3910,6 @@ impl norito::json::JsonDeserialize for RawGenesisTransaction {
         Self::from_json_value(value)
     }
 }
-
 /// Builder to build [`RawGenesisTransaction`] and [`GenesisBlock`].
 /// No guarantee of validity of the built genesis transactions and block.
 #[must_use]
@@ -4186,7 +3926,6 @@ pub struct GenesisBuilder {
     consensus_fingerprint: Option<ConsensusFingerprint>,
     sumeragi_v2: SumeragiV2GenesisContextParameters,
 }
-
 /// Domain editing mode of the [`GenesisBuilder`] to register accounts and assets under the domain.
 #[must_use]
 pub struct GenesisDomainBuilder {
@@ -4203,7 +3942,6 @@ pub struct GenesisDomainBuilder {
     consensus_fingerprint: Option<ConsensusFingerprint>,
     sumeragi_v2: SumeragiV2GenesisContextParameters,
 }
-
 #[derive(Default)]
 struct GenesisTxBuilder {
     parameters: Vec<Parameter>,
@@ -4211,7 +3949,6 @@ struct GenesisTxBuilder {
     ivm_triggers: Vec<GenesisIvmTrigger>,
     topology: Vec<GenesisTopologyEntry>,
 }
-
 impl GenesisBuilder {
     /// Construct [`GenesisBuilder`] with an executor upgrade.
     pub fn new(chain: ChainId, executor: impl Into<PathBuf>, ivm_dir: impl Into<PathBuf>) -> Self {
@@ -4229,7 +3966,6 @@ impl GenesisBuilder {
             sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         }
     }
-
     /// Construct [`GenesisBuilder`] without an executor upgrade.
     pub fn new_without_executor(chain: ChainId, ivm_dir: impl Into<PathBuf>) -> Self {
         Self {
@@ -4246,19 +3982,16 @@ impl GenesisBuilder {
             sumeragi_v2: SumeragiV2GenesisContextParameters::recommended(),
         }
     }
-
     /// Override the cryptography snapshot advertised alongside the manifest.
     pub fn with_crypto(mut self, crypto: ManifestCrypto) -> Self {
         self.crypto = crypto;
         self
     }
-
     /// Override the DA proof policy bundle embedded into genesis.
     pub fn with_da_proof_policies(mut self, policies: DaProofPolicyBundle) -> Self {
         self.da_proof_policies = Some(policies);
         self
     }
-
     /// Select the exact Sumeragi v2 context parameters which will be embedded
     /// in and signed by genesis.
     #[must_use]
@@ -4269,25 +4002,21 @@ impl GenesisBuilder {
         self.sumeragi_v2 = parameters;
         self
     }
-
     /// Select the signed immutable block cadence stored by genesis.
     #[must_use]
     pub fn with_block_cadence_ms(mut self, block_cadence_ms: NonZeroU64) -> Self {
         self.block_cadence_ms = block_cadence_ms;
         self
     }
-
     fn current_tx_mut(&mut self) -> &mut GenesisTxBuilder {
         self.transactions
             .last_mut()
             .expect("at least one transaction exists")
     }
-
     /// Entry a domain registration and transition to [`GenesisDomainBuilder`].
     pub fn domain(self, domain_id: DomainId) -> GenesisDomainBuilder {
         self.domain_with_metadata(domain_id, Metadata::default())
     }
-
     /// Same as [`GenesisBuilder::domain`], but attach a metadata to the domain.
     pub fn domain_with_metadata(
         mut self,
@@ -4295,11 +4024,9 @@ impl GenesisBuilder {
         metadata: Metadata,
     ) -> GenesisDomainBuilder {
         let new_domain = Domain::new(domain_id.clone()).with_metadata(metadata);
-
         self.current_tx_mut()
             .instructions
             .push(Register::domain(new_domain).into());
-
         GenesisDomainBuilder {
             chain: self.chain,
             executor: self.executor,
@@ -4315,7 +4042,6 @@ impl GenesisBuilder {
             sumeragi_v2: self.sumeragi_v2,
         }
     }
-
     /// Append a parameter to the authoritative snapshot in the first transaction.
     ///
     /// [`Parameters`] is a complete snapshot rather than a transaction-local patch, so a
@@ -4329,25 +4055,21 @@ impl GenesisBuilder {
             .push(parameter);
         self
     }
-
     /// Entry a instruction to the end of entries.
     pub fn append_instruction(mut self, instruction: impl Into<InstructionBox>) -> Self {
         self.current_tx_mut().instructions.push(instruction.into());
         self
     }
-
     /// Entry an IVM trigger to the end of entries.
     pub fn append_ivm_trigger(mut self, ivm_trigger: GenesisIvmTrigger) -> Self {
         self.current_tx_mut().ivm_triggers.push(ivm_trigger);
         self
     }
-
     /// Overwrite the initial topology of the current transaction.
     pub fn set_topology<T: Into<GenesisTopologyEntry>>(mut self, topology: Vec<T>) -> Self {
         self.current_tx_mut().topology = topology.into_iter().map(Into::into).collect();
         self
     }
-
     /// Merge PoPs into the topology entries of the current transaction.
     ///
     /// # Panics
@@ -4376,13 +4098,11 @@ impl GenesisBuilder {
         }
         self
     }
-
     /// Start a new empty transaction.
     pub fn next_transaction(mut self) -> Self {
         self.transactions.push(GenesisTxBuilder::default());
         self
     }
-
     /// Finish building, sign, and produce a [`GenesisBlock`].
     ///
     /// # Errors
@@ -4393,7 +4113,6 @@ impl GenesisBuilder {
         self.build_raw()
             .build_and_sign_with_da_proof_policies(genesis_key_pair, da_proof_policies)
     }
-
     /// Finish building, sign, and produce a [`GenesisBlock`] with a confidential policy hash.
     ///
     /// # Errors
@@ -4412,7 +4131,6 @@ impl GenesisBuilder {
                 confidential_policy_hash,
             )
     }
-
     /// Finish building and produce a [`RawGenesisTransaction`].
     pub fn build_raw(self) -> RawGenesisTransaction {
         let mut parameter_snapshot = Parameters::default();
@@ -4423,7 +4141,6 @@ impl GenesisBuilder {
             }
         }
         parameter_snapshot.sumeragi.block_cadence_ms = self.block_cadence_ms;
-
         let mut transactions: Vec<_> = source_transactions
             .into_iter()
             .map(|tx| RawGenesisTx {
@@ -4437,7 +4154,6 @@ impl GenesisBuilder {
             .first_mut()
             .expect("genesis builder always contains at least one transaction");
         first.parameters = Some(parameter_snapshot);
-
         RawGenesisTransaction {
             chain: self.chain,
             chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
@@ -4452,7 +4168,6 @@ impl GenesisBuilder {
         }
     }
 }
-
 impl GenesisDomainBuilder {
     /// Finish this domain and return to genesis block building.
     pub fn finish_domain(self) -> GenesisBuilder {
@@ -4470,12 +4185,10 @@ impl GenesisDomainBuilder {
             sumeragi_v2: self.sumeragi_v2,
         }
     }
-
     /// Add an account to this domain.
     pub fn account(self, signatory: PublicKey) -> Self {
         self.account_with_metadata(signatory, Metadata::default())
     }
-
     /// Add an account (having provided `metadata`) to this domain.
     pub fn account_with_metadata(mut self, signatory: PublicKey, metadata: Metadata) -> Self {
         let account_id = AccountId::new(signatory);
@@ -4483,7 +4196,6 @@ impl GenesisDomainBuilder {
         self.current_tx_mut().instructions.push(register.into());
         self
     }
-
     /// Add [`AssetDefinition`] to this domain.
     pub fn asset(mut self, asset_name: Name, asset_spec: NumericSpec) -> Self {
         let asset_display_name = asset_name.to_string();
@@ -4501,17 +4213,14 @@ impl GenesisDomainBuilder {
             .push(Register::asset_definition(asset_definition).into());
         self
     }
-
     fn current_tx_mut(&mut self) -> &mut GenesisTxBuilder {
         self.transactions
             .last_mut()
             .expect("at least one transaction exists")
     }
 }
-
 // Encode/Decode are provided generically by `norito` for any type that implements
 // `NoritoSerialize`/`NoritoDeserialize`, so no explicit impls are needed here.
-
 // Provide Norito core serialization so `IvmPath` can participate in
 // derive(Encode, Decode) on containing types.
 impl norito::core::NoritoSerialize for IvmPath {
@@ -4520,29 +4229,24 @@ impl norito::core::NoritoSerialize for IvmPath {
         norito::core::NoritoSerialize::serialize(&s, writer)
     }
 }
-
 impl<'a> norito::core::NoritoDeserialize<'a> for IvmPath {
     fn deserialize(archived: &'a norito::core::Archived<IvmPath>) -> Self {
         let s: String = norito::core::NoritoDeserialize::deserialize(archived.cast());
         IvmPath(PathBuf::from(s))
     }
 }
-
 impl From<PathBuf> for IvmPath {
     fn from(value: PathBuf) -> Self {
         Self(value)
     }
 }
-
 impl TryFrom<IvmPath> for IvmBytecode {
     type Error = eyre::Report;
-
     fn try_from(value: IvmPath) -> Result<Self, Self::Error> {
         let mut total = 0;
         load_genesis_ivm_bytecode(value, &mut total)
     }
 }
-
 fn checked_genesis_ivm_bytecode_total(current: usize, next: usize) -> Result<usize> {
     let total = current
         .checked_add(next)
@@ -4555,7 +4259,6 @@ fn checked_genesis_ivm_bytecode_total(current: usize, next: usize) -> Result<usi
     }
     Ok(total)
 }
-
 fn load_genesis_ivm_bytecode(value: IvmPath, total: &mut usize) -> Result<IvmBytecode> {
     let remaining = GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1
         .checked_sub(*total)
@@ -4570,7 +4273,6 @@ fn load_genesis_ivm_bytecode(value: IvmPath, total: &mut usize) -> Result<IvmByt
     *total = checked_genesis_ivm_bytecode_total(*total, blob.len())?;
     Ok(IvmBytecode::from_compiled(blob))
 }
-
 impl IvmPath {
     /// Resolve `self` to `here/self`,
     /// assuming `self` is an unresolved relative path to `here`.
@@ -4579,14 +4281,12 @@ impl IvmPath {
         self.0 = here.as_ref().join(&self.0)
     }
 }
-
 impl norito::json::FastJsonWrite for IvmPath {
     fn write_json(&self, out: &mut String) {
         let value = self.0.to_str().expect("path contains not valid UTF-8");
         norito::json::JsonSerialize::json_serialize(value, out);
     }
 }
-
 impl norito::json::JsonDeserialize for IvmPath {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -4595,7 +4295,6 @@ impl norito::json::JsonDeserialize for IvmPath {
         Ok(Self(PathBuf::from(raw)))
     }
 }
-
 /// Human-readable alternative to [`Trigger`] whose action executes IVM
 /// bytecode instead of a native instruction sequence.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, IntoSchema, Encode, Decode, Constructor)]
@@ -4605,7 +4304,6 @@ pub struct GenesisIvmTrigger {
     /// Action describing executable, repeats, authority and filter.
     action: GenesisIvmAction,
 }
-
 /// Human-readable alternative to [`Action`] which contains IVM bytecode as the
 /// executable payload.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, IntoSchema, Encode, Decode)]
@@ -4619,7 +4317,6 @@ pub struct GenesisIvmAction {
     /// Event filter selecting which events cause the trigger to fire.
     filter: EventFilterBox,
 }
-
 impl GenesisIvmAction {
     /// Construct [`GenesisIvmAction`]
     pub fn new(
@@ -4635,7 +4332,6 @@ impl GenesisIvmAction {
             filter: filter.into(),
         }
     }
-
     fn try_into_with_ivm_bytecode_budget(self, total: &mut usize) -> Result<Action> {
         Action::new(
             load_genesis_ivm_bytecode(self.executable, total)?,
@@ -4646,7 +4342,6 @@ impl GenesisIvmAction {
         .map_err(Into::into)
     }
 }
-
 impl GenesisIvmTrigger {
     fn try_into_with_ivm_bytecode_budget(self, total: &mut usize) -> Result<Trigger> {
         Ok(Trigger::new(
@@ -4655,16 +4350,13 @@ impl GenesisIvmTrigger {
         ))
     }
 }
-
 impl TryFrom<GenesisIvmTrigger> for Trigger {
     type Error = eyre::Report;
-
     fn try_from(value: GenesisIvmTrigger) -> Result<Self, Self::Error> {
         let mut total = 0;
         value.try_into_with_ivm_bytecode_budget(&mut total)
     }
 }
-
 // Enable packed-sequence decoding of genesis triggers under Norito by
 // delegating slice-based decoding to the regular codec decoder. This avoids
 // duplicating decode logic and keeps behavior consistent.
@@ -4675,7 +4367,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for GenesisIvmTrigger {
         Ok((v, bytes.len()))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for GenesisIvmAction {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = std::io::Cursor::new(bytes);
@@ -4683,7 +4374,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for GenesisIvmAction {
         Ok((v, bytes.len()))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for IvmPath {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = std::io::Cursor::new(bytes);
@@ -4691,7 +4381,6 @@ impl<'a> norito::core::DecodeFromSlice<'a> for IvmPath {
         Ok((v, bytes.len()))
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for RawGenesisTx {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let mut cursor = std::io::Cursor::new(bytes);
@@ -4699,16 +4388,13 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RawGenesisTx {
         Ok((v, bytes.len()))
     }
 }
-
 impl TryFrom<GenesisIvmAction> for Action {
     type Error = eyre::Report;
-
     fn try_from(value: GenesisIvmAction) -> Result<Self, Self::Error> {
         let mut total = 0;
         value.try_into_with_ivm_bytecode_budget(&mut total)
     }
 }
-
 #[cfg(test)]
 mod tests {
     use eyre::Result;
@@ -4739,7 +4425,6 @@ mod tests {
             checked_genesis_ivm_bytecode_total(GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1, 1).is_err()
         );
     }
-
     fn test_builder() -> (TempDir, GenesisBuilder) {
         let tmp_dir = TempDir::new().unwrap();
         let dummy_bytecode = IvmBytecode::from_compiled(vec![1, 2, 3]);
@@ -4748,10 +4433,8 @@ mod tests {
         let chain = ChainId::from("00000000-0000-0000-0000-000000000000");
         let ivm_dir = tmp_dir.path().join("ivm/");
         let builder = GenesisBuilder::new(chain, executor_path, ivm_dir);
-
         (tmp_dir, builder)
     }
-
     #[test]
     fn parse_without_optional_fields() -> Result<()> {
         let tmp_dir = TempDir::new().unwrap();
@@ -4772,17 +4455,14 @@ mod tests {
         RawGenesisTransaction::from_path(&genesis_path)?.build_and_sign(&kp)?;
         Ok(())
     }
-
     #[test]
     fn parse_genesis_accepts_structured_accounts_without_selector_bootstrap() -> Result<()> {
         init_instruction_registry();
-
         let (tmp_dir, builder) = test_builder();
         let (public_key, _) = checked_genesis_fixture_keypair().into_parts();
         let domain_name: Name = "wonderland".parse()?;
         let account_id = AccountId::new(public_key.clone());
         let domain_id = DomainId::try_new(&domain_name, "universal")?;
-
         let genesis = builder
             .domain(domain_id)
             .account(public_key)
@@ -4799,11 +4479,9 @@ mod tests {
         RawGenesisTransaction::from_path(&genesis_path)?;
         Ok(())
     }
-
     #[test]
     fn parse_genesis_accepts_legacy_public_key_account_literals() -> Result<()> {
         init_instruction_registry();
-
         let public_key_literal = ALICE_KEYPAIR.public_key().to_string();
         let account_id = AccountId::new(ALICE_KEYPAIR.public_key().clone());
         let sumeragi_v2 =
@@ -4823,7 +4501,6 @@ mod tests {
             iroha_data_model::account::address::chain_discriminant(),
             sumeragi_v2,
         );
-
         let decoded: RawGenesisTransaction = norito::json::from_str(&genesis)?;
         let account = decoded.transactions[0].instructions[0]
             .as_any()
@@ -4834,10 +4511,8 @@ mod tests {
             })
             .expect("account registration");
         assert_eq!(account, account_id);
-
         Ok(())
     }
-
     #[test]
     fn build_and_sign_refreshes_stale_consensus_fingerprint() -> Result<()> {
         init_instruction_registry();
@@ -4852,7 +4527,6 @@ mod tests {
             .clone()
             .expect("expected consensus fingerprint");
         manifest.consensus_fingerprint = Some(ConsensusFingerprint::new([0xDE; 32]));
-
         let genesis = manifest.build_and_sign(&checked_genesis_fixture_keypair())?;
         let mut found = None;
         for tx in genesis.0.external_transactions() {
@@ -4883,7 +4557,6 @@ mod tests {
         assert_eq!(got, expected.to_string());
         Ok(())
     }
-
     #[test]
     fn raw_genesis_tx_parameters_json_serializes() {
         let tx = RawGenesisTx {
@@ -4900,7 +4573,6 @@ mod tests {
             "parameters must be present when provided"
         );
     }
-
     #[test]
     fn default_genesis_omits_set_parameter_instructions() -> Result<()> {
         let genesis_path =
@@ -4925,7 +4597,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn shipped_genesis_assets_have_non_blank_human_names() -> Result<()> {
         use iroha_data_model::asset::definition::validate_asset_name;
@@ -4940,7 +4611,6 @@ mod tests {
             repo_root.join("configs/soranexus/nexus/genesis.json"),
             repo_root.join("configs/soranexus/taira/genesis.json"),
         ];
-
         for manifest_path in manifests {
             let raw = std::fs::read_to_string(&manifest_path)?;
             let value = norito::json::parse_value(&raw)?;
@@ -4978,17 +4648,14 @@ mod tests {
                 })?;
             }
         }
-
         Ok(())
     }
-
     #[test]
     fn shipped_public_genesis_manifests_do_not_fake_public_xor() -> Result<()> {
         use std::collections::BTreeSet;
 
         const PUBLIC_TAIRA_XOR_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
         const PUBLIC_XOR_ALIAS: &str = "xor#universal";
-
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let manifests = [
             (
@@ -5002,7 +4669,6 @@ mod tests {
                 false,
             ),
         ];
-
         for (manifest_path, requires_taira_xor_id) in manifests {
             let raw = std::fs::read_to_string(&manifest_path)?;
             let value = norito::json::parse_value(&raw)?;
@@ -5032,7 +4698,6 @@ mod tests {
                     }
                     registered_asset_ids.insert(id.to_owned());
                 }
-
                 let Some(binding) = instruction.get("SetAssetDefinitionAlias") else {
                     continue;
                 };
@@ -5051,7 +4716,6 @@ mod tests {
                     public_xor_binding = Some(target.to_owned());
                 }
             }
-
             if let Some(target) = public_xor_binding {
                 if target.starts_with("xor#") {
                     return Err(eyre!(
@@ -5078,16 +4742,13 @@ mod tests {
                 ));
             }
         }
-
         Ok(())
     }
-
     #[test]
     fn shipped_taira_genesis_binds_sorafs_appeal_xor_at_scale_nine() -> Result<()> {
         const SORA_XOR_ID: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
         const SORA_XOR_ALIAS: &str = "xor#sora";
         const SORA_XOR_SCALE: u64 = 9;
-
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         for manifest_path in [
             repo_root.join("defaults/kagami/iroha3-taira/genesis.json"),
@@ -5102,7 +4763,6 @@ mod tests {
             let mut sora_xor_registered = false;
             let mut sora_xor_scale = None;
             let mut sora_xor_binding = None;
-
             for instruction in transactions
                 .iter()
                 .filter_map(|tx| tx.get("instructions"))
@@ -5129,7 +4789,6 @@ mod tests {
                         .and_then(|spec| spec.get("scale"))
                         .and_then(norito::json::Value::as_u64);
                 }
-
                 let Some(binding) = instruction.get("SetAssetDefinitionAlias") else {
                     continue;
                 };
@@ -5148,7 +4807,6 @@ mod tests {
                     .get("asset_definition_id")
                     .and_then(norito::json::Value::as_str);
             }
-
             assert_eq!(
                 sora_xor_binding,
                 Some(SORA_XOR_ID),
@@ -5162,10 +4820,8 @@ mod tests {
                 manifest_path.display()
             );
         }
-
         Ok(())
     }
-
     #[test]
     fn shipped_genesis_manifests_advertise_current_npos_crypto_caps() -> Result<()> {
         let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -5178,12 +4834,10 @@ mod tests {
             repo_root.join("configs/soranexus/nexus/genesis.json"),
             repo_root.join("configs/soranexus/taira/genesis.json"),
         ];
-
         let bls_curve = iroha_data_model::account::curve::CurveId::try_from_algorithm(
             iroha_crypto::Algorithm::BlsNormal,
         )
         .expect("bls curve id");
-
         for manifest_path in manifests {
             let raw = std::fs::read_to_string(&manifest_path)?;
             let value = norito::json::parse_value(&raw)?;
@@ -5235,10 +4889,8 @@ mod tests {
                 manifest_path.display()
             );
         }
-
         Ok(())
     }
-
     #[test]
     fn set_topology_pop_merges_entries() {
         let bls = checked_genesis_fixture_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -5259,7 +4911,6 @@ mod tests {
         let expected = hex::encode(pop);
         assert_eq!(tx.topology()[0].pop_hex.as_deref(), Some(expected.as_str()));
     }
-
     #[test]
     fn parse_injects_register_peer_with_pop() -> Result<()> {
         init_instruction_registry();
@@ -5292,7 +4943,6 @@ mod tests {
         assert_eq!(registers[0].pop, vec![1, 2, 3, 4]);
         Ok(())
     }
-
     #[test]
     fn parse_errors_when_pop_missing() {
         init_instruction_registry();
@@ -5309,7 +4959,6 @@ mod tests {
             "{err}"
         );
     }
-
     #[test]
     fn parse_injects_consensus_handshake_metadata() -> Result<()> {
         init_instruction_registry();
@@ -5331,7 +4980,6 @@ mod tests {
         assert!(found, "consensus handshake metadata parameter not found");
         Ok(())
     }
-
     #[test]
     fn parse_replaces_stale_consensus_handshake_metadata() -> Result<()> {
         init_instruction_registry();
@@ -5342,7 +4990,6 @@ mod tests {
             .consensus_fingerprint
             .expect("consensus fingerprint expected")
             .to_string();
-
         let stale_param = Parameter::Custom(CustomParameter::new(
             consensus_metadata::handshake_meta_id(),
             Json::from_norito_value_ref(&norito::json::Value::Object({
@@ -5372,7 +5019,6 @@ mod tests {
             .expect("missing manifest transaction")
             .instructions
             .push(InstructionBox::from(SetParameter::new(stale_param)));
-
         let mut found = Vec::new();
         for instr in manifest.parse()?.into_iter().flatten() {
             if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
@@ -5397,7 +5043,6 @@ mod tests {
         assert_eq!(found[0], expected_fingerprint);
         Ok(())
     }
-
     #[test]
     fn parse_replaces_stale_consensus_handshake_metadata_in_parameters() -> Result<()> {
         init_instruction_registry();
@@ -5408,7 +5053,6 @@ mod tests {
             .consensus_fingerprint
             .expect("consensus fingerprint expected")
             .to_string();
-
         let stale_param = Parameter::Custom(CustomParameter::new(
             consensus_metadata::handshake_meta_id(),
             Json::from_norito_value_ref(&norito::json::Value::Object({
@@ -5439,7 +5083,6 @@ mod tests {
             .first_mut()
             .expect("missing manifest transaction")
             .parameters = Some(parameters);
-
         let mut found = Vec::new();
         for instr in manifest.parse()?.into_iter().flatten() {
             if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
@@ -5464,7 +5107,6 @@ mod tests {
         assert_eq!(found[0], expected_fingerprint);
         Ok(())
     }
-
     #[test]
     fn parse_recomputes_explicit_consensus_handshake_metadata() -> Result<()> {
         init_instruction_registry();
@@ -5506,7 +5148,6 @@ mod tests {
             .expect("missing manifest transaction")
             .instructions
             .push(InstructionBox::from(SetParameter::new(explicit_param)));
-
         let mut found = Vec::new();
         for instr in manifest.parse()?.into_iter().flatten() {
             if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
@@ -5539,7 +5180,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn parse_replaces_explicit_consensus_handshake_metadata_with_external_fingerprint() -> Result<()>
     {
@@ -5581,7 +5221,6 @@ mod tests {
             .expect("missing manifest transaction")
             .instructions
             .push(InstructionBox::from(SetParameter::new(explicit_param)));
-
         let mut found = Vec::new();
         for instr in manifest.parse()?.into_iter().flatten() {
             if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
@@ -5610,7 +5249,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn parse_recomputes_explicit_consensus_handshake_metadata_in_parameters() -> Result<()> {
         init_instruction_registry();
@@ -5653,7 +5291,6 @@ mod tests {
             .first_mut()
             .expect("missing manifest transaction")
             .parameters = Some(parameters);
-
         let mut found = Vec::new();
         for instr in manifest.parse()?.into_iter().flatten() {
             if let Some(set_param) = instr.as_any().downcast_ref::<SetParameter>()
@@ -5686,7 +5323,6 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn parse_injects_confidential_registry_root() -> Result<()> {
         init_instruction_registry();
@@ -5717,7 +5353,6 @@ mod tests {
         assert!(found, "confidential registry root parameter not found");
         Ok(())
     }
-
     #[test]
     fn parse_injects_crypto_manifest_metadata() -> Result<()> {
         init_instruction_registry();
@@ -5745,7 +5380,6 @@ mod tests {
         assert_eq!(found, expected_crypto);
         Ok(())
     }
-
     #[test]
     fn parse_rejects_mismatched_crypto_manifest_metadata() {
         init_instruction_registry();
@@ -5771,7 +5405,6 @@ mod tests {
             "unexpected error: {err:?}"
         );
     }
-
     #[test]
     fn parse_respects_manual_confidential_registry_root() -> Result<()> {
         init_instruction_registry();
@@ -5814,22 +5447,18 @@ mod tests {
         assert_eq!(count, 1, "expected exactly one registry root parameter");
         Ok(())
     }
-
     #[test]
     fn load_new_genesis_block() -> Result<()> {
         let genesis_key_pair = checked_genesis_fixture_keypair();
         let (alice_public_key, _) = checked_genesis_fixture_keypair().into_parts();
         let (_tmp_dir, builder) = test_builder();
-
         let _genesis_block = builder
             .domain(DomainId::try_new("wonderland", "universal")?)
             .account(alice_public_key)
             .finish_domain()
             .build_and_sign(&genesis_key_pair)?;
-
         Ok(())
     }
-
     #[test]
     fn signed_block_versioned_roundtrip() -> Result<()> {
         init_instruction_registry();
@@ -5839,15 +5468,12 @@ mod tests {
         let block = builder.build_and_sign(&genesis_key_pair)?;
         let encoded = block.0.encode_versioned();
         let decoded = SignedBlock::decode_all_versioned(&encoded)?;
-
         assert_eq!(
             decoded.external_transactions().count(),
             block.0.external_transactions().count()
         );
-
         Ok(())
     }
-
     #[test]
     #[allow(clippy::too_many_lines)]
     fn genesis_block_builder_example() -> Result<()> {
@@ -5867,7 +5493,6 @@ mod tests {
         .collect();
         let (_tmp_dir, mut genesis_builder) = test_builder();
         let _executor_path = genesis_builder.executor.clone();
-
         genesis_builder = genesis_builder
             .domain(DomainId::try_new("wonderland", "universal").unwrap())
             .account(public_key["alice"].clone())
@@ -5880,15 +5505,12 @@ mod tests {
             .account(public_key["mad_hatter"].clone())
             .asset("hats".parse().unwrap(), NumericSpec::default())
             .finish_domain();
-
         // In real cases executor should be constructed from an IVM bytecode blob
         let finished_genesis = genesis_builder.build_and_sign(&checked_genesis_fixture_keypair())?;
-
         let transactions = &finished_genesis
             .0
             .external_transactions()
             .collect::<Vec<_>>();
-
         // First transaction
         {
             let transaction = transactions[0];
@@ -5896,17 +5518,14 @@ mod tests {
             let Executable::Instructions(instructions) = instructions else {
                 panic!("Expected instructions");
             };
-
             assert_eq!(instructions.len(), 1);
         }
-
         // Second transaction
         let transaction = transactions[1];
         let instructions = transaction.instructions();
         let Executable::Instructions(instructions) = instructions else {
             panic!("Expected instructions");
         };
-
         {
             let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             assert_eq!(
@@ -5969,9 +5588,7 @@ mod tests {
                 .into()
             );
         }
-
         Ok(())
     }
-
     include!("genesis_tail_tests.rs");
 }

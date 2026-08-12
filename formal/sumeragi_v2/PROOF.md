@@ -1423,7 +1423,7 @@ reconstruction-refinement, or starvation obligations; the added rollover and
 tip-recovery regressions remain executable evidence under
 `specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 861 tests across forty-one Rust
+The current pre-network release inventory names 854 tests across forty Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -1531,13 +1531,18 @@ deterministic network simulations cover lossy/offline leaders, symmetric and
 asymmetric partitions, current-owner QC redelivery, leader crashes, bounded
 corrupted-chunk recovery, WAL-intent replay, and divergent Taira views, yielding
 the 847-test, 40-module checkpoint. The source-bound terminal-sweep partition
-regression yields the 848-test checkpoint. The late-passive-Fetch predecessor
-witness and one-shot completed-Serve reopening regressions yield the 850-test
-checkpoint. Seven Native AMX finality-bound merge-projection regressions yield
-the 857-test, 40-module checkpoint. Three Kura recovery regressions and the
-governance-unlock audit yield the current 861-test, 41-module inventory. The complete source-sealed
+regression yields the 848-test checkpoint. The late-
+passive-Fetch predecessor witness and one-shot completed-Serve reopening
+regressions yield the 850-test checkpoint. Seven Native AMX finality-bound
+merge-projection regressions yield the 857-test, 40-module checkpoint. Three
+Kura recovery regressions and the governance-unlock audit yield the 861-test,
+41-module checkpoint. The production-adapter activation guard and two deferred-
+canonical-carrier completion regressions produced that historical 864-test,
+41-module checkpoint. Retiring the duplicate inline network-simulation rows
+yields the current 854-test, 40-module inventory. The complete source-sealed
 pre-network corridor
-contains 89 legs. Six source-sealed command legs and the G-SCALE
+contains 88 legs. Six source-
+sealed command legs and the G-SCALE
 runner/validator preflight harden that release corridor.
 Wire protocol version 1 uses positive `NonZeroU64` responder generation,
 requester epoch, and per-stream semantic sequence coordinates. Canonical
@@ -1606,10 +1611,10 @@ empty successor projection, without forging close prefixes. Same-roster
 rehydration preserves generation and responder ownership; a new requester
 against a full same-roster table rejects without mutation.
 The canonical module/test TSV inventory SHA-256 is
-`8c39cb3717a9cab79e4d442e8179030c3af5af74947864d45838b80864290d2f`.
-The separate source-sealed G-UNIT inventory contains 524 focused tests,
-including 318 `iroha_core` tests. Its 525-line canonical TSV has SHA-256
-`bcbccc7f9e23d7b7b99c51ad1f336f58bcf615d3d793580131e17de9125189d8`;
+`df90ef7d94284bc805ff55ead6c6d938ba0f681a1d39e7b929fc275e8019aefa`.
+The separate source-sealed G-UNIT inventory contains 525 focused tests,
+including 319 `iroha_core` tests. Its 526-line canonical TSV has SHA-256
+`dc428b5bb9054495ef88aacd5b07a0f932ba2ada9da0c015dc45f36edbdf1352`;
 the sealed Native rows cover exact per-route prevote-byte accounting,
 empty/hard-cap/overflow pair geometry, and precommit error classification.
 The added boundaries preserve the frozen predecessor CommitQC through
@@ -1647,16 +1652,15 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
 The five integration names share a module-filtered leg; the pre-network corridor
-now has 89 legs, including the dedicated ten-test V2 core network-simulation
-module, the governance-unlock audit module, the autonomous lifecycle-recovery
-module, separate
+now has 88 legs, including the governance-unlock audit module, the autonomous
+lifecycle-recovery module, separate
 exact data-model status and atomic
 lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
 geometry modules, and source-sealed command-success legs. Its finality, offline
 compact-QC, and height-context proposal-origin
 modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the forty-module, eighty-seven-leg corridor. It
+tests are not claimed by the forty-module, eighty-eight-leg corridor. It
 includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
@@ -1713,7 +1717,7 @@ atomically. A new Fetch removes that head; an existing ordinary Fetch keeps it
 as the exact completion barrier after upgrading request authority. The
 preceding mutable-source discovery and direct execution evidence covered the
 earlier 168-name inventory. The latest fresh discovery checkpoint covered 738
-names; the current 861-name tree still requires a clean committed, detached,
+names; the current 854-name tree still requires a clean committed, detached,
 source-sealed serial release execution. An
 earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither

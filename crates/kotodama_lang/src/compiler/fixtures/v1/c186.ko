@@ -1,0 +1,11 @@
+
+        seiyaku LeafOptimization {
+            fn identity(int value) -> int {
+                return value;
+            }
+
+            view fn exposed(int value) -> int {
+                return identity(value);
+            }
+        }
+        

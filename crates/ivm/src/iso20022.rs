@@ -30,7 +30,6 @@ struct IsoMessage {
     /// Counters for `MSG_ADD` to emulate repeating fields.
     repeats: HashMap<String, usize>,
 }
-
 thread_local! {
     /// Thread-local stack of ISO 20022 messages.  The most recently created
     /// or parsed message lives at the top of the stack.
@@ -39,7 +38,6 @@ thread_local! {
     static LAST_VALIDATION_FAILURE: RefCell<Option<ValidationFailure>> =
         const { RefCell::new(None) };
 }
-
 /// Return the list of fields that must be present for the given message type.
 ///
 /// This is a tiny stand-in for schema driven validation. Only a handful of
@@ -51,7 +49,6 @@ enum Requirement {
     Required,
     Optional,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IdentifierKind {
     /// International Securities Identification Number (ISO 6166)
@@ -69,7 +66,6 @@ pub enum IdentifierKind {
     /// ISO 4217 currency code
     Currency,
 }
-
 impl IdentifierKind {
     fn label(self) -> &'static str {
         match self {
@@ -83,13 +79,11 @@ impl IdentifierKind {
         }
     }
 }
-
 impl fmt::Display for IdentifierKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.label())
     }
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FieldKind {
     Text,
@@ -101,7 +95,6 @@ enum FieldKind {
     DateTime,
     Enum(&'static [&'static str]),
 }
-
 #[derive(Clone, Debug)]
 enum InvalidReason {
     Empty,
@@ -114,7 +107,6 @@ enum InvalidReason {
     Enum,
     Utf8,
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InvalidValueKind {
     Empty,
@@ -125,7 +117,6 @@ pub enum InvalidValueKind {
     Enum,
     Utf8,
 }
-
 impl InvalidValueKind {
     fn label(self) -> &'static str {
         match self {
@@ -139,13 +130,11 @@ impl InvalidValueKind {
         }
     }
 }
-
 impl fmt::Display for InvalidValueKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.label())
     }
 }
-
 #[derive(Clone, Debug)]
 enum ValidationFailure {
     MissingField(&'static str),
@@ -159,13 +148,11 @@ enum ValidationFailure {
         reason: InvalidReason,
     },
 }
-
 #[derive(Clone, Copy, Debug)]
 struct AliasSpec {
     alias: &'static str,
     canonical: &'static str,
 }
-
 #[derive(Clone, Copy, Debug)]
 struct FieldSpec {
     pattern: &'static str,
@@ -173,7 +160,6 @@ struct FieldSpec {
     max_occurs: Option<usize>,
     kind: FieldKind,
 }
-
 impl FieldSpec {
     const fn required(pattern: &'static str, kind: FieldKind) -> Self {
         Self {
@@ -183,7 +169,6 @@ impl FieldSpec {
             kind,
         }
     }
-
     const fn optional(pattern: &'static str, kind: FieldKind) -> Self {
         Self {
             pattern,
@@ -192,7 +177,6 @@ impl FieldSpec {
             kind,
         }
     }
-
     const fn limited(
         pattern: &'static str,
         min_required: bool,
@@ -211,23 +195,19 @@ impl FieldSpec {
         }
     }
 }
-
 #[derive(Clone, Copy, Debug)]
 struct MessageSchema {
     fields: &'static [FieldSpec],
     aliases: &'static [AliasSpec],
 }
-
 impl MessageSchema {
     fn field_specs(&self) -> &'static [FieldSpec] {
         self.fields
     }
-
     fn aliases(&self) -> &'static [AliasSpec] {
         self.aliases
     }
 }
-
 fn canonical_message_type(message_type: &str) -> Cow<'_, str> {
     let parts: Vec<&str> = message_type.split('.').collect();
     if parts.len() >= 4
@@ -239,23 +219,19 @@ fn canonical_message_type(message_type: &str) -> Cow<'_, str> {
         Cow::Borrowed(message_type)
     }
 }
-
 fn record_validation_failure(failure: ValidationFailure) {
     LAST_VALIDATION_FAILURE.with(|cell| {
         *cell.borrow_mut() = Some(failure);
     });
 }
-
 fn take_validation_failure() -> Option<ValidationFailure> {
     LAST_VALIDATION_FAILURE.with(|cell| cell.borrow_mut().take())
 }
-
 fn clear_validation_failure() {
     LAST_VALIDATION_FAILURE.with(|cell| {
         cell.borrow_mut().take();
     });
 }
-
 fn schema_for(message_type: &str) -> Option<&'static MessageSchema> {
     match canonical_message_type(message_type).as_ref() {
         "head.001" => Some(&HEAD001_SCHEMA),
@@ -280,7 +256,6 @@ fn schema_for(message_type: &str) -> Option<&'static MessageSchema> {
         _ => None,
     }
 }
-
 const HEAD001_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("AppHdr/BizMsgIdr", FieldKind::Text),
     FieldSpec::required("AppHdr/MsgDefIdr", FieldKind::Text),
@@ -303,7 +278,6 @@ const HEAD001_FIELDS: &[FieldSpec] = &[
         FieldKind::Text,
     ),
 ];
-
 const HEAD001_ALIASES: &[AliasSpec] = &[
     AliasSpec {
         alias: "DataPDU/AppHdr/BizMsgIdr",
@@ -338,12 +312,10 @@ const HEAD001_ALIASES: &[AliasSpec] = &[
         canonical: "AppHdr/To/FIId/FinInstnId/ClrSysMmbId/MmbId",
     },
 ];
-
 const HEAD001_SCHEMA: MessageSchema = MessageSchema {
     fields: HEAD001_FIELDS,
     aliases: HEAD001_ALIASES,
 };
-
 const PACS008_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("MsgId", FieldKind::Text),
     FieldSpec::required(
@@ -371,7 +343,6 @@ const PACS008_FIELDS: &[FieldSpec] = &[
     FieldSpec::optional("SplmtryData/TargetAccountAddress", FieldKind::Text),
     FieldSpec::optional("SplmtryData/AssetDefinitionId", FieldKind::Text),
 ];
-
 const PACS008_ALIASES: &[AliasSpec] = &[
     AliasSpec {
         alias: "Document/FIToFICstmrCdtTrf/GrpHdr/MsgId",
@@ -442,12 +413,10 @@ const PACS008_ALIASES: &[AliasSpec] = &[
         canonical: "RmtInf/Ustrd[*]",
     },
 ];
-
 const PACS008_SCHEMA: MessageSchema = MessageSchema {
     fields: PACS008_FIELDS,
     aliases: PACS008_ALIASES,
 };
-
 const PACS002_FIELDS: &[FieldSpec] = &[
     FieldSpec::optional("MsgId", FieldKind::Text),
     FieldSpec::optional("StsId", FieldKind::Text),
@@ -459,7 +428,6 @@ const PACS002_FIELDS: &[FieldSpec] = &[
     FieldSpec::optional("RsnCd", FieldKind::Text),
     FieldSpec::limited("AddtlInf[*]", false, 8, FieldKind::Text),
 ];
-
 const PACS002_ALIASES: &[AliasSpec] = &[
     AliasSpec {
         alias: "Document/FIToFIPmtStsRpt/GrpHdr/MsgId",
@@ -506,12 +474,10 @@ const PACS002_ALIASES: &[AliasSpec] = &[
         canonical: "AddtlInf[*]",
     },
 ];
-
 const PACS002_SCHEMA: MessageSchema = MessageSchema {
     fields: PACS002_FIELDS,
     aliases: PACS002_ALIASES,
 };
-
 const PACS004_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("MsgId", FieldKind::Text),
     FieldSpec::required("CreDtTm", FieldKind::DateTime),
@@ -531,7 +497,6 @@ const PACS004_FIELDS: &[FieldSpec] = &[
     FieldSpec::optional("TxInf[*]/RtrdRsn/Cd", FieldKind::Text),
     FieldSpec::optional("TxInf[*]/RtrdRsn/Prtry", FieldKind::Text),
 ];
-
 const PACS004_SCHEMA: MessageSchema = MessageSchema {
     fields: PACS004_FIELDS,
     aliases: &[
@@ -577,19 +542,16 @@ const PACS004_SCHEMA: MessageSchema = MessageSchema {
         },
     ],
 };
-
 const PACS028_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("MsgId", FieldKind::Text),
     FieldSpec::required("CreDtTm", FieldKind::DateTime),
     FieldSpec::required("OrgnlGrpInf/OrgnlMsgId", FieldKind::Text),
     FieldSpec::optional("OrgnlGrpInf/OrgnlCreDtTm", FieldKind::DateTime),
 ];
-
 const PACS028_SCHEMA: MessageSchema = MessageSchema {
     fields: PACS028_FIELDS,
     aliases: &[],
 };
-
 const PACS029_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("MsgId", FieldKind::Text),
     FieldSpec::required("CreDtTm", FieldKind::DateTime),
@@ -602,12 +564,10 @@ const PACS029_FIELDS: &[FieldSpec] = &[
     ),
     FieldSpec::optional("TxInfAndSts[*]/StsRsnInf/Rsn/Cd", FieldKind::Text),
 ];
-
 const PACS029_SCHEMA: MessageSchema = MessageSchema {
     fields: PACS029_FIELDS,
     aliases: &[],
 };
-
 const CAMT052_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("Rpt/Id", FieldKind::Text),
     FieldSpec::required("Rpt/CreDtTm", FieldKind::DateTime),
@@ -625,7 +585,6 @@ const CAMT052_FIELDS: &[FieldSpec] = &[
     ),
     FieldSpec::limited("Rpt/Ntry[*]/BookgDt", false, 256, FieldKind::Date),
 ];
-
 const CAMT052_SCHEMA: MessageSchema = MessageSchema {
     fields: CAMT052_FIELDS,
     aliases: &[
@@ -663,7 +622,6 @@ const CAMT052_SCHEMA: MessageSchema = MessageSchema {
         },
     ],
 };
-
 const CAMT053_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("Stmt/Id", FieldKind::Text),
     FieldSpec::required("Stmt/Acct/Id", FieldKind::Identifier(IdentifierKind::Iban)),
@@ -686,12 +644,10 @@ const CAMT053_FIELDS: &[FieldSpec] = &[
     ),
     FieldSpec::optional("Stmt/Bal[*]/Dt", FieldKind::Date),
 ];
-
 const CAMT053_SCHEMA: MessageSchema = MessageSchema {
     fields: CAMT053_FIELDS,
     aliases: &[],
 };
-
 const CAMT054_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("Ntfctn/Id", FieldKind::Text),
     FieldSpec::required(
@@ -713,12 +669,10 @@ const CAMT054_FIELDS: &[FieldSpec] = &[
     ),
     FieldSpec::optional("Ntfctn/Ntry[*]/BookgDt", FieldKind::Date),
 ];
-
 const CAMT054_SCHEMA: MessageSchema = MessageSchema {
     fields: CAMT054_FIELDS,
     aliases: &[],
 };
-
 const CAMT029_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("Assgnmt/Id", FieldKind::Text),
     FieldSpec::required("Assgnmt/CreDtTm", FieldKind::DateTime),
@@ -738,7 +692,6 @@ const CAMT029_FIELDS: &[FieldSpec] = &[
     ),
     FieldSpec::optional("CxlDtls/TxInfAndSts/CxlStsRsnInf/AddtlInf", FieldKind::Text),
 ];
-
 const CAMT029_SCHEMA: MessageSchema = MessageSchema {
     fields: CAMT029_FIELDS,
     aliases: &[
@@ -788,7 +741,6 @@ const CAMT029_SCHEMA: MessageSchema = MessageSchema {
         },
     ],
 };
-
 const CAMT056_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("Assgnmt/Id", FieldKind::Text),
     FieldSpec::required("Assgnmt/CreDtTm", FieldKind::DateTime),
@@ -822,7 +774,6 @@ const CAMT056_FIELDS: &[FieldSpec] = &[
         FieldKind::Text,
     ),
 ];
-
 const CAMT056_SCHEMA: MessageSchema = MessageSchema {
     fields: CAMT056_FIELDS,
     aliases: &[
@@ -872,7 +823,6 @@ const CAMT056_SCHEMA: MessageSchema = MessageSchema {
         },
     ],
 };
-
 const PAIN001_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("GrpHdr/MsgId", FieldKind::Text),
     FieldSpec::required("GrpHdr/CreDtTm", FieldKind::DateTime),
@@ -917,12 +867,10 @@ const PAIN001_FIELDS: &[FieldSpec] = &[
         FieldKind::Text,
     ),
 ];
-
 const PAIN001_SCHEMA: MessageSchema = MessageSchema {
     fields: PAIN001_FIELDS,
     aliases: &[],
 };
-
 const PAIN002_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("GrpHdr/MsgId", FieldKind::Text),
     FieldSpec::required("GrpHdr/CreDtTm", FieldKind::DateTime),
@@ -933,12 +881,10 @@ const PAIN002_FIELDS: &[FieldSpec] = &[
     ),
     FieldSpec::optional("OrgnlGrpInfAndSts/StsRsnInf/Rsn/Cd", FieldKind::Text),
 ];
-
 const PAIN002_SCHEMA: MessageSchema = MessageSchema {
     fields: PAIN002_FIELDS,
     aliases: &[],
 };
-
 const PACS007_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("MsgId", FieldKind::Text),
     FieldSpec::required("CreDtTm", FieldKind::DateTime),
@@ -949,12 +895,10 @@ const PACS007_FIELDS: &[FieldSpec] = &[
     FieldSpec::limited("TxInf[*]/CxlRsnInf/Rsn/Cd", false, 1024, FieldKind::Text),
     FieldSpec::optional("SplmtryData/LedgerInstruction", FieldKind::Text),
 ];
-
 const PACS007_SCHEMA: MessageSchema = MessageSchema {
     fields: PACS007_FIELDS,
     aliases: &[],
 };
-
 const PACS009_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("BizMsgIdr", FieldKind::Text),
     FieldSpec::required("MsgDefIdr", FieldKind::Text),
@@ -971,7 +915,6 @@ const PACS009_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("CdtrAcct", FieldKind::Identifier(IdentifierKind::Iban)),
     FieldSpec::optional("Purp", FieldKind::Text),
 ];
-
 const PACS009_ALIASES: &[AliasSpec] = &[
     AliasSpec {
         alias: "AppHdr/BizMsgIdr",
@@ -1070,12 +1013,10 @@ const PACS009_ALIASES: &[AliasSpec] = &[
         canonical: "Purp",
     },
 ];
-
 const PACS009_SCHEMA: MessageSchema = MessageSchema {
     fields: PACS009_FIELDS,
     aliases: PACS009_ALIASES,
 };
-
 // Settlement schemas cover the DvP/PvP/collateral fields exercised by the bridge
 // (movement/payment qualifiers, execution plans, instruments, currencies, and parties).
 const SESE023_FIELDS: &[FieldSpec] = &[
@@ -1134,7 +1075,6 @@ const SESE023_FIELDS: &[FieldSpec] = &[
     FieldSpec::optional("SctiesLeg/Metadata", FieldKind::Text),
     FieldSpec::optional("CashLeg/Metadata", FieldKind::Text),
 ];
-
 const SESE023_ALIASES: &[AliasSpec] = &[
     AliasSpec {
         alias: "Document/SctiesSttlmTxInstr/TxId",
@@ -1253,12 +1193,10 @@ const SESE023_ALIASES: &[AliasSpec] = &[
         canonical: "CashLeg/Metadata",
     },
 ];
-
 const SESE023_SCHEMA: MessageSchema = MessageSchema {
     fields: SESE023_FIELDS,
     aliases: SESE023_ALIASES,
 };
-
 const SESE025_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("TxId", FieldKind::Text),
     FieldSpec::required("SttlmDt", FieldKind::Date),
@@ -1310,7 +1248,6 @@ const SESE025_FIELDS: &[FieldSpec] = &[
     FieldSpec::optional("RsnCd", FieldKind::Text),
     FieldSpec::optional("AddtlInf", FieldKind::Text),
 ];
-
 const SESE024_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("TxId", FieldKind::Text),
     FieldSpec::required(
@@ -1323,7 +1260,6 @@ const SESE024_FIELDS: &[FieldSpec] = &[
     FieldSpec::optional("RsnCd", FieldKind::Text),
     FieldSpec::optional("AddtlInf", FieldKind::Text),
 ];
-
 const SESE024_ALIASES: &[AliasSpec] = &[
     AliasSpec {
         alias: "Document/SctiesSttlmTxStsAdvc/TxId",
@@ -1366,12 +1302,10 @@ const SESE024_ALIASES: &[AliasSpec] = &[
         canonical: "AddtlInf",
     },
 ];
-
 const SESE024_SCHEMA: MessageSchema = MessageSchema {
     fields: SESE024_FIELDS,
     aliases: SESE024_ALIASES,
 };
-
 const SESE025_ALIASES: &[AliasSpec] = &[
     AliasSpec {
         alias: "Document/SctiesSttlmTxConf/TxId",
@@ -1494,12 +1428,10 @@ const SESE025_ALIASES: &[AliasSpec] = &[
         canonical: "RsnCd",
     },
 ];
-
 const SESE025_SCHEMA: MessageSchema = MessageSchema {
     fields: SESE025_FIELDS,
     aliases: SESE025_ALIASES,
 };
-
 const COLR012_FIELDS: &[FieldSpec] = &[
     FieldSpec::required("TxId", FieldKind::Text),
     FieldSpec::required("OblgtnId", FieldKind::Text),
@@ -1520,7 +1452,6 @@ const COLR012_FIELDS: &[FieldSpec] = &[
     FieldSpec::optional("Substitution/SubstituteFinInstrmId", FieldKind::Instrument),
     FieldSpec::optional("Substitution/ReasonCd", FieldKind::Text),
 ];
-
 const COLR012_ALIASES: &[AliasSpec] = &[
     AliasSpec {
         alias: "Document/CollSbstitnConf/TxId",
@@ -1579,12 +1510,10 @@ const COLR012_ALIASES: &[AliasSpec] = &[
         canonical: "Substitution/SubstituteFinInstrmId",
     },
 ];
-
 const COLR012_SCHEMA: MessageSchema = MessageSchema {
     fields: COLR012_FIELDS,
     aliases: COLR012_ALIASES,
 };
-
 /// Errors that can occur when parsing, validating, or serializing ISO 20022 messages.
 #[derive(Debug)]
 pub enum MsgError {
@@ -1610,7 +1539,6 @@ pub enum MsgError {
     },
     InvalidFormat,
 }
-
 impl fmt::Display for MsgError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1638,7 +1566,6 @@ impl fmt::Display for MsgError {
         }
     }
 }
-
 impl From<ValidationFailure> for MsgError {
     fn from(failure: ValidationFailure) -> Self {
         match failure {
@@ -1681,7 +1608,6 @@ impl From<ValidationFailure> for MsgError {
         }
     }
 }
-
 /// Consume and return the most recent validation error recorded by [`msg_validate`].
 ///
 /// The helper yields [`MsgError`] variants mirroring the validation failure and
@@ -1691,37 +1617,31 @@ impl From<ValidationFailure> for MsgError {
 pub fn take_validation_error() -> Option<MsgError> {
     take_validation_failure().map(MsgError::from)
 }
-
 /// Materialised ISO 20022 message extracted from the VM stack.
 #[derive(Clone, Debug)]
 pub struct ParsedMessage {
     message_type: String,
     fields: BTreeMap<String, Vec<u8>>,
 }
-
 impl ParsedMessage {
     /// Return the ISO 20022 message code (e.g. `"pacs.008"`).
     pub fn message_type(&self) -> &str {
         &self.message_type
     }
-
     /// Retrieve the raw bytes stored under the canonical field path.
     pub fn field_bytes(&self, field: &str) -> Option<&[u8]> {
         self.fields.get(field).map(|v| v.as_slice())
     }
-
     /// Retrieve the UTF-8 string stored under the canonical field path.
     pub fn field_text(&self, field: &str) -> Option<&str> {
         self.field_bytes(field)
             .and_then(|bytes| core::str::from_utf8(bytes).ok())
     }
-
     /// Iterate over canonical field paths and their values.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &Vec<u8>)> {
         self.fields.iter()
     }
 }
-
 /// Parse, validate, and materialise an ISO 20022 message.
 ///
 /// This helper wraps `msg_parse`/`msg_validate` and drains the temporary VM
@@ -1748,7 +1668,6 @@ pub fn parse_message(message_type: &str, data: &[u8]) -> Result<ParsedMessage, M
         }
     })
 }
-
 /// Norito-friendly projections of the ISO 20022 settlement messages covered by
 /// this helper. These structs make it easy to encode/decode settlement payloads
 /// alongside the VM message stack without reimplementing field mapping.
@@ -1763,11 +1682,9 @@ pub mod norito_schemas {
             .map(str::to_owned)
             .ok_or(MsgError::MissingField(field))
     }
-
     fn optional_text(parsed: &ParsedMessage, field: &str) -> Option<String> {
         parsed.field_text(field).map(str::to_owned)
     }
-
     fn optional_bool(
         parsed: &ParsedMessage,
         field: &'static str,
@@ -1784,17 +1701,14 @@ pub mod norito_schemas {
             }),
         }
     }
-
     fn bool_bytes(value: bool) -> &'static [u8] {
         if value { b"true" } else { b"false" }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
     pub struct Linkage {
         pub relation: String,
         pub reference: String,
     }
-
     /// Norito schema for `sese.023` DvP instructions.
     #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
     pub struct Sese023 {
@@ -1820,7 +1734,6 @@ pub mod norito_schemas {
         pub securities_metadata: Option<String>,
         pub cash_metadata: Option<String>,
     }
-
     impl Sese023 {
         /// Populate the VM message stack with this instruction.
         pub fn apply_to_stack(&self) {
@@ -1879,7 +1792,6 @@ pub mod norito_schemas {
                 msg_set("CashLeg/Metadata", meta.as_bytes());
             }
         }
-
         /// Build the Norito view from a parsed and validated message.
         pub fn from_parsed(parsed: &ParsedMessage) -> Result<Self, MsgError> {
             Ok(Self {
@@ -1907,7 +1819,6 @@ pub mod norito_schemas {
             })
         }
     }
-
     fn collect_linkages(parsed: &ParsedMessage) -> Vec<Linkage> {
         let mut linkages = Vec::new();
         let mut idx = 0usize;
@@ -1926,7 +1837,6 @@ pub mod norito_schemas {
         }
         linkages
     }
-
     /// Norito schema for `sese.025` PvP confirmations.
     #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
     pub struct Sese025 {
@@ -1953,7 +1863,6 @@ pub mod norito_schemas {
         pub reason_code: Option<String>,
         pub additional_info: Option<String>,
     }
-
     impl Sese025 {
         /// Populate the VM stack with a confirmation message.
         pub fn apply_to_stack(&self) {
@@ -2008,7 +1917,6 @@ pub mod norito_schemas {
                 msg_set("AddtlInf", info.as_bytes());
             }
         }
-
         /// Convert a parsed message into the Norito struct.
         pub fn from_parsed(parsed: &ParsedMessage) -> Result<Self, MsgError> {
             Ok(Self {
@@ -2037,7 +1945,6 @@ pub mod norito_schemas {
             })
         }
     }
-
     /// Norito schema for collateral substitution confirmations.
     #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
     pub struct Colr012 {
@@ -2054,7 +1961,6 @@ pub mod norito_schemas {
         pub substitute_fin_instr_id: Option<String>,
         pub reason_code: Option<String>,
     }
-
     impl Colr012 {
         /// Populate the VM stack with a substitution confirmation.
         pub fn apply_to_stack(&self) {
@@ -2089,7 +1995,6 @@ pub mod norito_schemas {
                 msg_set("Substitution/ReasonCd", reason.as_bytes());
             }
         }
-
         /// Convert a parsed message into the Norito struct.
         pub fn from_parsed(parsed: &ParsedMessage) -> Result<Self, MsgError> {
             Ok(Self {
@@ -2112,7 +2017,6 @@ pub mod norito_schemas {
         }
     }
 }
-
 fn parse_index(segment: &str) -> Option<(&str, usize)> {
     let (name, rest) = segment.split_once('[')?;
     let idx_str = rest.strip_suffix(']')?;
@@ -2121,7 +2025,6 @@ fn parse_index(segment: &str) -> Option<(&str, usize)> {
     }
     Some((name, idx_str.parse().ok()?))
 }
-
 fn pattern_matches(pattern: &str, field: &str) -> bool {
     let pattern_parts: Vec<&str> = pattern.split('/').collect();
     let field_parts: Vec<&str> = field.split('/').collect();
@@ -2139,13 +2042,11 @@ fn pattern_matches(pattern: &str, field: &str) -> bool {
             }
         })
 }
-
 fn repeating_base(pattern: &'static str) -> Option<&'static str> {
     let idx = pattern.find("[*]")?;
     let base = &pattern[..idx];
     Some(base.strip_suffix('/').unwrap_or(base))
 }
-
 fn resolve_alias(schema: &MessageSchema, field: &str) -> Option<String> {
     if schema
         .field_specs()
@@ -2201,13 +2102,11 @@ fn resolve_alias(schema: &MessageSchema, field: &str) -> Option<String> {
     }
     None
 }
-
 fn canonical_field_name(message_type: &str, field: &str) -> String {
     schema_for(message_type)
         .and_then(|schema| resolve_alias(schema, field))
         .unwrap_or_else(|| field.to_owned())
 }
-
 fn canonical_repeating_base(message_type: &str, base: &str) -> String {
     if let Some(schema) = schema_for(message_type) {
         if let Some(resolved) = resolve_alias(schema, base) {
@@ -2224,344 +2123,44 @@ fn canonical_repeating_base(message_type: &str, base: &str) -> String {
     }
     base.to_owned()
 }
-
 #[derive(Clone, Copy)]
 struct IbanSpec {
     code: [u8; 2],
     length: u8,
 }
-
 /// Source: IBAN Registry (June 2024). Keep alphabetically sorted so
 /// `iban_length_for_country` can binary-search deterministically.
-const IBAN_SPECS: &[IbanSpec] = &[
-    IbanSpec {
-        code: *b"AD",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"AE",
-        length: 23,
-    },
-    IbanSpec {
-        code: *b"AL",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"AT",
-        length: 20,
-    },
-    IbanSpec {
-        code: *b"AZ",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"BA",
-        length: 20,
-    },
-    IbanSpec {
-        code: *b"BE",
-        length: 16,
-    },
-    IbanSpec {
-        code: *b"BG",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"BH",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"BR",
-        length: 29,
-    },
-    IbanSpec {
-        code: *b"BY",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"CH",
-        length: 21,
-    },
-    IbanSpec {
-        code: *b"CR",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"CY",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"CZ",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"DE",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"DK",
-        length: 18,
-    },
-    IbanSpec {
-        code: *b"DO",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"EE",
-        length: 20,
-    },
-    IbanSpec {
-        code: *b"EG",
-        length: 27,
-    },
-    IbanSpec {
-        code: *b"ES",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"FI",
-        length: 18,
-    },
-    IbanSpec {
-        code: *b"FO",
-        length: 18,
-    },
-    IbanSpec {
-        code: *b"FR",
-        length: 27,
-    },
-    IbanSpec {
-        code: *b"GB",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"GE",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"GI",
-        length: 23,
-    },
-    IbanSpec {
-        code: *b"GL",
-        length: 18,
-    },
-    IbanSpec {
-        code: *b"GR",
-        length: 27,
-    },
-    IbanSpec {
-        code: *b"GT",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"HR",
-        length: 21,
-    },
-    IbanSpec {
-        code: *b"HU",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"IE",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"IL",
-        length: 23,
-    },
-    IbanSpec {
-        code: *b"IQ",
-        length: 23,
-    },
-    IbanSpec {
-        code: *b"IR",
-        length: 26,
-    },
-    IbanSpec {
-        code: *b"IS",
-        length: 26,
-    },
-    IbanSpec {
-        code: *b"IT",
-        length: 27,
-    },
-    IbanSpec {
-        code: *b"JO",
-        length: 30,
-    },
-    IbanSpec {
-        code: *b"KW",
-        length: 30,
-    },
-    IbanSpec {
-        code: *b"KZ",
-        length: 20,
-    },
-    IbanSpec {
-        code: *b"LB",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"LC",
-        length: 32,
-    },
-    IbanSpec {
-        code: *b"LI",
-        length: 21,
-    },
-    IbanSpec {
-        code: *b"LT",
-        length: 20,
-    },
-    IbanSpec {
-        code: *b"LU",
-        length: 20,
-    },
-    IbanSpec {
-        code: *b"LV",
-        length: 21,
-    },
-    IbanSpec {
-        code: *b"MC",
-        length: 27,
-    },
-    IbanSpec {
-        code: *b"MD",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"ME",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"MK",
-        length: 19,
-    },
-    IbanSpec {
-        code: *b"MR",
-        length: 27,
-    },
-    IbanSpec {
-        code: *b"MT",
-        length: 31,
-    },
-    IbanSpec {
-        code: *b"MU",
-        length: 30,
-    },
-    IbanSpec {
-        code: *b"NL",
-        length: 18,
-    },
-    IbanSpec {
-        code: *b"NO",
-        length: 15,
-    },
-    IbanSpec {
-        code: *b"PK",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"PL",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"PS",
-        length: 29,
-    },
-    IbanSpec {
-        code: *b"PT",
-        length: 25,
-    },
-    IbanSpec {
-        code: *b"QA",
-        length: 29,
-    },
-    IbanSpec {
-        code: *b"RO",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"RS",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"SA",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"SC",
-        length: 31,
-    },
-    IbanSpec {
-        code: *b"SE",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"SI",
-        length: 19,
-    },
-    IbanSpec {
-        code: *b"SK",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"SM",
-        length: 27,
-    },
-    IbanSpec {
-        code: *b"ST",
-        length: 25,
-    },
-    IbanSpec {
-        code: *b"SV",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"TL",
-        length: 23,
-    },
-    IbanSpec {
-        code: *b"TN",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"TR",
-        length: 26,
-    },
-    IbanSpec {
-        code: *b"UA",
-        length: 29,
-    },
-    IbanSpec {
-        code: *b"VA",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"VG",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"XK",
-        length: 20,
-    },
-];
-
+const IBAN_SPEC_BYTES: &[u8; 234] = include_bytes!("assets/iso20022_iban_specs_v1.bin");
+const fn decode_iban_specs(bytes: &[u8; 234]) -> [IbanSpec; 78] {
+    let mut specs = [IbanSpec {
+        code: [0_u8; 2],
+        length: 0,
+    }; 78];
+    let mut index = 0;
+    while index < 78 {
+        let offset = index * 3;
+        specs[index] = IbanSpec {
+            code: [bytes[offset], bytes[offset + 1]],
+            length: bytes[offset + 2],
+        };
+        index += 1;
+    }
+    specs
+}
+const IBAN_SPEC_VALUES: [IbanSpec; 78] = decode_iban_specs(IBAN_SPEC_BYTES);
+const IBAN_SPECS: &[IbanSpec] = &IBAN_SPEC_VALUES;
 fn iban_length_for_country(code: [u8; 2]) -> Option<usize> {
     IBAN_SPECS
         .binary_search_by(|spec| spec.code.cmp(&code))
         .ok()
         .map(|idx| IBAN_SPECS[idx].length as usize)
 }
-
 /// Validate an IBAN using the ISO 7064 mod 97-10 algorithm with
 /// country-specific length checks and digit validation for the check byte pair.
 fn validate_iban(value: &[u8]) -> bool {
     if value.len() < 4 {
         return false;
     }
-
     let mut normalized = Vec::with_capacity(value.len());
     for &byte in value {
         match byte {
@@ -2571,7 +2170,6 @@ fn validate_iban(value: &[u8]) -> bool {
             _ => return false,
         }
     }
-
     if normalized.len() < 4 {
         return false;
     }
@@ -2586,7 +2184,6 @@ fn validate_iban(value: &[u8]) -> bool {
     if !normalized[2].is_ascii_digit() || !normalized[3].is_ascii_digit() {
         return false;
     }
-
     // Rotate the country code and check digits to the end before running mod 97.
     normalized.rotate_left(4);
     let mut acc: u32 = 0;
@@ -2599,7 +2196,6 @@ fn validate_iban(value: &[u8]) -> bool {
     }
     acc == 1
 }
-
 /// Validate a BIC. The check is deliberately lightweight: it enforces
 /// an uppercase alphanumeric string of length 8 or 11 as per ISO 9362 but
 /// does not verify country codes or institution existence.
@@ -2608,7 +2204,6 @@ fn validate_bic(value: &[u8]) -> bool {
         .map(validate_bic_str)
         .unwrap_or(false)
 }
-
 fn validate_bic_str(value: &str) -> bool {
     let bytes = value.as_bytes();
     let len = bytes.len();
@@ -2641,7 +2236,6 @@ fn validate_bic_str(value: &str) -> bool {
     }
     true
 }
-
 fn validate_amount(value: &[u8]) -> bool {
     if value.is_empty() {
         return false;
@@ -2682,7 +2276,6 @@ fn validate_amount(value: &[u8]) -> bool {
         true
     }
 }
-
 const VALID_CURRENCY_CODES: &[&str] = &[
     "AED", "AFN", "ALL", "AMD", "ANG", "AOA", "ARS", "AUD", "AWG", "AZN", "BAM", "BBD", "BDT",
     "BGN", "BHD", "BIF", "BMD", "BND", "BOB", "BOV", "BRL", "BSD", "BTN", "BWP", "BYN", "BZD",
@@ -2699,7 +2292,6 @@ const VALID_CURRENCY_CODES: &[&str] = &[
     "VND", "VUV", "WST", "XAF", "XAG", "XAU", "XBA", "XBB", "XBC", "XBD", "XCD", "XDR", "XOF",
     "XPD", "XPF", "XPT", "XSU", "XTS", "XUA", "XXX", "YER", "ZAR", "ZMW", "ZWL",
 ];
-
 fn validate_currency_str(value: &str) -> bool {
     if value.len() != 3 {
         return false;
@@ -2709,7 +2301,6 @@ fn validate_currency_str(value: &str) -> bool {
     }
     VALID_CURRENCY_CODES.binary_search(&value).is_ok()
 }
-
 fn validate_mic_str(value: &str) -> bool {
     if value.len() != 4 {
         return false;
@@ -2723,7 +2314,6 @@ fn validate_mic_str(value: &str) -> bool {
     }
     chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
 }
-
 fn luhn_sum_from_digits(digits: impl DoubleEndedIterator<Item = u32>) -> u32 {
     let mut sum = 0;
     let mut double = true;
@@ -2742,7 +2332,6 @@ fn luhn_sum_from_digits(digits: impl DoubleEndedIterator<Item = u32>) -> u32 {
     }
     sum
 }
-
 fn validate_isin_str(value: &str) -> bool {
     if value.len() != 12 {
         return false;
@@ -2777,7 +2366,6 @@ fn validate_isin_str(value: &str) -> bool {
     let sum = luhn_sum_from_digits(digits.into_iter().rev());
     (sum + check) % 10 == 0
 }
-
 fn cusip_char_value(ch: char) -> Option<u32> {
     match ch {
         '0'..='9' => Some(ch as u32 - '0' as u32),
@@ -2788,7 +2376,6 @@ fn cusip_char_value(ch: char) -> Option<u32> {
         _ => None,
     }
 }
-
 fn validate_cusip_str(value: &str) -> bool {
     if value.len() != 9 {
         return false;
@@ -2815,7 +2402,6 @@ fn validate_cusip_str(value: &str) -> bool {
     };
     (sum + check_digit).is_multiple_of(10)
 }
-
 fn validate_lei_str(value: &str) -> bool {
     if value.len() != 20 {
         return false;
@@ -2840,7 +2426,6 @@ fn validate_lei_str(value: &str) -> bool {
     }
     remainder == 1
 }
-
 pub fn validate_identifier(kind: IdentifierKind, value: &str) -> bool {
     match kind {
         IdentifierKind::Isin => validate_isin_str(value),
@@ -2852,16 +2437,13 @@ pub fn validate_identifier(kind: IdentifierKind, value: &str) -> bool {
         IdentifierKind::Currency => validate_currency_str(value),
     }
 }
-
 pub fn validate_instrument_identifier(value: &str) -> bool {
     validate_identifier(IdentifierKind::Isin, value)
         || validate_identifier(IdentifierKind::Cusip, value)
 }
-
 fn validate_numeric(value: &[u8]) -> bool {
     !value.is_empty() && value.iter().all(|b| b.is_ascii_digit())
 }
-
 fn parse_ascii_u32(slice: &[u8]) -> Option<u32> {
     if slice.is_empty() {
         return None;
@@ -2875,7 +2457,6 @@ fn parse_ascii_u32(slice: &[u8]) -> Option<u32> {
     }
     Some(acc)
 }
-
 fn validate_date(value: &[u8]) -> bool {
     if value.len() != 10 {
         return false;
@@ -2909,7 +2490,6 @@ fn validate_date(value: &[u8]) -> bool {
     };
     day <= max_day
 }
-
 fn validate_offset(offset: &str) -> bool {
     if offset.len() != 6 {
         return false;
@@ -2939,7 +2519,6 @@ fn validate_offset(offset: &str) -> bool {
     };
     hour <= 23 && minute <= 59
 }
-
 fn validate_datetime(value: &[u8]) -> bool {
     let s = match core::str::from_utf8(value) {
         Ok(s) => s,
@@ -3003,7 +2582,6 @@ fn validate_datetime(value: &[u8]) -> bool {
     };
     tz_ok && hour <= 23 && minute <= 59 && second <= 60
 }
-
 fn validate_identifier_bytes(kind: IdentifierKind, value: &[u8]) -> Result<(), InvalidReason> {
     let text = core::str::from_utf8(value).map_err(|_| InvalidReason::Utf8)?;
     if validate_identifier(kind, text) {
@@ -3012,7 +2590,6 @@ fn validate_identifier_bytes(kind: IdentifierKind, value: &[u8]) -> Result<(), I
         Err(InvalidReason::Identifier(kind))
     }
 }
-
 fn validate_instrument_bytes(value: &[u8]) -> Result<(), InvalidReason> {
     let text = core::str::from_utf8(value).map_err(|_| InvalidReason::Utf8)?;
     if validate_identifier(IdentifierKind::Isin, text)
@@ -3023,7 +2600,6 @@ fn validate_instrument_bytes(value: &[u8]) -> Result<(), InvalidReason> {
         Err(InvalidReason::Instrument)
     }
 }
-
 fn validate_field(kind: FieldKind, value: &[u8]) -> Result<(), InvalidReason> {
     match kind {
         FieldKind::Text => {
@@ -3072,7 +2648,6 @@ fn validate_field(kind: FieldKind, value: &[u8]) -> Result<(), InvalidReason> {
         }
     }
 }
-
 fn proxy_fallback_match<'a>(
     pattern: &str,
     message: &'a IsoMessage,
@@ -3089,7 +2664,6 @@ fn proxy_fallback_match<'a>(
         _ => None,
     }
 }
-
 fn validate_message_against_schema(
     message: &IsoMessage,
     schema: &MessageSchema,
@@ -3129,7 +2703,6 @@ fn validate_message_against_schema(
     }
     Ok(())
 }
-
 fn collect_fields_in_order<'a>(
     message: &'a IsoMessage,
     schema: Option<&'static MessageSchema>,
@@ -3151,7 +2724,6 @@ fn collect_fields_in_order<'a>(
     pairs.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.0.cmp(b.0)));
     pairs
 }
-
 fn escape_xml_text(input: &str) -> String {
     let mut escaped = String::with_capacity(input.len());
     for ch in input.chars() {
@@ -3166,11 +2738,9 @@ fn escape_xml_text(input: &str) -> String {
     }
     escaped
 }
-
 fn escape_xml_attr(input: &str) -> String {
     escape_xml_text(input)
 }
-
 fn serialize_key_value(message: &IsoMessage, schema: Option<&'static MessageSchema>) -> Vec<u8> {
     let mut out = Vec::new();
     for (i, (key, value, _)) in collect_fields_in_order(message, schema)
@@ -3186,7 +2756,6 @@ fn serialize_key_value(message: &IsoMessage, schema: Option<&'static MessageSche
     }
     out
 }
-
 fn serialize_xml(message: &IsoMessage, schema: Option<&'static MessageSchema>) -> Vec<u8> {
     let mut out = Vec::new();
     let _ = write!(out, "<ISO20022 message=\"{}\">", message.message_type);
@@ -3209,23 +2778,18 @@ fn serialize_xml(message: &IsoMessage, schema: Option<&'static MessageSchema>) -
     out.extend_from_slice(b"</ISO20022>");
     out
 }
-
 fn looks_like_xml(data: &[u8]) -> bool {
     data.iter().copied().find(|b| !b.is_ascii_whitespace()) == Some(b'<')
 }
-
 fn local_name(name: &str) -> &str {
     name.rsplit(':').next().unwrap_or(name)
 }
-
 const ISO_20022_XSD_NAMESPACE_PREFIX: &str = "urn:iso:std:iso:20022:tech:xsd:";
-
 fn message_type_from_namespace(ns: &str) -> Option<String> {
     ns.strip_prefix(ISO_20022_XSD_NAMESPACE_PREFIX)
         .filter(|message_type| !message_type.is_empty())
         .map(str::to_owned)
 }
-
 fn namespace_bindings(attrs: &[(String, String)]) -> Vec<(String, String)> {
     attrs
         .iter()
@@ -3239,7 +2803,6 @@ fn namespace_bindings(attrs: &[(String, String)]) -> Vec<(String, String)> {
         })
         .collect()
 }
-
 fn namespace_uri_for_prefix<'a>(
     prefix: &str,
     attrs: &'a [(String, String)],
@@ -3268,7 +2831,6 @@ fn namespace_uri_for_prefix<'a>(
             })
         })
 }
-
 fn element_namespace_uri<'a>(
     name: &str,
     attrs: &'a [(String, String)],
@@ -3284,7 +2846,6 @@ fn element_namespace_uri<'a>(
     }
     Ok(namespace_uri_for_prefix("", attrs, namespace_scopes))
 }
-
 fn is_versioned_message_definition_id(message_type: &str) -> bool {
     let mut parts = message_type.split('.');
     let (Some(_business_area), Some(number), Some(variant), Some(version)) =
@@ -3300,7 +2861,6 @@ fn is_versioned_message_definition_id(message_type: &str) -> bool {
         && variant.chars().all(|c| c.is_ascii_digit())
         && version.chars().all(|c| c.is_ascii_digit())
 }
-
 fn declared_message_definitions_match(first: &str, second: &str) -> bool {
     if is_versioned_message_definition_id(first) || is_versioned_message_definition_id(second) {
         first.eq_ignore_ascii_case(second)
@@ -3310,7 +2870,6 @@ fn declared_message_definitions_match(first: &str, second: &str) -> bool {
             .eq_ignore_ascii_case(canonical_message_type(second).as_ref())
     }
 }
-
 fn requested_message_matches_declaration(requested: &str, declared: &str) -> bool {
     if is_versioned_message_definition_id(requested) {
         requested.eq_ignore_ascii_case(declared)
@@ -3320,7 +2879,6 @@ fn requested_message_matches_declaration(requested: &str, declared: &str) -> boo
             .eq_ignore_ascii_case(canonical_message_type(declared).as_ref())
     }
 }
-
 fn observe_declared_message_type(
     declared_message_type: &mut Option<String>,
     candidate: &str,
@@ -3338,7 +2896,6 @@ fn observe_declared_message_type(
     }
     Ok(())
 }
-
 fn document_root_matches_message(message_type: &str, root: &str) -> Option<bool> {
     Some(match canonical_message_type(message_type).as_ref() {
         "colr.012" => root == "CollSbstitnConf",
@@ -3362,11 +2919,9 @@ fn document_root_matches_message(message_type: &str, root: &str) -> Option<bool>
         _ => return None,
     })
 }
-
 fn message_type_requires_document_root(message_type: &str) -> bool {
     document_root_matches_message(message_type, "").is_some()
 }
-
 fn repeating_bases_for(message_type: &str) -> Vec<String> {
     schema_for(message_type)
         .map(|schema| {
@@ -3379,13 +2934,10 @@ fn repeating_bases_for(message_type: &str) -> Vec<String> {
         })
         .unwrap_or_default()
 }
-
 fn should_index(path: &str, repeating_bases: &[String]) -> bool {
     repeating_bases.iter().any(|base| path.ends_with(base))
 }
-
 const SIGNATURE_IGNORED_VALUE: &[u8] = b"signature-block-ignored";
-
 fn should_skip_element(name: &str) -> bool {
     matches!(
         local_name(name),
@@ -3399,7 +2951,6 @@ fn should_skip_element(name: &str) -> bool {
             | "SignedProperties"
     )
 }
-
 fn normalised_parts(stack: &[String]) -> Vec<String> {
     stack
         .iter()
@@ -3411,7 +2962,6 @@ fn normalised_parts(stack: &[String]) -> Vec<String> {
         .map(|s| local_name(s).to_owned())
         .collect()
 }
-
 fn current_path(stack: &[String]) -> Option<String> {
     let parts = normalised_parts(stack);
     if parts.is_empty() {
@@ -3420,7 +2970,6 @@ fn current_path(stack: &[String]) -> Option<String> {
         Some(parts.join("/"))
     }
 }
-
 fn find_tag_end(bytes: &[u8], start: usize) -> Option<usize> {
     let mut i = start;
     let mut in_quote = None;
@@ -3436,7 +2985,6 @@ fn find_tag_end(bytes: &[u8], start: usize) -> Option<usize> {
     }
     None
 }
-
 fn supported_xml_comment_end(text: &str, start: usize) -> Result<usize, MsgError> {
     let Some(body_start) = text[start..].strip_prefix("<!--").map(|_| start + 4) else {
         return Err(MsgError::InvalidFormat);
@@ -3453,7 +3001,6 @@ fn supported_xml_comment_end(text: &str, start: usize) -> Result<usize, MsgError
     }
     Ok(comment_end + 3)
 }
-
 fn supported_processing_instruction_end(text: &str, start: usize) -> Result<usize, MsgError> {
     let Some(body_start) = text[start..].strip_prefix("<?").map(|_| start + 2) else {
         return Err(MsgError::InvalidFormat);
@@ -3477,7 +3024,6 @@ fn supported_processing_instruction_end(text: &str, start: usize) -> Result<usiz
     }
     Ok(pi_end + 2)
 }
-
 fn supported_special_xml_markup_end(text: &str, start: usize) -> Result<Option<usize>, MsgError> {
     if text[start..].starts_with("<!--") {
         return supported_xml_comment_end(text, start).map(Some);
@@ -3490,7 +3036,6 @@ fn supported_special_xml_markup_end(text: &str, start: usize) -> Result<Option<u
     }
     Ok(None)
 }
-
 fn parse_attributes(tag_body: &str) -> Result<Vec<(String, String)>, MsgError> {
     let mut attrs = Vec::new();
     let mut cursor = tag_body.trim();
@@ -3541,7 +3086,6 @@ fn parse_attributes(tag_body: &str) -> Result<Vec<(String, String)>, MsgError> {
     }
     Ok(attrs)
 }
-
 fn is_supported_xml_name(name: &str) -> bool {
     let mut bytes = name.bytes();
     let Some(first) = bytes.next() else {
@@ -3550,7 +3094,6 @@ fn is_supported_xml_name(name: &str) -> bool {
     (first.is_ascii_alphabetic() || first == b'_')
         && bytes.all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
 }
-
 fn is_supported_xml_qname(name: &str) -> bool {
     if name.matches(':').count() > 1 {
         return false;
@@ -3561,7 +3104,6 @@ fn is_supported_xml_qname(name: &str) -> bool {
         is_supported_xml_name(name)
     }
 }
-
 fn is_supported_xml_attribute_name(name: &str) -> bool {
     if name == "xmlns" {
         return true;
@@ -3571,7 +3113,6 @@ fn is_supported_xml_attribute_name(name: &str) -> bool {
     }
     is_supported_xml_qname(name)
 }
-
 fn unescape_xml_text(input: &str) -> Result<String, MsgError> {
     if !input.contains('&') {
         ensure_xml_characters(input)?;
@@ -3600,7 +3141,6 @@ fn unescape_xml_text(input: &str) -> Result<String, MsgError> {
     ensure_xml_characters(&out)?;
     Ok(out)
 }
-
 fn decode_xml_character_reference(entity: &str) -> Result<char, MsgError> {
     let (digits, radix) = if let Some(digits) = entity
         .strip_prefix("#x")
@@ -3638,18 +3178,15 @@ fn decode_xml_character_reference(entity: &str) -> Result<char, MsgError> {
         Err(MsgError::InvalidFormat)
     }
 }
-
 fn is_xml_character(ch: char) -> bool {
     matches!(
         ch as u32,
         0x9 | 0xA | 0xD | 0x20..=0xD7FF | 0xE000..=0xFFFD | 0x10000..=0x10FFFF
     )
 }
-
 fn contains_only_xml_characters(input: &str) -> bool {
     input.chars().all(is_xml_character)
 }
-
 fn ensure_xml_characters(input: &str) -> Result<(), MsgError> {
     if contains_only_xml_characters(input) {
         Ok(())
@@ -3657,7 +3194,6 @@ fn ensure_xml_characters(input: &str) -> Result<(), MsgError> {
         Err(MsgError::InvalidFormat)
     }
 }
-
 fn buffer_real_iso20022_text(
     stack: &[String],
     path: &str,
@@ -3679,7 +3215,6 @@ fn buffer_real_iso20022_text(
     let _ = stack;
     Ok(())
 }
-
 fn flush_real_iso20022_text(
     stack: &[String],
     declared_message_type: &mut Option<String>,
@@ -3702,13 +3237,11 @@ fn flush_real_iso20022_text(
     msg_set(path, trimmed.as_bytes());
     Ok(())
 }
-
 fn parsed_attr_value<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
     attrs
         .iter()
         .find_map(|(attr_name, value)| (attr_name == name).then_some(value.as_str()))
 }
-
 fn parse_named_opening_attributes(
     raw_tag: &str,
     expected_name: &str,
@@ -3725,7 +3258,6 @@ fn parse_named_opening_attributes(
     }
     parse_attributes(tag_body)
 }
-
 fn reject_unexpected_attrs(
     attrs: &[(String, String)],
     allowed: &[&str],
@@ -3749,7 +3281,6 @@ fn reject_unexpected_attrs(
     let _ = label;
     Ok(())
 }
-
 fn is_supported_internal_field_path(path: &str) -> bool {
     !path.is_empty()
         && path.split('/').all(|segment| {
@@ -3776,7 +3307,6 @@ fn is_supported_internal_field_path(path: &str) -> bool {
                 })
         })
 }
-
 fn parse_key_values(message_type: &str, text: &str) {
     for (key, value) in text.lines().filter_map(|line| line.split_once('=')) {
         msg_set(key.trim(), value.trim().as_bytes());
@@ -3790,7 +3320,6 @@ fn parse_key_values(message_type: &str, text: &str) {
         }
     });
 }
-
 fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
     let mut stack: Vec<String> = Vec::new();
     let mut qname_stack: Vec<String> = Vec::new();
@@ -3804,11 +3333,9 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
     let mut top_level_root_seen = false;
     let mut namespace_scopes: Vec<Vec<(String, String)>> = Vec::new();
     let mut text_buffers: HashMap<String, String> = HashMap::new();
-
     let mut idx = 0usize;
     let bytes = text.as_bytes();
     let len = bytes.len();
-
     while idx < len {
         let next_lt = match text[idx..].find('<') {
             Some(offset) => idx + offset,
@@ -3853,7 +3380,6 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
         };
         let raw_tag = &text[next_lt + 1..tag_end];
         idx = tag_end + 1;
-
         let tag = raw_tag.trim();
         if tag.starts_with('?') || tag.starts_with('!') {
             return Err(MsgError::InvalidFormat);
@@ -3878,7 +3404,6 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
         } else {
             tag_body
         };
-
         let (name_part, _) = tag_body
             .split_once(char::is_whitespace)
             .unwrap_or((tag_body, ""));
@@ -3886,7 +3411,6 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
             return Err(MsgError::InvalidFormat);
         }
         let lname = local_name(name_part);
-
         if closing {
             let Some(opened) = qname_stack.pop() else {
                 return Err(MsgError::InvalidFormat);
@@ -3915,7 +3439,6 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
             namespace_scopes.pop();
             continue;
         }
-
         let attrs = parse_attributes(tag_body)?;
         if skip_depth == 0 && stack.is_empty() {
             if top_level_root_seen {
@@ -3988,7 +3511,6 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
         qname_stack.push(name_part.to_owned());
         element_child_counts.push(0);
         namespace_scopes.push(current_namespace_bindings);
-
         if is_skipped && skip_depth == 0 {
             // Track that a signature subtree was present while deliberately ignoring its contents.
             if let Some(path) = current_path(&stack) {
@@ -4000,7 +3522,6 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
         if is_skipped {
             skip_depth += 1;
         }
-
         if skip_depth == 0
             && let Some(path) = current_path(&stack)
         {
@@ -4012,7 +3533,6 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
                 msg_set(&attr_path, value.as_bytes());
             }
         }
-
         if self_closing {
             if let Some(skipped) = skip_stack.pop()
                 && skipped
@@ -4026,11 +3546,9 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
             namespace_scopes.pop();
         }
     }
-
     if !qname_stack.is_empty() {
         return Err(MsgError::InvalidFormat);
     }
-
     if let Some(declared) = declared_message_type {
         let requested_head = canonical_message_type(message_type) == "head.001";
         if !requested_head && !requested_message_matches_declaration(message_type, &declared) {
@@ -4042,7 +3560,6 @@ fn parse_real_iso20022(message_type: &str, text: &str) -> Result<(), MsgError> {
     }
     Ok(())
 }
-
 fn parse_xml_into_current(message_type: &str, text: &str) -> Result<(), MsgError> {
     let trimmed = text.trim();
     if !trimmed.starts_with("<ISO20022") {
@@ -4098,12 +3615,10 @@ fn parse_xml_into_current(message_type: &str, text: &str) -> Result<(), MsgError
     }
     Ok(())
 }
-
 /// Encode a numeric amount as an ASCII string.
 pub fn encode_amount(value: u64) -> Vec<u8> {
     value.to_string().into_bytes()
 }
-
 /// Decode a numeric amount from an ASCII string.
 ///
 /// Returns `None` if the input contains non-digit characters or does not fit
@@ -4115,10 +3630,8 @@ pub fn decode_amount(value: &[u8]) -> Option<u64> {
         None
     }
 }
-
 /// Base64 alphabet used by [`encode_base64`] and [`decode_base64`].
 const BASE64_TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
 /// Precomputed table mapping ASCII bytes to their 6-bit Base64 value.
 /// Invalid bytes map to `0xFF`.
 const fn build_b64_decode_table() -> [u8; 256] {
@@ -4132,9 +3645,7 @@ const fn build_b64_decode_table() -> [u8; 256] {
     table[b'=' as usize] = 0;
     table
 }
-
 const BASE64_DECODE_TABLE: [u8; 256] = build_b64_decode_table();
-
 /// Encode binary data as a Base64 ASCII string.
 ///
 /// This lightweight helper is sufficient for tests and prototypes and uses
@@ -4160,7 +3671,6 @@ pub fn encode_base64(data: &[u8]) -> Vec<u8> {
     }
     out
 }
-
 /// Decode a Base64 ASCII string into the provided output buffer.
 ///
 /// The caller supplies the destination [`Vec`] which is extended with the
@@ -4198,7 +3708,6 @@ pub fn decode_base64_into(data: &[u8], out: &mut Vec<u8>) -> Option<()> {
     }
     Some(())
 }
-
 /// Decode a Base64 ASCII string back into binary data.
 ///
 /// Returns `None` if the input contains invalid characters or has the wrong
@@ -4208,7 +3717,6 @@ pub fn decode_base64(data: &[u8]) -> Option<Vec<u8>> {
     decode_base64_into(data, &mut out)?;
     Some(out)
 }
-
 /// Encode a byte slice according to a named format.
 ///
 /// Currently only `"BASE64"` is supported.
@@ -4218,7 +3726,6 @@ pub fn encode_str(format: &str, value: &[u8]) -> Vec<u8> {
         _ => value.to_vec(),
     }
 }
-
 /// Decode a string according to a named format.
 ///
 /// Currently only `"BASE64"` is supported.
@@ -4228,7 +3735,6 @@ pub fn decode_str(format: &str, value: &[u8]) -> Option<Vec<u8>> {
         _ => Some(value.to_vec()),
     }
 }
-
 /// Validate a value against a named pattern.
 ///
 /// Supported patterns are `"IBAN"`, `"BIC"`, and `"NUMERIC"`.
@@ -4240,7 +3746,6 @@ pub fn validate_format(pattern: &str, value: &[u8]) -> bool {
         _ => false,
     }
 }
-
 /// Create a new ISO 20022 message of the given type.
 ///
 /// The message is represented as a deterministic in-memory [`IsoMessage`] slot.
@@ -4254,7 +3759,6 @@ pub fn msg_create(message_type: &str) {
         });
     });
 }
-
 /// Clone the current ISO 20022 message object.
 ///
 /// The thread-local message stack stores deterministic in-memory structures, so
@@ -4267,7 +3771,6 @@ pub fn msg_clone() {
         }
     });
 }
-
 /// Set the value of an ISO 20022 field.
 ///
 /// Values are stored verbatim; type checking is intentionally omitted but the
@@ -4280,7 +3783,6 @@ pub fn msg_set(field: &str, value: &[u8]) {
         }
     });
 }
-
 /// Retrieve the value of an ISO 20022 field.
 pub fn msg_get(field: &str) -> Option<Vec<u8>> {
     MESSAGE_STACK.with(|stack| {
@@ -4290,7 +3792,6 @@ pub fn msg_get(field: &str) -> Option<Vec<u8>> {
         message.fields.get(&key).cloned()
     })
 }
-
 /// Append a repeating ISO 20022 sub-structure.
 ///
 /// Each call creates an empty entry with an incremented index.  The entry can
@@ -4306,7 +3807,6 @@ pub fn msg_add(field: &str) {
         }
     });
 }
-
 /// Remove a field or sub-structure from the current message.
 pub fn msg_remove(field: &str) {
     MESSAGE_STACK.with(|stack| {
@@ -4316,7 +3816,6 @@ pub fn msg_remove(field: &str) {
         }
     });
 }
-
 /// Clear all fields of the current ISO 20022 message.
 pub fn msg_clear() {
     MESSAGE_STACK.with(|stack| {
@@ -4326,7 +3825,6 @@ pub fn msg_clear() {
         }
     });
 }
-
 /// Parse raw data into an ISO 20022 message.
 ///
 /// The parser accepts deterministic internal `<ISO20022>` XML wrappers, real
@@ -4353,7 +3851,6 @@ pub fn msg_parse(message_type: &str, data: &[u8]) -> Result<(), MsgError> {
     }
     result
 }
-
 /// Serialize the current ISO 20022 message into a simple key=value format.
 ///
 /// Fields are written one per line in lexicographic order of their keys.
@@ -4374,7 +3871,6 @@ pub fn msg_serialize(format: &str) -> Result<Vec<u8>, MsgError> {
         }
     })
 }
-
 /// Validate the current ISO 20022 message against schema rules.
 ///
 /// Rather than a full schema engine we keep a tiny table of mandatory fields
@@ -4398,7 +3894,6 @@ pub fn msg_validate() -> bool {
         })
     })
 }
-
 /// Sign the current ISO 20022 message.
 ///
 /// Uses Ed25519, secp256k1, or ML-DSA (Dilithium3) depending on the key
@@ -4440,7 +3935,6 @@ pub fn msg_sign(key: &[u8]) -> Vec<u8> {
             return sig.as_bytes().to_vec();
         }
     }
-
     if let Ok(sk_bytes) = <[u8; 32]>::try_from(key) {
         let sk = SigningKey::from_bytes(&sk_bytes);
         return sk.sign(&msg).to_bytes().to_vec();
@@ -4453,7 +3947,6 @@ pub fn msg_sign(key: &[u8]) -> Vec<u8> {
     }
     Vec::new()
 }
-
 /// Verify the signature on an ISO 20022 message.
 ///
 /// Uses the [`verify_signature`] helper with Ed25519, secp256k1, or ML-DSA
@@ -4483,7 +3976,6 @@ pub fn msg_verify_sig(sig: &[u8], key: &[u8]) -> bool {
     }
     false
 }
-
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::SigningKey;
@@ -4493,12 +3985,10 @@ mod tests {
         norito_schemas::{Colr012, Linkage, Sese023, Sese025},
         *,
     };
-
     // Helper to reset the thread-local between tests.
     fn reset() {
         MESSAGE_STACK.with(|m| m.borrow_mut().clear());
     }
-
     fn populate_pacs008_minimal() {
         msg_set("MsgId", b"1");
         msg_set("IntrBkSttlmCcy", b"USD");
@@ -4509,7 +3999,6 @@ mod tests {
         msg_set("DbtrAgt", b"DEUTDEFF");
         msg_set("CdtrAgt", b"DEUTDEFF");
     }
-
     fn populate_camt053_minimal() {
         msg_set("Stmt/Id", b"1");
         msg_set("Stmt/Acct/Id", b"GB82WEST12345698765432");
@@ -4518,7 +4007,6 @@ mod tests {
         msg_set("Stmt/Bal[0]/Ccy", b"USD");
         msg_set("Stmt/Bal[0]/Cd", b"CRDT");
     }
-
     fn populate_camt052_minimal() {
         msg_set("Rpt/Id", b"RPT1");
         msg_set("Rpt/CreDtTm", b"2024-01-01T00:00:00Z");
@@ -4529,7 +4017,6 @@ mod tests {
         msg_set("Rpt/Ntry[0]/CdtDbtInd", b"CRDT");
         msg_set("Rpt/Ntry[0]/BookgDt", b"2024-01-01");
     }
-
     fn populate_pain001_minimal() {
         msg_set("GrpHdr/MsgId", b"MSG-1");
         msg_set("GrpHdr/CreDtTm", b"2024-01-01T10:00:00Z");
@@ -4549,7 +4036,6 @@ mod tests {
         msg_set("PmtInf[0]/CdtTrfTxInf[0]/CdtrAgt", b"DEUTDEFF");
         msg_set("PmtInf[0]/CdtTrfTxInf[0]/EndToEndId", b"E2E1");
     }
-
     fn populate_pacs009_minimal() {
         msg_set("BizMsgIdr", b"BMSG1");
         msg_set("MsgDefIdr", b"pacs.009.001.10");
@@ -4562,7 +4048,6 @@ mod tests {
         msg_set("DbtrAcct", b"GB82WEST12345698765432");
         msg_set("CdtrAcct", b"GB33BUKB20201555555555");
     }
-
     fn populate_head001_minimal() {
         msg_set("AppHdr/BizMsgIdr", b"HDR-123");
         msg_set("AppHdr/MsgDefIdr", b"pacs.008.001.08");
@@ -4570,7 +4055,6 @@ mod tests {
         msg_set("AppHdr/Fr/FIId/FinInstnId/BICFI", b"DEUTDEFF");
         msg_set("AppHdr/To/FIId/FinInstnId/ClrSysMmbId/MmbId", b"123456");
     }
-
     fn populate_pacs004_minimal() {
         msg_set("MsgId", b"RTRN1");
         msg_set("CreDtTm", b"2024-01-05T10:00:00Z");
@@ -4580,13 +4064,11 @@ mod tests {
         msg_set("TxInf[0]/RtrdInstdAmt", b"100.00");
         msg_set("TxInf[0]/RtrdInstdAmtCcy", b"USD");
     }
-
     fn populate_pacs028_minimal() {
         msg_set("MsgId", b"REQ1");
         msg_set("CreDtTm", b"2024-01-06T09:30:00Z");
         msg_set("OrgnlGrpInf/OrgnlMsgId", b"ORIG1");
     }
-
     fn populate_pacs029_minimal() {
         msg_set("MsgId", b"STAT1");
         msg_set("CreDtTm", b"2024-01-06T09:45:00Z");
@@ -4594,14 +4076,12 @@ mod tests {
         msg_add("TxInfAndSts");
         msg_set("TxInfAndSts[0]/TxSts", b"ACSP");
     }
-
     fn populate_pain002_minimal() {
         msg_set("GrpHdr/MsgId", b"PAINSTAT1");
         msg_set("GrpHdr/CreDtTm", b"2024-01-07T08:00:00Z");
         msg_set("OrgnlGrpInfAndSts/OrgnlMsgId", b"PAIN1");
         msg_set("OrgnlGrpInfAndSts/GrpSts", b"ACSP");
     }
-
     fn populate_pacs007_minimal() {
         msg_set("MsgId", b"CXL1");
         msg_set("CreDtTm", b"2024-01-02T09:30:00Z");
@@ -4612,7 +4092,6 @@ mod tests {
         msg_set("TxInf[0]/OrgnlTxId", b"TX1");
         msg_set("TxInf[0]/CxlRsnInf/Rsn/Cd", b"RR01");
     }
-
     fn populate_camt056_minimal() {
         msg_set("Assgnmt/Id", b"CXL2");
         msg_set("Assgnmt/CreDtTm", b"2024-01-03T11:15:00Z");
@@ -4622,7 +4101,6 @@ mod tests {
         msg_set("Undrlyg/TxInf/OrgnlTxId", b"TX2");
         msg_set("Undrlyg/TxInf/CxlRsnInf/Rsn/Cd", b"RC01");
     }
-
     fn populate_sese023_minimal() {
         msg_set("TxId", b"DVP-SETTLEMENT-1");
         msg_set("SttlmDt", b"2024-01-02");
@@ -4639,7 +4117,6 @@ mod tests {
         msg_set("Plan/ExecutionOrder", b"DELIVERY_THEN_PAYMENT");
         msg_set("Plan/Atomicity", b"ALL_OR_NOTHING");
     }
-
     fn populate_sese025_minimal() {
         msg_set("TxId", b"DVP-SETTLEMENT-1");
         msg_set("SttlmDt", b"2024-01-02");
@@ -4653,7 +4130,6 @@ mod tests {
         msg_set("Plan/Atomicity", b"ALL_OR_NOTHING");
         msg_set("RsnCd", b"SETTLED");
     }
-
     fn populate_colr012_minimal() {
         msg_set("TxId", b"COLLATERAL-EXCHANGE-1");
         msg_set("OblgtnId", b"REPO-DAILY-1");
@@ -4665,7 +4141,6 @@ mod tests {
         msg_set("Substitution/Type", b"FULL");
         msg_set("Substitution/ReasonCd", b"HAIRCUT");
     }
-
     const PACS002_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/pacs002_fixture.xml");
     const PACS004_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/pacs004_fixture.xml");
     const CAMT056_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/camt056_fixture.xml");
@@ -4676,7 +4151,6 @@ mod tests {
     const SESE025_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/sese025_fixture.xml");
     const COLR007_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/colr007_fixture.xml");
     const COLR012_FIXTURE: &str = include_str!(r"../../../fixtures/iso20022/colr012_fixture.xml");
-
     fn expected_sese023_schema() -> Sese023 {
         Sese023 {
             tx_id: "DVP-FIXTURE-1".to_owned(),
@@ -4711,7 +4185,6 @@ mod tests {
             cash_metadata: Some(r#"{"note":"cash"}"#.to_owned()),
         }
     }
-
     fn expected_sese025_schema() -> Sese025 {
         Sese025 {
             tx_id: "PVP-FIXTURE-1".to_owned(),
@@ -4738,7 +4211,6 @@ mod tests {
             additional_info: Some(r#"{"counter_ccy":"EUR"}"#.to_owned()),
         }
     }
-
     fn expected_colr012_schema() -> Colr012 {
         Colr012 {
             tx_id: "COLR-FIXTURE-1".to_owned(),
@@ -4755,319 +4227,15 @@ mod tests {
             reason_code: Some("MARGIN".to_owned()),
         }
     }
-
     const GENERATED_MD: &str = include_str!(r"../../../generatediso20022.md");
-
-    const SAMPLE_PACS008_XML: &str = r#"
-<DataEnvelope xmlns="urn:sample:iso">
-  <Body>
-    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
-      <Fr><FIId><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></Fr>
-      <To><FIId><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></To>
-      <BizMsgIdr>ISO-SAMPLE-008</BizMsgIdr>
-      <MsgDefIdr>pacs.008.001.08</MsgDefIdr>
-      <BizSvc>IPS</BizSvc>
-      <CreDt>2025-11-11T09:34:09Z</CreDt>
-    </AppHdr>
-    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
-      <FIToFICstmrCdtTrf>
-        <GrpHdr>
-          <MsgId>ISO-008-GRP</MsgId>
-          <CreDtTm>2025-11-11T09:34:09</CreDtTm>
-          <BtchBookg>false</BtchBookg>
-          <NbOfTxs>1</NbOfTxs>
-          <SttlmInf><SttlmMtd>CLRG</SttlmMtd></SttlmInf>
-        </GrpHdr>
-        <CdtTrfTxInf>
-          <PmtId>
-            <InstrId>SAMPLE-INSTR-008</InstrId>
-            <EndToEndId>SAMPLE-E2E-008</EndToEndId>
-            <TxId>SAMPLE-TX-008</TxId>
-          </PmtId>
-          <PmtTpInf>
-            <ClrChanl>RTNS</ClrChanl>
-            <SvcLvl><Prtry>0100</Prtry></SvcLvl>
-            <LclInstrm><Prtry>CTAA</Prtry></LclInstrm>
-            <CtgyPurp><Prtry>005</Prtry></CtgyPurp>
-          </PmtTpInf>
-          <IntrBkSttlmAmt Ccy="USD">1400.00</IntrBkSttlmAmt>
-          <IntrBkSttlmDt>2025-11-11</IntrBkSttlmDt>
-          <ChrgBr>SLEV</ChrgBr>
-          <Dbtr><Nm>Example Debtor</Nm></Dbtr>
-          <DbtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></DbtrAcct>
-          <DbtrAgt><FinInstnId><BICFI>ALPHGB2L</BICFI></FinInstnId></DbtrAgt>
-          <CdtrAgt><FinInstnId><ClrSysMmbId><MmbId>OMEGGB2L</MmbId></ClrSysMmbId></FinInstnId></CdtrAgt>
-          <Cdtr><Nm>Example Creditor</Nm></Cdtr>
-          <CdtrAcct><Id><IBAN>GB33BUKB20201555555555</IBAN></Id></CdtrAcct>
-          <InstrForNxtAgt><InstrInf>/INFO/Example note</InstrInf></InstrForNxtAgt>
-        </CdtTrfTxInf>
-      </FIToFICstmrCdtTrf>
-    </Document>
-  </Body>
-</DataEnvelope>
-"#;
-
-    const SAMPLE_PACS004_XML: &str = r#"
-<DataEnvelope xmlns="urn:sample:iso">
-  <Body>
-    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.004.001.09">
-      <PmtRtr>
-        <GrpHdr>
-          <MsgId>ISO-PACS004-MSG</MsgId>
-          <CreDtTm>2025-11-06T12:42:25.758Z</CreDtTm>
-          <BtchBookg>false</BtchBookg>
-          <NbOfTxs>1</NbOfTxs>
-          <SttlmInf><SttlmMtd>CLRG</SttlmMtd></SttlmInf>
-          <InstdAgt><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></InstdAgt>
-        </GrpHdr>
-        <OrgnlGrpInf>
-          <OrgnlMsgId>ORIGINAL-008</OrgnlMsgId>
-          <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
-          <OrgnlCreDtTm>2025-11-06T12:42:07.770Z</OrgnlCreDtTm>
-        </OrgnlGrpInf>
-        <TxInf>
-          <RtrId>RETURN-5310</RtrId>
-          <OrgnlInstrId>ORIGINAL-INSTR-008</OrgnlInstrId>
-          <OrgnlEndToEndId>ORIGINAL-E2E-008</OrgnlEndToEndId>
-          <OrgnlTxId>ORIGINAL-TX-008</OrgnlTxId>
-          <OrgnlIntrBkSttlmDt>2025-11-06</OrgnlIntrBkSttlmDt>
-          <RtrdIntrBkSttlmAmt Ccy="USD">10.00</RtrdIntrBkSttlmAmt>
-          <IntrBkSttlmDt>2025-11-06</IntrBkSttlmDt>
-          <ChrgBr>SLEV</ChrgBr>
-          <InstgAgt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></InstgAgt>
-          <InstdAgt><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></InstdAgt>
-          <RtrRsnInf><Rsn><Prtry>TechnicalProblem</Prtry></Rsn></RtrRsnInf>
-          <OrgnlTxRef>
-            <IntrBkSttlmAmt Ccy="USD">10.00</IntrBkSttlmAmt>
-            <PmtTpInf>
-              <ClrChanl>RTNS</ClrChanl>
-              <SvcLvl><Prtry>0100</Prtry></SvcLvl>
-              <LclInstrm><Prtry>CTAA</Prtry></LclInstrm>
-              <CtgyPurp><Prtry>001</Prtry></CtgyPurp>
-            </PmtTpInf>
-            <Dbtr><Pty><Nm>Debtor One</Nm></Pty></Dbtr>
-            <DbtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></DbtrAcct>
-            <DbtrAgt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></DbtrAgt>
-            <CdtrAgt><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></CdtrAgt>
-            <Cdtr><Pty><Nm>Creditor One</Nm></Pty></Cdtr>
-            <CdtrAcct><Id><IBAN>GB33BUKB20201555555555</IBAN></Id></CdtrAcct>
-          </OrgnlTxRef>
-        </TxInf>
-      </PmtRtr>
-    </Document>
-    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
-      <Fr><FIId><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></Fr>
-      <To><FIId><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></To>
-      <BizMsgIdr>ISO-PACS004-MSG</BizMsgIdr>
-      <MsgDefIdr>pacs.004.001.09</MsgDefIdr>
-      <BizSvc>IPS</BizSvc>
-      <CreDt>2025-11-06T07:42:25.771Z</CreDt>
-      <Sgntr>
-        <SignedInfo><SignatureMethod>sample</SignatureMethod></SignedInfo>
-        <SignatureValue>ignored</SignatureValue>
-      </Sgntr>
-    </AppHdr>
-  </Body>
-</DataEnvelope>
-"#;
-
-    const SAMPLE_PACS009_XML: &str = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.009.001.10">
-  <FICdtTrf>
-    <GrpHdr>
-      <MsgId>PACS009-GRP</MsgId>
-      <CreDtTm>2024-01-01T12:00:00Z</CreDtTm>
-      <BizMsgIdr>PACS009-BIZ</BizMsgIdr>
-      <MsgDefIdr>pacs.009.001.10</MsgDefIdr>
-    </GrpHdr>
-    <CdtTrfTxInf>
-      <IntrBkSttlmAmt Ccy="USD">2500</IntrBkSttlmAmt>
-      <IntrBkSttlmDt>2024-01-03</IntrBkSttlmDt>
-      <InstgAgt><FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId></InstgAgt>
-      <InstdAgt><FinInstnId><BICFI>MARKDEFF</BICFI></FinInstnId></InstdAgt>
-      <DbtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></DbtrAcct>
-      <CdtrAcct><Id><IBAN>GB33BUKB20201555555555</IBAN></Id></CdtrAcct>
-      <Purp><Cd>SECU</Cd></Purp>
-    </CdtTrfTxInf>
-  </FICdtTrf>
-</Document>
-"#;
-
-    const SAMPLE_PACS009_ENVELOPE_XML: &str = r#"
-<DataEnvelope xmlns="urn:sample:iso">
-  <Body>
-    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
-      <BizMsgIdr>BAH-PACS009-1</BizMsgIdr>
-      <MsgDefIdr>pacs.009.001.10</MsgDefIdr>
-      <CreDt>2025-11-12T09:34:09Z</CreDt>
-    </AppHdr>
-    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.009.001.10">
-      <FICdtTrf>
-        <GrpHdr>
-          <InstgAgt><FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId></InstgAgt>
-          <InstdAgt><FinInstnId><BICFI>MARKDEFF</BICFI></FinInstnId></InstdAgt>
-        </GrpHdr>
-        <CdtTrfTxInf>
-          <IntrBkSttlmAmt Ccy="USD">2500</IntrBkSttlmAmt>
-          <IntrBkSttlmDt>2024-01-03</IntrBkSttlmDt>
-          <DbtrAcct><Id><Othr><Id>GB82WEST12345698765432</Id></Othr></Id></DbtrAcct>
-          <CdtrAcct><Id><IBAN>GB33BUKB20201555555555</IBAN></Id></CdtrAcct>
-          <Purp><Cd>SECU</Cd></Purp>
-        </CdtTrfTxInf>
-      </FICdtTrf>
-    </Document>
-  </Body>
-</DataEnvelope>
-"#;
-
-    const SAMPLE_PACS002_STATUS_XML: &str = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
-  <FIToFIPmtStsRpt>
-    <GrpHdr>
-      <MsgId>ISO-PACS002-STATUS</MsgId>
-      <CreDtTm>2025-11-11T09:35:15.671Z</CreDtTm>
-    </GrpHdr>
-    <OrgnlGrpInfAndSts>
-      <OrgnlMsgId>ISO-SAMPLE-008</OrgnlMsgId>
-      <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
-      <OrgnlCreDtTm>2025-11-11T09:34:09</OrgnlCreDtTm>
-      <OrgnlNbOfTxs>1</OrgnlNbOfTxs>
-      <GrpSts>ACSP</GrpSts>
-    </OrgnlGrpInfAndSts>
-    <TxInfAndSts>
-      <StsId>ISO-PACS002-STATUS</StsId>
-      <OrgnlInstrId>SAMPLE-INSTR-008</OrgnlInstrId>
-      <OrgnlEndToEndId>SAMPLE-E2E-008</OrgnlEndToEndId>
-      <OrgnlTxId>SAMPLE-TX-008</OrgnlTxId>
-      <TxSts>ACSP</TxSts>
-      <AcctSvcrRef>6762</AcctSvcrRef>
-      <InstgAgt><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></InstgAgt>
-      <InstdAgt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></InstdAgt>
-      <OrgnlTxRef>
-        <IntrBkSttlmAmt Ccy="USD">1400</IntrBkSttlmAmt>
-        <IntrBkSttlmDt>2025-11-11</IntrBkSttlmDt>
-        <PmtTpInf>
-          <ClrChanl>RTNS</ClrChanl>
-          <SvcLvl><Prtry>0100</Prtry></SvcLvl>
-          <LclInstrm><Prtry>CTAA</Prtry></LclInstrm>
-          <CtgyPurp><Prtry>005</Prtry></CtgyPurp>
-        </PmtTpInf>
-        <Purp><Prtry>005</Prtry></Purp>
-      </OrgnlTxRef>
-    </TxInfAndSts>
-  </FIToFIPmtStsRpt>
-</Document>
-"#;
-
-    const SAMPLE_PACS002_AUTH_XML: &str = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
-  <FIToFIPmtStsRpt>
-    <GrpHdr>
-      <MsgId>ISO-PACS002-AUTH</MsgId>
-      <CreDtTm>2025-11-11T09:35:15.671Z</CreDtTm>
-    </GrpHdr>
-    <OrgnlGrpInfAndSts>
-      <OrgnlMsgId>ISO-SAMPLE-008</OrgnlMsgId>
-      <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
-      <OrgnlCreDtTm>2025-11-11T09:34:09</OrgnlCreDtTm>
-      <OrgnlNbOfTxs>1</OrgnlNbOfTxs>
-    </OrgnlGrpInfAndSts>
-    <TxInfAndSts>
-      <StsId>ISO-PACS002-AUTH</StsId>
-      <OrgnlInstrId>SAMPLE-INSTR-008</OrgnlInstrId>
-      <OrgnlEndToEndId>SAMPLE-E2E-008</OrgnlEndToEndId>
-      <OrgnlTxId>SAMPLE-TX-008</OrgnlTxId>
-      <AcctSvcrRef>7001</AcctSvcrRef>
-      <OrgnlTxRef>
-        <IntrBkSttlmAmt Ccy="USD">1400</IntrBkSttlmAmt>
-        <IntrBkSttlmDt>2025-11-11</IntrBkSttlmDt>
-      </OrgnlTxRef>
-    </TxInfAndSts>
-  </FIToFIPmtStsRpt>
-</Document>
-"#;
-
-    const SAMPLE_CAMT052_XML: &str = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08">
-  <BkToCstmrAcctRpt>
-    <GrpHdr>
-      <MsgId>RPT-460052</MsgId>
-      <CreDtTm>2025-11-10T15:17:49.578Z</CreDtTm>
-    </GrpHdr>
-    <Rpt>
-      <Id>RPT-460052</Id>
-      <ElctrncSeqNb>531</ElctrncSeqNb>
-      <CreDtTm>2025-11-10T15:17:49.580Z</CreDtTm>
-      <Acct>
-        <Id><Othr><Id>ALTACCOUNT</Id></Othr></Id>
-        <Ccy>USD</Ccy>
-        <Ownr>
-          <Id><OrgId><Othr><Id>OWNER001</Id><SchmeNm><Prtry>PCOD</Prtry></SchmeNm></Othr></OrgId></Id>
-        </Ownr>
-      </Acct>
-      <Bal>
-        <Tp><CdOrPrtry><Cd>CLBD</Cd></CdOrPrtry></Tp>
-        <Amt Ccy="USD">1000.00</Amt>
-        <CdtDbtInd>DBIT</CdtDbtInd>
-        <Dt><Dt>2025-11-06</Dt></Dt>
-      </Bal>
-      <TxsSummry>
-        <TtlNtries>
-          <NbOfNtries>41</NbOfNtries>
-          <Sum>1011323.14</Sum>
-          <TtlNetNtry><Amt>991491.14</Amt><CdtDbtInd>DBIT</CdtDbtInd></TtlNetNtry>
-        </TtlNtries>
-        <TtlCdtNtries><NbOfNtries>21</NbOfNtries><Sum>9916.00</Sum></TtlCdtNtries>
-        <TtlDbtNtries><NbOfNtries>20</NbOfNtries><Sum>1001407.14</Sum></TtlDbtNtries>
-      </TxsSummry>
-      <AddtlRptInf>/SESSIONID/6761</AddtlRptInf>
-    </Rpt>
-  </BkToCstmrAcctRpt>
-</Document>
-"#;
-
-    const SAMPLE_CAMT056_XML: &str = r#"
-<DataEnvelope xmlns="urn:sample:iso">
-  <Body>
-    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
-      <Fr><FIId><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></Fr>
-      <To><FIId><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></To>
-      <BizMsgIdr>ISO-CAMT056-ASSIGN</BizMsgIdr>
-      <MsgDefIdr>camt.056.001.08</MsgDefIdr>
-      <BizSvc>IPS</BizSvc>
-      <CreDt>2025-11-07T16:27:33Z</CreDt>
-      <Sgntr><SignedInfo><SignatureMethod>sample</SignatureMethod></SignedInfo><SignatureValue>ignored</SignatureValue></Sgntr>
-    </AppHdr>
-    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.056.001.08">
-      <FIToFIPmtCxlReq>
-        <Assgnmt>
-          <Id>ISO-CAMT056-ASSIGN</Id>
-          <Assgnr><Agt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></Agt></Assgnr>
-          <Assgne><Agt><FinInstnId><ClrSysMmbId><MmbId>PAYFASTX</MmbId></ClrSysMmbId></FinInstnId></Agt></Assgne>
-          <CreDtTm>2025-11-07T16:27:33Z</CreDtTm>
-        </Assgnmt>
-        <Case>
-          <Id>ISO-CAMT056-ASSIGN</Id>
-          <Cretr><Agt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></Agt></Cretr>
-        </Case>
-        <Undrlyg>
-          <TxInf>
-            <OrgnlGrpInf>
-              <OrgnlMsgId>ISO-SAMPLE-008</OrgnlMsgId>
-              <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
-              <OrgnlCreDtTm>2025-11-07T16:13:08.557</OrgnlCreDtTm>
-            </OrgnlGrpInf>
-            <OrgnlIntrBkSttlmDt>2025-11-07</OrgnlIntrBkSttlmDt>
-            <Assgnr><Agt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></Agt></Assgnr>
-            <Assgne><Agt><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></Agt></Assgne>
-          </TxInf>
-        </Undrlyg>
-      </FIToFIPmtCxlReq>
-    </Document>
-  </Body>
-</DataEnvelope>
-"#;
-
+    const SAMPLE_PACS008_XML: &str = include_str!("assets/text_v1/pacs008_sample.xml");
+    const SAMPLE_PACS004_XML: &str = include_str!("assets/text_v1/pacs004_sample.xml");
+    const SAMPLE_PACS009_XML: &str = include_str!("assets/text_v1/pacs009_sample.xml");
+    const SAMPLE_PACS009_ENVELOPE_XML: &str = include_str!("assets/text_v1/pacs009_envelope.xml");
+    const SAMPLE_PACS002_STATUS_XML: &str = include_str!("assets/text_v1/pacs002_status.xml");
+    const SAMPLE_PACS002_AUTH_XML: &str = include_str!("assets/text_v1/pacs002_auth.xml");
+    const SAMPLE_CAMT052_XML: &str = include_str!("assets/text_v1/camt052_sample.xml");
+    const SAMPLE_CAMT056_XML: &str = include_str!("assets/text_v1/camt056_sample.xml");
     fn assert_validated(message_type: &str, xml: &str) {
         reset();
         msg_parse(message_type, xml.as_bytes())
@@ -5076,7 +4244,6 @@ mod tests {
         let failure = take_validation_failure();
         assert!(valid, "validation failed: {failure:?}");
     }
-
     fn generated_sample(message_marker: &str) -> String {
         let needle = format!("<!-- {message_marker} -->");
         let all = GENERATED_MD;
@@ -5093,7 +4260,6 @@ mod tests {
             .unwrap_or_else(|| panic!("closing fence missing for {message_marker}"));
         after_fence[..end].trim().to_owned()
     }
-
     #[test]
     fn msg_create_and_validate() {
         reset();
@@ -5101,7 +4267,6 @@ mod tests {
         populate_pacs008_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn pacs008_requires_creditor_agent() {
         reset();
@@ -5110,7 +4275,6 @@ mod tests {
         msg_remove("CdtrAgt");
         assert!(!msg_validate());
     }
-
     #[test]
     fn pacs008_requires_debtor_account() {
         reset();
@@ -5119,7 +4283,6 @@ mod tests {
         msg_remove("DbtrAcct");
         assert!(!msg_validate());
     }
-
     #[test]
     fn msg_validate_rejects_non_numeric_amount() {
         reset();
@@ -5128,7 +4291,6 @@ mod tests {
         msg_set("IntrBkSttlmAmt", b"not-a-number");
         assert!(!msg_validate());
     }
-
     #[test]
     fn msg_validate_rejects_invalid_iban() {
         reset();
@@ -5137,7 +4299,6 @@ mod tests {
         msg_set("DbtrAcct", b"GB82WEST12345698765433");
         assert!(!msg_validate());
     }
-
     #[test]
     fn take_validation_error_reports_identifier_failure() {
         reset();
@@ -5155,7 +4316,6 @@ mod tests {
         }
         assert!(take_validation_error().is_none(), "error should be drained");
     }
-
     #[test]
     fn msg_validate_accepts_valid_iban() {
         reset();
@@ -5163,7 +4323,6 @@ mod tests {
         populate_pacs008_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn pacs008_validates_proxy_identifiers() {
         reset();
@@ -5181,7 +4340,6 @@ mod tests {
             Some(&b"1233214568521"[..])
         );
     }
-
     #[test]
     fn pacs008_rejects_empty_proxy_identifier() {
         reset();
@@ -5198,14 +4356,12 @@ mod tests {
             other => panic!("unexpected validation failure: {other:?}"),
         }
     }
-
     #[test]
     fn head001_requires_core_fields() {
         reset();
         msg_create("head.001.001.03");
         populate_head001_minimal();
         assert!(msg_validate(), "baseline header should validate");
-
         msg_remove("AppHdr/CreDt");
         assert!(!msg_validate(), "missing CreDt must fail validation");
         let err = take_validation_error().expect("validation error captured");
@@ -5214,7 +4370,6 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
-
     #[test]
     fn msg_validate_rejects_invalid_bic() {
         reset();
@@ -5223,7 +4378,6 @@ mod tests {
         msg_set("DbtrAgt", b"deutdeff");
         assert!(!msg_validate());
     }
-
     #[test]
     fn msg_validate_accepts_valid_bic() {
         reset();
@@ -5231,7 +4385,6 @@ mod tests {
         populate_pacs008_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn msg_validate_rejects_invalid_isin() {
         reset();
@@ -5240,7 +4393,6 @@ mod tests {
         msg_set("SctiesLeg/FinInstrmId", b"INVALID123456");
         assert!(!msg_validate());
     }
-
     #[test]
     fn msg_validate_accepts_cusip_instrument() {
         reset();
@@ -5249,7 +4401,6 @@ mod tests {
         msg_set("SctiesLeg/FinInstrmId", b"037833100");
         assert!(msg_validate());
     }
-
     #[test]
     fn parse_message_reports_invalid_instrument() {
         reset();
@@ -5263,15 +4414,12 @@ mod tests {
             MsgError::InvalidInstrument { field } if field == "SctiesLeg/FinInstrmId"
         ));
     }
-
     #[test]
     fn validate_identifier_helpers() {
         assert!(validate_identifier(IdentifierKind::Isin, "US0378331005"));
         assert!(!validate_identifier(IdentifierKind::Isin, "US0378331004"));
-
         assert!(validate_identifier(IdentifierKind::Cusip, "037833100"));
         assert!(!validate_identifier(IdentifierKind::Cusip, "03783310X"));
-
         assert!(validate_identifier(
             IdentifierKind::Lei,
             "5493001KJTIIGC8Y1R12"
@@ -5280,13 +4428,10 @@ mod tests {
             IdentifierKind::Lei,
             "5493001KJTIIGC8Y1R13"
         ));
-
         assert!(validate_identifier(IdentifierKind::Bic, "DEUTDEFF"));
         assert!(!validate_identifier(IdentifierKind::Bic, "deutDEFF"));
-
         assert!(validate_identifier(IdentifierKind::Mic, "XNAS"));
         assert!(!validate_identifier(IdentifierKind::Mic, "1NAS"));
-
         assert!(validate_identifier(
             IdentifierKind::Iban,
             "GB82WEST12345698765432"
@@ -5308,18 +4453,15 @@ mod tests {
             IdentifierKind::Iban,
             "ZZ82WEST12345698765432"
         ));
-
         assert!(validate_identifier(IdentifierKind::Currency, "USD"));
         assert!(!validate_identifier(IdentifierKind::Currency, "ZZZ"));
     }
-
     #[test]
     fn validate_instrument_identifier_helper() {
         assert!(validate_instrument_identifier("US0378331005"));
         assert!(validate_instrument_identifier("037833100"));
         assert!(!validate_instrument_identifier("INVALID"));
     }
-
     #[test]
     fn camt053_requires_account_id() {
         reset();
@@ -5328,7 +4470,6 @@ mod tests {
         msg_remove("Stmt/Acct/Id");
         assert!(!msg_validate());
     }
-
     #[test]
     fn camt053_rejects_invalid_iban() {
         reset();
@@ -5337,7 +4478,6 @@ mod tests {
         msg_set("Stmt/Acct/Id", b"GB82WEST12345698765433");
         assert!(!msg_validate());
     }
-
     #[test]
     fn camt053_rejects_non_numeric_balance() {
         reset();
@@ -5346,7 +4486,6 @@ mod tests {
         msg_set("Stmt/Bal[0]/Amt", b"not-number");
         assert!(!msg_validate());
     }
-
     #[test]
     fn camt053_accepts_valid_message() {
         reset();
@@ -5354,7 +4493,6 @@ mod tests {
         populate_camt053_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn camt052_accepts_valid_message() {
         reset();
@@ -5362,7 +4500,6 @@ mod tests {
         populate_camt052_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn pain001_accepts_valid_message() {
         reset();
@@ -5370,7 +4507,6 @@ mod tests {
         populate_pain001_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn pain001_rejects_missing_credit_transfer() {
         reset();
@@ -5379,7 +4515,6 @@ mod tests {
         msg_remove("PmtInf[0]/CdtTrfTxInf[0]/Amt");
         assert!(!msg_validate());
     }
-
     #[test]
     fn pacs009_accepts_valid_message() {
         reset();
@@ -5387,7 +4522,6 @@ mod tests {
         populate_pacs009_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn pacs009_rejects_missing_agents() {
         reset();
@@ -5396,7 +4530,6 @@ mod tests {
         msg_remove("InstgAgt");
         assert!(!msg_validate());
     }
-
     #[test]
     fn pacs004_accepts_valid_message() {
         reset();
@@ -5404,7 +4537,6 @@ mod tests {
         populate_pacs004_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn pacs028_accepts_valid_message() {
         reset();
@@ -5412,7 +4544,6 @@ mod tests {
         populate_pacs028_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn pacs029_accepts_valid_message() {
         reset();
@@ -5420,7 +4551,6 @@ mod tests {
         populate_pacs029_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn pain002_accepts_valid_message() {
         reset();
@@ -5428,7 +4558,6 @@ mod tests {
         populate_pain002_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn pacs007_accepts_valid_message() {
         reset();
@@ -5436,7 +4565,6 @@ mod tests {
         populate_pacs007_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn camt056_accepts_valid_message() {
         reset();
@@ -5444,7 +4572,6 @@ mod tests {
         populate_camt056_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn pacs002_accepts_valid_message() {
         reset();
@@ -5453,7 +4580,6 @@ mod tests {
         msg_set("TxSts", b"ACTC");
         assert!(msg_validate());
     }
-
     #[test]
     fn pacs002_accepts_missing_tx_status() {
         reset();
@@ -5461,7 +4587,6 @@ mod tests {
         msg_set("OrgnlMsgId", b"1");
         assert!(msg_validate());
     }
-
     #[test]
     fn pacs002_rejects_unknown_status() {
         reset();
@@ -5470,7 +4595,6 @@ mod tests {
         msg_set("TxSts", b"XXXX");
         assert!(!msg_validate());
     }
-
     #[test]
     fn msg_clone_copies_fields() {
         reset();
@@ -5479,7 +4603,6 @@ mod tests {
         msg_clone();
         assert_eq!(msg_get("field").as_deref(), Some(&b"value"[..]));
     }
-
     #[test]
     fn msg_set_and_get() {
         reset();
@@ -5487,7 +4610,6 @@ mod tests {
         msg_set("field", b"value");
         assert_eq!(msg_get("field").as_deref(), Some(&b"value"[..]));
     }
-
     #[test]
     fn msg_clear_removes_all() {
         reset();
@@ -5496,7 +4618,6 @@ mod tests {
         msg_clear();
         assert!(msg_get("field").is_none());
     }
-
     #[test]
     fn msg_add_creates_incrementing_keys() {
         reset();
@@ -5507,7 +4628,6 @@ mod tests {
         assert!(msg_get("Entry[1]").is_some());
         assert!(msg_get("Entry[2]").is_none());
     }
-
     #[test]
     fn msg_remove_deletes_field() {
         reset();
@@ -5516,7 +4636,6 @@ mod tests {
         msg_remove("field");
         assert!(msg_get("field").is_none());
     }
-
     #[test]
     fn msg_clone_pushes_copy_on_stack() {
         reset();
@@ -5531,7 +4650,6 @@ mod tests {
             assert_eq!(stack[1].fields.get("MsgId").unwrap(), b"2");
         });
     }
-
     #[test]
     fn msg_parse_and_serialize_roundtrip() {
         reset();
@@ -5542,7 +4660,6 @@ mod tests {
             b"field=value\nfoo=bar".to_vec()
         );
     }
-
     #[test]
     fn parse_message_materialises_fields() {
         reset();
@@ -5556,7 +4673,6 @@ mod tests {
         assert_eq!(parsed.field_text("IntrBkSttlmCcy"), Some("USD"));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_message_validation_failure() {
         reset();
@@ -5564,43 +4680,10 @@ mod tests {
         assert!(matches!(err, MsgError::MissingField("IntrBkSttlmCcy")));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_head001_envelope_preserves_apphdr_fields() {
         reset();
-        let xml = r#"
-<DataPDU>
-  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.03">
-    <Fr>
-      <FIId>
-        <FinInstnId>
-          <BICFI>DEUTDEFF</BICFI>
-        </FinInstnId>
-      </FIId>
-    </Fr>
-    <To>
-      <FIId>
-        <FinInstnId>
-          <ClrSysMmbId>
-            <MmbId>654321</MmbId>
-          </ClrSysMmbId>
-        </FinInstnId>
-      </FIId>
-    </To>
-    <BizMsgIdr>HDR-123</BizMsgIdr>
-    <MsgDefIdr>pacs.008.001.08</MsgDefIdr>
-    <BizSvc>swift.cbprplus.02</BizSvc>
-    <CreDt>2025-01-01T12:00:00Z</CreDt>
-  </AppHdr>
-  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
-    <FIToFICstmrCdtTrf>
-      <CdtTrfTxInf>
-        <IntrBkSttlmAmt Ccy="USD">100</IntrBkSttlmAmt>
-      </CdtTrfTxInf>
-    </FIToFICstmrCdtTrf>
-  </Document>
-</DataPDU>
-        "#;
+        let xml = include_str!("assets/text_v1/head001_envelope.xml");
         let parsed =
             parse_message("head.001.001.03", xml.as_bytes()).expect("header envelope parses");
         assert_eq!(parsed.message_type(), "head.001.001.03");
@@ -5619,47 +4702,10 @@ mod tests {
         );
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn pacs008_accepts_proxy_accounts_without_iban() {
         reset();
-        let xml = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
-  <FIToFICstmrCdtTrf>
-    <GrpHdr>
-      <MsgId>ISO-PROXY</MsgId>
-    </GrpHdr>
-    <CdtTrfTxInf>
-      <IntrBkSttlmAmt Ccy="USD">42</IntrBkSttlmAmt>
-      <IntrBkSttlmDt>2025-02-02</IntrBkSttlmDt>
-      <DbtrAcct>
-        <Prxy>
-          <Id>proxy-debtor</Id>
-        </Prxy>
-      </DbtrAcct>
-      <CdtrAcct>
-        <Prxy>
-          <Id>proxy-creditor</Id>
-        </Prxy>
-      </CdtrAcct>
-      <DbtrAgt>
-        <FinInstnId>
-          <ClrSysMmbId>
-            <MmbId>DBTRCODE</MmbId>
-          </ClrSysMmbId>
-        </FinInstnId>
-      </DbtrAgt>
-      <CdtrAgt>
-        <FinInstnId>
-          <ClrSysMmbId>
-            <MmbId>CDTRCODE</MmbId>
-          </ClrSysMmbId>
-        </FinInstnId>
-      </CdtrAgt>
-    </CdtTrfTxInf>
-  </FIToFICstmrCdtTrf>
-</Document>
-"#;
+        let xml = include_str!("assets/text_v1/pacs008_proxy.xml");
         let parsed =
             parse_message("pacs.008.001.08", xml.as_bytes()).expect("proxy-only pacs.008 parses");
         assert_eq!(parsed.field_text("DbtrAcct/Prxy/Id"), Some("proxy-debtor"));
@@ -5670,13 +4716,11 @@ mod tests {
         assert!(parsed.field_text("DbtrAcct").is_none());
         assert!(parsed.field_text("CdtrAcct").is_none());
     }
-
     #[test]
     fn msg_validate_none() {
         reset();
         assert!(!msg_validate());
     }
-
     #[test]
     fn versioned_pacs008_supported() {
         reset();
@@ -5684,7 +4728,6 @@ mod tests {
         populate_pacs008_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn versioned_pacs002_supported() {
         reset();
@@ -5693,7 +4736,6 @@ mod tests {
         msg_set("TxSts", b"ACSP");
         assert!(msg_validate());
     }
-
     #[test]
     fn versioned_camt053_supported() {
         reset();
@@ -5701,7 +4743,6 @@ mod tests {
         populate_camt053_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn versioned_camt054_supported() {
         reset();
@@ -5714,7 +4755,6 @@ mod tests {
         msg_set("Ntfctn/Ntry[0]/CdtDbtInd", b"CRDT");
         assert!(msg_validate());
     }
-
     #[test]
     fn versioned_camt052_supported() {
         reset();
@@ -5722,7 +4762,6 @@ mod tests {
         populate_camt052_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn parse_sample_pacs008() {
         assert_validated("pacs.008.001.08", SAMPLE_PACS008_XML);
@@ -5734,7 +4773,6 @@ mod tests {
             Some(b"1400.00".as_ref())
         );
     }
-
     #[test]
     fn iso_xsd_document_roots_cover_supported_xml_families() {
         for (message_type, root) in [
@@ -5767,46 +4805,32 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_real_iso20022_rejects_mismatched_xsd_document_root() {
         reset();
-        let xml = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
-  <FIToFICstmrCdtTrf>
-    <GrpHdr><MsgId>WRONG-ROOT</MsgId></GrpHdr>
-  </FIToFICstmrCdtTrf>
-</Document>
-"#;
+        let xml = include_str!("assets/text_v1/pacs002_wrong_root.xml");
         let err = parse_message("pacs.002.001.10", xml.as_bytes())
             .expect_err("pacs.002 must not accept pacs.008 document root");
         assert!(matches!(err, MsgError::UnknownMessageType));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_missing_xsd_document_root() {
         reset();
-        let xml = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
-</Document>
-"#;
+        let xml = include_str!("assets/text_v1/pacs002_missing_root.xml");
         let err = parse_message("pacs.002.001.10", xml.as_bytes())
             .expect_err("real pacs.002 XML must carry its XSD document root");
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_requested_version_drift() {
         reset();
         let err = parse_message("pacs.008.001.10", SAMPLE_PACS008_XML.as_bytes())
             .expect_err("exact requested MDR version must match payload declarations");
-
         assert!(matches!(err, MsgError::UnknownMessageType));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_header_document_definition_drift() {
         reset();
@@ -5816,11 +4840,9 @@ mod tests {
         );
         let err = parse_message("pacs.008", xml.as_bytes())
             .expect_err("BAH MsgDefIdr must match Document XSD namespace exactly");
-
         assert!(matches!(err, MsgError::UnknownMessageType));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_spoofed_document_namespace_suffix() {
         reset();
@@ -5830,11 +4852,9 @@ mod tests {
         );
         let err = parse_message("pacs.008", xml.as_bytes())
             .expect_err("Document namespace must use the exact ISO 20022 XSD prefix");
-
         assert!(matches!(err, MsgError::UnknownMessageType));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_empty_document_namespace_definition() {
         reset();
@@ -5844,11 +4864,9 @@ mod tests {
         );
         let err = parse_message("pacs.008", xml.as_bytes())
             .expect_err("Document namespace must include a concrete message definition");
-
         assert!(matches!(err, MsgError::UnknownMessageType));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_unqualified_document_namespace() {
         reset();
@@ -5858,11 +4876,9 @@ mod tests {
         );
         let err = parse_message("pacs.008", xml.as_bytes())
             .expect_err("Document must be bound to the ISO 20022 XSD namespace");
-
         assert!(matches!(err, MsgError::UnknownMessageType));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_accepts_prefixed_iso_document_namespace() {
         reset();
@@ -5876,12 +4892,10 @@ mod tests {
             .replace("</Document>", "</pacs:Document>");
         let parsed = parse_message("pacs.002", xml.as_bytes())
             .expect("prefixed Document and payload root should resolve to ISO namespace");
-
         assert_eq!(parsed.message_type(), "pacs.002");
         assert_eq!(parsed.field_text("MsgId"), Some("ISO-PACS002-STATUS"));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_prefixed_document_namespace_spoofing() {
         reset();
@@ -5895,11 +4909,9 @@ mod tests {
             .replace("</Document>", "</pacs:Document>");
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("prefixed Document namespace must use the ISO XSD URI");
-
         assert!(matches!(err, MsgError::UnknownMessageType));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_payload_root_namespace_spoofing() {
         reset();
@@ -5911,55 +4923,45 @@ mod tests {
             .replace("</FIToFIPmtStsRpt>", "</evil:FIToFIPmtStsRpt>");
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("Document payload root must resolve to the ISO XSD namespace");
-
         assert!(matches!(err, MsgError::UnknownMessageType));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_mismatched_closing_tag() {
         reset();
         let xml = SAMPLE_PACS002_STATUS_XML.replace("</GrpHdr>", "</WrongGrpHdr>");
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("mismatched closing tags must fail real ISO XML parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_extra_closing_tag() {
         reset();
         let xml = format!("{SAMPLE_PACS002_STATUS_XML}</Document>");
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("extra closing tags must fail real ISO XML parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_attributed_closing_tag() {
         reset();
         let xml = SAMPLE_PACS002_STATUS_XML.replace("</GrpHdr>", r#"</GrpHdr attr="x">"#);
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("closing tags with attributes must fail real ISO XML parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_unclosed_document_tag() {
         reset();
         let xml = SAMPLE_PACS002_STATUS_XML.replace("</Document>", "");
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("unclosed Document tags must fail real ISO XML parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_accepts_single_quoted_namespace_attribute() {
         reset();
@@ -5969,12 +4971,10 @@ mod tests {
         );
         let parsed = parse_message("pacs.002", xml.as_bytes())
             .expect("single-quoted XML attributes are well-formed");
-
         assert_eq!(parsed.message_type(), "pacs.002");
         assert_eq!(parsed.field_text("MsgId"), Some("ISO-PACS002-STATUS"));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_unquoted_namespace_attribute() {
         reset();
@@ -5984,11 +4984,9 @@ mod tests {
         );
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("unquoted XML namespace attributes must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_unterminated_attribute_value() {
         reset();
@@ -5998,11 +4996,9 @@ mod tests {
         );
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("unterminated XML attributes must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_duplicate_namespace_attribute() {
         reset();
@@ -6012,11 +5008,9 @@ mod tests {
         );
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("duplicate XML attributes must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_malformed_trailing_attribute() {
         reset();
@@ -6026,11 +5020,9 @@ mod tests {
         );
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("malformed trailing XML attributes must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_decodes_xml_entities_in_text_and_attributes() {
         reset();
@@ -6045,7 +5037,6 @@ mod tests {
             );
         let parsed = parse_message("pacs.008", xml.as_bytes())
             .expect("valid XML character references should parse");
-
         assert_eq!(
             parsed.field_text("AppHdr/BizMsgIdr"),
             Some("ISO-SAMPLE&008")
@@ -6053,7 +5044,6 @@ mod tests {
         assert_eq!(parsed.field_text("IntrBkSttlmCcy"), Some("USD"));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_unknown_xml_entity_reference() {
         reset();
@@ -6063,11 +5053,9 @@ mod tests {
         );
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("unknown XML entities must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_unterminated_xml_entity_reference() {
         reset();
@@ -6077,11 +5065,9 @@ mod tests {
         );
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("unterminated XML entities must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_invalid_numeric_xml_character_reference() {
         reset();
@@ -6091,11 +5077,9 @@ mod tests {
         );
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("invalid XML numeric character references must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_raw_invalid_xml_character_in_text() {
         reset();
@@ -6105,11 +5089,9 @@ mod tests {
         );
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("raw invalid XML characters in text must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_raw_invalid_xml_character_in_attribute() {
         reset();
@@ -6119,11 +5101,9 @@ mod tests {
         );
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("raw invalid XML characters in attributes must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_raw_less_than_in_attribute_value() {
         reset();
@@ -6133,11 +5113,9 @@ mod tests {
         );
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("raw less-than characters in XML attributes must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_accepts_xml_declaration_and_well_formed_comment() {
         reset();
@@ -6145,12 +5123,10 @@ mod tests {
             format!("<?xml version=\"1.0\"?>\n<!--valid comment-->\n{SAMPLE_PACS002_STATUS_XML}");
         let parsed = parse_message("pacs.002", xml.as_bytes())
             .expect("well-formed XML declaration and comments should parse");
-
         assert_eq!(parsed.message_type(), "pacs.002");
         assert_eq!(parsed.field_text("MsgId"), Some("ISO-PACS002-STATUS"));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_concatenates_text_split_by_comment() {
         reset();
@@ -6160,33 +5136,27 @@ mod tests {
         );
         let parsed = parse_message("pacs.002", xml.as_bytes())
             .expect("comments inside simple content should not overwrite text chunks");
-
         assert_eq!(parsed.field_text("MsgId"), Some("ISO-PACS002-STATUS"));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_text_before_child_element() {
         reset();
         let xml = SAMPLE_PACS002_STATUS_XML.replace("<GrpHdr>", "<GrpHdr>mixed");
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("mixed content before child elements must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_text_after_child_element() {
         reset();
         let xml = SAMPLE_PACS002_STATUS_XML.replace("</MsgId>", "</MsgId>mixed");
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("mixed content after child elements must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_content_outside_single_root() {
         for (label, xml) in [
@@ -6204,45 +5174,37 @@ mod tests {
                 Ok(_) => panic!("{label} outside the ISO XML root must fail parsing"),
                 Err(err) => err,
             };
-
             assert!(matches!(err, MsgError::InvalidFormat), "{label}: {err:?}");
             assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
         }
     }
-
     #[test]
     fn parse_real_iso20022_rejects_unterminated_comment() {
         reset();
         let xml = SAMPLE_PACS002_STATUS_XML.replace("<GrpHdr>", "<!--unterminated><GrpHdr>");
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("unterminated comments must fail real ISO XML parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_malformed_comment_body() {
         reset();
         let xml = format!("<!--bad--comment-->\n{SAMPLE_PACS002_STATUS_XML}");
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("comments containing double hyphen must fail real ISO XML parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_malformed_processing_instruction() {
         reset();
         let xml = format!("<?bad processing>\n{SAMPLE_PACS002_STATUS_XML}");
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("unterminated processing instructions must fail real ISO XML parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_unsupported_doctype_declaration() {
         reset();
@@ -6250,11 +5212,9 @@ mod tests {
             format!("<!DOCTYPE Document [<!ENTITY x \"boom\">]>\n{SAMPLE_PACS002_STATUS_XML}");
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("DOCTYPE declarations must fail real ISO XML parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_unsupported_cdata_section() {
         reset();
@@ -6264,11 +5224,9 @@ mod tests {
         );
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("CDATA must fail real ISO XML parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_malformed_document_qname() {
         reset();
@@ -6280,11 +5238,9 @@ mod tests {
             .replace("</Document>", "</pacs::Document>");
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("malformed Document QNames must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_malformed_payload_root_qname() {
         reset();
@@ -6296,11 +5252,9 @@ mod tests {
             .replace("</FIToFIPmtStsRpt>", "</pacs::FIToFIPmtStsRpt>");
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("malformed payload root QNames must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_malformed_namespace_declaration_name() {
         reset();
@@ -6310,11 +5264,9 @@ mod tests {
         );
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("malformed namespace declaration names must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_rejects_invalid_element_name_start() {
         reset();
@@ -6324,17 +5276,14 @@ mod tests {
         );
         let err = parse_message("pacs.002", xml.as_bytes())
             .expect_err("unsupported XML element names must fail parsing");
-
         assert!(matches!(err, MsgError::InvalidFormat));
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_real_iso20022_allows_canonical_family_request_with_consistent_version() {
         reset();
         let parsed = parse_message("pacs.008", SAMPLE_PACS008_XML.as_bytes())
             .expect("canonical family requests defer exact MDR allowlists to profiles");
-
         assert_eq!(parsed.message_type(), "pacs.008");
         assert_eq!(
             parsed.field_text("AppHdr/MsgDefIdr"),
@@ -6342,7 +5291,6 @@ mod tests {
         );
         assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
     }
-
     #[test]
     fn parse_sample_pacs009() {
         assert_validated("pacs.009.001.10", SAMPLE_PACS009_XML);
@@ -6366,7 +5314,6 @@ mod tests {
         );
         assert_eq!(msg_get("Purp").as_deref(), Some(b"SECU".as_ref()));
     }
-
     #[test]
     fn parse_sample_pacs009_envelope() {
         assert_validated("pacs.009.001.10", SAMPLE_PACS009_ENVELOPE_XML);
@@ -6393,7 +5340,6 @@ mod tests {
             Some(b"GB33BUKB20201555555555".as_ref())
         );
     }
-
     #[test]
     fn parse_sample_pacs002_auth_allows_missing_txsts() {
         assert_validated("pacs.002.001.10", SAMPLE_PACS002_AUTH_XML);
@@ -6406,27 +5352,14 @@ mod tests {
             Some(b"ISO-SAMPLE-008".as_ref())
         );
     }
-
     #[test]
     fn parse_sese024_status_advice_lifecycle_fields() {
-        let xml = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:sese.024.001.10">
-  <SctiesSttlmTxStsAdvc>
-    <TxId>SETTLEMENT-123</TxId>
-    <SttlmTxSts>
-      <Sts><Cd>SETT</Cd></Sts>
-      <Rsn><Cd>NARR</Cd></Rsn>
-      <AddtlInf>settled in CSD</AddtlInf>
-    </SttlmTxSts>
-  </SctiesSttlmTxStsAdvc>
-</Document>
-"#;
+        let xml = include_str!("assets/text_v1/sese024_status.xml");
         assert_validated("sese.024.001.10", xml);
         assert_eq!(msg_get("TxId").as_deref(), Some(b"SETTLEMENT-123".as_ref()));
         assert_eq!(msg_get("SttlmSts").as_deref(), Some(b"SETT".as_ref()));
         assert_eq!(msg_get("RsnCd").as_deref(), Some(b"NARR".as_ref()));
     }
-
     #[test]
     fn parse_sample_camt052_allows_other_account_id() {
         assert_validated("camt.052.001.08", SAMPLE_CAMT052_XML);
@@ -6435,7 +5368,6 @@ mod tests {
             Some(b"ALTACCOUNT".as_ref())
         );
     }
-
     #[test]
     fn parse_sample_camt056_tracks_assignment() {
         assert_validated("camt.056.001.08", SAMPLE_CAMT056_XML);
@@ -6448,7 +5380,6 @@ mod tests {
             Some(b"ISO-SAMPLE-008".as_ref())
         );
     }
-
     #[test]
     fn camt056_fixture_parses_cancellation_fields() {
         assert_validated("camt.056.001.08", CAMT056_FIXTURE);
@@ -6469,7 +5400,6 @@ mod tests {
             Some(b"customer requested recall".as_ref())
         );
     }
-
     #[test]
     fn camt056_001_09_fixture_parses_cancellation_fields() {
         assert_validated("camt.056.001.09", CAMT056_001_09_FIXTURE);
@@ -6490,36 +5420,9 @@ mod tests {
             Some(b"customer requested recall".as_ref())
         );
     }
-
     #[test]
     fn parse_camt029_resolution_of_investigation() {
-        let xml = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.029.001.09">
-  <RsltnOfInvstgtn>
-    <Assgnmt>
-      <Id>IROHA-CAMT029-ORIGINAL-1</Id>
-      <CreDtTm>2025-11-12T09:34:09Z</CreDtTm>
-    </Assgnmt>
-    <Sts>
-      <Conf>CNCL</Conf>
-    </Sts>
-    <CxlDtls>
-      <OrgnlGrpInf>
-        <OrgnlMsgId>ORIGINAL-1</OrgnlMsgId>
-        <OrgnlMsgNmId>pacs.009</OrgnlMsgNmId>
-      </OrgnlGrpInf>
-      <TxInfAndSts>
-        <OrgnlInstrId>tx-hash-1</OrgnlInstrId>
-        <TxCxlSts>CNCL</TxCxlSts>
-        <CxlStsRsnInf>
-          <Rsn><Prtry>CANCELLED_BY_LEDGER</Prtry></Rsn>
-          <AddtlInf>cancelled by participant request</AddtlInf>
-        </CxlStsRsnInf>
-      </TxInfAndSts>
-    </CxlDtls>
-  </RsltnOfInvstgtn>
-</Document>
-"#;
+        let xml = include_str!("assets/text_v1/camt029_resolution.xml");
         assert_validated("camt.029.001.09", xml);
         assert_eq!(
             msg_get("Assgnmt/Id").as_deref(),
@@ -6531,7 +5434,6 @@ mod tests {
             Some(b"ORIGINAL-1".as_ref())
         );
     }
-
     #[test]
     fn parse_sample_pacs004_return() {
         assert_validated("pacs.004.001.09", SAMPLE_PACS004_XML);
@@ -6556,7 +5458,6 @@ mod tests {
             Some(b"TechnicalProblem".as_ref())
         );
     }
-
     #[test]
     fn pacs004_fixture_parses_return_fields() {
         assert_validated("pacs.004.001.09", PACS004_FIXTURE);
@@ -6581,7 +5482,6 @@ mod tests {
             Some(b"AC01".as_ref())
         );
     }
-
     #[test]
     fn parse_sample_pacs002_status() {
         assert_validated("pacs.002.001.10", SAMPLE_PACS002_STATUS_XML);
@@ -6591,7 +5491,6 @@ mod tests {
         );
         assert_eq!(msg_get("TxSts").as_deref(), Some(b"ACSP".as_ref()));
     }
-
     #[test]
     fn pacs002_fixture_parses_status_fields() {
         assert_validated("pacs.002.001.10", PACS002_FIXTURE);
@@ -6610,7 +5509,6 @@ mod tests {
             Some(b"settled by fixture report".as_ref())
         );
     }
-
     #[test]
     fn parse_generated_md_pacs008() {
         let xml = generated_sample("pacs.008.001.08");
@@ -6632,7 +5530,6 @@ mod tests {
             "keys={keys:?}"
         );
     }
-
     #[test]
     fn parse_generated_md_pacs004() {
         let xml = generated_sample("pacs.004.001.09");
@@ -6659,7 +5556,6 @@ mod tests {
             "keys={keys:?}"
         );
     }
-
     #[test]
     fn parse_generated_md_pacs002() {
         let xml = generated_sample("pacs.002.001.10");
@@ -6677,7 +5573,6 @@ mod tests {
             "keys={keys:?}"
         );
     }
-
     #[test]
     fn parse_generated_md_camt052() {
         let xml = generated_sample("camt.052.001.08");
@@ -6698,7 +5593,6 @@ mod tests {
             Some(b"DBIT".as_ref())
         );
     }
-
     #[test]
     fn parse_generated_md_camt056() {
         let xml = generated_sample("camt.056.001.08");
@@ -6715,7 +5609,6 @@ mod tests {
             "keys={keys:?}"
         );
     }
-
     #[test]
     fn versioned_pacs007_supported() {
         reset();
@@ -6723,7 +5616,6 @@ mod tests {
         populate_pacs007_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn versioned_camt056_supported() {
         reset();
@@ -6731,7 +5623,6 @@ mod tests {
         populate_camt056_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn versioned_pacs004_supported() {
         reset();
@@ -6739,7 +5630,6 @@ mod tests {
         populate_pacs004_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn versioned_pacs028_supported() {
         reset();
@@ -6747,7 +5637,6 @@ mod tests {
         populate_pacs028_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn versioned_pacs029_supported() {
         reset();
@@ -6755,33 +5644,28 @@ mod tests {
         populate_pacs029_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn sese023_roundtrip_and_norito_snapshot() {
         reset();
         let schema = expected_sese023_schema();
         schema.apply_to_stack();
         assert!(msg_validate());
-
         let xml = msg_serialize("XML").expect("serialize sese.023");
         let xml_str = String::from_utf8(xml.clone()).expect("utf8");
         assert!(xml_str.contains("ISO20022 message=\"sese.023\""));
         assert!(xml_str.contains("Field path=\"SttlmTpAndAddtlParams/SctiesMvmntTp\""));
         assert!(xml_str.contains("Field path=\"Plan/Atomicity\""));
-
         let parsed = parse_message("sese.023", &xml).expect("parse sese.023");
         assert_eq!(parsed.field_text("SttlmParams/PrtlSttlmInd"), Some("NPAR"));
         assert_eq!(parsed.field_text("SttlmParams/HldInd"), Some("true"));
         let materialized =
             Sese023::from_parsed(&parsed).expect("materialize sese.023 into Norito schema");
         assert_eq!(schema, materialized);
-
         let encoded = schema.encode();
         let mut cursor = encoded.as_slice();
         let decoded = Sese023::decode(&mut cursor).expect("decode");
         assert_eq!(schema, decoded);
     }
-
     #[test]
     fn sese023_requires_movement_and_payment_qualifiers() {
         reset();
@@ -6793,7 +5677,6 @@ mod tests {
         msg_set("SttlmTpAndAddtlParams/Pmt", b"INVALID");
         assert!(!msg_validate());
     }
-
     #[test]
     fn sese023_missing_execution_order_fails() {
         reset();
@@ -6804,7 +5687,6 @@ mod tests {
         msg_set("Plan/ExecutionOrder", b"INVALID");
         assert!(!msg_validate());
     }
-
     #[test]
     fn sese023_fixture_parses_into_schema() {
         reset();
@@ -6813,7 +5695,6 @@ mod tests {
         let schema = Sese023::from_parsed(&parsed).expect("materialize sese.023 from fixture");
         assert_eq!(schema, expected_sese023_schema());
     }
-
     #[test]
     fn sese024_fixture_parses_status_advice_fields() {
         reset();
@@ -6828,7 +5709,6 @@ mod tests {
             Some("awaiting CSD matching confirmation")
         );
     }
-
     #[test]
     fn sese025_validation_and_serialization() {
         reset();
@@ -6850,7 +5730,6 @@ mod tests {
         );
         assert_eq!(parsed.field_text("SttlmParams/HldInd"), Some("false"));
     }
-
     #[test]
     fn sese025_requires_plan_fields() {
         reset();
@@ -6862,7 +5741,6 @@ mod tests {
         msg_set("Plan/Atomicity", b"INVALID");
         assert!(!msg_validate());
     }
-
     #[test]
     fn sese025_fixture_parses_into_schema() {
         reset();
@@ -6871,32 +5749,27 @@ mod tests {
         let schema = Sese025::from_parsed(&parsed).expect("materialize sese.025 from fixture");
         assert_eq!(schema, expected_sese025_schema());
     }
-
     #[test]
     fn colr012_roundtrip_and_norito_snapshot() {
         reset();
         let schema = expected_colr012_schema();
         schema.apply_to_stack();
         assert!(msg_validate());
-
         let xml = msg_serialize("XML").expect("serialize colr.012");
         let parsed = parse_message("colr.012", &xml).expect("parse colr.012");
         assert_eq!(parsed.field_text("Substitution/Haircut"), Some("50"));
         let materialized = Colr012::from_parsed(&parsed).expect("materialize colr.012 into schema");
         assert_eq!(materialized, schema);
-
         let encoded = schema.encode();
         let mut cursor = encoded.as_slice();
         let decoded = Colr012::decode(&mut cursor).expect("decode");
         assert_eq!(schema, decoded);
     }
-
     #[test]
     fn colr007_fixture_is_not_supported() {
         reset();
         assert!(parse_message("colr.007", COLR007_FIXTURE.as_bytes()).is_err());
     }
-
     #[test]
     fn colr012_fixture_parses_into_schema() {
         reset();
@@ -6905,7 +5778,6 @@ mod tests {
         let schema = Colr012::from_parsed(&parsed).expect("materialize colr.012 from fixture");
         assert_eq!(schema, expected_colr012_schema());
     }
-
     #[test]
     fn colr012_rejects_unknown_type() {
         reset();
@@ -6914,7 +5786,6 @@ mod tests {
         msg_set("Substitution/Type", b"UNEXPECTED");
         assert!(!msg_validate());
     }
-
     #[test]
     fn versioned_sese023_supported() {
         reset();
@@ -6922,7 +5793,6 @@ mod tests {
         populate_sese023_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn versioned_sese025_supported() {
         reset();
@@ -6930,7 +5800,6 @@ mod tests {
         populate_sese025_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn versioned_colr007_is_not_supported() {
         reset();
@@ -6938,7 +5807,6 @@ mod tests {
         populate_colr012_minimal();
         assert!(!msg_validate());
     }
-
     #[test]
     fn versioned_colr012_supported() {
         reset();
@@ -6946,7 +5814,6 @@ mod tests {
         populate_colr012_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn versioned_pain002_supported() {
         reset();
@@ -6954,7 +5821,6 @@ mod tests {
         populate_pain002_minimal();
         assert!(msg_validate());
     }
-
     #[test]
     fn msg_sign_and_verify_roundtrip() {
         reset();
@@ -6964,7 +5830,6 @@ mod tests {
         let pk = SigningKey::from_bytes(&sk_bytes).verifying_key();
         assert!(msg_verify_sig(&sig, pk.as_bytes()));
     }
-
     #[test]
     fn msg_sign_and_verify_roundtrip_dilithium() {
         use pqcrypto_mldsa::mldsa65 as dilithium;
@@ -6978,7 +5843,6 @@ mod tests {
         let sig = msg_sign(&tagged);
         assert!(msg_verify_sig(&sig, pk.as_bytes()));
     }
-
     #[test]
     fn msg_sign_and_verify_roundtrip_secp256k1() {
         use k256::ecdsa::{SigningKey, VerifyingKey};
@@ -6994,7 +5858,6 @@ mod tests {
         let pk_bytes = pk.to_encoded_point(true);
         assert!(msg_verify_sig(&sig, pk_bytes.as_bytes()));
     }
-
     #[test]
     fn msg_parse_xml_roundtrip() {
         reset();
@@ -7008,7 +5871,6 @@ mod tests {
         assert!(xml_str.contains("<ISO20022"));
         assert!(xml_str.contains("CdtrAgt"));
     }
-
     #[test]
     fn msg_parse_xml_wrapper_accepts_single_quoted_attributes() {
         reset();
@@ -7017,10 +5879,8 @@ mod tests {
             b"<ISO20022 message='pacs.008'><Field path='MsgId'>1</Field></ISO20022>",
         )
         .expect("single-quoted internal XML wrapper attributes are well-formed");
-
         assert_eq!(msg_get("MsgId").as_deref(), Some(b"1".as_slice()));
     }
-
     #[test]
     fn msg_parse_xml_wrapper_rejects_malformed_attribute_and_tag_shapes() {
         let cases: &[(&str, &[u8])] = &[
@@ -7073,7 +5933,6 @@ mod tests {
                 br#"<ISO20022 message="pacs.008"><Field path="MsgId"><b>1</b></Field></ISO20022>"#,
             ),
         ];
-
         for (label, xml) in cases {
             reset();
             let err = match msg_parse("pacs.008", xml) {
@@ -7087,58 +5946,24 @@ mod tests {
             assert!(super::MESSAGE_STACK.with(|stack| stack.borrow().is_empty()));
         }
     }
-
     #[test]
     fn msg_serialize_xml_base64_encodes_utf8_that_is_not_xml_text() {
         reset();
         let msg_id = "bad-\u{1}-xml";
         msg_create("pacs.008");
         msg_set("MsgId", msg_id.as_bytes());
-
         let xml = msg_serialize("XML").expect("XML serializes");
         let xml_str = String::from_utf8(xml.clone()).expect("internal XML is UTF-8");
         assert!(xml_str.contains(r#"<Field path="MsgId" encoding="base64">"#));
         assert!(!xml_str.contains(msg_id));
-
         reset();
         msg_parse("pacs.008", &xml).expect("base64 internal XML parses");
         assert_eq!(msg_get("MsgId").as_deref(), Some(msg_id.as_bytes()));
     }
-
     #[test]
     fn signature_blocks_marked_as_ignored() {
         reset();
-        let xml = r#"
-            <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
-                <FIToFICstmrCdtTrf>
-                    <GrpHdr>
-                        <MsgId>sig-001</MsgId>
-                    </GrpHdr>
-                    <CdtTrfTxInf>
-                        <IntrBkSttlmAmt Ccy="USD">10</IntrBkSttlmAmt>
-                        <IntrBkSttlmDt>2024-01-01</IntrBkSttlmDt>
-                        <DbtrAcct>
-                            <Id><IBAN>GB82WEST12345698765432</IBAN></Id>
-                        </DbtrAcct>
-                        <CdtrAcct>
-                            <Id><IBAN>GB33BUKB20201555555555</IBAN></Id>
-                        </CdtrAcct>
-                        <DbtrAgt>
-                            <FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId>
-                        </DbtrAgt>
-                        <CdtrAgt>
-                            <FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId>
-                        </CdtrAgt>
-                    </CdtTrfTxInf>
-                    <Sgntr>
-                        <SignedInfo>
-                            <SignatureMethod>dummy</SignatureMethod>
-                        </SignedInfo>
-                        <SignatureValue>Zm9vYmFy</SignatureValue>
-                    </Sgntr>
-                </FIToFICstmrCdtTrf>
-            </Document>
-        "#;
+        let xml = include_str!("assets/text_v1/pacs008_signature.xml");
         msg_parse("pacs.008", xml.as_bytes()).expect("parse pacs.008 with signature");
         assert_eq!(
             msg_get("Document/FIToFICstmrCdtTrf/Sgntr/@ignored").as_deref(),
@@ -7147,7 +5972,6 @@ mod tests {
         assert!(msg_get("Document/FIToFICstmrCdtTrf/Sgntr/SignatureValue").is_none());
         assert!(msg_validate());
     }
-
     #[test]
     fn amount_encode_decode_roundtrip() {
         let enc = encode_amount(42);
@@ -7155,7 +5979,6 @@ mod tests {
         assert_eq!(decode_amount(&enc), Some(42));
         assert!(decode_amount(b"12a").is_none());
     }
-
     #[test]
     fn validate_format_dispatches() {
         assert!(validate_format("IBAN", b"GB82WEST12345698765432"));
@@ -7165,7 +5988,6 @@ mod tests {
         assert!(validate_format("NUMERIC", b"12345"));
         assert!(!validate_format("NUMERIC", b"12a"));
     }
-
     #[test]
     fn base64_encode_decode_roundtrip() {
         let data = b"hello world";
@@ -7173,19 +5995,16 @@ mod tests {
         assert_eq!(enc, b"aGVsbG8gd29ybGQ=".to_vec());
         assert_eq!(decode_base64(&enc), Some(data.to_vec()));
     }
-
     #[test]
     fn decode_base64_rejects_invalid() {
         assert!(decode_base64(b"@@@=").is_none());
     }
-
     #[test]
     fn decode_base64_into_reuses_buffer() {
         let mut out = Vec::new();
         decode_base64_into(b"SGVsbG8=", &mut out).unwrap();
         assert_eq!(out, b"Hello");
     }
-
     #[test]
     fn decode_base64_into_rejects_invalid() {
         let mut out = Vec::new();

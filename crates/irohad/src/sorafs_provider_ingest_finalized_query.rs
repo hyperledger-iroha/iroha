@@ -40,8 +40,10 @@ use iroha_core::{
     sumeragi::{V2StartupReplayPlan, plan_v2_startup_replay},
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
+#[cfg(test)]
+use iroha_data_model::ChainId;
 use iroha_data_model::{
-    ChainId, NetworkId,
+    NetworkId,
     sorafs::{
         capacity::ProviderId,
         pin_registry::{

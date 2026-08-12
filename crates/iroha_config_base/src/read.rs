@@ -169,7 +169,7 @@ pub enum Error {
 
 #[derive(Debug, Error, Eq, PartialEq)]
 enum ExtendsTraversalError {
-    #[error("configuration `extends` cycle detected at `{path}`")]
+    #[error("configuration `extends` cycle detected at `{}`", path.display())]
     Cycle { path: PathBuf },
     #[error("configuration `extends` depth {observed} exceeds the maximum {maximum}")]
     DepthLimit { observed: u8, maximum: u8 },
@@ -207,10 +207,7 @@ impl ExtendsTraversalBudget {
         &mut self,
         additional: usize,
     ) -> core::result::Result<(), ExtendsTraversalError> {
-        let observed = self
-            .source_references
-            .checked_add(additional)
-            .unwrap_or(usize::MAX);
+        let observed = self.source_references.saturating_add(additional);
         if observed > MAX_TOML_EXTENDS_SOURCES {
             return Err(ExtendsTraversalError::SourceLimit {
                 observed,
@@ -222,7 +219,7 @@ impl ExtendsTraversalBudget {
     }
 
     fn record_bytes(&mut self, additional: u64) -> core::result::Result<(), ExtendsTraversalError> {
-        let observed = self.bytes_read.checked_add(additional).unwrap_or(u64::MAX);
+        let observed = self.bytes_read.saturating_add(additional);
         if observed > MAX_TOML_EXTENDS_TOTAL_BYTES {
             return Err(ExtendsTraversalError::ByteLimit {
                 observed,
@@ -259,6 +256,65 @@ fn extends_read_report(
         )),
         None => report,
     }
+}
+
+fn read_toml_source_with_budget(
+    path: &Path,
+    parent: Option<&PathBuf>,
+    depth: u8,
+    expected_identity: &toml::RegularFileIdentity,
+    budget: &mut ExtendsTraversalBudget,
+) -> Result<TomlSource, Error> {
+    let source_limit = toml::MAX_TOML_SOURCE_BYTES.min(budget.remaining_bytes());
+    let (source, bytes_read, loaded_identity) =
+        match TomlSource::from_file_with_limit(path, source_limit) {
+            Ok(loaded) => loaded,
+            Err(error) => {
+                if let toml::FromFileError::TooLarge { actual, .. } = *error.current_context()
+                    && source_limit < toml::MAX_TOML_SOURCE_BYTES
+                {
+                    return Err(extends_traversal_report(ExtendsTraversalError::ByteLimit {
+                        observed: budget.bytes_read.saturating_add(actual),
+                        maximum: MAX_TOML_EXTENDS_TOTAL_BYTES,
+                    })
+                    .into());
+                }
+                return Err(extends_read_report(error, path, parent, depth).into());
+            }
+        };
+    if &loaded_identity != expected_identity {
+        return Err(extends_read_report(
+            Report::new(toml::FromFileError::ChangedWhileReading),
+            path,
+            parent,
+            depth,
+        )
+        .into());
+    }
+    budget
+        .record_bytes(bytes_read)
+        .map_err(extends_traversal_report)?;
+    Ok(source)
+}
+
+fn take_extends_paths(source: &mut TomlSource) -> Result<Vec<PathBuf>, Error> {
+    let Some(extends) = source.table_mut().remove("extends") else {
+        return Ok(Vec::new());
+    };
+    let parsed = ExtendsPaths::try_from(extends.clone())
+        .map_err(Report::new)
+        .attach_with(|| {
+            attach::Expected::new(
+                r#"a single path ("./file.toml") or an array of paths (["a.toml", "b.toml", "c.toml"])"#,
+            )
+        })
+        .attach_with(|| attach::ActualValue::new(extends))
+        .change_context(Error::InvalidExtends)?;
+    log::trace!("found `extends`: {parsed:?}");
+    Ok(match parsed {
+        ExtendsPaths::Single(path) => vec![path],
+        ExtendsPaths::Chain(paths) => paths,
+    })
 }
 
 #[derive(Error, Debug)]
@@ -459,55 +515,14 @@ impl ConfigReader {
                     continue;
                 }
 
-                let source_limit = toml::MAX_TOML_SOURCE_BYTES.min(budget.remaining_bytes());
-                let (mut source, bytes_read, loaded_identity) =
-                    match TomlSource::from_file_with_limit(&path, source_limit) {
-                        Ok(loaded) => loaded,
-                        Err(error) => {
-                            if let toml::FromFileError::TooLarge { actual, .. } =
-                                *error.current_context()
-                                && source_limit < toml::MAX_TOML_SOURCE_BYTES
-                            {
-                                return Err(extends_traversal_report(
-                                    ExtendsTraversalError::ByteLimit {
-                                        observed: budget.bytes_read.saturating_add(actual),
-                                        maximum: MAX_TOML_EXTENDS_TOTAL_BYTES,
-                                    },
-                                )
-                                .into());
-                            }
-                            return Err(
-                                extends_read_report(error, &path, parent.as_ref(), depth).into()
-                            );
-                        }
-                    };
-                if loaded_identity != identity {
-                    return Err(extends_read_report(
-                        Report::new(toml::FromFileError::ChangedWhileReading),
-                        &path,
-                        parent.as_ref(),
-                        depth,
-                    )
-                    .into());
-                }
-                budget
-                    .record_bytes(bytes_read)
-                    .map_err(extends_traversal_report)?;
-
-                let extends_paths = if let Some(extends) = source.table_mut().remove("extends") {
-                    let parsed = ExtendsPaths::try_from(extends.clone())
-                        .map_err(Report::new)
-                        .attach_with(|| attach::Expected::new(r#"a single path ("./file.toml") or an array of paths (["a.toml", "b.toml", "c.toml"])"#))
-                        .attach_with(|| attach::ActualValue::new(extends))
-                        .change_context(Error::InvalidExtends)?;
-                    log::trace!("found `extends`: {parsed:?}");
-                    match parsed {
-                        ExtendsPaths::Single(path) => vec![path],
-                        ExtendsPaths::Chain(paths) => paths,
-                    }
-                } else {
-                    Vec::new()
-                };
+                let mut source = read_toml_source_with_budget(
+                    &path,
+                    parent.as_ref(),
+                    depth,
+                    &identity,
+                    &mut budget,
+                )?;
+                let extends_paths = take_extends_paths(&mut source)?;
 
                 budget
                     .schedule_sources(extends_paths.len())

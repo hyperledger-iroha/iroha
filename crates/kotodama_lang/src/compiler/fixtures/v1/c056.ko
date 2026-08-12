@@ -1,0 +1,17 @@
+
+seiyaku CompilerFixture {
+
+error enum ContractError {
+  InvariantViolation = 1001,
+}
+
+kotoage fn inspect() -> int authorize("InspectContract") {
+  debug::info("ready");
+  debug::info(7);
+  test::assert(true);
+  require(true, ContractError::InvariantViolation);
+  test::assert_eq(actual: 1, expected: 1);
+  return 1;
+}
+
+}

@@ -1,0 +1,15 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  let _bytes = ledger::governance::build_submit_ballot(
+    election_id: "election",
+    ciphertext: 1,
+    nullifier: b"00",
+    backend: "halo2",
+    proof: b"proof",
+    verification_key: b"vk",
+  );
+}
+
+}

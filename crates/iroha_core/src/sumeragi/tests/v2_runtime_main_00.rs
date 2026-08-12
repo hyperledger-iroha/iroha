@@ -220,6 +220,7 @@ impl RuntimeDriver for FakeDriver {
                 deferred_ordinal: None,
                 retry_unadmitted: true,
                 producer_handoff: None,
+                remote_proposal_replay: None,
             });
         }
         self.delivered.push((tagged.tag, value));

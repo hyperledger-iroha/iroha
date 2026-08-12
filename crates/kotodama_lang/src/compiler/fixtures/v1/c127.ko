@@ -1,0 +1,6 @@
+
+seiyaku Test {
+  kotoage fn main()  authorize("Entry") {
+    test::assert(1 == 1);
+  }
+}

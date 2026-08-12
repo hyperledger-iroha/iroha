@@ -109,7 +109,6 @@ use super::{
 use crate::privacy_engines::transparent_stark::{
     GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
-
 /// Stable descriptor for the first-release heterogeneous-domain integration layer.
 #[cfg(test)]
 pub(crate) const ZK_X509_P256_AGGREGATE_ADAPTER_DESCRIPTOR_V1: &[u8] =
@@ -120,7 +119,6 @@ pub(crate) const ZK_X509_P256_AGGREGATE_ADAPTER_DESCRIPTOR_SHA256_V1: [u8; 32] =
     0xd6, 0xd0, 0x13, 0x4d, 0x9d, 0x5f, 0x49, 0xdb, 0x36, 0x62, 0xd4, 0xbe, 0xfb, 0xc0, 0xb9, 0x5b,
     0xf2, 0x32, 0x8a, 0xf2, 0x12, 0xf6, 0xa6, 0x93, 0xc8, 0x3b, 0xa3, 0x6e, 0x3b, 0x1e, 0xea, 0x22,
 ];
-
 include!("p256_aggregate_layout.rs");
 /// Aggregate adapter construction or algebraic failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -146,7 +144,6 @@ pub(crate) enum P256AggregateAdapterErrorV1 {
     #[error("zk-X509 P-256 aggregate resource bound is exceeded")]
     Resource,
 }
-
 fn verifier_topology_v1(
     role: P256EcdsaRoleV1,
 ) -> Result<P256EcdsaTopologyV1, P256AggregateAdapterErrorV1> {
@@ -155,7 +152,6 @@ fn verifier_topology_v1(
         _ => P256AggregateAdapterErrorV1::Topology,
     })
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn validate_arithmetic_trace_topology_v1(
     trace: &ZkX509P256ArithmeticTraceV1,
@@ -190,7 +186,6 @@ fn validate_arithmetic_trace_topology_v1(
     }
     Ok(())
 }
-
 /// Independent lanes in the value-bus/arithmetic copy permutation.
 pub(crate) const P256_ARITHMETIC_COPY_LANES_V1: usize = 4;
 /// `beta`, unique cell address, and committed limb value.
@@ -220,21 +215,18 @@ pub(crate) const P256_ARITHMETIC_COPY_CHALLENGE_LABELS_V1: [[&[u8];
         b"zk-x509-p256-arithmetic-copy-lane3-value-v1",
     ],
 ];
-
 /// One arithmetic-copy tuple-compression lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256ArithmeticCopyLaneChallengesV1 {
     /// `beta`, address, and value coefficients.
     pub(crate) terms: [F; P256_ARITHMETIC_COPY_CHALLENGE_TERMS_V1],
 }
-
 /// Four independent post-base-commitment arithmetic-copy products.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256ArithmeticCopyChallengesV1 {
     /// Independently sampled tuple-compression lanes.
     pub(crate) lanes: [P256ArithmeticCopyLaneChallengesV1; P256_ARITHMETIC_COPY_LANES_V1],
 }
-
 impl P256ArithmeticCopyChallengesV1 {
     /// Reject zero, noncanonical, or repeated coordinates.
     pub(crate) fn validate_v1(self) -> Result<(), P256AggregateAdapterErrorV1> {
@@ -255,7 +247,6 @@ impl P256ArithmeticCopyChallengesV1 {
         Ok(())
     }
 }
-
 /// Derive the arithmetic-copy challenges after both base commitments.
 pub(crate) fn derive_p256_arithmetic_copy_challenges_v1(
     transcript: &mut TransparentTranscriptV1,
@@ -273,7 +264,6 @@ pub(crate) fn derive_p256_arithmetic_copy_challenges_v1(
     }
     Ok(P256ArithmeticCopyChallengesV1 { lanes })
 }
-
 macro_rules! map_adapter_error {
     ($error:ty) => {
         impl From<$error> for P256AggregateAdapterErrorV1 {
@@ -285,20 +275,17 @@ macro_rules! map_adapter_error {
         }
     };
 }
-
 map_adapter_error!(ZkX509P256AirErrorV1);
 map_adapter_error!(P256WindowAirErrorV1);
 map_adapter_error!(P256ReductionAirErrorV1);
 map_adapter_error!(P256ScalarBitBusErrorV1);
 map_adapter_error!(P256ValueBusErrorV1);
 map_adapter_error!(P256CrossTraceBusErrorV1);
-
 fn f_usize_v1(value: usize) -> Result<F, P256AggregateAdapterErrorV1> {
     Ok(F(
         u64::try_from(value).map_err(|_| P256AggregateAdapterErrorV1::Resource)?
     ))
 }
-
 /// Zero a caller-owned destination unless a complete column is committed.
 ///
 /// Callers perform all shape and column-index checks before constructing this
@@ -310,7 +297,6 @@ struct P256AggregateColumnDestinationGuardV1<'a> {
     output: &'a mut [F],
     committed: bool,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256AggregateColumnDestinationGuardV1<'a> {
     fn new_v1(output: &'a mut [F]) -> Self {
@@ -319,12 +305,10 @@ impl<'a> P256AggregateColumnDestinationGuardV1<'a> {
             committed: false,
         }
     }
-
     fn commit_v1(mut self) {
         self.committed = true;
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256AggregateColumnDestinationGuardV1<'_> {
     fn drop(&mut self) {
@@ -333,28 +317,24 @@ impl Drop for P256AggregateColumnDestinationGuardV1<'_> {
         }
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_cross_challenges_v1(challenges: &mut P256CrossTraceChallengesV1) {
     for lane in &mut challenges.lanes {
         lane.terms.fill(F::ZERO);
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_scalar_challenges_v1(challenges: &mut P256ScalarBitBusChallengesV1) {
     for lane in &mut challenges.lanes {
         lane.terms.fill(F::ZERO);
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_arithmetic_copy_challenges_v1(challenges: &mut P256ArithmeticCopyChallengesV1) {
     for lane in &mut challenges.lanes {
         lane.terms.fill(F::ZERO);
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fill_aggregate_row_column_v1<const WIDTH: usize>(
     rows: usize,
@@ -372,7 +352,6 @@ fn fill_aggregate_row_column_v1<const WIDTH: usize>(
     destination.commit_v1();
     Ok(())
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn fill_aggregate_aux_column_v1<const WIDTH: usize>(
     rows: usize,
@@ -393,13 +372,11 @@ fn fill_aggregate_aux_column_v1<const WIDTH: usize>(
     destination.commit_v1();
     Ok(())
 }
-
 fn encode_cross_event_v1(event: P256CrossTraceEventFixedV1, target: &mut [F]) {
     target[0] = event.active;
     target[1] = event.endpoint;
     target[2] = event.address;
 }
-
 fn decode_cross_event_v1(source: &[F]) -> P256CrossTraceEventFixedV1 {
     P256CrossTraceEventFixedV1 {
         active: source[0],
@@ -407,13 +384,11 @@ fn decode_cross_event_v1(source: &[F]) -> P256CrossTraceEventFixedV1 {
         address: source[2],
     }
 }
-
 fn encode_boundary_v1(boundary: P256CrossTraceBoundaryFixedV1, target: &mut [F]) {
     target[0] = boundary.first;
     target[1] = boundary.last;
     target[2] = boundary.continuation;
 }
-
 fn decode_boundary_v1(source: &[F]) -> P256CrossTraceBoundaryFixedV1 {
     P256CrossTraceBoundaryFixedV1 {
         first: source[0],
@@ -421,7 +396,6 @@ fn decode_boundary_v1(source: &[F]) -> P256CrossTraceBoundaryFixedV1 {
         continuation: source[2],
     }
 }
-
 fn active_cross_event_v1(
     endpoint: P256CrossTraceEndpointV1,
     address: usize,
@@ -431,19 +405,15 @@ fn active_cross_event_v1(
         address: u32::try_from(address).map_err(|_| P256AggregateAdapterErrorV1::Resource)?,
     }))
 }
-
 fn compact_aux_width_v1(events: usize) -> usize {
     events + P256_CROSS_TRACE_LANES_V1 * (events + 1) + P256_CROSS_TRACE_LANES_V1
 }
-
 fn compact_products_start_v1(events: usize, lane: usize) -> usize {
     events + lane * (events + 1)
 }
-
 fn compact_terminal_start_v1(events: usize) -> usize {
     events + P256_CROSS_TRACE_LANES_V1 * (events + 1)
 }
-
 fn cross_factor_v1(
     fixed: P256CrossTraceEventFixedV1,
     value: F,
@@ -456,7 +426,6 @@ fn cross_factor_v1(
         .add(fixed.address.mul(terms[2]))
         .add(value.mul(terms[3]))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_compact_cross_aux_row_v1(
     events: &[P256CrossTraceEventFixedV1],
@@ -488,7 +457,6 @@ fn build_compact_cross_aux_row_v1(
     }
     Ok(after)
 }
-
 fn evaluate_compact_cross_residues_v1(
     events: &[P256CrossTraceEventFixedV1],
     sources: &[F],
@@ -525,7 +493,6 @@ fn evaluate_compact_cross_residues_v1(
     }
     Ok(residues)
 }
-
 fn compact_cross_terminal_v1(
     events: usize,
     aux: &[F],
@@ -537,13 +504,11 @@ fn compact_cross_terminal_v1(
         aux[compact_terminal_start_v1(events) + lane]
     }))
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct P256ArithmeticCopyEventFixedV1 {
     active: F,
     address: F,
 }
-
 impl P256ArithmeticCopyEventFixedV1 {
     const fn inactive_v1() -> Self {
         Self {
@@ -551,7 +516,6 @@ impl P256ArithmeticCopyEventFixedV1 {
             address: F::ZERO,
         }
     }
-
     fn active_v1(address: usize) -> Result<Self, P256AggregateAdapterErrorV1> {
         Ok(Self {
             active: F::ONE,
@@ -559,19 +523,16 @@ impl P256ArithmeticCopyEventFixedV1 {
         })
     }
 }
-
 fn encode_arithmetic_copy_event_v1(event: P256ArithmeticCopyEventFixedV1, target: &mut [F]) {
     target[0] = event.active;
     target[1] = event.address;
 }
-
 fn decode_arithmetic_copy_event_v1(source: &[F]) -> P256ArithmeticCopyEventFixedV1 {
     P256ArithmeticCopyEventFixedV1 {
         active: source[0],
         address: source[1],
     }
 }
-
 fn arithmetic_copy_factor_v1(
     fixed: P256ArithmeticCopyEventFixedV1,
     value: F,
@@ -583,7 +544,6 @@ fn arithmetic_copy_factor_v1(
         .add(fixed.address.mul(terms[1]))
         .add(value.mul(terms[2]))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_compact_arithmetic_copy_aux_row_v1(
     events: &[P256ArithmeticCopyEventFixedV1],
@@ -615,7 +575,6 @@ fn build_compact_arithmetic_copy_aux_row_v1(
     }
     Ok(after)
 }
-
 fn evaluate_compact_arithmetic_copy_residues_v1(
     events: &[P256ArithmeticCopyEventFixedV1],
     sources: &[F],
@@ -653,7 +612,6 @@ fn evaluate_compact_arithmetic_copy_residues_v1(
     }
     Ok(residues)
 }
-
 fn value_arithmetic_copy_events_v1(
     packed_row: usize,
     arithmetic_operations: usize,
@@ -684,7 +642,6 @@ fn value_arithmetic_copy_events_v1(
     }
     Ok(events)
 }
-
 fn arithmetic_value_copy_events_v1(
     row: usize,
     logical_rows: usize,
@@ -714,7 +671,6 @@ fn arithmetic_value_copy_events_v1(
     }
     Ok(events)
 }
-
 fn arithmetic_copy_terminal_v1(
     events: usize,
     aux: &[F],
@@ -726,7 +682,6 @@ fn arithmetic_copy_terminal_v1(
         aux[compact_terminal_start_v1(events) + lane]
     }))
 }
-
 /// Verifier-owned role of one external cross-product source segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256CrossTraceTerminalRoleV1 {
@@ -741,7 +696,6 @@ pub(crate) enum P256CrossTraceTerminalRoleV1 {
     /// Wallet-only low-S scalar.
     WalletLowS,
 }
-
 /// One explicit, transcript-bound source-segment terminal claim.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256CrossTraceTerminalClaimV1 {
@@ -752,7 +706,6 @@ pub(crate) struct P256CrossTraceTerminalClaimV1 {
     /// Claimed product leaving this segment.
     pub(crate) terminal: [F; P256_CROSS_TRACE_LANES_V1],
 }
-
 /// Explicit transcript-bound claims for the three non-cross product buses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256BusTerminalClaimsV1 {
@@ -773,12 +726,10 @@ pub(crate) struct P256BusTerminalClaimsV1 {
     /// Window endpoint terminal in the packed scalar-bit bus.
     pub(crate) scalar_bus_window: [F; P256_SCALAR_BIT_BUS_LANES_V1],
 }
-
 /// Stable transcript label for all verifier-ordered P-256 terminal claims.
 #[cfg(test)]
 pub(crate) const P256_TERMINAL_CLAIMS_TRANSCRIPT_LABEL_V1: &[u8] =
     b"zk-x509-p256-terminal-claims-v1";
-
 /// Exact source role order for one ECDSA statement role.
 pub(crate) fn p256_cross_trace_terminal_roles_v1(
     role: P256EcdsaRoleV1,
@@ -801,13 +752,11 @@ pub(crate) fn p256_cross_trace_terminal_roles_v1(
         P256EcdsaRoleV1::WalletOwnership => &WALLET,
     }
 }
-
 fn p256_claim_fields_are_canonical_v1(fields: impl IntoIterator<Item = F>) -> bool {
     fields
         .into_iter()
         .all(|field| F::canonical(field.0).is_some())
 }
-
 fn validate_p256_cross_trace_terminal_claims_v1(
     role: P256EcdsaRoleV1,
     sources: &[P256CrossTraceTerminalClaimV1],
@@ -828,7 +777,6 @@ fn validate_p256_cross_trace_terminal_claims_v1(
     }
     Ok(())
 }
-
 /// Exact host-side terminal-claim equalities, ending at the independent
 /// binding sink.
 ///
@@ -862,7 +810,6 @@ pub(crate) fn evaluate_p256_cross_trace_terminal_claim_equalities_v1(
     ));
     Ok(residues)
 }
-
 /// Host-side equality residues for value, arithmetic-copy, and scalar buses.
 pub(crate) fn evaluate_p256_bus_terminal_claim_equalities_v1(
     claims: P256BusTerminalClaimsV1,
@@ -895,7 +842,6 @@ pub(crate) fn evaluate_p256_bus_terminal_claim_equalities_v1(
     }
     Ok(residues)
 }
-
 /// Bind an explicit terminal claim to a product carried by one source trace.
 ///
 /// `last_selector` is verifier preprocessing for that source's own native
@@ -910,7 +856,6 @@ pub(crate) fn evaluate_p256_terminal_claim_binding_v1(
         last_selector.mul(opened_terminal[lane].sub(claimed_terminal[lane]))
     })
 }
-
 /// Absorb all canonical terminal claims in the sole verifier-owned order.
 ///
 /// Call this after auxiliary commitment roots and before any composition,
@@ -979,7 +924,6 @@ pub(crate) fn absorb_p256_terminal_claims_v1(
         )
         .map_err(|_| P256AggregateAdapterErrorV1::Resource)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn flatten_writer_aux_v1(
     row: P256CrossTraceWriterAuxRowV1,
@@ -1010,7 +954,6 @@ fn flatten_writer_aux_v1(
     debug_assert_eq!(cursor, flat.len());
     flat
 }
-
 fn decode_writer_aux_v1(
     flat: &[F],
 ) -> Result<P256CrossTraceWriterAuxRowV1, P256AggregateAdapterErrorV1> {
@@ -1061,7 +1004,6 @@ fn decode_writer_aux_v1(
         terminal,
     })
 }
-
 fn encode_writer_fixed_v1(
     row: super::p256_cross_trace_bus::P256CrossTraceWriterFixedRowV1,
 ) -> [F; VALUE_WRITER_FIXED_WIDTH] {
@@ -1084,7 +1026,6 @@ fn encode_writer_fixed_v1(
     );
     flat
 }
-
 fn decode_writer_fixed_v1(
     flat: &[F],
 ) -> Result<super::p256_cross_trace_bus::P256CrossTraceWriterFixedRowV1, P256AggregateAdapterErrorV1>
@@ -1116,7 +1057,6 @@ fn decode_writer_fixed_v1(
         },
     )
 }
-
 /// Constant-memory verifier preprocessing for the value execution adapter and
 /// its attached writer source product.
 #[derive(Clone, Debug)]
@@ -1125,7 +1065,6 @@ pub(crate) struct P256ValueExecutionAggregateFixedProviderV1 {
     writer: P256CrossTraceWriterSourceFixedV1,
     arithmetic_operations: usize,
 }
-
 impl P256ValueExecutionAggregateFixedProviderV1 {
     /// Compile the exact execution and writer schedules.
     pub(crate) fn new_v1(role: P256EcdsaRoleV1) -> Result<Self, P256AggregateAdapterErrorV1> {
@@ -1148,7 +1087,6 @@ impl P256ValueExecutionAggregateFixedProviderV1 {
             arithmetic_operations: topology.linked_operations.len(),
         })
     }
-
     /// Regenerate one exact flat fixed row.
     pub(crate) fn row_v1(
         &self,
@@ -1175,7 +1113,6 @@ impl P256ValueExecutionAggregateFixedProviderV1 {
         );
         Ok(fixed)
     }
-
     /// Regenerate one complete verifier-preprocessed native column.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn fill_fixed_column_v1(
@@ -1191,7 +1128,6 @@ impl P256ValueExecutionAggregateFixedProviderV1 {
         )
     }
 }
-
 /// Constant-memory integrated value-execution base/aux stream.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256ValueExecutionAggregateStreamV1<'a> {
@@ -1205,7 +1141,6 @@ pub(crate) struct P256ValueExecutionAggregateStreamV1<'a> {
     arithmetic_copy_terminal: [F; P256_ARITHMETIC_COPY_LANES_V1],
     next_row: usize,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
     /// Construct the execution aggregate only from an X5B1-bound value-bus
@@ -1262,7 +1197,6 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
             next_row: 0,
         })
     }
-
     /// Emit the next exact 116-column auxiliary row.
     pub(crate) fn next_aux_row_v1(
         &mut self,
@@ -1301,7 +1235,6 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
         self.next_row += 1;
         Ok(Some(aux))
     }
-
     /// Replay this deterministic stream into one challenge-dependent native
     /// auxiliary column, then drop all row-local state.
     pub(crate) fn fill_aux_column_v1(
@@ -1338,12 +1271,10 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
             || replay.next_aux_row_v1(),
         )
     }
-
     /// Writer product terminal.
     pub(crate) const fn terminal_v1(&self) -> [F; P256_CROSS_TRACE_LANES_V1] {
         self.writer_terminal
     }
-
     /// Value-memory execution terminal carried by the native value-bus
     /// substream.
     pub(crate) fn value_terminal_v1(
@@ -1355,12 +1286,10 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
             .ok_or(P256AggregateAdapterErrorV1::Challenge)?
             .terminal_v1())
     }
-
     /// Terminal of the direct value-bus arithmetic-cell copy product.
     pub(crate) const fn arithmetic_copy_terminal_v1(&self) -> [F; P256_ARITHMETIC_COPY_LANES_V1] {
         self.arithmetic_copy_terminal
     }
-
     /// Recursively release retained replay state and clear challenge-bound
     /// products while preserving the borrowed base provider.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -1372,7 +1301,6 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
         self.arithmetic_copy_terminal.fill(F::ZERO);
         self.next_row = P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1;
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.value_aux.is_none()
@@ -1392,14 +1320,12 @@ impl<'a> P256ValueExecutionAggregateStreamV1<'a> {
             && self.next_row == P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ValueExecutionAggregateStreamV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 /// Post-commitment challenges consumed by the value-execution aggregate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256ValueExecutionAggregateChallengesV1 {
@@ -1410,7 +1336,6 @@ pub(crate) struct P256ValueExecutionAggregateChallengesV1 {
     /// Direct value-bus/arithmetic cell-copy permutation.
     pub(crate) arithmetic_copy: P256ArithmeticCopyChallengesV1,
 }
-
 /// Integrated value-execution residues over the opened value-bus source cell.
 pub(crate) fn evaluate_p256_value_execution_aggregate_residues_v1(
     current: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1],
@@ -1473,7 +1398,6 @@ pub(crate) fn evaluate_p256_value_execution_aggregate_residues_v1(
     }
     Ok(residues)
 }
-
 /// Construct the explicit writer claim from native first/final rows.
 #[cfg(test)]
 pub(crate) fn p256_value_execution_cross_terminal_claim_v1(
@@ -1489,7 +1413,6 @@ pub(crate) fn p256_value_execution_cross_terminal_claim_v1(
         terminal: terminal.terminal,
     })
 }
-
 /// Direct value-bus side arithmetic-copy terminal projection.
 pub(crate) fn p256_value_execution_arithmetic_copy_terminal_v1(
     aux: &[F; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1],
@@ -1499,21 +1422,18 @@ pub(crate) fn p256_value_execution_arithmetic_copy_terminal_v1(
         &aux[VALUE_ARITHMETIC_COPY_AUX..],
     )
 }
-
 /// Writer terminal carried by one value-execution auxiliary opening.
 pub(crate) fn p256_value_execution_cross_terminal_v1(
     aux: &[F; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1],
 ) -> Result<[F; P256_CROSS_TRACE_LANES_V1], P256AggregateAdapterErrorV1> {
     Ok(decode_writer_aux_v1(&aux[VALUE_WRITER_AUX..VALUE_ARITHMETIC_COPY_AUX])?.terminal)
 }
-
 /// Final native-row selector in value-execution preprocessing.
 pub(crate) fn p256_value_execution_last_selector_v1(
     fixed: &[F; P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1],
 ) -> F {
     decode_boundary_v1(&fixed[VALUE_ARITHMETIC_COPY_BOUNDARY_FIXED..]).last
 }
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct P256ScalarSourceEventFixedV1 {
     active: F,
@@ -1521,7 +1441,6 @@ struct P256ScalarSourceEventFixedV1 {
     window: F,
     bit: F,
 }
-
 impl P256ScalarSourceEventFixedV1 {
     const fn inactive_v1() -> Self {
         Self {
@@ -1532,14 +1451,12 @@ impl P256ScalarSourceEventFixedV1 {
         }
     }
 }
-
 fn encode_scalar_event_v1(event: P256ScalarSourceEventFixedV1, target: &mut [F]) {
     target[0] = event.active;
     target[1] = event.scalar;
     target[2] = event.window;
     target[3] = event.bit;
 }
-
 fn decode_scalar_event_v1(source: &[F]) -> P256ScalarSourceEventFixedV1 {
     P256ScalarSourceEventFixedV1 {
         active: source[0],
@@ -1548,7 +1465,6 @@ fn decode_scalar_event_v1(source: &[F]) -> P256ScalarSourceEventFixedV1 {
         bit: source[3],
     }
 }
-
 fn scalar_factor_v1(fixed: P256ScalarSourceEventFixedV1, value: F, terms: [F; 5]) -> F {
     F::ONE
         .sub(fixed.active)
@@ -1558,7 +1474,6 @@ fn scalar_factor_v1(fixed: P256ScalarSourceEventFixedV1, value: F, terms: [F; 5]
         .add(fixed.bit.mul(terms[3]))
         .add(value.mul(terms[4]))
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn build_compact_scalar_aux_row_v1(
     events: &[P256ScalarSourceEventFixedV1],
@@ -1590,7 +1505,6 @@ fn build_compact_scalar_aux_row_v1(
     }
     Ok(after)
 }
-
 fn evaluate_compact_scalar_residues_v1(
     events: &[P256ScalarSourceEventFixedV1],
     sources: &[F],
@@ -1627,7 +1541,6 @@ fn evaluate_compact_scalar_residues_v1(
     }
     Ok(residues)
 }
-
 fn arithmetic_scalar_events_v1(
     row: usize,
 ) -> Result<[P256ScalarSourceEventFixedV1; 8], P256AggregateAdapterErrorV1> {
@@ -1660,7 +1573,6 @@ fn arithmetic_scalar_events_v1(
     }
     Ok(events)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn arithmetic_scalar_sources_v1(row: usize, base: &[F; P256_ARITHMETIC_BASE_WIDTH_V1]) -> [F; 8] {
     let coefficient = row % P256_ARITHMETIC_ROWS_PER_OPERATION_V1;
@@ -1668,7 +1580,6 @@ fn arithmetic_scalar_sources_v1(row: usize, base: &[F; P256_ARITHMETIC_BASE_WIDT
     let bits = p256_arithmetic_opened_c_limb_bits_v1(base);
     core::array::from_fn(|slot| bits[offset + slot])
 }
-
 /// Constant-memory base/fixed provider for exact arithmetic plus its attached
 /// scalar-source and value-copy products.
 #[derive(Clone, Debug)]
@@ -1677,7 +1588,6 @@ pub(crate) struct P256ArithmeticAggregateRowsV1<'a> {
     trace: &'a ZkX509P256ArithmeticTraceV1,
     fixed: P256ArithmeticStarkFixedProviderV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ArithmeticAggregateRowsV1<'a> {
     /// Validate the exact arithmetic trace and scalar source positions.
@@ -1707,7 +1617,6 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
             )?,
         })
     }
-
     /// Direct committed arithmetic row or canonical zero padding.
     pub(crate) fn base_row_v1(
         &self,
@@ -1723,7 +1632,6 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
             .copied()
             .unwrap_or([F::ZERO; P256_ARITHMETIC_BASE_WIDTH_V1]))
     }
-
     /// Copy one complete committed arithmetic column into caller-owned
     /// storage without materializing an aggregate row matrix.
     pub(crate) fn fill_base_column_v1(
@@ -1739,7 +1647,6 @@ impl<'a> P256ArithmeticAggregateRowsV1<'a> {
         )
     }
 }
-
 /// Constant-memory arithmetic auxiliary stream.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256ArithmeticAggregateAuxStreamV1<'a> {
@@ -1753,7 +1660,6 @@ pub(crate) struct P256ArithmeticAggregateAuxStreamV1<'a> {
     next_row: usize,
     _not_copy: core::cell::Cell<()>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
     /// Compute the source terminal from the two exact scalar operations, then
@@ -1818,7 +1724,6 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
             _not_copy: core::cell::Cell::new(()),
         })
     }
-
     /// Emit the next exact integrated auxiliary row.
     pub(crate) fn next_aux_row_v1(
         &mut self,
@@ -1853,7 +1758,6 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
         self.next_row += 1;
         Ok(Some(aux))
     }
-
     /// Replay this deterministic stream into one challenge-dependent
     /// arithmetic auxiliary column.
     pub(crate) fn fill_aux_column_v1(
@@ -1883,17 +1787,14 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
             || replay.next_aux_row_v1(),
         )
     }
-
     /// Arithmetic scalar-source terminal.
     pub(crate) const fn terminal_v1(&self) -> [F; P256_SCALAR_BIT_BUS_LANES_V1] {
         self.scalar_terminal
     }
-
     /// Terminal of all direct arithmetic `a`, `b`, and `c` limb copies.
     pub(crate) const fn arithmetic_copy_terminal_v1(&self) -> [F; P256_ARITHMETIC_COPY_LANES_V1] {
         self.arithmetic_copy_terminal
     }
-
     /// Clear every challenge and running/terminal product. The borrowed
     /// arithmetic rows and their verifier-owned fixed provider remain intact.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -1905,7 +1806,6 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
         self.arithmetic_copy_terminal.fill(F::ZERO);
         self.next_row = P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1;
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.scalar_challenges
@@ -1929,14 +1829,12 @@ impl<'a> P256ArithmeticAggregateAuxStreamV1<'a> {
             && self.next_row == P256_ARITHMETIC_AGGREGATE_TRACE_SIZE_V1
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ArithmeticAggregateAuxStreamV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 /// Integrated arithmetic residues with eight direct `c`-bit source events.
 pub(crate) fn evaluate_p256_arithmetic_aggregate_residues_v1(
     current: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
@@ -2001,28 +1899,24 @@ pub(crate) fn evaluate_p256_arithmetic_aggregate_residues_v1(
     }
     Ok(residues)
 }
-
 /// Arithmetic scalar-source terminal projection.
 pub(crate) fn p256_arithmetic_scalar_terminal_v1(
     aux: &[F; P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1],
 ) -> Result<[F; P256_SCALAR_BIT_BUS_LANES_V1], P256AggregateAdapterErrorV1> {
     compact_cross_terminal_v1(8, &aux[ARITHMETIC_SCALAR_AUX..ARITHMETIC_VALUE_COPY_AUX])
 }
-
 /// Direct arithmetic side value-copy terminal projection.
 pub(crate) fn p256_arithmetic_value_copy_terminal_v1(
     aux: &[F; P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1],
 ) -> Result<[F; P256_ARITHMETIC_COPY_LANES_V1], P256AggregateAdapterErrorV1> {
     arithmetic_copy_terminal_v1(3, &aux[ARITHMETIC_VALUE_COPY_AUX..])
 }
-
 /// Final native-row selector in arithmetic preprocessing.
 pub(crate) fn p256_arithmetic_last_selector_v1(
     fixed: &[F; P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1],
 ) -> F {
     decode_boundary_v1(&fixed[ARITHMETIC_VALUE_COPY_BOUNDARY_FIXED..]).last
 }
-
 /// Bind the complete value-bus arithmetic-access product to every directly
 /// opened arithmetic `a`, `b`, and `c` limb.
 #[cfg(test)]
@@ -2032,7 +1926,6 @@ pub(crate) fn evaluate_p256_arithmetic_copy_terminal_openings_v1(
 ) -> [F; P256_ARITHMETIC_COPY_LANES_V1] {
     core::array::from_fn(|lane| value_bus[lane].sub(arithmetic[lane]))
 }
-
 fn window_cross_events_v1(
     row: usize,
 ) -> Result<[P256CrossTraceEventFixedV1; 3], P256AggregateAdapterErrorV1> {
@@ -2058,7 +1951,6 @@ fn window_cross_events_v1(
     }
     Ok(events)
 }
-
 fn window_scalar_event_v1(
     row: usize,
 ) -> Result<P256ScalarSourceEventFixedV1, P256AggregateAdapterErrorV1> {
@@ -2080,7 +1972,6 @@ fn window_scalar_event_v1(
         bit: f_usize_v1(local + 1)?,
     })
 }
-
 /// Constant-memory base/fixed provider for the vertically packed 128-window
 /// adapter.
 #[derive(Clone, Copy, Debug)]
@@ -2088,7 +1979,6 @@ fn window_scalar_event_v1(
 pub(crate) struct P256WindowAggregateRowsV1<'a> {
     trace: &'a P256WindowBatchStarkTraceV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256WindowAggregateRowsV1<'a> {
     /// Validate the sole vertical commitment layout.
@@ -2103,7 +1993,6 @@ impl<'a> P256WindowAggregateRowsV1<'a> {
         }
         Ok(Self { trace })
     }
-
     /// Direct committed base row or canonical zero padding.
     pub(crate) fn base_row_v1(
         &self,
@@ -2119,7 +2008,6 @@ impl<'a> P256WindowAggregateRowsV1<'a> {
             .copied()
             .unwrap_or([F::ZERO; P256_WINDOW_BASE_WIDTH_V1]))
     }
-
     /// Copy one complete committed window column into caller-owned storage.
     pub(crate) fn fill_base_column_v1(
         &self,
@@ -2130,7 +2018,6 @@ impl<'a> P256WindowAggregateRowsV1<'a> {
             self.base_row_v1(row)
         })
     }
-
     fn native_aux_row_v1(
         &self,
         row: usize,
@@ -2146,7 +2033,6 @@ impl<'a> P256WindowAggregateRowsV1<'a> {
             .unwrap_or([F::ZERO; P256_WINDOW_STARK_AUX_WIDTH_V1]))
     }
 }
-
 /// Constant-memory integrated window auxiliary stream.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256WindowAggregateAuxStreamV1<'a> {
@@ -2161,7 +2047,6 @@ pub(crate) struct P256WindowAggregateAuxStreamV1<'a> {
     next_row: usize,
     _not_copy: core::cell::Cell<()>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256WindowAggregateAuxStreamV1<'a> {
     /// Prepare both external and scalar source products.
@@ -2219,7 +2104,6 @@ impl<'a> P256WindowAggregateAuxStreamV1<'a> {
             _not_copy: core::cell::Cell::new(()),
         })
     }
-
     /// Emit the next exact 37-column row.
     pub(crate) fn next_aux_row_v1(
         &mut self,
@@ -2255,7 +2139,6 @@ impl<'a> P256WindowAggregateAuxStreamV1<'a> {
         self.next_row += 1;
         Ok(Some(aux))
     }
-
     /// Replay this deterministic stream into one challenge-dependent window
     /// auxiliary column.
     pub(crate) fn fill_aux_column_v1(
@@ -2285,22 +2168,18 @@ impl<'a> P256WindowAggregateAuxStreamV1<'a> {
             replay.next_aux_row_v1()
         })
     }
-
     /// External cross-product start.
     pub(crate) const fn cross_start_v1(&self) -> [F; P256_CROSS_TRACE_LANES_V1] {
         self.cross_start
     }
-
     /// External cross-product terminal.
     pub(crate) const fn cross_terminal_v1(&self) -> [F; P256_CROSS_TRACE_LANES_V1] {
         self.cross_terminal
     }
-
     /// Window scalar-source terminal.
     pub(crate) const fn scalar_terminal_v1(&self) -> [F; P256_SCALAR_BIT_BUS_LANES_V1] {
         self.scalar_terminal
     }
-
     /// Clear all challenge-bound window products without altering the
     /// committed-row reference or verifier-owned fixed topology.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -2313,7 +2192,6 @@ impl<'a> P256WindowAggregateAuxStreamV1<'a> {
         self.scalar_terminal.fill(F::ZERO);
         self.next_row = P256_WINDOW_AGGREGATE_TRACE_SIZE_V1;
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.cross_challenges
@@ -2338,14 +2216,12 @@ impl<'a> P256WindowAggregateAuxStreamV1<'a> {
             && self.next_row == P256_WINDOW_AGGREGATE_TRACE_SIZE_V1
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256WindowAggregateAuxStreamV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 /// Integrated numeric residues for the vertical window adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256WindowAggregateChallengesV1 {
@@ -2356,7 +2232,6 @@ pub(crate) struct P256WindowAggregateChallengesV1 {
     /// Scalar/window-bit tuple challenges.
     pub(crate) scalar: P256ScalarBitBusChallengesV1,
 }
-
 /// Integrated numeric residues for the vertical window adapter.
 pub(crate) fn evaluate_p256_window_aggregate_residues_v1(
     current: &[F; P256_WINDOW_BASE_WIDTH_V1],
@@ -2423,7 +2298,6 @@ pub(crate) fn evaluate_p256_window_aggregate_residues_v1(
     }
     Ok(residues)
 }
-
 /// Construct the explicit window claim from native first/final rows.
 #[cfg(test)]
 pub(crate) fn p256_window_cross_terminal_claim_v1(
@@ -2439,21 +2313,18 @@ pub(crate) fn p256_window_cross_terminal_claim_v1(
         terminal: compact_cross_terminal_v1(3, &terminal_aux[WINDOW_CROSS_AUX..WINDOW_SCALAR_AUX])?,
     })
 }
-
 /// Window scalar-source terminal projection.
 pub(crate) fn p256_window_scalar_terminal_v1(
     aux: &[F; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1],
 ) -> Result<[F; P256_SCALAR_BIT_BUS_LANES_V1], P256AggregateAdapterErrorV1> {
     compact_cross_terminal_v1(1, &aux[WINDOW_SCALAR_AUX..])
 }
-
 /// Window external-chain terminal projection.
 pub(crate) fn p256_window_cross_terminal_v1(
     aux: &[F; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1],
 ) -> Result<[F; P256_CROSS_TRACE_LANES_V1], P256AggregateAdapterErrorV1> {
     compact_cross_terminal_v1(3, &aux[WINDOW_CROSS_AUX..WINDOW_SCALAR_AUX])
 }
-
 /// Final native-row selector in window preprocessing.
 pub(crate) fn p256_window_last_selector_v1(fixed: &[F; P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1]) -> F {
     decode_boundary_v1(
@@ -2461,7 +2332,6 @@ pub(crate) fn p256_window_last_selector_v1(fixed: &[F; P256_WINDOW_AGGREGATE_FIX
     )
     .last
 }
-
 /// Verifier-owned reduction instance in the terminal chain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256ReductionAggregateRoleV1 {
@@ -2470,7 +2340,6 @@ pub(crate) enum P256ReductionAggregateRoleV1 {
     /// Affine result-X to scalar reduction.
     ResultX,
 }
-
 fn reduction_cross_events_v1(
     role: P256ReductionAggregateRoleV1,
     row: usize,
@@ -2501,7 +2370,6 @@ fn reduction_cross_events_v1(
         ]),
     }
 }
-
 /// Constant-memory base/fixed provider for one reduction instance.
 #[derive(Clone, Copy, Debug)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2511,7 +2379,6 @@ pub(crate) struct P256ReductionAggregateRowsV1<'a> {
     #[cfg(test)]
     fixed: P256ComparisonStarkFixedProviderV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ReductionAggregateRowsV1<'a> {
     /// Validate the exact 16-row reduction topology.
@@ -2529,7 +2396,6 @@ impl<'a> P256ReductionAggregateRowsV1<'a> {
             )?,
         })
     }
-
     /// Direct committed reduction row or canonical zero padding.
     pub(crate) fn base_row_v1(
         &self,
@@ -2545,7 +2411,6 @@ impl<'a> P256ReductionAggregateRowsV1<'a> {
             .copied()
             .unwrap_or([F::ZERO; P256_REDUCTION_BASE_WIDTH_V1]))
     }
-
     /// Copy one complete committed reduction column into caller-owned
     /// storage.
     pub(crate) fn fill_base_column_v1(
@@ -2560,7 +2425,6 @@ impl<'a> P256ReductionAggregateRowsV1<'a> {
             |row| self.base_row_v1(row),
         )
     }
-
     /// Exact flat fixed row.
     #[cfg(test)]
     pub(crate) fn fixed_row_v1(
@@ -2584,7 +2448,6 @@ impl<'a> P256ReductionAggregateRowsV1<'a> {
         Ok(fixed)
     }
 }
-
 /// Constant-memory reduction auxiliary stream.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256ReductionAggregateAuxStreamV1<'a> {
@@ -2596,7 +2459,6 @@ pub(crate) struct P256ReductionAggregateAuxStreamV1<'a> {
     next_row: usize,
     _not_copy: core::cell::Cell<()>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256ReductionAggregateAuxStreamV1<'a> {
     /// Prepare one exact reduction chain segment.
@@ -2634,7 +2496,6 @@ impl<'a> P256ReductionAggregateAuxStreamV1<'a> {
             _not_copy: core::cell::Cell::new(()),
         })
     }
-
     /// Direct committed base row.
     #[cfg(test)]
     pub(crate) fn base_row_v1(
@@ -2643,7 +2504,6 @@ impl<'a> P256ReductionAggregateAuxStreamV1<'a> {
     ) -> Result<[F; P256_REDUCTION_BASE_WIDTH_V1], P256AggregateAdapterErrorV1> {
         self.rows.base_row_v1(row)
     }
-
     /// Exact flat fixed row.
     #[cfg(test)]
     pub(crate) fn fixed_row_v1(
@@ -2652,7 +2512,6 @@ impl<'a> P256ReductionAggregateAuxStreamV1<'a> {
     ) -> Result<[F; P256_REDUCTION_AGGREGATE_FIXED_WIDTH_V1], P256AggregateAdapterErrorV1> {
         self.rows.fixed_row_v1(row)
     }
-
     /// Emit the next exact 19-column row.
     pub(crate) fn next_aux_row_v1(
         &mut self,
@@ -2676,7 +2535,6 @@ impl<'a> P256ReductionAggregateAuxStreamV1<'a> {
         self.next_row += 1;
         Ok(Some(aux))
     }
-
     /// Replay this deterministic stream into one challenge-dependent
     /// reduction auxiliary column.
     pub(crate) fn fill_aux_column_v1(
@@ -2703,17 +2561,14 @@ impl<'a> P256ReductionAggregateAuxStreamV1<'a> {
             || replay.next_aux_row_v1(),
         )
     }
-
     /// Segment start.
     pub(crate) const fn start_v1(&self) -> [F; P256_CROSS_TRACE_LANES_V1] {
         self.start
     }
-
     /// Segment terminal.
     pub(crate) const fn terminal_v1(&self) -> [F; P256_CROSS_TRACE_LANES_V1] {
         self.terminal
     }
-
     /// Clear reduction challenges and product endpoints while retaining the
     /// public role and fixed schedule in `rows`.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -2723,7 +2578,6 @@ impl<'a> P256ReductionAggregateAuxStreamV1<'a> {
         self.terminal.fill(F::ZERO);
         self.next_row = P256_REDUCTION_AGGREGATE_TRACE_SIZE_V1;
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.challenges
@@ -2740,14 +2594,12 @@ impl<'a> P256ReductionAggregateAuxStreamV1<'a> {
             && self.next_row == P256_REDUCTION_AGGREGATE_TRACE_SIZE_V1
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256ReductionAggregateAuxStreamV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 /// Integrated numeric reduction residues.
 pub(crate) fn evaluate_p256_reduction_aggregate_residues_v1(
     current: &[F; P256_REDUCTION_BASE_WIDTH_V1],
@@ -2798,7 +2650,6 @@ pub(crate) fn evaluate_p256_reduction_aggregate_residues_v1(
     }
     Ok(residues)
 }
-
 /// Construct an explicit reduction claim from native first/final rows.
 #[cfg(test)]
 pub(crate) fn p256_reduction_cross_terminal_claim_v1(
@@ -2817,14 +2668,12 @@ pub(crate) fn p256_reduction_cross_terminal_claim_v1(
         terminal: compact_cross_terminal_v1(2, &terminal_aux[REDUCTION_CROSS_AUX..])?,
     })
 }
-
 /// Reduction external-chain terminal projection.
 pub(crate) fn p256_reduction_cross_terminal_v1(
     aux: &[F; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1],
 ) -> Result<[F; P256_CROSS_TRACE_LANES_V1], P256AggregateAdapterErrorV1> {
     compact_cross_terminal_v1(2, &aux[REDUCTION_CROSS_AUX..])
 }
-
 /// Final native-row selector in reduction preprocessing.
 pub(crate) fn p256_reduction_last_selector_v1(
     fixed: &[F; P256_REDUCTION_AGGREGATE_FIXED_WIDTH_V1],
@@ -2834,7 +2683,6 @@ pub(crate) fn p256_reduction_last_selector_v1(
     )
     .last
 }
-
 fn low_s_cross_event_v1(
     row: usize,
 ) -> Result<P256CrossTraceEventFixedV1, P256AggregateAdapterErrorV1> {
@@ -2847,7 +2695,6 @@ fn low_s_cross_event_v1(
         Ok(P256CrossTraceEventFixedV1::inactive())
     }
 }
-
 /// Constant-memory wallet low-S base/fixed provider.
 #[derive(Clone, Copy, Debug)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -2856,7 +2703,6 @@ pub(crate) struct P256LowSAggregateRowsV1<'a> {
     #[cfg(test)]
     fixed: P256ComparisonStarkFixedProviderV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256LowSAggregateRowsV1<'a> {
     /// Construct only for the wallet role.
@@ -2876,7 +2722,6 @@ impl<'a> P256LowSAggregateRowsV1<'a> {
             )?,
         })
     }
-
     /// Direct committed low-S row or canonical zero padding.
     pub(crate) fn base_row_v1(
         &self,
@@ -2892,7 +2737,6 @@ impl<'a> P256LowSAggregateRowsV1<'a> {
             .copied()
             .unwrap_or([F::ZERO; P256_LOW_S_BASE_WIDTH_V1]))
     }
-
     /// Copy one complete committed low-S column into caller-owned storage.
     pub(crate) fn fill_base_column_v1(
         &self,
@@ -2903,7 +2747,6 @@ impl<'a> P256LowSAggregateRowsV1<'a> {
             self.base_row_v1(row)
         })
     }
-
     /// Exact flat fixed row.
     #[cfg(test)]
     pub(crate) fn fixed_row_v1(
@@ -2923,7 +2766,6 @@ impl<'a> P256LowSAggregateRowsV1<'a> {
         Ok(fixed)
     }
 }
-
 /// Constant-memory wallet low-S auxiliary stream.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256LowSAggregateAuxStreamV1<'a> {
@@ -2935,7 +2777,6 @@ pub(crate) struct P256LowSAggregateAuxStreamV1<'a> {
     next_row: usize,
     _not_copy: core::cell::Cell<()>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256LowSAggregateAuxStreamV1<'a> {
     /// Prepare the wallet-only chain segment.
@@ -2973,7 +2814,6 @@ impl<'a> P256LowSAggregateAuxStreamV1<'a> {
             _not_copy: core::cell::Cell::new(()),
         })
     }
-
     /// Direct committed base row.
     #[cfg(test)]
     pub(crate) fn base_row_v1(
@@ -2982,7 +2822,6 @@ impl<'a> P256LowSAggregateAuxStreamV1<'a> {
     ) -> Result<[F; P256_LOW_S_BASE_WIDTH_V1], P256AggregateAdapterErrorV1> {
         self.rows.base_row_v1(row)
     }
-
     /// Exact flat fixed row.
     #[cfg(test)]
     pub(crate) fn fixed_row_v1(
@@ -2991,7 +2830,6 @@ impl<'a> P256LowSAggregateAuxStreamV1<'a> {
     ) -> Result<[F; P256_LOW_S_AGGREGATE_FIXED_WIDTH_V1], P256AggregateAdapterErrorV1> {
         self.rows.fixed_row_v1(row)
     }
-
     /// Emit the next exact 14-column row.
     pub(crate) fn next_aux_row_v1(
         &mut self,
@@ -3016,7 +2854,6 @@ impl<'a> P256LowSAggregateAuxStreamV1<'a> {
         self.next_row += 1;
         Ok(Some(aux))
     }
-
     /// Replay this deterministic stream into one challenge-dependent low-S
     /// auxiliary column.
     pub(crate) fn fill_aux_column_v1(
@@ -3040,17 +2877,14 @@ impl<'a> P256LowSAggregateAuxStreamV1<'a> {
             replay.next_aux_row_v1()
         })
     }
-
     /// Segment start.
     pub(crate) const fn start_v1(&self) -> [F; P256_CROSS_TRACE_LANES_V1] {
         self.start
     }
-
     /// Segment terminal.
     pub(crate) const fn terminal_v1(&self) -> [F; P256_CROSS_TRACE_LANES_V1] {
         self.terminal
     }
-
     /// Clear wallet low-S challenges and products while retaining the public
     /// role/fixed topology in `rows`.
     pub(crate) fn zeroize_private_v1(&mut self) {
@@ -3060,7 +2894,6 @@ impl<'a> P256LowSAggregateAuxStreamV1<'a> {
         self.terminal.fill(F::ZERO);
         self.next_row = P256_LOW_S_AGGREGATE_TRACE_SIZE_V1;
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.challenges
@@ -3077,14 +2910,12 @@ impl<'a> P256LowSAggregateAuxStreamV1<'a> {
             && self.next_row == P256_LOW_S_AGGREGATE_TRACE_SIZE_V1
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256LowSAggregateAuxStreamV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 /// Integrated wallet low-S residues.
 pub(crate) fn evaluate_p256_low_s_aggregate_residues_v1(
     current: &[F; P256_LOW_S_BASE_WIDTH_V1],
@@ -3132,7 +2963,6 @@ pub(crate) fn evaluate_p256_low_s_aggregate_residues_v1(
     }
     Ok(residues)
 }
-
 /// Construct the explicit wallet low-S claim from native first/final rows.
 #[cfg(test)]
 pub(crate) fn p256_low_s_cross_terminal_claim_v1(
@@ -3147,14 +2977,12 @@ pub(crate) fn p256_low_s_cross_terminal_claim_v1(
         terminal: compact_cross_terminal_v1(1, &terminal_aux[LOW_S_CROSS_AUX..])?,
     })
 }
-
 /// Wallet low-S external-chain terminal projection.
 pub(crate) fn p256_low_s_cross_terminal_v1(
     aux: &[F; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1],
 ) -> Result<[F; P256_CROSS_TRACE_LANES_V1], P256AggregateAdapterErrorV1> {
     compact_cross_terminal_v1(1, &aux[LOW_S_CROSS_AUX..])
 }
-
 /// Final native-row selector in low-S preprocessing.
 pub(crate) fn p256_low_s_last_selector_v1(fixed: &[F; P256_LOW_S_AGGREGATE_FIXED_WIDTH_V1]) -> F {
     decode_boundary_v1(
@@ -3162,7 +2990,6 @@ pub(crate) fn p256_low_s_last_selector_v1(fixed: &[F; P256_LOW_S_AGGREGATE_FIXED
     )
     .last
 }
-
 const SINK_ACTIVE_FIXED: usize = 0;
 const SINK_CONSTANT_FIXED: usize = SINK_ACTIVE_FIXED + P256_EXTERNAL_BINDINGS_PER_ROW_V1;
 const SINK_CONSTANT_VALUE_FIXED: usize = SINK_CONSTANT_FIXED + P256_EXTERNAL_BINDINGS_PER_ROW_V1;
@@ -3174,16 +3001,13 @@ const SINK_SELECTION_REQUIRE_ACTIVE_FIXED: usize = SINK_SELECTION_SELECTOR_FIXED
 const SINK_SELECTION_DUMMY_FIXED: usize = SINK_SELECTION_REQUIRE_ACTIVE_FIXED + 1;
 const SINK_SELECTION_INACTIVE_REAL_FIXED: usize = SINK_SELECTION_DUMMY_FIXED + 1;
 const SINK_SELECTION_CONTINUE_FIXED: usize = SINK_SELECTION_INACTIVE_REAL_FIXED + 1;
-
 const SINK_SELECTION_REAL_BASE: usize = 2 * P256_EXTERNAL_BINDINGS_PER_ROW_V1;
 const SINK_SELECTION_SELECTED_BASE: usize = SINK_SELECTION_REAL_BASE + 1;
 const SINK_SELECTION_ACTIVE_BASE: usize = SINK_SELECTION_SELECTED_BASE + 1;
 const SINK_SELECTION_REAL_BITS_BASE: usize = SINK_SELECTION_ACTIVE_BASE + 1;
 const SINK_SELECTION_SELECTED_BITS_BASE: usize = SINK_SELECTION_REAL_BITS_BASE + 8;
-
 const _: () = assert!(SINK_SELECTION_SELECTED_BITS_BASE + 8 == P256_BINDING_SINK_BASE_WIDTH_V1);
 const _: () = assert!(SINK_SELECTION_CONTINUE_FIXED + 1 == P256_BINDING_SINK_FIXED_WIDTH_V1);
-
 fn p256_input_selection_byte_v1(
     witness: super::p256_ecdsa_air::P256EcdsaWitnessV1,
     byte: usize,
@@ -3199,7 +3023,6 @@ fn p256_input_selection_byte_v1(
         _ => Err(P256AggregateAdapterErrorV1::Topology),
     }
 }
-
 fn p256_inactive_real_byte_v1(byte: usize) -> Result<u8, P256AggregateAdapterErrorV1> {
     if byte < 4 * 32 {
         Ok(0)
@@ -3210,14 +3033,12 @@ fn p256_inactive_real_byte_v1(byte: usize) -> Result<u8, P256AggregateAdapterErr
             .ok_or(P256AggregateAdapterErrorV1::Topology)
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn write_byte_bits_v1(target: &mut [F], byte: u8) {
     for (bit, value) in target.iter_mut().enumerate() {
         *value = F(u64::from((byte >> bit) & 1));
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn flatten_regular_aux_v1(
     row: P256CrossTraceRegularAuxRowV1,
@@ -3234,20 +3055,17 @@ fn flatten_regular_aux_v1(
     flat[cursor..cursor + P256_CROSS_TRACE_LANES_V1].copy_from_slice(&row.terminal);
     flat
 }
-
 /// Constant-memory verifier preprocessing for the external-binding sink.
 #[derive(Clone, Debug)]
 pub(crate) struct P256BindingSinkFixedProviderV1 {
     fixed: P256CrossTraceSinkFixedV1,
     optional_certificate: bool,
 }
-
 impl P256BindingSinkFixedProviderV1 {
     /// Compile the role-exact sink schedule.
     pub(crate) fn new_v1(role: P256EcdsaRoleV1) -> Result<Self, P256AggregateAdapterErrorV1> {
         Self::new_with_optional_certificate_v1(role, false)
     }
-
     /// Compile the role-exact schedule for the sole optional certificate
     /// instance. The Boolean is verifier-derived from global signature index
     /// two and is never accepted from proof metadata.
@@ -3263,7 +3081,6 @@ impl P256BindingSinkFixedProviderV1 {
             optional_certificate,
         })
     }
-
     /// Regenerate one exact flat fixed row.
     pub(crate) fn row_v1(
         &self,
@@ -3299,7 +3116,6 @@ impl P256BindingSinkFixedProviderV1 {
         ));
         Ok(fixed)
     }
-
     /// Regenerate one complete verifier-preprocessed sink column.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn fill_fixed_column_v1(
@@ -3315,14 +3131,12 @@ impl P256BindingSinkFixedProviderV1 {
         )
     }
 }
-
 /// Constant-memory committed sink base-row provider.
 #[derive(Clone, Copy, Debug)]
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256BindingSinkRowsV1<'a> {
     trace: &'a P256ExternalBindingTraceV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256BindingSinkRowsV1<'a> {
     /// Validate the exact role-dependent row count.
@@ -3336,7 +3150,6 @@ impl<'a> P256BindingSinkRowsV1<'a> {
         }
         Ok(Self { trace })
     }
-
     /// Direct writer/external committed cells or canonical zero padding.
     pub(crate) fn base_row_v1(
         self,
@@ -3368,7 +3181,6 @@ impl<'a> P256BindingSinkRowsV1<'a> {
         }
         Ok(base)
     }
-
     /// Copy one complete committed sink column into caller-owned storage.
     pub(crate) fn fill_base_column_v1(
         self,
@@ -3383,7 +3195,6 @@ impl<'a> P256BindingSinkRowsV1<'a> {
         )
     }
 }
-
 /// Integrated binding-sink base/aux stream.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256BindingSinkAggregateStreamV1<'a> {
@@ -3393,7 +3204,6 @@ pub(crate) struct P256BindingSinkAggregateStreamV1<'a> {
     terminal: [F; P256_CROSS_TRACE_LANES_V1],
     optional_certificate: bool,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> P256BindingSinkAggregateStreamV1<'a> {
     /// Build the sole verifier-positioned optional certificate sink.
@@ -3418,7 +3228,6 @@ impl<'a> P256BindingSinkAggregateStreamV1<'a> {
             optional_certificate,
         })
     }
-
     /// Emit the next exact 38-column row.
     pub(crate) fn next_aux_row_v1(
         &mut self,
@@ -3430,7 +3239,6 @@ impl<'a> P256BindingSinkAggregateStreamV1<'a> {
             .next_row_v1()?
             .map(flatten_regular_aux_v1))
     }
-
     /// Replay this deterministic stream into one challenge-dependent sink
     /// auxiliary column.
     pub(crate) fn fill_aux_column_v1(
@@ -3457,32 +3265,27 @@ impl<'a> P256BindingSinkAggregateStreamV1<'a> {
             || replay.next_aux_row_v1(),
         )
     }
-
     /// Independent sink terminal.
     pub(crate) const fn terminal_v1(&self) -> [F; P256_CROSS_TRACE_LANES_V1] {
         self.terminal
     }
-
     /// Release the challenge-bound sink replay and terminal while preserving
     /// the independently compiled verifier-owned fixed topology.
     pub(crate) fn zeroize_private_v1(&mut self) {
         self.sink = None;
         self.terminal.fill(F::ZERO);
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.sink.is_none() && self.terminal.iter().all(|value| *value == F::ZERO)
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256BindingSinkAggregateStreamV1<'_> {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 fn sink_sources_from_opened_base_v1(base: &[F; P256_BINDING_SINK_BASE_WIDTH_V1]) -> [F; 6] {
     core::array::from_fn(|event| {
         let slot = event / 2;
@@ -3493,7 +3296,6 @@ fn sink_sources_from_opened_base_v1(base: &[F; P256_BINDING_SINK_BASE_WIDTH_V1])
         }
     })
 }
-
 /// Pure numeric sink residues over directly opened writer/external cells.
 pub(crate) fn evaluate_p256_binding_sink_aggregate_residues_v1(
     current: &[F; P256_BINDING_SINK_BASE_WIDTH_V1],
@@ -3576,14 +3378,12 @@ pub(crate) fn evaluate_p256_binding_sink_aggregate_residues_v1(
     }
     Ok(residues)
 }
-
 /// Independent sink terminal projection.
 pub(crate) fn p256_binding_sink_terminal_v1(
     aux: &[F; P256_CROSS_TRACE_SINK_AUX_WIDTH_V1],
 ) -> Result<[F; P256_CROSS_TRACE_LANES_V1], P256AggregateAdapterErrorV1> {
     compact_cross_terminal_v1(6, aux)
 }
-
 /// Final native-row selector in binding-sink preprocessing.
 pub(crate) fn p256_binding_sink_last_selector_v1(
     fixed: &[F; P256_BINDING_SINK_FIXED_WIDTH_V1],
@@ -3593,7 +3393,6 @@ pub(crate) fn p256_binding_sink_last_selector_v1(
     )
     .last
 }
-
 /// Native-domain scalar-bit bus residues.
 pub(crate) fn evaluate_p256_scalar_bit_bus_aggregate_residues_v1(
     current: &[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1],
@@ -3616,7 +3415,6 @@ pub(crate) fn evaluate_p256_scalar_bit_bus_aggregate_residues_v1(
     }
     Ok(residues)
 }
-
 /// Bind both direct source terminals to the packed-bus terminal at the
 /// verifier-preprocessed final active bus row.
 pub(crate) fn evaluate_p256_scalar_source_terminal_openings_v1(
@@ -3634,7 +3432,6 @@ pub(crate) fn evaluate_p256_scalar_source_terminal_openings_v1(
         }
     })
 }
-
 /// Verifier-owned P-256 adapter family within one signature instance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum P256MainAdapterV1 {
@@ -3653,7 +3450,6 @@ pub(crate) enum P256MainAdapterV1 {
     /// Packed arithmetic/window scalar-bit copy bus.
     ScalarBitBus,
 }
-
 /// Exact verifier-owned identity of one P-256 MAIN registration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256MainRegistrationV1 {
@@ -3661,7 +3457,6 @@ pub(crate) struct P256MainRegistrationV1 {
     adapter: P256MainAdapterV1,
     local_instance: u8,
 }
-
 impl P256MainRegistrationV1 {
     /// Validate a verifier-positioned signature, adapter, and local instance.
     pub(crate) fn new_v1(
@@ -3690,22 +3485,18 @@ impl P256MainRegistrationV1 {
                 .map_err(|_| P256AggregateAdapterErrorV1::Resource)?,
         })
     }
-
     /// Global signature index in the sole five-signature order.
     pub(crate) const fn signature_v1(self) -> usize {
         self.signature as usize
     }
-
     /// Registration-owned adapter family.
     pub(crate) const fn adapter_v1(self) -> P256MainAdapterV1 {
         self.adapter
     }
-
     /// Verifier-owned adapter-local instance.
     pub(crate) const fn local_instance_v1(self) -> usize {
         self.local_instance as usize
     }
-
     /// Role implied solely by the global signature index.
     pub(crate) const fn role_v1(self) -> P256EcdsaRoleV1 {
         if self.signature_v1() < P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1 {
@@ -3714,7 +3505,6 @@ impl P256MainRegistrationV1 {
             P256EcdsaRoleV1::WalletOwnership
         }
     }
-
     /// Native domain and committed/fixed widths for this exact registration.
     pub(crate) const fn shape_v1(
         self,
@@ -3773,7 +3563,6 @@ impl P256MainRegistrationV1 {
         Ok(shape)
     }
 }
-
 /// Exact native shape selected by a verifier-owned P-256 registration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct P256MainAdapterShapeV1 {
@@ -3786,7 +3575,6 @@ pub(crate) struct P256MainAdapterShapeV1 {
     /// Verifier-preprocessed width.
     pub(crate) fixed_width: usize,
 }
-
 fn canonical_p256_main_registrations_v1()
 -> Result<Vec<P256MainRegistrationV1>, P256AggregateAdapterErrorV1> {
     let mut registrations = Vec::new();
@@ -3826,7 +3614,6 @@ fn canonical_p256_main_registrations_v1()
     }
     Ok(registrations)
 }
-
 /// Reject any omitted, duplicated, or reordered P-256 MAIN registration.
 pub(crate) fn validate_p256_main_registration_order_v1(
     registrations: &[P256MainRegistrationV1],
@@ -3836,7 +3623,6 @@ pub(crate) fn validate_p256_main_registration_order_v1(
     }
     Ok(())
 }
-
 fn p256_main_owned_fixed_row_v1<const WIDTH: usize>(
     row: [F; WIDTH],
 ) -> Result<Vec<F>, P256AggregateAdapterErrorV1> {
@@ -3847,12 +3633,10 @@ fn p256_main_owned_fixed_row_v1<const WIDTH: usize>(
     owned.extend_from_slice(&row);
     Ok(owned)
 }
-
 #[derive(Clone, Debug)]
 struct P256MainArithmeticFixedSourceV1 {
     fixed: P256ArithmeticStarkFixedProviderV1,
 }
-
 impl P256MainArithmeticFixedSourceV1 {
     fn new_v1(role: P256EcdsaRoleV1) -> Result<Self, P256AggregateAdapterErrorV1> {
         let topology = verifier_topology_v1(role)?;
@@ -3874,7 +3658,6 @@ impl P256MainArithmeticFixedSourceV1 {
             )?,
         })
     }
-
     fn row_v1(
         &self,
         row: usize,
@@ -3909,7 +3692,6 @@ impl P256MainArithmeticFixedSourceV1 {
         );
         Ok(fixed)
     }
-
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     fn fill_fixed_column_v1(
         &self,
@@ -3924,7 +3706,6 @@ impl P256MainArithmeticFixedSourceV1 {
         )
     }
 }
-
 fn p256_main_window_fixed_row_v1(
     provider: P256WindowBatchStarkFixedProviderV1,
     row: usize,
@@ -3949,7 +3730,6 @@ fn p256_main_window_fixed_row_v1(
     );
     Ok(fixed)
 }
-
 fn p256_main_reduction_fixed_row_v1(
     provider: P256ComparisonStarkFixedProviderV1,
     role: P256ReductionAggregateRoleV1,
@@ -3970,7 +3750,6 @@ fn p256_main_reduction_fixed_row_v1(
     );
     Ok(fixed)
 }
-
 fn p256_main_low_s_fixed_row_v1(
     provider: P256ComparisonStarkFixedProviderV1,
     row: usize,
@@ -3987,7 +3766,6 @@ fn p256_main_low_s_fixed_row_v1(
     );
     Ok(fixed)
 }
-
 fn p256_main_value_fixed_source_v1(
     role: P256EcdsaRoleV1,
     endpoint: P256ValueBusStarkEndpointV1,
@@ -4002,7 +3780,6 @@ fn p256_main_value_fixed_source_v1(
         P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1,
     )?)
 }
-
 /// Closed verifier-only fixed preprocessing for every canonical P-256 MAIN
 /// registration.
 ///
@@ -4026,7 +3803,6 @@ pub(crate) struct P256MainVerifierFixedSourceV1 {
     wallet_sink: P256BindingSinkFixedProviderV1,
     scalar: super::p256_scalar_bit_bus::P256ScalarBitBusStarkFixedProviderV1,
 }
-
 impl P256MainVerifierFixedSourceV1 {
     /// Compile all verifier-owned schedules once.
     pub(crate) fn new_v1() -> Result<Self, P256AggregateAdapterErrorV1> {
@@ -4074,28 +3850,24 @@ impl P256MainVerifierFixedSourceV1 {
             )?,
         })
     }
-
     fn execution_v1(&self, role: P256EcdsaRoleV1) -> &P256ValueExecutionAggregateFixedProviderV1 {
         match role {
             P256EcdsaRoleV1::CertificateOrCrl => &self.certificate_execution,
             P256EcdsaRoleV1::WalletOwnership => &self.wallet_execution,
         }
     }
-
     fn sorted_v1(&self, role: P256EcdsaRoleV1) -> &P256ValueBusStarkFixedProviderV1 {
         match role {
             P256EcdsaRoleV1::CertificateOrCrl => &self.certificate_sorted,
             P256EcdsaRoleV1::WalletOwnership => &self.wallet_sorted,
         }
     }
-
     fn arithmetic_v1(&self, role: P256EcdsaRoleV1) -> &P256MainArithmeticFixedSourceV1 {
         match role {
             P256EcdsaRoleV1::CertificateOrCrl => &self.certificate_arithmetic,
             P256EcdsaRoleV1::WalletOwnership => &self.wallet_arithmetic,
         }
     }
-
     fn sink_v1(&self, registration: P256MainRegistrationV1) -> &P256BindingSinkFixedProviderV1 {
         if registration.signature_v1() == 2 {
             &self.optional_certificate_sink
@@ -4106,7 +3878,6 @@ impl P256MainVerifierFixedSourceV1 {
             }
         }
     }
-
     /// Regenerate one verifier-owned fixed row for a canonical registration.
     pub(crate) fn fixed_row_v1(
         &self,
@@ -4149,7 +3920,6 @@ impl P256MainVerifierFixedSourceV1 {
             _ => Err(P256AggregateAdapterErrorV1::Topology),
         }
     }
-
     /// Regenerate one verifier-owned fixed cell without any proof input.
     #[cfg(test)]
     pub(crate) fn fixed_cell_v1(
@@ -4167,7 +3937,6 @@ impl P256MainVerifierFixedSourceV1 {
             .copied()
             .ok_or(P256AggregateAdapterErrorV1::Topology)
     }
-
     /// Replay one complete verifier-owned fixed column transactionally.
     #[cfg(any(test, feature = "privacy-release-evidence"))]
     pub(crate) fn fill_fixed_column_v1(
@@ -4241,7 +4010,6 @@ impl P256MainVerifierFixedSourceV1 {
         }
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_main_arithmetic_trace_v1(trace: &mut ZkX509P256ArithmeticTraceV1) {
     for row in &mut trace.base {
@@ -4250,7 +4018,6 @@ fn zeroize_main_arithmetic_trace_v1(trace: &mut ZkX509P256ArithmeticTraceV1) {
     trace.base.clear();
     trace.fixed.clear();
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_main_window_batch_v1(trace: &mut P256WindowBatchStarkTraceV1) {
     for row in &mut trace.base {
@@ -4262,10 +4029,8 @@ fn zeroize_main_window_batch_v1(trace: &mut P256WindowBatchStarkTraceV1) {
     trace.base.clear();
     trace.aux.clear();
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainWindowInputGuardV1(Vec<P256WindowTraceV1>);
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainWindowInputGuardV1 {
     fn drop(&mut self) {
@@ -4275,21 +4040,17 @@ impl Drop for P256MainWindowInputGuardV1 {
         self.0.clear();
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainArithmeticGuardV1(Option<ZkX509P256ArithmeticTraceV1>);
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainArithmeticGuardV1 {
     fn as_ref_v1(&self) -> Result<&ZkX509P256ArithmeticTraceV1, P256AggregateAdapterErrorV1> {
         self.0.as_ref().ok_or(P256AggregateAdapterErrorV1::Source)
     }
-
     fn take_v1(&mut self) -> Result<ZkX509P256ArithmeticTraceV1, P256AggregateAdapterErrorV1> {
         self.0.take().ok_or(P256AggregateAdapterErrorV1::Source)
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainArithmeticGuardV1 {
     fn drop(&mut self) {
@@ -4299,21 +4060,17 @@ impl Drop for P256MainArithmeticGuardV1 {
         self.0 = None;
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainWindowBatchGuardV1(Option<P256WindowBatchStarkTraceV1>);
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainWindowBatchGuardV1 {
     fn as_ref_v1(&self) -> Result<&P256WindowBatchStarkTraceV1, P256AggregateAdapterErrorV1> {
         self.0.as_ref().ok_or(P256AggregateAdapterErrorV1::Source)
     }
-
     fn take_v1(&mut self) -> Result<P256WindowBatchStarkTraceV1, P256AggregateAdapterErrorV1> {
         self.0.take().ok_or(P256AggregateAdapterErrorV1::Source)
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainWindowBatchGuardV1 {
     fn drop(&mut self) {
@@ -4323,21 +4080,17 @@ impl Drop for P256MainWindowBatchGuardV1 {
         self.0 = None;
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainReductionGuardV1(Option<P256ReductionTraceV1>);
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainReductionGuardV1 {
     fn as_ref_v1(&self) -> Result<&P256ReductionTraceV1, P256AggregateAdapterErrorV1> {
         self.0.as_ref().ok_or(P256AggregateAdapterErrorV1::Source)
     }
-
     fn take_v1(&mut self) -> Result<P256ReductionTraceV1, P256AggregateAdapterErrorV1> {
         self.0.take().ok_or(P256AggregateAdapterErrorV1::Source)
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainReductionGuardV1 {
     fn drop(&mut self) {
@@ -4347,21 +4100,17 @@ impl Drop for P256MainReductionGuardV1 {
         self.0 = None;
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainLowSGuardV1(Option<P256LowSTraceV1>);
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainLowSGuardV1 {
     fn as_ref_v1(&self) -> Option<&P256LowSTraceV1> {
         self.0.as_ref()
     }
-
     fn take_v1(&mut self) -> Option<P256LowSTraceV1> {
         self.0.take()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainLowSGuardV1 {
     fn drop(&mut self) {
@@ -4371,7 +4120,6 @@ impl Drop for P256MainLowSGuardV1 {
         self.0 = None;
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainSignatureBaseV1 {
     role: P256EcdsaRoleV1,
@@ -4384,7 +4132,6 @@ struct P256MainSignatureBaseV1 {
     low_s: Option<P256LowSTraceV1>,
     sink: Option<P256ExternalBindingTraceV1>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256MainSignatureBaseV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -4395,7 +4142,6 @@ impl core::fmt::Debug for P256MainSignatureBaseV1 {
             .finish()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainSignatureBaseV1 {
     fn new_v1(
@@ -4426,7 +4172,6 @@ impl P256MainSignatureBaseV1 {
         {
             return Err(P256AggregateAdapterErrorV1::Topology);
         }
-
         let value = P256ValueBusBaseSourceV1::new_v1(material)
             .map_err(P256AggregateAdapterErrorV1::from)?;
         if value.role_v1().map_err(P256AggregateAdapterErrorV1::from)? != expected_role {
@@ -4444,7 +4189,6 @@ impl P256MainSignatureBaseV1 {
             )
             .map_err(|_| P256AggregateAdapterErrorV1::Topology)?;
         }
-
         let mut arithmetic = P256MainArithmeticGuardV1(Some(
             material
                 .build_arithmetic_trace_v1()
@@ -4467,7 +4211,6 @@ impl P256MainSignatureBaseV1 {
                 .map_err(P256AggregateAdapterErrorV1::from)?,
         ));
         P256WindowAggregateRowsV1::new_v1(window.as_ref_v1()?)?;
-
         let mut digest_reduction =
             P256MainReductionGuardV1(Some(material.reductions[0].trace.clone()));
         let mut result_x_reduction =
@@ -4486,7 +4229,6 @@ impl P256MainSignatureBaseV1 {
             P256LowSAggregateRowsV1::new_v1(expected_role, low_s)?;
         }
         P256BindingSinkRowsV1::new_v1(&sink)?;
-
         let mut source = Self {
             role: expected_role,
             value: None,
@@ -4508,7 +4250,6 @@ impl P256MainSignatureBaseV1 {
         source.low_s = low_s.take_v1();
         Ok(source)
     }
-
     fn zeroize_private_v1(&mut self) {
         if let Some(value) = self.value.as_mut() {
             value.zeroize_private_v1();
@@ -4544,14 +4285,12 @@ impl P256MainSignatureBaseV1 {
         self.sink = None;
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainSignatureBaseV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 /// Pre-X5B1 capability for the exact five-signature P-256 MAIN set.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) struct P256MainBaseSourceV1 {
@@ -4559,7 +4298,6 @@ pub(crate) struct P256MainBaseSourceV1 {
     fixed: Option<P256MainVerifierFixedSourceV1>,
     bind_attempted: bool,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256MainBaseSourceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -4570,7 +4308,6 @@ impl core::fmt::Debug for P256MainBaseSourceV1 {
             .finish()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainBaseSourceV1 {
     /// Compile all five role-positioned signatures from the canonical MAIN
@@ -4584,7 +4321,6 @@ impl P256MainBaseSourceV1 {
             assembly.optional_certificate_selection,
         )
     }
-
     fn from_materials_v1(
         materials: &[P256EcdsaTraceMaterialV1; P256_X5S1_SIGNATURES_V1],
         optional_selection: P256OptionalCertificateSelectionV1,
@@ -4625,7 +4361,6 @@ impl P256MainBaseSourceV1 {
             bind_attempted: false,
         })
     }
-
     #[cfg(test)]
     fn from_materials_for_test_v1(
         materials: &[P256EcdsaTraceMaterialV1; P256_X5S1_SIGNATURES_V1],
@@ -4633,7 +4368,6 @@ impl P256MainBaseSourceV1 {
     ) -> Result<Self, P256AggregateAdapterErrorV1> {
         Self::from_materials_v1(materials, optional_selection)
     }
-
     fn ensure_base_phase_v1(&self) -> Result<(), P256AggregateAdapterErrorV1> {
         if self.bind_attempted || self.signatures.is_none() || self.fixed.is_none() {
             Err(P256AggregateAdapterErrorV1::Phase)
@@ -4641,7 +4375,6 @@ impl P256MainBaseSourceV1 {
             Ok(())
         }
     }
-
     fn signature_v1(
         &self,
         registration: P256MainRegistrationV1,
@@ -4653,7 +4386,6 @@ impl P256MainBaseSourceV1 {
             .filter(|signature| signature.role == registration.role_v1())
             .ok_or(P256AggregateAdapterErrorV1::Topology)
     }
-
     /// Sole verifier-owned registration order for all five signatures.
     pub(crate) fn canonical_registrations_v1(
         &self,
@@ -4661,7 +4393,6 @@ impl P256MainBaseSourceV1 {
         self.ensure_base_phase_v1()?;
         canonical_p256_main_registrations_v1()
     }
-
     /// Replay one complete challenge-independent committed column.
     pub(crate) fn fill_base_column_v1(
         &self,
@@ -4756,7 +4487,6 @@ impl P256MainBaseSourceV1 {
             _ => Err(P256AggregateAdapterErrorV1::Topology),
         }
     }
-
     /// Replay one complete verifier-preprocessed column.
     #[cfg(test)]
     pub(crate) fn fill_fixed_column_v1(
@@ -4775,7 +4505,6 @@ impl P256MainBaseSourceV1 {
             .ok_or(P256AggregateAdapterErrorV1::Phase)?
             .fill_fixed_column_v1(registration, column, output)
     }
-
     pub(crate) fn zeroize_private_v1(&mut self) {
         if let Some(signatures) = self.signatures.as_mut() {
             for signature in signatures {
@@ -4786,7 +4515,6 @@ impl P256MainBaseSourceV1 {
         self.fixed = None;
         self.bind_attempted = true;
     }
-
     #[cfg(test)]
     fn poison_scalar_for_test_v1(
         &mut self,
@@ -4801,20 +4529,17 @@ impl P256MainBaseSourceV1 {
             .zeroize_private_v1();
         Ok(())
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.signatures.is_none() && self.fixed.is_none() && self.bind_attempted
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainBaseSourceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainSignatureBoundV1 {
     role: P256EcdsaRoleV1,
@@ -4827,7 +4552,6 @@ struct P256MainSignatureBoundV1 {
     low_s: Option<P256LowSTraceV1>,
     sink: Option<P256ExternalBindingTraceV1>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256MainSignatureBoundV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -4838,7 +4562,6 @@ impl core::fmt::Debug for P256MainSignatureBoundV1 {
             .finish()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainSignatureBoundV1 {
     fn zeroize_private_v1(&mut self) {
@@ -4876,14 +4599,12 @@ impl P256MainSignatureBoundV1 {
         self.sink = None;
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainSignatureBoundV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainSignatureTerminalClaimsV1 {
     role: P256EcdsaRoleV1,
@@ -4891,7 +4612,6 @@ struct P256MainSignatureTerminalClaimsV1 {
     cross_sources: Vec<P256CrossTraceTerminalClaimV1>,
     sink: [F; P256_CROSS_TRACE_LANES_V1],
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainSignatureTerminalClaimsV1 {
     fn drop(&mut self) {
@@ -4904,17 +4624,14 @@ impl Drop for P256MainSignatureTerminalClaimsV1 {
         self.sink.fill(F::ZERO);
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainCrossClaimsGuardV1(Vec<P256CrossTraceTerminalClaimV1>);
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainCrossClaimsGuardV1 {
     fn take_v1(&mut self) -> Vec<P256CrossTraceTerminalClaimV1> {
         core::mem::take(&mut self.0)
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainCrossClaimsGuardV1 {
     fn drop(&mut self) {
@@ -4925,14 +4642,12 @@ impl Drop for P256MainCrossClaimsGuardV1 {
         self.0.clear();
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 struct P256MainTerminalAssemblyGuardV1 {
     certificate_or_crl:
         [ZkX509P256CertificateTerminalClaimsV1; P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1],
     wallet: ZkX509P256WalletTerminalClaimsV1,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainTerminalAssemblyGuardV1 {
     fn drop(&mut self) {
@@ -4952,7 +4667,6 @@ impl Drop for P256MainTerminalAssemblyGuardV1 {
         self.wallet.sink.fill(F::ZERO);
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_main_signature_terminal_claims_v1(
     signature: &P256MainSignatureBoundV1,
@@ -4981,7 +4695,6 @@ fn p256_main_signature_terminal_claims_v1(
     {
         return Err(P256AggregateAdapterErrorV1::Challenge);
     }
-
     let execution = P256ValueExecutionAggregateStreamV1::new_v1(value)?;
     let sorted = value
         .sorted_aux_source_v1()
@@ -4996,7 +4709,6 @@ fn p256_main_signature_terminal_claims_v1(
         post_base.p256_arithmetic_copy(),
     )?;
     let scalar_terminals = scalar.terminals_v1();
-
     let writer = P256CrossTraceTerminalClaimV1 {
         role: P256CrossTraceTerminalRoleV1::ValueWriter,
         start: [F::ONE; P256_CROSS_TRACE_LANES_V1],
@@ -5044,7 +4756,6 @@ fn p256_main_signature_terminal_claims_v1(
         start: result_x.start_v1(),
         terminal: result_x.terminal_v1(),
     };
-
     let mut cross_sources = P256MainCrossClaimsGuardV1(Vec::new());
     cross_sources
         .0
@@ -5071,7 +4782,6 @@ fn p256_main_signature_terminal_claims_v1(
     } else if signature.low_s.is_some() {
         return Err(P256AggregateAdapterErrorV1::Topology);
     }
-
     let buses = P256BusTerminalClaimsV1 {
         value_execution: execution.value_terminal_v1()?,
         value_sorted: sorted.terminal_v1(),
@@ -5112,7 +4822,6 @@ fn p256_main_signature_terminal_claims_v1(
     }
     Ok(claims)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn p256_main_terminal_claims_v1(
     signatures: &[P256MainSignatureBoundV1; P256_X5S1_SIGNATURES_V1],
@@ -5180,7 +4889,6 @@ fn p256_main_terminal_claims_v1(
     )
     .map_err(|_| P256AggregateAdapterErrorV1::Constraint)
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_p256_main_bus_claims_v1(claims: &mut P256BusTerminalClaimsV1) {
     claims.value_execution.fill(F::ZERO);
@@ -5192,7 +4900,6 @@ fn zeroize_p256_main_bus_claims_v1(claims: &mut P256BusTerminalClaimsV1) {
     claims.scalar_bus_arithmetic.fill(F::ZERO);
     claims.scalar_bus_window.fill(F::ZERO);
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn zeroize_p256_main_terminal_claims_v1(claims: &mut ZkX509P256TerminalClaimsV1) {
     for signature in &mut claims.certificate_or_crl {
@@ -5210,7 +4917,6 @@ fn zeroize_p256_main_terminal_claims_v1(claims: &mut ZkX509P256TerminalClaimsV1)
     }
     claims.wallet.sink.fill(F::ZERO);
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainBaseSourceV1 {
     /// Consume the exact five-signature base phase once under the opaque X5B1
@@ -5244,7 +4950,6 @@ impl P256MainBaseSourceV1 {
                     return Err(P256AggregateAdapterErrorV1::Source);
                 }
             }
-
             let mut bound = Vec::new();
             bound
                 .try_reserve_exact(P256_X5S1_SIGNATURES_V1)
@@ -5316,7 +5021,6 @@ impl P256MainBaseSourceV1 {
         result
     }
 }
-
 /// Post-X5B1 capability for the sole five-signature P-256 MAIN set.
 ///
 /// It is the only production source of P-256 auxiliary replay. All challenge
@@ -5329,7 +5033,6 @@ pub(crate) struct P256MainBoundSourceV1 {
     post_base: Option<ZkX509CredentialMainPostBaseChallengesV1>,
     terminal_claims: Option<ZkX509P256TerminalClaimsV1>,
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl core::fmt::Debug for P256MainBoundSourceV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -5339,7 +5042,6 @@ impl core::fmt::Debug for P256MainBoundSourceV1 {
             .finish()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl P256MainBoundSourceV1 {
     fn ensure_bound_v1(&self) -> Result<(), P256AggregateAdapterErrorV1> {
@@ -5390,7 +5092,6 @@ impl P256MainBoundSourceV1 {
         }
         Ok(())
     }
-
     fn signature_v1(
         &self,
         registration: P256MainRegistrationV1,
@@ -5402,7 +5103,6 @@ impl P256MainBoundSourceV1 {
             .filter(|signature| signature.role == registration.role_v1())
             .ok_or(P256AggregateAdapterErrorV1::Topology)
     }
-
     fn cross_claim_v1(
         &self,
         registration: P256MainRegistrationV1,
@@ -5427,7 +5127,6 @@ impl P256MainBoundSourceV1 {
             .find(|source| source.role == role)
             .ok_or(P256AggregateAdapterErrorV1::Topology)
     }
-
     /// The already-bound opaque MAIN token used by residue evaluators.
     ///
     /// Returning the capability does not permit caller-selected challenges:
@@ -5439,7 +5138,6 @@ impl P256MainBoundSourceV1 {
         self.ensure_bound_v1()?;
         self.post_base.ok_or(P256AggregateAdapterErrorV1::Phase)
     }
-
     /// Sole verifier-owned registration order retained after binding.
     pub(crate) fn canonical_registrations_v1(
         &self,
@@ -5447,7 +5145,6 @@ impl P256MainBoundSourceV1 {
         self.ensure_bound_v1()?;
         canonical_p256_main_registrations_v1()
     }
-
     /// Replay one complete challenge-independent committed column after
     /// binding.
     pub(crate) fn fill_base_column_v1(
@@ -5544,7 +5241,6 @@ impl P256MainBoundSourceV1 {
             _ => Err(P256AggregateAdapterErrorV1::Topology),
         }
     }
-
     /// Replay one complete witness-free verifier-preprocessed column after
     /// binding.
     pub(crate) fn fill_fixed_column_v1(
@@ -5563,7 +5259,6 @@ impl P256MainBoundSourceV1 {
             .ok_or(P256AggregateAdapterErrorV1::Phase)?
             .fill_fixed_column_v1(registration, column, output)
     }
-
     /// Replay one complete challenge-dependent committed column from the
     /// single retained X5B1 token.
     pub(crate) fn fill_aux_column_v1(
@@ -5699,7 +5394,6 @@ impl P256MainBoundSourceV1 {
             _ => Err(P256AggregateAdapterErrorV1::Topology),
         }
     }
-
     /// Exact X5V1 terminal material for all five role-positioned signatures.
     pub(crate) fn terminal_claims_v1(
         &self,
@@ -5708,7 +5402,6 @@ impl P256MainBoundSourceV1 {
         self.terminal_claims
             .ok_or(P256AggregateAdapterErrorV1::Phase)
     }
-
     pub(crate) fn zeroize_private_v1(&mut self) {
         self.post_base = None;
         if let Some(claims) = self.terminal_claims.as_mut() {
@@ -5723,7 +5416,6 @@ impl P256MainBoundSourceV1 {
         self.signatures = None;
         self.fixed = None;
     }
-
     #[cfg(test)]
     fn replace_post_base_for_test_v1(
         &mut self,
@@ -5731,7 +5423,6 @@ impl P256MainBoundSourceV1 {
     ) {
         self.post_base = Some(post_base);
     }
-
     #[cfg(test)]
     fn private_is_zeroized_v1(&self) -> bool {
         self.signatures.is_none()
@@ -5740,20 +5431,17 @@ impl P256MainBoundSourceV1 {
             && self.terminal_claims.is_none()
     }
 }
-
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl Drop for P256MainBoundSourceV1 {
     fn drop(&mut self) {
         self.zeroize_private_v1();
     }
 }
-
 #[cfg(test)]
 struct P256MainCanonicalTestMaterialsV1 {
     materials: [P256EcdsaTraceMaterialV1; P256_X5S1_SIGNATURES_V1],
     selection: P256OptionalCertificateSelectionV1,
 }
-
 #[cfg(test)]
 impl Drop for P256MainCanonicalTestMaterialsV1 {
     fn drop(&mut self) {
@@ -5765,7 +5453,6 @@ impl Drop for P256MainCanonicalTestMaterialsV1 {
         self.selection.active = F::ZERO;
     }
 }
-
 #[cfg(test)]
 fn p256_main_signed_witness_for_test_v1(
     seed: u8,
@@ -5800,7 +5487,6 @@ fn p256_main_signed_witness_for_test_v1(
         digest_be: digest,
     })
 }
-
 #[cfg(test)]
 fn p256_main_canonical_materials_for_test_v1()
 -> Result<P256MainCanonicalTestMaterialsV1, P256AggregateAdapterErrorV1> {
@@ -5844,7 +5530,6 @@ fn p256_main_canonical_materials_for_test_v1()
         selection,
     })
 }
-
 /// Canonical exact-five-signature central P-256 source for native-log tests.
 ///
 /// This fixture bypasses only release-profile assembly setup; it still
@@ -5856,7 +5541,6 @@ pub(crate) fn p256_main_base_source_fixture_for_test_v1()
     let fixture = p256_main_canonical_materials_for_test_v1()?;
     P256MainBaseSourceV1::from_materials_v1(&fixture.materials, fixture.selection)
 }
-
 #[cfg(test)]
 mod tests {
     use sha2::{Digest as _, Sha256};
@@ -5898,7 +5582,6 @@ mod tests {
         .expect("opaque X5B1 binding")
         .main_post_base()
     }
-
     fn arithmetic_copy_challenges() -> P256ArithmeticCopyChallengesV1 {
         P256ArithmeticCopyChallengesV1 {
             lanes: core::array::from_fn(|lane| P256ArithmeticCopyLaneChallengesV1 {
@@ -5906,7 +5589,6 @@ mod tests {
             }),
         }
     }
-
     fn copy_sources(events: &[P256ArithmeticCopyEventFixedV1]) -> Vec<F> {
         events
             .iter()
@@ -5919,7 +5601,6 @@ mod tests {
             })
             .collect()
     }
-
     fn build_copy_endpoint(
         events: &[Vec<P256ArithmeticCopyEventFixedV1>],
         sources: &[Vec<F>],
@@ -5957,7 +5638,6 @@ mod tests {
         assert_eq!(running, terminal);
         (aux, terminal)
     }
-
     fn copy_endpoint_residues(
         events: &[Vec<P256ArithmeticCopyEventFixedV1>],
         sources: &[Vec<F>],
@@ -5981,7 +5661,6 @@ mod tests {
             })
             .collect()
     }
-
     fn one_event_fixture(
         rows: usize,
         active: usize,
@@ -5998,7 +5677,6 @@ mod tests {
         let sources = events.iter().map(|row| copy_sources(row)).collect();
         (events, sources)
     }
-
     fn three_event_fixture(
         rows: usize,
         active_rows: usize,
@@ -6020,7 +5698,6 @@ mod tests {
         let sources = events.iter().map(|row| copy_sources(row)).collect();
         (events, sources)
     }
-
     fn cross_challenges() -> P256CrossTraceChallengesV1 {
         P256CrossTraceChallengesV1 {
             lanes: core::array::from_fn(|lane| P256CrossTraceLaneChallengesV1 {
@@ -6028,7 +5705,6 @@ mod tests {
             }),
         }
     }
-
     fn scalar_challenges() -> P256ScalarBitBusChallengesV1 {
         P256ScalarBitBusChallengesV1 {
             lanes: core::array::from_fn(|lane| P256ScalarBitBusLaneChallengesV1 {
@@ -6036,7 +5712,6 @@ mod tests {
             }),
         }
     }
-
     fn selection_tail_residues_v1(
         current: &[F; P256_BINDING_SINK_BASE_WIDTH_V1],
         next: &[F; P256_BINDING_SINK_BASE_WIDTH_V1],
@@ -6054,7 +5729,6 @@ mod tests {
         .expect("selection residues");
         residues[P256_BINDING_SINK_CONSTRAINT_COUNT_V1 - 41..].to_vec()
     }
-
     fn selection_byte_row_v1(
         active: F,
         real: u8,
@@ -6083,11 +5757,9 @@ mod tests {
         fixed[SINK_SELECTION_INACTIVE_REAL_FIXED] = F(u64::from(inactive_real));
         (base, fixed)
     }
-
     #[test]
     fn binding_sink_commits_all_321_optional_certificate_relations() {
         let mut caught = 0_usize;
-
         // One Boolean relation, committed on the verifier-fixed selector row.
         let mut selector = [F::ZERO; P256_BINDING_SINK_BASE_WIDTH_V1];
         selector[SINK_SELECTION_ACTIVE_BASE] = F::ONE;
@@ -6105,13 +5777,11 @@ mod tests {
                 .any(|residue| *residue != F::ZERO)
         );
         caught += 1;
-
         for byte in 0..P256_INPUT_SELECTION_BYTES_V1 {
             let real = u8::try_from((byte * 73 + 19) % 251).expect("fixture byte");
             let dummy =
                 p256_input_selection_byte_v1(ZK_X509_P256_OPTIONAL_CERTIFICATE_DUMMY_V1, byte)
                     .expect("dummy byte");
-
             // All 160 selected-byte relations reject even a coordinated
             // selected-byte/range-bit substitution.
             let (active, active_fixed) = selection_byte_row_v1(F::ONE, real, real, dummy, 0);
@@ -6136,7 +5806,6 @@ mod tests {
                 "selected byte {byte}",
             );
             caught += 1;
-
             // All 160 inactive-source relations reject a coordinated
             // real-byte/range-bit substitution, including the digest word.
             let inactive_real = p256_inactive_real_byte_v1(byte).expect("inactive byte");
@@ -6163,10 +5832,8 @@ mod tests {
             );
             caught += 1;
         }
-
         assert_eq!(caught, 321);
     }
-
     #[test]
     fn binding_sink_selector_rejects_range_padding_transition_and_fixed_schedule_attacks() {
         let byte = 137;
@@ -6175,7 +5842,6 @@ mod tests {
         let inactive_real = p256_inactive_real_byte_v1(byte).expect("inactive byte");
         let (base, fixed) =
             selection_byte_row_v1(F::ZERO, inactive_real, dummy, dummy, inactive_real);
-
         for column in SINK_SELECTION_REAL_BITS_BASE..SINK_SELECTION_SELECTED_BITS_BASE + 8 {
             let mut changed = base;
             changed[column] = F(2);
@@ -6186,7 +5852,6 @@ mod tests {
                 "range bit column {column}",
             );
         }
-
         let mut changed_fixed = fixed;
         changed_fixed[SINK_SELECTION_DUMMY_FIXED] =
             changed_fixed[SINK_SELECTION_DUMMY_FIXED].add(F::ONE);
@@ -6203,7 +5868,6 @@ mod tests {
                 .iter()
                 .any(|residue| *residue != F::ZERO)
         );
-
         let mut padding = [F::ZERO; P256_BINDING_SINK_BASE_WIDTH_V1];
         padding[SINK_SELECTION_ACTIVE_BASE] = F::ONE;
         let padding_fixed = [F::ZERO; P256_BINDING_SINK_FIXED_WIDTH_V1];
@@ -6222,7 +5886,6 @@ mod tests {
                 "padding column {column}",
             );
         }
-
         let mut transition_fixed = padding_fixed;
         transition_fixed[SINK_SELECTION_CONTINUE_FIXED] = F::ONE;
         let mut changed_next = padding;
@@ -6232,7 +5895,6 @@ mod tests {
                 .iter()
                 .any(|residue| *residue != F::ZERO)
         );
-
         let mut inactive_selector = [F::ZERO; P256_BINDING_SINK_BASE_WIDTH_V1];
         inactive_selector[SINK_SELECTION_ACTIVE_BASE] = F::ZERO;
         let mut mandatory_fixed = padding_fixed;
@@ -6244,7 +5906,6 @@ mod tests {
                 .any(|residue| *residue != F::ZERO)
         );
     }
-
     #[test]
     fn only_certificate_sinks_can_use_the_verifier_positioned_optional_schedule() {
         assert!(
@@ -6263,7 +5924,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Topology)
         );
     }
-
     type CrossFixtureV1 = (
         Vec<Vec<P256CrossTraceEventFixedV1>>,
         Vec<Vec<F>>,
@@ -6271,7 +5931,6 @@ mod tests {
         [F; P256_CROSS_TRACE_LANES_V1],
         [F; P256_CROSS_TRACE_LANES_V1],
     );
-
     fn cross_fixture(event_slots: usize) -> CrossFixtureV1 {
         let rows = 8;
         let events: Vec<Vec<_>> = (0..rows)
@@ -6334,7 +5993,6 @@ mod tests {
         assert_eq!(running, terminal);
         (events, sources, aux, start, terminal)
     }
-
     fn cross_fixture_residues(
         events: &[Vec<P256CrossTraceEventFixedV1>],
         sources: &[Vec<F>],
@@ -6357,7 +6015,6 @@ mod tests {
             })
             .collect()
     }
-
     fn assert_aux_column_transpose_v1<const WIDTH: usize>(rows: Vec<Vec<F>>) {
         let rows: Vec<[F; WIDTH]> = rows
             .into_iter()
@@ -6396,11 +6053,9 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Topology)
         );
     }
-
     #[test]
     fn aggregate_column_destinations_are_transactional_and_fail_closed() {
         const SENTINEL: F = F(0x5a5a);
-
         // Shape and column-index failures happen before the destination guard
         // exists, so caller-owned storage remains byte-for-byte untouched.
         let mut invalid_row_column = [SENTINEL; 8];
@@ -6411,7 +6066,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Topology)
         );
         assert_eq!(invalid_row_column, [SENTINEL; 8]);
-
         let mut invalid_row_length = [SENTINEL; 7];
         assert_eq!(
             fill_aggregate_row_column_v1::<2>(8, 0, &mut invalid_row_length, |_| panic!(
@@ -6420,7 +6074,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Topology)
         );
         assert_eq!(invalid_row_length, [SENTINEL; 7]);
-
         let mut non_power_of_two = [SENTINEL; 6];
         assert_eq!(
             fill_aggregate_row_column_v1::<2>(6, 0, &mut non_power_of_two, |_| panic!(
@@ -6429,7 +6082,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Topology)
         );
         assert_eq!(non_power_of_two, [SENTINEL; 6]);
-
         let mut invalid_aux_column = [SENTINEL; 8];
         assert_eq!(
             fill_aggregate_aux_column_v1::<2>(8, 2, &mut invalid_aux_column, || panic!(
@@ -6438,7 +6090,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Topology)
         );
         assert_eq!(invalid_aux_column, [SENTINEL; 8]);
-
         let mut invalid_aux_length = [SENTINEL; 7];
         assert_eq!(
             fill_aggregate_aux_column_v1::<2>(8, 0, &mut invalid_aux_length, || panic!(
@@ -6447,7 +6098,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Topology)
         );
         assert_eq!(invalid_aux_length, [SENTINEL; 7]);
-
         // Once a source has begun populating a column, every error path clears
         // the complete destination instead of retaining a successful prefix.
         let mut row_error = [SENTINEL; 8];
@@ -6462,7 +6112,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Source)
         );
         assert_eq!(row_error, [F::ZERO; 8]);
-
         let mut aux_call = 0_usize;
         let mut aux_error = [SENTINEL; 8];
         assert_eq!(
@@ -6478,7 +6127,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Source)
         );
         assert_eq!(aux_error, [F::ZERO; 8]);
-
         let rows: [[F; 2]; 8] =
             core::array::from_fn(|row| [F((row + 1) as u64), F((row + 101) as u64)]);
         let mut short = rows[..7].iter().copied();
@@ -6488,7 +6136,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Topology)
         );
         assert_eq!(short_output, [F::ZERO; 8]);
-
         let mut extra = rows.iter().copied().chain(core::iter::once(rows[0]));
         let mut extra_output = [SENTINEL; 8];
         assert_eq!(
@@ -6496,24 +6143,20 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Topology)
         );
         assert_eq!(extra_output, [F::ZERO; 8]);
-
         // A complete successful replay commits the exact transposed column.
         let mut row_success = [SENTINEL; 8];
         fill_aggregate_row_column_v1::<2>(8, 1, &mut row_success, |row| Ok(rows[row]))
             .expect("complete row column");
         assert_eq!(row_success, rows.map(|row| row[1]));
-
         let mut replay = rows.iter().copied();
         let mut aux_success = [SENTINEL; 8];
         fill_aggregate_aux_column_v1(8, 0, &mut aux_success, || Ok(replay.next()))
             .expect("complete auxiliary column");
         assert_eq!(aux_success, rows.map(|row| row[0]));
     }
-
     #[test]
     fn aggregate_private_zeroization_is_idempotent_and_preserves_fixed_topology() {
         const SENTINEL: F = F(0x6b6b);
-
         let reduction_trace =
             build_p256_reduction_trace_v1([0_u8; 32]).expect("canonical reduction");
         let mut reduction = P256ReductionAggregateAuxStreamV1::new_v1(
@@ -6531,7 +6174,6 @@ mod tests {
             .expect("last reduction fixed row");
         let reduction_base = reduction.base_row_v1(0).expect("reduction base row");
         assert!(!reduction.private_is_zeroized_v1());
-
         reduction.zeroize_private_v1();
         reduction.zeroize_private_v1();
         assert!(reduction.private_is_zeroized_v1());
@@ -6559,7 +6201,6 @@ mod tests {
             reduction_output,
             [SENTINEL; P256_REDUCTION_AGGREGATE_TRACE_SIZE_V1]
         );
-
         let low_s_trace = build_p256_low_s_trace_v1([0_u8; 32]).expect("canonical low-S");
         let mut low_s = P256LowSAggregateAuxStreamV1::new_v1(
             P256EcdsaRoleV1::WalletOwnership,
@@ -6574,7 +6215,6 @@ mod tests {
             .expect("last low-S fixed row");
         let low_s_base = low_s.base_row_v1(0).expect("low-S base row");
         assert!(!low_s.private_is_zeroized_v1());
-
         low_s.zeroize_private_v1();
         low_s.zeroize_private_v1();
         assert!(low_s.private_is_zeroized_v1());
@@ -6600,14 +6240,12 @@ mod tests {
         );
         assert_eq!(low_s_output, [SENTINEL; P256_LOW_S_AGGREGATE_TRACE_SIZE_V1]);
     }
-
     type ScalarFixtureV1 = (
         Vec<Vec<P256ScalarSourceEventFixedV1>>,
         Vec<Vec<F>>,
         Vec<Vec<F>>,
         [F; P256_SCALAR_BIT_BUS_LANES_V1],
     );
-
     fn scalar_fixture(event_slots: usize) -> ScalarFixtureV1 {
         let rows = 8;
         let events: Vec<Vec<_>> = (0..rows)
@@ -6674,7 +6312,6 @@ mod tests {
         assert_eq!(running, terminal);
         (events, sources, aux, terminal)
     }
-
     fn scalar_fixture_residues(
         events: &[Vec<P256ScalarSourceEventFixedV1>],
         sources: &[Vec<F>],
@@ -6695,7 +6332,6 @@ mod tests {
             })
             .collect()
     }
-
     #[test]
     fn aggregate_shapes_descriptor_and_copy_challenges_are_exact() {
         assert_eq!(
@@ -6777,7 +6413,6 @@ mod tests {
             assert!(!labels[..index].contains(label));
         }
     }
-
     #[test]
     fn every_fixed_source_address_is_injective_complete_and_padded() {
         let mut value_seen = vec![false; P256_ARITHMETIC_COPY_CELLS_V1];
@@ -6785,7 +6420,6 @@ mod tests {
         let mut window_seen = vec![false; WINDOW_EXTERNAL_EVENTS];
         let mut window_scalar_seen = [false; 512];
         let mut arithmetic_scalar_seen = [false; 512];
-
         for row in 0..P256_VALUE_BUS_AGGREGATE_TRACE_SIZE_V1 {
             for value_event in value_arithmetic_copy_events_v1(row, P256_ARITHMETIC_OPERATIONS_V1)
                 .expect("value copy schedule")
@@ -6817,7 +6451,6 @@ mod tests {
                     assert_eq!(event.address, F::ZERO);
                 }
             }
-
             for event in arithmetic_scalar_events_v1(row).expect("arithmetic scalar schedule") {
                 if event.active == F::ONE {
                     let address = usize::try_from(
@@ -6847,7 +6480,6 @@ mod tests {
                     assert_eq!(event.address, F::ZERO);
                 }
             }
-
             let window_scalar = window_scalar_event_v1(row).expect("window scalar schedule");
             if window_scalar.active == F::ONE {
                 let address = usize::try_from(
@@ -6869,7 +6501,6 @@ mod tests {
         assert!(window_seen.into_iter().all(core::convert::identity));
         assert_eq!(window_scalar_seen, [true; 512]);
         assert_eq!(arithmetic_scalar_seen, [true; 512]);
-
         for row in 0..P256_REDUCTION_ROWS_V1 {
             let digest = reduction_cross_events_v1(P256ReductionAggregateRoleV1::Digest, row)
                 .expect("digest reduction schedule");
@@ -6950,7 +6581,6 @@ mod tests {
         assert!(window_scalar_event_v1(P256_WINDOW_AGGREGATE_TRACE_SIZE_V1).is_err());
         assert!(low_s_cross_event_v1(P256_LOW_S_AGGREGATE_TRACE_SIZE_V1).is_err());
     }
-
     #[test]
     fn arithmetic_copy_products_reject_all_source_aux_padding_and_opening_mutations() {
         let challenges = arithmetic_copy_challenges();
@@ -6980,7 +6610,6 @@ mod tests {
             evaluate_p256_arithmetic_copy_terminal_openings_v1(value_terminal, arithmetic_terminal,),
             [F::ZERO; P256_ARITHMETIC_COPY_LANES_V1]
         );
-
         for (events, sources, aux, boundary_rows) in [
             (&value_events, &value_sources, &value_aux, [0_usize, 6, 7]),
             (
@@ -7033,7 +6662,6 @@ mod tests {
                 }
             }
         }
-
         let mut coordinated_sources = value_sources.clone();
         coordinated_sources[3][0] = coordinated_sources[3][0].add(F::ONE);
         let (coordinated_aux, coordinated_terminal) =
@@ -7064,7 +6692,6 @@ mod tests {
             assert_ne!(residues[lane], F::ZERO);
         }
     }
-
     #[test]
     fn all_compact_cross_and_scalar_adapter_widths_reject_every_committed_mutation() {
         for event_slots in [1_usize, 2, 3, 6] {
@@ -7128,7 +6755,6 @@ mod tests {
                 "cross N={event_slots}, inactive selector",
             );
         }
-
         for event_slots in [1_usize, 8] {
             let (events, sources, aux, _) = scalar_fixture(event_slots);
             assert!(
@@ -7187,7 +6813,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn challenge_dependent_n1_n2_n3_n6_columns_equal_row_transposes() {
         assert_aux_column_transpose_v1::<13>(cross_fixture(1).2);
@@ -7195,7 +6820,6 @@ mod tests {
         assert_aux_column_transpose_v1::<23>(cross_fixture(3).2);
         assert_aux_column_transpose_v1::<38>(cross_fixture(6).2);
     }
-
     #[test]
     fn every_aggregate_terminal_projection_reads_the_registered_columns() {
         let (_, _, window_rows, window_start, window_terminal) = cross_fixture(3);
@@ -7218,7 +6842,6 @@ mod tests {
             p256_window_cross_terminal_v1(&window_last),
             Ok(window_terminal)
         );
-
         let (_, _, reduction_rows, reduction_start, reduction_terminal) = cross_fixture(2);
         let mut reduction_first = [F::ZERO; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1];
         let mut reduction_last = [F::ZERO; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1];
@@ -7250,7 +6873,6 @@ mod tests {
                 Ok(reduction_terminal)
             );
         }
-
         let (_, _, low_s_rows, low_s_start, low_s_terminal) = cross_fixture(1);
         let mut low_s_first = [F::ZERO; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1];
         let mut low_s_last = [F::ZERO; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1];
@@ -7271,12 +6893,10 @@ mod tests {
             p256_low_s_cross_terminal_v1(&low_s_last),
             Ok(low_s_terminal)
         );
-
         let (_, _, sink_rows, _, sink_terminal) = cross_fixture(6);
         let sink_last: [F; P256_CROSS_TRACE_SINK_AUX_WIDTH_V1] =
             sink_rows[7].clone().try_into().expect("sink aux width");
         assert_eq!(p256_binding_sink_terminal_v1(&sink_last), Ok(sink_terminal));
-
         let (_, _, window_scalar_rows, window_scalar_terminal) = scalar_fixture(1);
         let mut window_scalar_last = [F::ZERO; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1];
         window_scalar_last[WINDOW_SCALAR_AUX..].copy_from_slice(&window_scalar_rows[7]);
@@ -7321,7 +6941,6 @@ mod tests {
             ),
             [F::ZERO; 2 * P256_SCALAR_BIT_BUS_LANES_V1]
         );
-
         let writer_start = [F(17), F(19), F(23), F(29)];
         let writer_terminal = [F(31), F(37), F(41), F(43)];
         let writer_first_row = P256CrossTraceWriterAuxRowV1 {
@@ -7363,7 +6982,6 @@ mod tests {
             p256_value_execution_cross_terminal_v1(&value_last),
             Ok(writer_terminal)
         );
-
         let writer_fixed =
             P256CrossTraceWriterSourceFixedV1::compile_v1(P256EcdsaRoleV1::WalletOwnership)
                 .expect("writer fixed");
@@ -7386,13 +7004,11 @@ mod tests {
             );
         }
     }
-
     fn small_be(value: u64) -> [u8; 32] {
         let mut bytes = [0_u8; 32];
         bytes[24..].copy_from_slice(&value.to_be_bytes());
         bytes
     }
-
     #[test]
     fn arithmetic_copy_known_answer_binds_real_value_bus_and_arithmetic_openings() {
         let operations = [
@@ -7469,7 +7085,6 @@ mod tests {
         let arithmetic_fixed =
             P256ArithmeticStarkFixedProviderV1::new_v1(&arithmetic_topology, trace_size)
                 .expect("KAT arithmetic fixed");
-
         let mut value_events = Vec::with_capacity(trace_size);
         let mut value_sources = Vec::with_capacity(trace_size);
         let mut arithmetic_events = Vec::with_capacity(trace_size);
@@ -7486,7 +7101,6 @@ mod tests {
                 )
                 .to_vec(),
             );
-
             let events = arithmetic_value_copy_events_v1(row, arithmetic.rows())
                 .expect("KAT arithmetic events");
             arithmetic_events.push(events.to_vec());
@@ -7503,7 +7117,6 @@ mod tests {
                 .to_vec(),
             );
         }
-
         for operation in 0..operations.len() {
             for limb in 0..16 {
                 let arithmetic_row = operation * P256_ARITHMETIC_ROWS_PER_OPERATION_V1 + limb;
@@ -7521,7 +7134,6 @@ mod tests {
                 }
             }
         }
-
         let copy_challenges = arithmetic_copy_challenges();
         let (value_aux, value_terminal) =
             build_copy_endpoint(&value_events, &value_sources, copy_challenges);
@@ -7555,7 +7167,6 @@ mod tests {
             [F::ZERO; P256_ARITHMETIC_COPY_LANES_V1]
         );
     }
-
     fn canonical_terminal_chain(
         role: P256EcdsaRoleV1,
     ) -> (
@@ -7579,7 +7190,6 @@ mod tests {
         }
         (claims, running)
     }
-
     fn bus_terminal_claims(groups: [[F; P256_CROSS_TRACE_LANES_V1]; 8]) -> P256BusTerminalClaimsV1 {
         P256BusTerminalClaimsV1 {
             value_execution: groups[0],
@@ -7592,7 +7202,6 @@ mod tests {
             scalar_bus_window: groups[7],
         }
     }
-
     fn canonical_bus_terminal_claims() -> P256BusTerminalClaimsV1 {
         bus_terminal_claims([
             [F(11), F(12), F(13), F(14)],
@@ -7605,12 +7214,10 @@ mod tests {
             [F(41), F(42), F(43), F(44)],
         ])
     }
-
     fn terminal_claim_transcript() -> TransparentTranscriptV1 {
         TransparentTranscriptV1::new(b"p256-claim-test", &[7_u8; 32], &[9_u8; 32])
             .expect("claim transcript")
     }
-
     #[test]
     fn transcript_bound_terminal_claims_order_and_mutations_fail_closed() {
         for role in [
@@ -7639,7 +7246,6 @@ mod tests {
             )
             .expect("absorb canonical claims");
             let canonical_state = canonical_transcript.state();
-
             let mut missing = canonical.clone();
             missing.pop();
             assert_eq!(
@@ -7688,7 +7294,6 @@ mod tests {
                 ),
                 Err(P256AggregateAdapterErrorV1::Topology)
             );
-
             for index in 0..canonical.len() {
                 for lane in 0..P256_CROSS_TRACE_LANES_V1 {
                     let mut forged = canonical.clone();
@@ -7705,7 +7310,6 @@ mod tests {
                     absorb_p256_terminal_claims_v1(&mut transcript, role, buses, &forged, sink)
                         .expect("absorb forged start");
                     assert_ne!(transcript.state(), canonical_state);
-
                     let mut forged = canonical.clone();
                     forged[index].terminal[lane] = forged[index].terminal[lane].add(F::ONE);
                     assert!(
@@ -7748,7 +7352,6 @@ mod tests {
                     .any(|residue| *residue != F::ZERO)
                 );
             }
-
             let canonical_groups = [
                 buses.value_execution,
                 buses.value_sorted,
@@ -7776,7 +7379,6 @@ mod tests {
                     assert_ne!(transcript.state(), canonical_state);
                 }
             }
-
             let mut noncanonical_cross = canonical.clone();
             noncanonical_cross[0].terminal[0] = F(u64::MAX);
             assert_eq!(
@@ -7814,7 +7416,6 @@ mod tests {
                 Err(P256AggregateAdapterErrorV1::Topology)
             );
         }
-
         let (wallet, wallet_sink) = canonical_terminal_chain(P256EcdsaRoleV1::WalletOwnership);
         assert_eq!(
             evaluate_p256_cross_trace_terminal_claim_equalities_v1(
@@ -7825,7 +7426,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Topology)
         );
     }
-
     fn run_p256_main_test_on_explicit_stack_v1(name: &'static str, body: fn()) {
         std::thread::scope(|scope| {
             let thread = std::thread::Builder::new()
@@ -7836,7 +7436,6 @@ mod tests {
             thread.join().expect("P-256 MAIN test thread");
         });
     }
-
     #[test]
     fn p256_main_ephemeral_stream_zeroization_is_recursive_and_idempotent() {
         run_p256_main_test_on_explicit_stack_v1(
@@ -7844,7 +7443,6 @@ mod tests {
             p256_main_ephemeral_stream_zeroization_body_v1,
         );
     }
-
     fn p256_main_ephemeral_stream_zeroization_body_v1() {
         let fixture =
             p256_main_canonical_materials_for_test_v1().expect("canonical P-256 MAIN materials");
@@ -7857,7 +7455,6 @@ mod tests {
             .signatures
             .as_ref()
             .expect("retained bound signatures")[2];
-
         let mut execution = P256ValueExecutionAggregateStreamV1::new_v1(
             signature.value.as_ref().expect("bound value source"),
         )
@@ -7885,12 +7482,10 @@ mod tests {
             true,
         )
         .expect("optional-certificate sink stream");
-
         assert!(!execution.private_is_zeroized_v1());
         assert!(!arithmetic.private_is_zeroized_v1());
         assert!(!window.private_is_zeroized_v1());
         assert!(!sink.private_is_zeroized_v1());
-
         execution.zeroize_private_v1();
         arithmetic.zeroize_private_v1();
         window.zeroize_private_v1();
@@ -7899,7 +7494,6 @@ mod tests {
         assert!(arithmetic.private_is_zeroized_v1());
         assert!(window.private_is_zeroized_v1());
         assert!(sink.private_is_zeroized_v1());
-
         execution.zeroize_private_v1();
         arithmetic.zeroize_private_v1();
         window.zeroize_private_v1();
@@ -7909,7 +7503,6 @@ mod tests {
         assert!(window.private_is_zeroized_v1());
         assert!(sink.private_is_zeroized_v1());
     }
-
     #[test]
     fn p256_main_registration_and_verifier_fixed_source_are_closed_and_exact() {
         run_p256_main_test_on_explicit_stack_v1(
@@ -7917,7 +7510,6 @@ mod tests {
             p256_main_registration_and_verifier_fixed_source_body_v1,
         );
     }
-
     #[test]
     fn p256_main_arithmetic_copy_selectors_use_true_logical_row_bound() {
         let logical_rows = P256_ARITHMETIC_OPERATIONS_V1 * P256_ARITHMETIC_ROWS_PER_OPERATION_V1;
@@ -7952,7 +7544,6 @@ mod tests {
             }
         }
     }
-
     fn p256_main_registration_and_verifier_fixed_source_body_v1() {
         let registrations = canonical_p256_main_registrations_v1().expect("canonical MAIN order");
         assert_eq!(registrations.len(), 41);
@@ -8044,7 +7635,6 @@ mod tests {
                 }
             );
         }
-
         let mut omitted = registrations.clone();
         omitted.remove(7);
         assert_eq!(
@@ -8092,7 +7682,6 @@ mod tests {
             forged.shape_v1(),
             Err(P256AggregateAdapterErrorV1::Topology)
         );
-
         let fixed = P256MainVerifierFixedSourceV1::new_v1().expect("closed fixed source");
         let sink_one =
             P256MainRegistrationV1::new_v1(1, P256MainAdapterV1::BindingSink, 0).expect("sink one");
@@ -8142,7 +7731,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Topology)
         );
     }
-
     #[test]
     fn p256_main_exact_five_signature_pipeline_binds_once_and_replays_from_one_token() {
         run_p256_main_test_on_explicit_stack_v1(
@@ -8150,7 +7738,6 @@ mod tests {
             p256_main_exact_five_signature_pipeline_body_v1,
         );
     }
-
     fn p256_main_exact_five_signature_pipeline_body_v1() {
         let mut fixture =
             p256_main_canonical_materials_for_test_v1().expect("canonical P-256 MAIN materials");
@@ -8161,7 +7748,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Topology)
         ));
         fixture.materials.swap(0, P256_X5S1_SIGNATURES_V1 - 1);
-
         let post_base = main_post_base_v1(41);
         let mut partially_poisoned =
             P256MainBaseSourceV1::from_materials_for_test_v1(&fixture.materials, selection)
@@ -8176,7 +7762,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Phase)
         ));
         drop(partially_poisoned);
-
         let mut source =
             P256MainBaseSourceV1::from_materials_for_test_v1(&fixture.materials, selection)
                 .expect("canonical five-signature base source");
@@ -8209,7 +7794,6 @@ mod tests {
             .fill_fixed_column_v1(scalar, 0, &mut independently_replayed)
             .expect("independent fixed replay");
         assert_eq!(scalar_fixed_before, independently_replayed);
-
         let mut bound = source.bind_v1(post_base).expect("one exact X5B1 bind");
         assert!(source.private_is_zeroized_v1());
         assert_eq!(
@@ -8233,7 +7817,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Phase)
         );
         assert_eq!(denied_after_bind, scalar_base_before);
-
         let mut scalar_base_after = vec![F::ZERO; scalar_shape.trace_size];
         let mut scalar_fixed_after = vec![F::ZERO; scalar_shape.trace_size];
         bound
@@ -8244,7 +7827,6 @@ mod tests {
             .expect("bound scalar fixed replay");
         assert_eq!(scalar_base_after, scalar_base_before);
         assert_eq!(scalar_fixed_after, scalar_fixed_before);
-
         let claims = bound.terminal_claims_v1().expect("exact X5V1 terminals");
         for certificate in claims.certificate_or_crl {
             assert!(
@@ -8280,7 +7862,6 @@ mod tests {
             .iter()
             .all(|residue| *residue == F::ZERO)
         );
-
         let mut scalar_aux = vec![F::ZERO; scalar_shape.trace_size];
         bound
             .fill_aux_column_v1(scalar, 0, &mut scalar_aux)
@@ -8289,7 +7870,6 @@ mod tests {
         bound
             .fill_aux_column_v1(reduction, 0, &mut reduction_aux)
             .expect("digest reduction auxiliary replay");
-
         let other_post_base = main_post_base_v1(42);
         bound.replace_post_base_for_test_v1(other_post_base);
         let mut token_mismatch = vec![F(91); scalar_shape.trace_size];
@@ -8299,7 +7879,6 @@ mod tests {
         );
         assert!(token_mismatch.iter().all(|value| *value == F(91)));
         bound.replace_post_base_for_test_v1(post_base);
-
         bound
             .terminal_claims
             .as_mut()
@@ -8316,7 +7895,6 @@ mod tests {
             bound.terminal_claims_v1().expect("restored terminals"),
             claims
         );
-
         bound.zeroize_private_v1();
         assert!(bound.private_is_zeroized_v1());
         assert!(matches!(
@@ -8324,7 +7902,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Phase)
         ));
     }
-
     #[test]
     fn p256_main_failed_bind_is_permanently_poisoned_and_zeroized() {
         run_p256_main_test_on_explicit_stack_v1(
@@ -8332,7 +7909,6 @@ mod tests {
             p256_main_failed_bind_body_v1,
         );
     }
-
     fn p256_main_failed_bind_body_v1() {
         let signatures = core::array::from_fn(|signature| P256MainSignatureBaseV1 {
             role: if signature < P256_X5S1_CERTIFICATE_OR_CRL_SIGNATURES_V1 {
@@ -8364,7 +7940,6 @@ mod tests {
             source.bind_v1(post_base),
             Err(P256AggregateAdapterErrorV1::Phase)
         ));
-
         let mut bound = P256MainBoundSourceV1 {
             signatures: None,
             fixed: Some(P256MainVerifierFixedSourceV1::new_v1().expect("closed fixed source")),
@@ -8378,7 +7953,6 @@ mod tests {
             Err(P256AggregateAdapterErrorV1::Phase)
         ));
     }
-
     #[test]
     fn p256_main_x5v1_constructor_rejects_every_terminal_equality_tamper_class() {
         run_p256_main_test_on_explicit_stack_v1(
@@ -8386,7 +7960,6 @@ mod tests {
             p256_main_x5v1_constructor_tamper_body_v1,
         );
     }
-
     fn p256_main_x5v1_constructor_tamper_body_v1() {
         let buses = canonical_bus_terminal_claims();
         let certificate_or_crl = core::array::from_fn(|_| {
@@ -8406,7 +7979,6 @@ mod tests {
         };
         ZkX509P256TerminalClaimsV1::from_p256_air_terminals_v1(certificate_or_crl, wallet)
             .expect("canonical X5V1 claims");
-
         let mut changed = certificate_or_crl;
         changed[0].cross_sources[1].start[0] = changed[0].cross_sources[1].start[0].add(F::ONE);
         assert!(ZkX509P256TerminalClaimsV1::from_p256_air_terminals_v1(changed, wallet).is_err());

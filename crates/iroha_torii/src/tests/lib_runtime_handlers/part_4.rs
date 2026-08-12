@@ -27,7 +27,6 @@ async fn signed_query_proxy_does_not_resend_after_complete_rejection() {
     };
     let attempts = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let attempts_ref = attempts.clone();
-
     let response = super::execute_torii_proxy_request_across_candidates(
         vec![
             ToriiProxyCandidate::P2p(first_peer_id.clone()),
@@ -35,6 +34,7 @@ async fn signed_query_proxy_does_not_resend_after_complete_rejection() {
         ],
         route,
         request,
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
         Duration::from_millis(20),
         move |candidate, _request| {
             let first_peer_id = first_peer_id.clone();
@@ -64,7 +64,6 @@ async fn signed_query_proxy_does_not_resend_after_complete_rejection() {
         |_request_id| async move {},
     )
     .await;
-
     assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -94,11 +93,11 @@ async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable
     };
     let completed = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let completed_ref = completed.clone();
-
     let response = super::execute_torii_proxy_request_across_candidates(
         Vec::new(),
         route,
         request,
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
         Duration::from_millis(20),
         |_candidate, _request| async move {
             Err::<ToriiProxyHttpResponseV1, ToriiProxyAttemptError>(
@@ -118,7 +117,6 @@ async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable
         },
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         response
@@ -158,11 +156,11 @@ async fn execute_torii_proxy_request_across_candidates_returns_last_retryable_re
             response_format: ToriiProxyResponseFormatV1::Norito,
         },
     };
-
     let response = super::execute_torii_proxy_request_across_candidates(
         vec![ToriiProxyCandidate::P2p(peer_id)],
         route,
         request,
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
         Duration::from_millis(20),
         |_candidate, _request| async move {
             Ok(ToriiProxyHttpResponseV1 {
@@ -177,7 +175,6 @@ async fn execute_torii_proxy_request_across_candidates_returns_last_retryable_re
         |_request_id| async move {},
     )
     .await;
-
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(
         response
@@ -199,7 +196,6 @@ async fn queue_plan_outcome_unknown_survives_both_retryable_completion_orders() 
         b"outcome-unknown-retryable-order",
     ));
     let expected_hash_literal = expected_hash.to_string();
-
     for unknown_arrives_first in [true, false] {
         let mut strongest = None;
         let unknown = super::queue_plan_outcome_unknown_response(
@@ -211,7 +207,6 @@ async fn queue_plan_outcome_unknown_survives_both_retryable_completion_orders() 
             "route_unavailable",
             "definitely not admitted by this candidate",
         );
-
         if unknown_arrives_first {
             super::retain_strongest_queue_plan_synced_failure(&mut strongest, 1, unknown);
             super::retain_strongest_queue_plan_synced_failure(&mut strongest, 0, retryable);
@@ -219,7 +214,6 @@ async fn queue_plan_outcome_unknown_survives_both_retryable_completion_orders() 
             super::retain_strongest_queue_plan_synced_failure(&mut strongest, 0, retryable);
             super::retain_strongest_queue_plan_synced_failure(&mut strongest, 1, unknown);
         }
-
         let response = strongest.expect("one reducer candidate must remain").2;
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -371,6 +365,7 @@ async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
         vec![ToriiProxyCandidate::P2p(peer_id)],
         route,
         request,
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
         Duration::ZERO,
         move |_candidate, _request| {
             let forged_snapshot = forged_snapshot.clone();
@@ -432,6 +427,7 @@ async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritati
         ],
         route,
         request,
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
         Duration::from_millis(100),
         move |candidate, _request| {
             let final_authority_snapshot = final_authority_snapshot.clone();
@@ -617,6 +613,7 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
                 vec![ToriiProxyCandidate::P2p(peer_id.clone())],
                 route,
                 request.clone(),
+                TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
                 Duration::ZERO,
                 {
                     let valid_snapshot = valid_snapshot.clone();
@@ -725,6 +722,7 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
             vec![ToriiProxyCandidate::P2p(peer_id.clone())],
             route,
             request.clone(),
+            TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
             Duration::ZERO,
             move |_candidate, _request| {
                 let snapshot = snapshot.clone();
@@ -807,6 +805,7 @@ async fn queue_plan_synced_post_admission_or_malformed_500_is_indeterminate() {
             vec![ToriiProxyCandidate::P2p(peer_id.clone())],
             route,
             request.clone(),
+            TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
             Duration::ZERO,
             move |_candidate, _request| {
                 let snapshot = snapshot.clone();
@@ -887,6 +886,7 @@ async fn queue_plan_synced_post_dispatch_loss_is_exactly_indeterminate_for_each_
             vec![candidate],
             route,
             request,
+            TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
             Duration::ZERO,
             |_candidate, _request| async move {
                 Err::<ToriiProxyHttpResponseV1, ToriiProxyAttemptError>(
@@ -1234,6 +1234,7 @@ async fn queue_plan_synced_before_dispatch_failure_remains_definitely_unavailabl
         vec![ToriiProxyCandidate::P2p(peer_id)],
         route,
         request,
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
         Duration::ZERO,
         |_candidate, _request| async move {
             Err::<ToriiProxyHttpResponseV1, ToriiProxyAttemptError>(
@@ -1299,6 +1300,7 @@ async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable
         vec![ToriiProxyCandidate::P2p(peer_id)],
         route,
         request,
+        TORII_PROXY_REQUEST_MAX_ENCODED_BYTES_V1,
         Duration::from_millis(20),
         |_candidate, _request| async move {
             Err::<ToriiProxyHttpResponseV1, ToriiProxyAttemptError>(

@@ -159,8 +159,6 @@ mod ffi {
         Eq: { ExternValue, ExternOpaqueStruct },
     }
 
-    iroha_ffi::def_ffi_fns! { dealloc }
-
     /// Structure that `Value` points to
     #[derive(Debug, Clone, PartialEq, Eq, FfiType)]
     #[ffi_type(opaque)]

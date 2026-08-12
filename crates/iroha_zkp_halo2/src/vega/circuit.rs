@@ -303,20 +303,22 @@ enum CircuitBuilderMode {
         b_coefficients: CoefficientDictionaryCounter,
         c_coefficients: CoefficientDictionaryCounter,
     },
-    Compile {
-        variable_count: usize,
-        constraint_count: usize,
-        expected_private_value_count: usize,
-        expected_constraint_count: usize,
-        emitted_constraint_count: usize,
-        a: SparseMatrixRowBuilder,
-        b: SparseMatrixRowBuilder,
-        c: SparseMatrixRowBuilder,
-    },
+    Compile(Box<CompileCircuitBuilderMode>),
     Witness {
         profile: Arc<CircuitProfile>,
         emitted_constraint_count: usize,
     },
+}
+
+struct CompileCircuitBuilderMode {
+    variable_count: usize,
+    constraint_count: usize,
+    expected_private_value_count: usize,
+    expected_constraint_count: usize,
+    emitted_constraint_count: usize,
+    a: SparseMatrixRowBuilder,
+    b: SparseMatrixRowBuilder,
+    c: SparseMatrixRowBuilder,
 }
 
 pub(super) struct CircuitBuilder {
@@ -415,7 +417,7 @@ impl CircuitBuilder {
         Ok(Self {
             public_inputs,
             private_values: SecretCircuitValues::with_capacity(dimensions.variable_count),
-            mode: CircuitBuilderMode::Compile {
+            mode: CircuitBuilderMode::Compile(Box::new(CompileCircuitBuilderMode {
                 variable_count: dimensions.variable_count,
                 constraint_count: dimensions.constraint_count,
                 expected_private_value_count: dimensions.emitted_private_value_count,
@@ -439,7 +441,7 @@ impl CircuitBuilder {
                     dimensions.c_nonzero_count,
                     dimensions.c_coefficient_count,
                 )?,
-            },
+            })),
         })
     }
 
@@ -473,10 +475,7 @@ impl CircuitBuilder {
 
     pub(super) fn alloc(&mut self, value: Scalar) -> Result<Variable, CircuitError> {
         let limit = match &self.mode {
-            CircuitBuilderMode::Compile {
-                expected_private_value_count,
-                ..
-            } => *expected_private_value_count,
+            CircuitBuilderMode::Compile(state) => state.expected_private_value_count,
             CircuitBuilderMode::Witness { profile, .. } => profile.raw_private_value_count(),
             CircuitBuilderMode::Count { .. } => MAX_CIRCUIT_ROWS,
             #[cfg(test)]
@@ -517,7 +516,7 @@ impl CircuitBuilder {
                 profile.raw_constraint_count(),
                 *emitted_constraint_count,
             )),
-            CircuitBuilderMode::Count { .. } | CircuitBuilderMode::Compile { .. } => None,
+            CircuitBuilderMode::Count { .. } | CircuitBuilderMode::Compile(_) => None,
             #[cfg(test)]
             CircuitBuilderMode::Shape(_) => None,
         };
@@ -550,15 +549,10 @@ impl CircuitBuilder {
         }
 
         let compile_mode = match &self.mode {
-            CircuitBuilderMode::Compile {
-                variable_count,
-                expected_constraint_count,
-                emitted_constraint_count,
-                ..
-            } => Some((
-                *variable_count,
-                *expected_constraint_count,
-                *emitted_constraint_count,
+            CircuitBuilderMode::Compile(state) => Some((
+                state.variable_count,
+                state.expected_constraint_count,
+                state.emitted_constraint_count,
             )),
             CircuitBuilderMode::Count { .. } | CircuitBuilderMode::Witness { .. } => None,
             #[cfg(test)]
@@ -571,20 +565,14 @@ impl CircuitBuilder {
             let a_row = matrix_row_entries(variable_count, a)?;
             let b_row = matrix_row_entries(variable_count, b)?;
             let c_row = matrix_row_entries(variable_count, c)?;
-            let CircuitBuilderMode::Compile {
-                emitted_constraint_count,
-                a,
-                b,
-                c,
-                ..
-            } = &mut self.mode
-            else {
+            let CircuitBuilderMode::Compile(state) = &mut self.mode else {
                 unreachable!("compile mode was observed");
             };
-            a.append_canonical_row(a_row.entries())?;
-            b.append_canonical_row(b_row.entries())?;
-            c.append_canonical_row(c_row.entries())?;
-            *emitted_constraint_count = emitted_constraint_count
+            state.a.append_canonical_row(a_row.entries())?;
+            state.b.append_canonical_row(b_row.entries())?;
+            state.c.append_canonical_row(c_row.entries())?;
+            state.emitted_constraint_count = state
+                .emitted_constraint_count
                 .checked_add(1)
                 .ok_or(CircuitError::InvalidDimension)?;
             return Ok(());
@@ -643,7 +631,7 @@ impl CircuitBuilder {
                 return Err(CircuitError::InvalidDimension);
             }
             constraints.push(Constraint { a, b, c });
-            return Ok(());
+            Ok(())
         }
 
         #[cfg(not(test))]
@@ -956,7 +944,10 @@ impl CircuitBuilder {
             mut private_values,
             mode,
         } = self;
-        let CircuitBuilderMode::Compile {
+        let CircuitBuilderMode::Compile(state) = mode else {
+            return Err(CircuitError::InvalidAssignment);
+        };
+        let CompileCircuitBuilderMode {
             variable_count,
             constraint_count,
             expected_private_value_count,
@@ -965,10 +956,7 @@ impl CircuitBuilder {
             a,
             b,
             c,
-        } = mode
-        else {
-            return Err(CircuitError::InvalidAssignment);
-        };
+        } = *state;
         if private_values.is_empty()
             || emitted_constraint_count == 0
             || private_values.len() != expected_private_value_count

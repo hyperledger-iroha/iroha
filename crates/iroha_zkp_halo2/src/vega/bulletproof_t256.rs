@@ -1255,13 +1255,15 @@ mod tests {
         }
     }
 
-    fn fixture() -> (
+    type TinyFixture = (
         [u8; 32],
         [u8; 32],
         Point,
         Vec<LinComb<Scalar>>,
         ArithmeticCircuitWitness<TinyT256Suite>,
-    ) {
+    );
+
+    fn fixture() -> TinyFixture {
         let generators = TinyT256Suite::generators().reduce(4).expect("tiny basis");
         let values = vec![
             Scalar::from_u64(7),
@@ -1726,9 +1728,11 @@ mod tests {
 
     #[test]
     fn membership_verifier_rejects_legacy_nonzero_padded_opening_tails_for_both_bounds() {
+        type PaddedTailCase<'a> = (ZkAmsT256MembershipBoundV1, &'a [i8], u64, u64, &'a [u8]);
+
         let context = keccak256(b"t256-membership-padded-tail-context");
         let basis = keccak256(b"t256-membership-padded-tail-basis");
-        let cases: [(ZkAmsT256MembershipBoundV1, &[i8], u64, u64, &[u8]); 2] = [
+        let cases: [PaddedTailCase<'_>; 2] = [
             (
                 ZkAmsT256MembershipBoundV1::One,
                 &[-1, 0, 1],

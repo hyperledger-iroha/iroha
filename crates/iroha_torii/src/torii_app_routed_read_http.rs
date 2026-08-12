@@ -421,6 +421,7 @@ struct ExactAppRoutedReadBody {
 }
 
 impl AsRef<[u8]> for ExactAppRoutedReadBody {
+    #[allow(unsafe_code)]
     fn as_ref(&self) -> &[u8] {
         // SAFETY: the collector initializes exactly `len` leading bytes before
         // constructing the owner-backed `Bytes`, and never mutates it later.

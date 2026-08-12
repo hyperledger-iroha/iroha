@@ -76,17 +76,25 @@ def test_worker_regression_include_invocation_cannot_move_or_disappear(
 
     module = load_checker()
     copy_serve_lifecycle_production_fixture(tmp_path, module)
-    worker = tmp_path / "crates/iroha_core/src/sumeragi/v2_worker.rs"
+    owner = (
+        "v2_worker_main_01.rs"
+        if filename in {
+            "v2_worker_reply_route_cases.rs",
+            "v2_worker_backpressure_cases.rs",
+        }
+        else "v2_worker_main_04.rs"
+    )
+    worker = tmp_path / "crates/iroha_core/src/sumeragi/tests" / owner
     mutate_source_once(
         worker,
-        f'    include!("tests/{filename}");',
-        f'    // removed include!("tests/{filename}");',
+        f'include!("{filename}");',
+        f'// removed include!("{filename}");',
     )
 
     errors = module._worker_test_include_source_fidelity_errors(tmp_path)
 
     assert any(
-        filename in error and "must occur exactly once" in error
+        owner in error and "reviewed Rust include inventory must equal" in error
         for error in errors
     ), errors
 
@@ -255,8 +263,8 @@ _SERVE_TERMINAL_EFFECT_CONTEXT = (
             Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
             "fully_authenticate_persisted_certified_serve_request",
             (),
-            "verify_quorum_certificate_with_validator_pops(",
-            "verify_quorum_certificate(",
+            "authenticate_certified_body_request_with_validator_pops(",
+            "authenticate_certified_body_request(",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),

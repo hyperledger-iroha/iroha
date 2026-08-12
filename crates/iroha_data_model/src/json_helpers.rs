@@ -1252,7 +1252,6 @@ mod tests {
             other => panic!("unexpected error variant: {other:?}"),
         }
     }
-
     #[derive(Debug, PartialEq, Eq, JsonSerialize, crate::DeriveJsonDeserialize)]
     struct InrouGuestImagesWrapper {
         #[cfg_attr(

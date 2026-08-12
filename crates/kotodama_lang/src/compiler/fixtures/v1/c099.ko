@@ -1,0 +1,17 @@
+
+seiyaku CompilerFixture {
+    view fn compute(
+        int a,
+        int b,
+        decimal x,
+        decimal y,
+        quantity q,
+        quantity r,
+    ) -> (int, decimal, quantity, decimal) {
+        return (a + b, x * y, q - r, q / r);
+    }
+
+    view fn compare(quantity left, quantity right) -> bool {
+        return left >= right;
+    }
+}

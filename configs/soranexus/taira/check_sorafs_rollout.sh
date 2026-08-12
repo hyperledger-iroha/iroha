@@ -652,9 +652,9 @@ if not isinstance(epoch_seed, str) or re.fullmatch(r"[0-9A-F]{64}", epoch_seed) 
 validator_count = require_uint(
     context.get("validator_count"), "height_context.validator_count", positive=True
 )
-if validator_count < 4:
+if validator_count != 4:
     raise SystemExit(
-        f"sumeragi/status frozen only {validator_count} validators; Taira requires at least 4"
+        f"sumeragi/status froze {validator_count} validators; Taira requires exactly 4"
     )
 if leader >= validator_count:
     raise SystemExit(
@@ -704,7 +704,7 @@ commit_total_power = require_uint(
 )
 expected_commit_min = commit_validators - ((commit_validators - 1) // 3)
 if (
-    commit_validators < 4
+    commit_validators != 4
     or signer_count > commit_validators
     or commit_min != expected_commit_min
     or signer_count < commit_min

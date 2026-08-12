@@ -231,6 +231,11 @@ impl FLR {
     pub(crate) const NZERO: Self = Self(1u64 << 63);
     pub(crate) const ONE: Self = Self::from_i64(1);
 
+    #[inline(always)]
+    pub(crate) const fn from_bits(bits: u64) -> Self {
+        Self(bits)
+    }
+
     // Convert a signed 64-bit integer to an FLR value.
     // Source value j must be in [-(2^63-1),+(2^63-1)] (i.e. -2^63 is
     // not allowed).

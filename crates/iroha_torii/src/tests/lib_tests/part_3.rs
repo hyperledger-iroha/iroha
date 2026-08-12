@@ -2297,12 +2297,19 @@ async fn torii_norito_body_decodes_successful_responses() {
         bridge: None,
     };
     let response = (StatusCode::OK, utils::NoritoBody(record.clone())).into_response();
+    let phase_bytes = 64 * 1_024;
+    let mut budget = super::ToriiRoutedReadMemoryBudget::new(
+        super::routed_read_working_set_for_phase(phase_bytes),
+        phase_bytes,
+    )
+    .expect("proof record decode budget should fit");
 
-    let decoded = super::torii_norito_body::<ProofRecord>(response, "proof record response")
-        .await
-        .expect("norito body should decode");
+    let decoded =
+        super::torii_norito_body::<ProofRecord>(response, "proof record response", &mut budget)
+            .await
+            .expect("norito body should decode");
 
-    assert_eq!(decoded, record);
+    assert_eq!(decoded.value, record);
 }
 
 #[tokio::test]
@@ -2312,7 +2319,7 @@ async fn resolve_torii_proof_record_for_routes_fanouts_matching_records() {
     let id = seed_proof_record(&app, "debug-proof", [0xBC; 32]);
     let routes = super::torii_all_dataspace_routes(app.as_ref());
 
-    let (record, diagnostics, routed_by) =
+    let (record, diagnostics, routed_by, _reservation) =
         super::resolve_torii_proof_record_for_routes(&app, routes, id.clone())
             .await
             .expect("proof record fanout should resolve");
@@ -2335,13 +2342,16 @@ async fn resolve_torii_proof_record_for_routes_prefers_not_found_over_route_unav
     }
     .to_string();
 
-    let response = super::resolve_torii_proof_record_for_routes(
+    let response = match super::resolve_torii_proof_record_for_routes(
         &app,
         vec![foreign_route, local_route],
         missing_id,
     )
     .await
-    .expect_err("missing proof record should return an error response");
+    {
+        Ok(_) => panic!("missing proof record should return an error response"),
+        Err(response) => response,
+    };
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_ne!(
@@ -2366,9 +2376,12 @@ async fn resolve_torii_proof_record_for_routes_returns_route_unavailable_when_on
     .to_string();
 
     let response =
-        super::resolve_torii_proof_record_for_routes(&app, vec![foreign_route], missing_id)
+        match super::resolve_torii_proof_record_for_routes(&app, vec![foreign_route], missing_id)
             .await
-            .expect_err("offline authoritative route should be unavailable");
+        {
+            Ok(_) => panic!("offline authoritative route should be unavailable"),
+            Err(response) => response,
+        };
 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(

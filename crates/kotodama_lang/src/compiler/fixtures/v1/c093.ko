@@ -1,0 +1,9 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  let payload = b"\x01\x02\x03";
+  let _bad = crypto::sm2::verify(message: payload, signature: payload, public_key: payload, distid: 1);
+}
+
+}

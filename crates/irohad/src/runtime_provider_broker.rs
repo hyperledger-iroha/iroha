@@ -25,7 +25,6 @@
 //! including Windows V1 builds, compile the stock registry but reject every
 //! non-empty broker-backed catalog until an equivalently authenticated
 //! platform transport exists.
-
 /// Launcher-facing broker lifecycle, registry, backend set, and serve boundary.
 mod api;
 /// Standard deployment-owned broker assembly without credential discovery.
@@ -49,7 +48,16 @@ pub use launcher::{
 mod protocol {
     #[cfg(not(target_pointer_width = "64"))]
     compile_error!("the V1 runtime-provider broker requires a 64-bit address space");
-
+    use crate::{
+        IrohaRuntimeDeps, RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
+        RuntimeProviderBrokerReadinessErrorV1, RuntimeProviderBrokerServerErrorV1,
+        runtime_provider_registry::{
+            EvidenceViewerWebAuthnBindingV1, IrohaRuntimeProviderBindingV1,
+            IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderRegistryErrorV1,
+            IrohaRuntimeProviderSlotV1, ProviderIngestSourceLimitsV1,
+            RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1,
+        },
+    };
     use iroha_config::parameters::{
         defaults::sorafs::storage::provider_ingest_runtime::outbox as provider_ingest_outbox_defaults,
         validate_webauthn_origin_v1, validate_webauthn_rp_id_v1,
@@ -69,18 +77,6 @@ mod protocol {
         },
         time::Duration,
     };
-
-    use crate::{
-        IrohaRuntimeDeps, RuntimeProviderBrokerBackendsV1, RuntimeProviderBrokerLifecycleV1,
-        RuntimeProviderBrokerReadinessErrorV1, RuntimeProviderBrokerServerErrorV1,
-        runtime_provider_registry::{
-            EvidenceViewerWebAuthnBindingV1, IrohaRuntimeProviderBindingV1,
-            IrohaRuntimeProviderBindingsV1, IrohaRuntimeProviderRegistryErrorV1,
-            IrohaRuntimeProviderSlotV1, ProviderIngestSourceLimitsV1,
-            RUNTIME_PROVIDER_CATALOG_MAX_ENTRIES_V1,
-        },
-    };
-
     const BROKER_MAGIC_V1: [u8; 8] = *b"IRPBRK01";
     const BROKER_VERSION_V1: u16 = 1;
     const FRAME_KIND_HANDSHAKE_REQUEST_V1: u8 = 1;
@@ -89,7 +85,6 @@ mod protocol {
     const FRAME_KIND_OPERATION_RESPONSE_V1: u8 = 4;
     const FRAME_KIND_PROVIDER_INGEST_SOURCE_CHUNK_V1: u8 = 5;
     const FRAME_KIND_PROVIDER_INGEST_SOURCE_TRAILER_V1: u8 = 6;
-
     const MAX_HANDSHAKE_FRAME_BYTES_V1: usize = 256 * 1024;
     // Appeal-finance's local data model permits a 512 MiB canonical recovery
     // checkpoint, while the V1 broker protocol intentionally admits only the
@@ -356,7 +351,6 @@ mod protocol {
             None => panic!("composed live-memory cap overflow"),
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct DecodeResourcePhaseCountsV1 {
         raw_frames: usize,
@@ -364,7 +358,6 @@ mod protocol {
         encoded_copies: usize,
         decoded_values: usize,
     }
-
     // One admission covers either a complete client call (request construction,
     // response validation, and caller result decode) or a complete server
     // iteration (request validation, dispatch, response validation, and
@@ -447,7 +440,6 @@ mod protocol {
             encoded_copies: 2,
             decoded_values: 2,
         };
-
     const fn cumulative_decode_cap(
         max_blob_bytes: usize,
         max_total_allocated_bytes: usize,
@@ -478,7 +470,6 @@ mod protocol {
             None => panic!("cumulative operation byte cap overflow"),
         }
     }
-
     const fn operation_resource_caps(
         max_blob_bytes: usize,
         max_total_allocated_bytes: usize,
@@ -497,7 +488,6 @@ mod protocol {
             ),
         )
     }
-
     const fn control_resource_caps(
         max_blob_bytes: usize,
         max_total_allocated_bytes: usize,
@@ -516,7 +506,6 @@ mod protocol {
             ),
         )
     }
-
     const fn provider_ingest_checkpoint_external_decode_peak_bytes_v1() -> usize {
         // At the external sealed-record decode peak, the request frame, request
         // payload, semantic wrapper, decoded record allocation (4x the public
@@ -544,7 +533,6 @@ mod protocol {
             None => panic!("provider checkpoint external peak overflow"),
         }
     }
-
     const fn provider_ingest_checkpoint_live_cap_v1() -> usize {
         let generic = composed_decode_cap(
             MAX_PROVIDER_INGEST_CHECKPOINT_FRAME_BYTES_V1,
@@ -558,7 +546,6 @@ mod protocol {
             external
         }
     }
-
     // A framed control value retains the BrokerFrame, its typed body, and one
     // semantic decode/re-encode at the same time.
     const CONTROL_MAX_DECODE_ALLOCATION_BYTES_V1: usize = 8 * 1024 * 1024;
@@ -812,14 +799,12 @@ mod protocol {
                 ),
             ),
         );
-
     /// Exact operation identifiers and foundational canonical wire containers.
     mod primitives {
         use super::*;
         include!("runtime_provider_broker/protocol_primitives.rs");
     }
     use primitives::*;
-
     const fn native_transaction_signer_role_to_wire(
         role: iroha_torii::SorafsNativeTransactionSignerRoleV1,
     ) -> u8 {
@@ -830,7 +815,6 @@ mod protocol {
             iroha_torii::SorafsNativeTransactionSignerRoleV1::Orderbook => 4,
         }
     }
-
     fn native_transaction_signer_role_from_wire(
         role: u8,
     ) -> Result<iroha_torii::SorafsNativeTransactionSignerRoleV1, BrokerError> {
@@ -842,7 +826,6 @@ mod protocol {
             _ => Err(BrokerError::BindingMismatch),
         }
     }
-
     fn native_transaction_signer_role_for_slot(
         slot: u16,
     ) -> Option<iroha_torii::SorafsNativeTransactionSignerRoleV1> {
@@ -858,7 +841,6 @@ mod protocol {
             None
         }
     }
-
     impl NativeTransactionSignerBindingWireV1 {
         fn from_binding(binding: &iroha_torii::SorafsNativeTransactionSignerBindingV1) -> Self {
             Self {
@@ -867,7 +849,6 @@ mod protocol {
                 public_key: binding.public_key().clone(),
             }
         }
-
         fn from_soracloud_binding(
             binding: &crate::soracloud_runtime_signer::SoracloudRuntimeSignerBindingV1,
         ) -> Self {
@@ -877,7 +858,6 @@ mod protocol {
                 public_key: binding.public_key().clone(),
             }
         }
-
         fn to_binding(
             &self,
             outer: &ProviderBindingWireV1,
@@ -901,7 +881,6 @@ mod protocol {
             .map_err(|_| BrokerError::BindingMismatch)
         }
     }
-
     fn native_transaction_signer_binding_from_wire(
         binding: &ProviderBindingWireV1,
     ) -> Result<iroha_torii::SorafsNativeTransactionSignerBindingV1, BrokerError> {
@@ -911,7 +890,6 @@ mod protocol {
             .ok_or(BrokerError::BindingMismatch)?
             .to_binding(binding)
     }
-
     fn soracloud_runtime_signer_binding_from_wire(
         binding: &ProviderBindingWireV1,
     ) -> Result<crate::soracloud_runtime_signer::SoracloudRuntimeSignerBindingV1, BrokerError> {
@@ -938,7 +916,6 @@ mod protocol {
         )
         .map_err(|_| BrokerError::BindingMismatch)
     }
-
     fn soracloud_hf_credential_binding_from_wire(
         binding: &ProviderBindingWireV1,
     ) -> Result<crate::soracloud_hf_credential::SoracloudHfCredentialProviderBindingV1, BrokerError>
@@ -959,7 +936,6 @@ mod protocol {
         )
         .map_err(|_| BrokerError::BindingMismatch)
     }
-
     impl ProviderBindingWireV1 {
         fn try_from_binding(
             binding: &IrohaRuntimeProviderBindingV1,
@@ -1094,19 +1070,16 @@ mod protocol {
                     ),
             })
         }
-
         fn has_exact_qualification(&self) -> bool {
             matches!(
                 (self.revision, self.policy_digest),
                 (Some(revision), Some(digest)) if revision != 0 && digest != [0; 32]
             )
         }
-
         fn runtime_slot(&self) -> Result<IrohaRuntimeProviderSlotV1, BrokerError> {
             IrohaRuntimeProviderSlotV1::from_wire_id(self.slot).ok_or(BrokerError::BindingMismatch)
         }
     }
-
     fn exact_ed25519_public_key_bytes(
         public_key: &iroha_crypto::PublicKey,
     ) -> Result<[u8; 32], BrokerError> {
@@ -1120,7 +1093,6 @@ mod protocol {
         iroha_crypto::ed25519_parse_public_key(&bytes).map_err(|_| BrokerError::BindingMismatch)?;
         Ok(bytes)
     }
-
     fn potr_provider_binding_from_wire(
         binding: &ProviderBindingWireV1,
     ) -> Result<iroha_torii::sorafs::PotrRuntimeProviderBindingV1, BrokerError> {
@@ -1159,7 +1131,6 @@ mod protocol {
         )
         .map_err(|_| BrokerError::BindingMismatch)
     }
-
     fn validate_potr_runtime_wire(runtime: &PotrRuntimeBindingWireV1) -> Result<(), BrokerError> {
         let admission = runtime.baseline_admission_policy.to_binding();
         admission
@@ -1200,7 +1171,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_webauthn_wire_policy(
         rp_id: &str,
         allowed_origins: &[String],
@@ -1220,7 +1190,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerError> {
         let runtime_slot = binding.runtime_slot()?;
         let governance_signer = runtime_slot == IrohaRuntimeProviderSlotV1::GovernanceDagSigner;
@@ -1419,7 +1388,6 @@ mod protocol {
             }
         } else if pop_registry {
             use iroha_config::parameters::is_production_runtime_handle;
-
             let exact = binding
                 .pop_credential_runtime_binding
                 .as_ref()
@@ -2001,7 +1969,6 @@ mod protocol {
         }
         Err(BrokerError::BindingMismatch)
     }
-
     fn compare_wire_bindings(
         left: &ProviderBindingWireV1,
         right: &ProviderBindingWireV1,
@@ -2012,7 +1979,6 @@ mod protocol {
             .then_with(|| left.revision.cmp(&right.revision))
             .then_with(|| left.policy_digest.cmp(&right.policy_digest))
     }
-
     fn validate_catalog_slot_ids(
         slot_ids: impl IntoIterator<Item = u16>,
     ) -> Result<(), BrokerError> {
@@ -2040,13 +2006,11 @@ mod protocol {
         }
         Ok(())
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct SignerMetadataWireV1 {
         publisher_peer_id: Vec<u8>,
         public_key: [u8; 32],
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderObservationWireV1 {
         binding: ProviderBindingWireV1,
@@ -2065,7 +2029,6 @@ mod protocol {
             Option<ModerationPanelNotificationArchiveBindingWireV1>,
         metadata_digest: [u8; 32],
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct HandshakeTranscriptFieldsV1 {
         chain_id: String,
@@ -2074,7 +2037,6 @@ mod protocol {
         client_nonce: [u8; 32],
         catalog_digest: [u8; 32],
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct HandshakeRequestV1 {
         chain_id: String,
@@ -2084,7 +2046,6 @@ mod protocol {
         catalog_digest: [u8; 32],
         client_transcript_digest: [u8; 32],
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ServerTranscriptFieldsV1 {
         chain_id: String,
@@ -2096,7 +2057,6 @@ mod protocol {
         session_id: [u8; 32],
         observations: Vec<ProviderObservationWireV1>,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct HandshakeResponseV1 {
         chain_id: String,
@@ -2109,7 +2069,6 @@ mod protocol {
         observations: Vec<ProviderObservationWireV1>,
         server_transcript_digest: [u8; 32],
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct OperationRequestFieldsV1 {
         session_id: [u8; 32],
@@ -2120,7 +2079,6 @@ mod protocol {
         payload_digest: [u8; 32],
         payload_len: u64,
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct OperationRequestV1 {
         session_id: [u8; 32],
@@ -2132,7 +2090,6 @@ mod protocol {
         payload: Vec<u8>,
         request_digest: [u8; 32],
     }
-
     impl fmt::Debug for OperationRequestV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -2144,14 +2101,12 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for OperationRequestV1 {
         fn drop(&mut self) {
             self.payload.fill(0);
             let _ = std::hint::black_box(&self.payload);
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct OperationResponseFieldsV1 {
         session_id: [u8; 32],
@@ -2165,7 +2120,6 @@ mod protocol {
         result_digest: [u8; 32],
         result_len: u64,
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct OperationResponseV1 {
         session_id: [u8; 32],
@@ -2180,7 +2134,6 @@ mod protocol {
         result: Vec<u8>,
         response_digest: [u8; 32],
     }
-
     impl fmt::Debug for OperationResponseV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -2193,20 +2146,17 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for OperationResponseV1 {
         fn drop(&mut self) {
             self.result.fill(0);
             let _ = std::hint::black_box(&self.result);
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct QualificationResultWireV1 {
         revision: u64,
         policy_digest: [u8; 32],
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct GovernanceRequestIngressQualificationWireV1 {
         provider: QualificationResultWireV1,
@@ -2215,7 +2165,6 @@ mod protocol {
         replay_namespace_digest: [u8; 32],
         replica_set_digest: [u8; 32],
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct BootleLanternAuthenticateRequestWireV1 {
         opaque_credential: Vec<u8>,
@@ -2223,7 +2172,6 @@ mod protocol {
         request_binding: [u8; 32],
         committed_height: u64,
     }
-
     impl fmt::Debug for BootleLanternAuthenticateRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -2234,21 +2182,18 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for BootleLanternAuthenticateRequestWireV1 {
         fn drop(&mut self) {
             self.opaque_credential.fill(0);
             let _ = std::hint::black_box(&self.opaque_credential);
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct BootleLanternAuthenticatedPrincipalWireV1 {
         principal_digest: [u8; 32],
         issued_at_height: u64,
         expires_at_height: u64,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct BootleLanternPrepareAuthorizationRequestWireV1 {
         context: iroha_data_model::privacy::PrivacyStatementContextV1,
@@ -2258,12 +2203,10 @@ mod protocol {
         issued_at_height: u64,
         expires_at_height: u64,
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct BootleLanternAuthorizationWireV1 {
         authorization: Vec<u8>,
     }
-
     impl fmt::Debug for BootleLanternAuthorizationWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -2272,14 +2215,12 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for BootleLanternAuthorizationWireV1 {
         fn drop(&mut self) {
             self.authorization.fill(0);
             let _ = std::hint::black_box(&self.authorization);
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct BootleLanternIssueRequestWireV1 {
         context: iroha_data_model::privacy::PrivacyStatementContextV1,
@@ -2289,7 +2230,6 @@ mod protocol {
         request: Vec<u8>,
         current_height: u64,
     }
-
     impl fmt::Debug for BootleLanternIssueRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -2300,7 +2240,6 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for BootleLanternIssueRequestWireV1 {
         fn drop(&mut self) {
             self.authorization.fill(0);
@@ -2308,12 +2247,10 @@ mod protocol {
             let _ = std::hint::black_box((&self.authorization, &self.request));
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct BootleLanternIssuanceResponseWireV1 {
         response: Vec<u8>,
     }
-
     impl fmt::Debug for BootleLanternIssuanceResponseWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -2322,14 +2259,12 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for BootleLanternIssuanceResponseWireV1 {
         fn drop(&mut self) {
             self.response.fill(0);
             let _ = std::hint::black_box(&self.response);
         }
     }
-
     fn bootle_lantern_action_to_wire(
         action: iroha_torii::privacy_issuance_api::BootleLanternIssuanceActionV1,
     ) -> u8 {
@@ -2338,7 +2273,6 @@ mod protocol {
             iroha_torii::privacy_issuance_api::BootleLanternIssuanceActionV1::Issue => 2,
         }
     }
-
     fn bootle_lantern_action_from_wire(
         action: u8,
     ) -> Result<iroha_torii::privacy_issuance_api::BootleLanternIssuanceActionV1, BrokerError> {
@@ -2348,7 +2282,6 @@ mod protocol {
             _ => Err(BrokerError::Rejected),
         }
     }
-
     fn bootle_lantern_bindings_from_wire(
         binding: &ProviderBindingWireV1,
     ) -> Result<
@@ -2370,7 +2303,6 @@ mod protocol {
         )
         .map_err(|_| BrokerError::BindingMismatch)
     }
-
     fn validate_bootle_lantern_policy_binding(
         binding: &ProviderBindingWireV1,
         policy: &iroha_data_model::privacy::BootleLanternIssuerPolicyV1,
@@ -2389,7 +2321,6 @@ mod protocol {
         }
         Ok(exact)
     }
-
     fn validate_bootle_lantern_prepare_request(
         request: &BootleLanternPrepareAuthorizationRequestWireV1,
         binding: &ProviderBindingWireV1,
@@ -2410,7 +2341,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn decode_bootle_lantern_issue_request(
         payload: &[u8],
         binding: &ProviderBindingWireV1,
@@ -2468,7 +2398,14 @@ mod protocol {
             .map_err(|_| BrokerError::Rejected)?;
         Ok((request, authorization))
     }
-
+    fn request_network_id(payload: &[u8]) -> Result<NetworkId, BrokerError> {
+        Ok(decode_canonical::<BootleLanternIssueRequestWireV1>(
+            payload,
+            MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
+        )?
+        .context
+        .network_id)
+    }
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct SoracloudSignerQualificationWireV1 {
         revision: u64,
@@ -2476,13 +2413,11 @@ mod protocol {
         active: bool,
         test_only: bool,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct SoracloudProvenanceSignRequestWireV1 {
         purpose: u8,
         preimage: Vec<u8>,
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct SoracloudHfAuthenticatedInferenceRequestWireV1 {
         url: String,
@@ -2491,7 +2426,6 @@ mod protocol {
         body: Vec<u8>,
         maximum_response_bytes: u64,
     }
-
     impl fmt::Debug for SoracloudHfAuthenticatedInferenceRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -2504,14 +2438,12 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for SoracloudHfAuthenticatedInferenceRequestWireV1 {
         fn drop(&mut self) {
             self.body.fill(0);
             let _ = std::hint::black_box(&self.body);
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct SoracloudHfAuthenticatedInferenceResponseWireV1 {
         status: u16,
@@ -2519,7 +2451,6 @@ mod protocol {
         content_encoding: Option<String>,
         body: Vec<u8>,
     }
-
     impl fmt::Debug for SoracloudHfAuthenticatedInferenceResponseWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -2531,14 +2462,12 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for SoracloudHfAuthenticatedInferenceResponseWireV1 {
         fn drop(&mut self) {
             self.body.fill(0);
             let _ = std::hint::black_box(&self.body);
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct PrivacyCyclePrfRequestWireV1 {
         version: u16,
@@ -2551,7 +2480,6 @@ mod protocol {
         cycle_end_unix: u64,
         binding_digest: [u8; 32],
     }
-
     impl PrivacyCyclePrfRequestWireV1 {
         fn from_request(request: &sorafs_node::PrivacyCyclePrfRequestV1) -> Self {
             Self {
@@ -2566,7 +2494,6 @@ mod protocol {
                 binding_digest: request.binding_digest(),
             }
         }
-
         fn to_request(self) -> Result<sorafs_node::PrivacyCyclePrfRequestV1, BrokerError> {
             if self.version != sorafs_node::PRIVACY_CYCLE_PRF_REQUEST_VERSION_V1 {
                 return Err(BrokerError::Rejected);
@@ -2589,12 +2516,10 @@ mod protocol {
             Ok(request)
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct PrivacyCyclePrfOutputWireV1 {
         output: [u8; 32],
     }
-
     impl fmt::Debug for PrivacyCyclePrfOutputWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -2603,21 +2528,18 @@ mod protocol {
                 .finish()
         }
     }
-
     impl Drop for PrivacyCyclePrfOutputWireV1 {
         fn drop(&mut self) {
             self.output.fill(0);
             let _ = std::hint::black_box(&self.output);
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct TransparencyRuntimeProviderBindingWireV1 {
         handle: String,
         revision: u64,
         policy_digest: [u8; 32],
     }
-
     impl TransparencyRuntimeProviderBindingWireV1 {
         fn from_binding(binding: &sorafs_node::TransparencyRuntimeProviderBindingV1) -> Self {
             Self {
@@ -2626,7 +2548,6 @@ mod protocol {
                 policy_digest: binding.qualification().policy_digest(),
             }
         }
-
         fn to_binding(
             &self,
         ) -> Result<sorafs_node::TransparencyRuntimeProviderBindingV1, BrokerError> {
@@ -2642,7 +2563,6 @@ mod protocol {
             Ok(binding)
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct PrivacyReleaseAnchorHeadWireV1 {
         query_id: [u8; 32],
@@ -2651,7 +2571,6 @@ mod protocol {
         record_digest: [u8; 32],
         latest_publication_block_hash: Option<[u8; 32]>,
     }
-
     impl PrivacyReleaseAnchorHeadWireV1 {
         fn from_head(head: sorafs_node::PrivacyReleaseAnchorHeadV1) -> Self {
             Self {
@@ -2662,7 +2581,6 @@ mod protocol {
                 latest_publication_block_hash: head.latest_publication_block_hash(),
             }
         }
-
         fn to_head(self) -> Result<sorafs_node::PrivacyReleaseAnchorHeadV1, BrokerError> {
             let head = sorafs_node::PrivacyReleaseAnchorHeadV1::try_from_parts(
                 self.query_id,
@@ -2678,7 +2596,6 @@ mod protocol {
             Ok(head)
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct TransparencyLeaderLeaseScopeWireV1 {
         query_id: [u8; 32],
@@ -2688,7 +2605,6 @@ mod protocol {
         due_at_unix: u64,
         holder_identity: [u8; 32],
     }
-
     impl TransparencyLeaderLeaseScopeWireV1 {
         fn from_scope(scope: sorafs_node::TransparencyLeaderLeaseScopeV1) -> Self {
             let window = scope.window();
@@ -2701,7 +2617,6 @@ mod protocol {
                 holder_identity: scope.holder_identity(),
             }
         }
-
         fn to_scope(self) -> Result<sorafs_node::TransparencyLeaderLeaseScopeV1, BrokerError> {
             let scope = sorafs_node::TransparencyLeaderLeaseScopeV1::try_new(
                 self.query_id,
@@ -2719,7 +2634,6 @@ mod protocol {
             Ok(scope)
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct TransparencyLeaderLeaseGrantWireV1 {
         version: u16,
@@ -2730,7 +2644,6 @@ mod protocol {
         expires_at_unix: u64,
         provider_binding: TransparencyRuntimeProviderBindingWireV1,
     }
-
     impl TransparencyLeaderLeaseGrantWireV1 {
         fn from_grant(grant: &sorafs_node::TransparencyLeaderLeaseGrantV1) -> Self {
             Self {
@@ -2745,7 +2658,6 @@ mod protocol {
                 ),
             }
         }
-
         fn to_grant(&self) -> Result<sorafs_node::TransparencyLeaderLeaseGrantV1, BrokerError> {
             if self.version != sorafs_node::TRANSPARENCY_LEADER_LEASE_VERSION_V1 {
                 return Err(BrokerError::Rejected);
@@ -2765,7 +2677,6 @@ mod protocol {
             Ok(grant)
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct TransparencyLeaderLeaseAcquireRequestWireV1 {
         scope: TransparencyLeaderLeaseScopeWireV1,
@@ -2774,7 +2685,6 @@ mod protocol {
         fencing_floor: u64,
         provider_binding: TransparencyRuntimeProviderBindingWireV1,
     }
-
     impl TransparencyLeaderLeaseAcquireRequestWireV1 {
         fn from_request(request: &sorafs_node::TransparencyLeaderLeaseAcquireRequestV1) -> Self {
             Self {
@@ -2787,7 +2697,6 @@ mod protocol {
                 ),
             }
         }
-
         fn to_request(
             &self,
         ) -> Result<sorafs_node::TransparencyLeaderLeaseAcquireRequestV1, BrokerError> {
@@ -2805,7 +2714,6 @@ mod protocol {
             Ok(request)
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct TransparencyLeaderLeaseRenewRequestWireV1 {
         current_grant: TransparencyLeaderLeaseGrantWireV1,
@@ -2813,7 +2721,6 @@ mod protocol {
         expires_at_unix: u64,
         fencing_floor: u64,
     }
-
     impl TransparencyLeaderLeaseRenewRequestWireV1 {
         fn from_request(request: &sorafs_node::TransparencyLeaderLeaseRenewRequestV1) -> Self {
             Self {
@@ -2825,7 +2732,6 @@ mod protocol {
                 fencing_floor: request.fencing_floor(),
             }
         }
-
         fn to_request(
             &self,
         ) -> Result<sorafs_node::TransparencyLeaderLeaseRenewRequestV1, BrokerError> {
@@ -2842,13 +2748,11 @@ mod protocol {
             Ok(request)
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct TransparencyLeaderLeaseReleaseRequestWireV1 {
         current_grant: TransparencyLeaderLeaseGrantWireV1,
         release_at_unix: u64,
     }
-
     impl TransparencyLeaderLeaseReleaseRequestWireV1 {
         fn from_request(request: &sorafs_node::TransparencyLeaderLeaseReleaseRequestV1) -> Self {
             Self {
@@ -2858,7 +2762,6 @@ mod protocol {
                 release_at_unix: request.release_at_unix(),
             }
         }
-
         fn to_request(
             &self,
         ) -> Result<sorafs_node::TransparencyLeaderLeaseReleaseRequestV1, BrokerError> {
@@ -2873,7 +2776,6 @@ mod protocol {
             Ok(request)
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct TransparencyLeaderLeaseReleaseReceiptWireV1 {
         version: u16,
@@ -2883,7 +2785,6 @@ mod protocol {
         released_at_unix: u64,
         provider_binding: TransparencyRuntimeProviderBindingWireV1,
     }
-
     impl TransparencyLeaderLeaseReleaseReceiptWireV1 {
         fn from_receipt(receipt: &sorafs_node::TransparencyLeaderLeaseReleaseReceiptV1) -> Self {
             Self {
@@ -2897,7 +2798,6 @@ mod protocol {
                 ),
             }
         }
-
         fn to_receipt(
             &self,
         ) -> Result<sorafs_node::TransparencyLeaderLeaseReleaseReceiptV1, BrokerError> {
@@ -2918,7 +2818,6 @@ mod protocol {
             Ok(receipt)
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct FencedTransparencyTargetHeadWireV1 {
         version: u8,
@@ -2926,7 +2825,6 @@ mod protocol {
         head_digest: [u8; 32],
         fencing_floor: u64,
     }
-
     impl FencedTransparencyTargetHeadWireV1 {
         fn from_head(head: sorafs_node::FencedTransparencyTargetHeadV1) -> Self {
             Self {
@@ -2936,7 +2834,6 @@ mod protocol {
                 fencing_floor: head.fencing_floor(),
             }
         }
-
         fn to_head(self) -> Result<sorafs_node::FencedTransparencyTargetHeadV1, BrokerError> {
             if self.version != sorafs_node::FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1 {
                 return Err(BrokerError::Rejected);
@@ -2953,7 +2850,6 @@ mod protocol {
             Ok(head)
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct PrivacyPublicationAuthorizationWireV1 {
         leader_lease: TransparencyLeaderLeaseGrantWireV1,
@@ -2962,7 +2858,6 @@ mod protocol {
         release_record_digest: [u8; 32],
         payload_digest: [u8; 32],
     }
-
     impl PrivacyPublicationAuthorizationWireV1 {
         fn from_authorization(
             authorization: &sorafs_node::PrivacyPublicationAuthorizationV1,
@@ -2979,7 +2874,6 @@ mod protocol {
                 payload_digest: authorization.payload_digest(),
             }
         }
-
         fn to_authorization(
             &self,
         ) -> Result<sorafs_node::PrivacyPublicationAuthorizationV1, BrokerError> {
@@ -2998,7 +2892,6 @@ mod protocol {
             Ok(authorization)
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct FencedPrivacyPublicationRequestWireV1 {
         version: u8,
@@ -3012,7 +2905,6 @@ mod protocol {
         fencing_floor: u64,
         request_digest: [u8; 32],
     }
-
     impl fmt::Debug for FencedPrivacyPublicationRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -3036,7 +2928,6 @@ mod protocol {
                 .finish()
         }
     }
-
     impl FencedPrivacyPublicationRequestWireV1 {
         fn from_request(request: &sorafs_node::FencedPrivacyPublicationRequestV1) -> Self {
             Self {
@@ -3056,7 +2947,6 @@ mod protocol {
                 request_digest: request.request_digest(),
             }
         }
-
         fn matches_request(
             &self,
             request: &sorafs_node::FencedPrivacyPublicationRequestV1,
@@ -3078,7 +2968,6 @@ mod protocol {
                 && self.fencing_floor == request.fencing_floor()
                 && self.request_digest == request.request_digest()
         }
-
         fn to_request(
             &self,
         ) -> Result<sorafs_node::FencedPrivacyPublicationRequestV1, BrokerError> {
@@ -3094,7 +2983,6 @@ mod protocol {
             let _scope = admission.enter();
             self.to_request_with_admission(&admission)
         }
-
         fn to_request_with_admission(
             &self,
             admission: &DecodeResourceAdmissionV1,
@@ -3139,7 +3027,6 @@ mod protocol {
             Ok(request)
         }
     }
-
     fn validate_fenced_privacy_publication_payload_len(
         payload_len: usize,
     ) -> Result<(), BrokerError> {
@@ -3148,7 +3035,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn decode_fenced_privacy_publication_with_admission(
         bytes: &[u8],
         admission: &DecodeResourceAdmissionV1,
@@ -3173,7 +3059,6 @@ mod protocol {
         );
         norito::decode_canonical_with_limits(bytes, limits).map_err(|_| BrokerError::Rejected)
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct FencedPrivacyPublicationReceiptWireV1 {
         version: u8,
@@ -3185,7 +3070,6 @@ mod protocol {
         readback_head: FencedTransparencyTargetHeadWireV1,
         head_inclusion_digest: [u8; 32],
     }
-
     impl FencedPrivacyPublicationReceiptWireV1 {
         fn from_receipt(receipt: &sorafs_node::FencedPrivacyPublicationReceiptV1) -> Self {
             Self {
@@ -3206,7 +3090,6 @@ mod protocol {
                 head_inclusion_digest: receipt.head_inclusion_digest(),
             }
         }
-
         fn to_receipt(
             self,
             request: &sorafs_node::FencedPrivacyPublicationRequestV1,
@@ -3243,7 +3126,6 @@ mod protocol {
             Ok(receipt)
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct FencedTransparencyPublicationInclusionWireV1 {
         version: u8,
@@ -3251,7 +3133,6 @@ mod protocol {
         payload_digest: [u8; 32],
         included_head: FencedTransparencyTargetHeadWireV1,
     }
-
     impl FencedTransparencyPublicationInclusionWireV1 {
         fn from_inclusion(
             inclusion: sorafs_node::FencedTransparencyPublicationInclusionV1,
@@ -3265,7 +3146,6 @@ mod protocol {
                 ),
             }
         }
-
         fn to_inclusion(
             self,
         ) -> Result<sorafs_node::FencedTransparencyPublicationInclusionV1, BrokerError> {
@@ -3284,14 +3164,12 @@ mod protocol {
             Ok(inclusion)
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct FencedPrivacyHeadReadRequestWireV1 {
         version: u8,
         required_ancestors: Vec<FencedTransparencyTargetHeadWireV1>,
         required_publications: Vec<FencedTransparencyPublicationInclusionWireV1>,
     }
-
     impl FencedPrivacyHeadReadRequestWireV1 {
         fn from_required_evidence(
             required_ancestors: &[sorafs_node::FencedTransparencyTargetHeadV1],
@@ -3311,7 +3189,6 @@ mod protocol {
                     .collect(),
             }
         }
-
         fn to_required_evidence(
             &self,
         ) -> Result<
@@ -3345,7 +3222,6 @@ mod protocol {
             Ok((required_ancestors, required_publications))
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct FencedTransparencyHeadAncestryProofWireV1 {
         version: u8,
@@ -3354,7 +3230,6 @@ mod protocol {
         verified_publications: Vec<FencedTransparencyPublicationInclusionWireV1>,
         adapter_proof_digest: [u8; 32],
     }
-
     impl FencedTransparencyHeadAncestryProofWireV1 {
         fn from_proof(proof: &sorafs_node::FencedTransparencyHeadAncestryProofV1) -> Self {
             Self {
@@ -3377,7 +3252,6 @@ mod protocol {
                 adapter_proof_digest: proof.adapter_proof_digest(),
             }
         }
-
         fn to_proof(
             &self,
             required_ancestors: &[sorafs_node::FencedTransparencyTargetHeadV1],
@@ -3423,19 +3297,16 @@ mod protocol {
             Ok(proof)
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct PrivacyReleaseAnchorFinalizedHeadRequestWireV1 {
         query_id: [u8; 32],
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct PrivacyReleaseAnchorCompareAndSetRequestWireV1 {
         expected: PrivacyReleaseAnchorHeadWireV1,
         next: PrivacyReleaseAnchorHeadWireV1,
         lease: TransparencyLeaderLeaseGrantWireV1,
     }
-
     fn transparency_runtime_binding_from_wire(
         binding: &ProviderBindingWireV1,
     ) -> Result<sorafs_node::TransparencyRuntimeProviderBindingV1, BrokerError> {
@@ -3446,7 +3317,6 @@ mod protocol {
         )
         .map_err(|_| BrokerError::BindingMismatch)
     }
-
     fn validate_privacy_release_anchor_query(
         request: PrivacyReleaseAnchorFinalizedHeadRequestWireV1,
     ) -> Result<[u8; 32], BrokerError> {
@@ -3455,7 +3325,6 @@ mod protocol {
         }
         Ok(request.query_id)
     }
-
     fn validate_privacy_release_anchor_compare_and_set(
         request: &PrivacyReleaseAnchorCompareAndSetRequestWireV1,
     ) -> Result<
@@ -3481,7 +3350,6 @@ mod protocol {
         }
         Ok((expected, next, lease))
     }
-
     fn validate_transparency_leader_lease_acquire(
         request: &TransparencyLeaderLeaseAcquireRequestWireV1,
         configured_binding: &sorafs_node::TransparencyRuntimeProviderBindingV1,
@@ -3492,7 +3360,6 @@ mod protocol {
         }
         Ok(request)
     }
-
     fn validate_transparency_leader_lease_renew(
         request: &TransparencyLeaderLeaseRenewRequestWireV1,
         configured_binding: &sorafs_node::TransparencyRuntimeProviderBindingV1,
@@ -3503,7 +3370,6 @@ mod protocol {
         }
         Ok(request)
     }
-
     fn validate_transparency_leader_lease_release(
         request: &TransparencyLeaderLeaseReleaseRequestWireV1,
         configured_binding: &sorafs_node::TransparencyRuntimeProviderBindingV1,
@@ -3514,7 +3380,6 @@ mod protocol {
         }
         Ok(request)
     }
-
     fn validate_transparency_leader_lease_acquire_grant(
         request: &sorafs_node::TransparencyLeaderLeaseAcquireRequestV1,
         grant: &sorafs_node::TransparencyLeaderLeaseGrantV1,
@@ -3531,7 +3396,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_transparency_leader_lease_renew_grant(
         request: &sorafs_node::TransparencyLeaderLeaseRenewRequestV1,
         grant: &sorafs_node::TransparencyLeaderLeaseGrantV1,
@@ -3551,7 +3415,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_transparency_leader_lease_release_receipt(
         request: &sorafs_node::TransparencyLeaderLeaseReleaseRequestV1,
         receipt: &sorafs_node::TransparencyLeaderLeaseReleaseReceiptV1,
@@ -3568,7 +3431,6 @@ mod protocol {
         }
         Ok(())
     }
-
     const fn transparency_leader_lease_provider_error(
         error: sorafs_node::TransparencyLeaderLeaseProviderErrorV1,
     ) -> BrokerError {
@@ -3587,12 +3449,10 @@ mod protocol {
             }
         }
     }
-
     const fn stream_token_gateway_provider_error(
         error: iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1,
     ) -> BrokerError {
         use iroha_torii::sorafs::StreamTokenGatewayAdmissionErrorV1 as Error;
-
         match error {
             Error::Unavailable | Error::ReputationCallback => BrokerError::Unavailable,
             Error::InvalidRequest | Error::Rejected | Error::SubstitutedOutcome => {
@@ -3603,7 +3463,6 @@ mod protocol {
             Error::Ambiguous => BrokerError::Ambiguous,
         }
     }
-
     const fn fenced_privacy_publish_error(
         error: sorafs_node::FencedTransparencyPublishErrorV1,
     ) -> BrokerError {
@@ -3624,13 +3483,11 @@ mod protocol {
             }
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct GovernanceRequestAuthHeaderWireV1 {
         name: String,
         value: String,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct GovernanceRequestAuthRequestWireV1 {
         scope: u8,
@@ -3641,7 +3498,6 @@ mod protocol {
         body_blake3: [u8; 32],
         request_digest: [u8; 32],
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct GovernanceRequestAuthResultWireV1 {
         scope: u8,
@@ -3652,13 +3508,11 @@ mod protocol {
         public_key: [u8; 32],
         signature: [u8; 64],
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct PotrSignRequestWireV1 {
         payload: Vec<u8>,
         expected_public_key: Vec<u8>,
     }
-
     impl fmt::Debug for PotrSignRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -3668,7 +3522,6 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for PotrSignRequestWireV1 {
         fn drop(&mut self) {
             self.payload.fill(0);
@@ -3676,20 +3529,17 @@ mod protocol {
             let _ = std::hint::black_box((&self.payload, &self.expected_public_key));
         }
     }
-
     impl Drop for VariableSignatureResultWireV1 {
         fn drop(&mut self) {
             self.signature.fill(0);
             let _ = std::hint::black_box(&self.signature);
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct DurationWireV1 {
         secs: u64,
         nanos: u32,
     }
-
     impl DurationWireV1 {
         fn from_duration(duration: Duration) -> Self {
             Self {
@@ -3697,7 +3547,6 @@ mod protocol {
                 nanos: duration.subsec_nanos(),
             }
         }
-
         fn to_duration(self) -> Result<Duration, BrokerError> {
             if self.nanos >= 1_000_000_000 {
                 return Err(BrokerError::Rejected);
@@ -3705,13 +3554,11 @@ mod protocol {
             Ok(Duration::new(self.secs, self.nanos))
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct IpAddressWireV1 {
         family: u8,
         octets: Vec<u8>,
     }
-
     impl From<std::net::IpAddr> for IpAddressWireV1 {
         fn from(address: std::net::IpAddr) -> Self {
             match address {
@@ -3726,7 +3573,6 @@ mod protocol {
             }
         }
     }
-
     impl IpAddressWireV1 {
         fn to_address(&self) -> Result<std::net::IpAddr, BrokerError> {
             match self.family {
@@ -3750,13 +3596,11 @@ mod protocol {
             }
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct SystemTimeWireV1 {
         unix_secs: u64,
         nanos: u32,
     }
-
     impl SystemTimeWireV1 {
         fn from_system_time(value: std::time::SystemTime) -> Result<Self, BrokerError> {
             let duration = value
@@ -3767,7 +3611,6 @@ mod protocol {
                 nanos: duration.subsec_nanos(),
             })
         }
-
         fn to_system_time(self) -> Result<std::time::SystemTime, BrokerError> {
             let duration = DurationWireV1 {
                 secs: self.unix_secs,
@@ -3779,7 +3622,6 @@ mod protocol {
                 .ok_or(BrokerError::Rejected)
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct GatewayAcmeOrderRequestWireV1 {
         hostnames: Vec<String>,
@@ -3789,7 +3631,6 @@ mod protocol {
         dns01: bool,
         tls_alpn_01: bool,
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct GatewayAcmeOrderOutcomeWireV1 {
         outcome: u8,
@@ -3799,13 +3640,11 @@ mod protocol {
         not_after: Option<SystemTimeWireV1>,
         retry_after: Option<DurationWireV1>,
     }
-
     fn scrub_secret_string(value: &mut String) {
         let mut bytes = std::mem::take(value).into_bytes();
         bytes.fill(0);
         let _ = std::hint::black_box(&bytes);
     }
-
     impl fmt::Debug for GatewayAcmeOrderOutcomeWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -3817,7 +3656,6 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for GatewayAcmeOrderOutcomeWireV1 {
         fn drop(&mut self) {
             scrub_secret_string(&mut self.private_key_pem);
@@ -3827,13 +3665,11 @@ mod protocol {
             }
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct GatewayComplianceResolveRequestWireV1 {
         hostname: String,
         timeout: DurationWireV1,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct GatewayComplianceResolveOutcomeWireV1 {
         outcome: u8,
@@ -3841,7 +3677,6 @@ mod protocol {
         found: u64,
         maximum: u64,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct GatewayComplianceFetchRequestWireV1 {
         url: String,
@@ -3850,7 +3685,6 @@ mod protocol {
         total_timeout: DurationWireV1,
         max_encoded_bytes: u64,
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct GatewayComplianceFetchOutcomeWireV1 {
         outcome: u8,
@@ -3864,7 +3698,6 @@ mod protocol {
         found: u64,
         maximum: u64,
     }
-
     impl fmt::Debug for GatewayComplianceFetchOutcomeWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -3875,7 +3708,6 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for GatewayComplianceFetchOutcomeWireV1 {
         fn drop(&mut self) {
             self.body.fill(0);
@@ -3968,7 +3800,6 @@ mod protocol {
                 revocation_siblings: witness.revocation_path.siblings.clone(),
             }
         }
-
         fn into_witness(mut self) -> sorafs_manifest::pop_credentials::PopMembershipWitnessV1 {
             let witness = sorafs_manifest::pop_credentials::PopMembershipWitnessV1 {
                 holder_secret: self.holder_secret,
@@ -3998,7 +3829,6 @@ mod protocol {
         revocation_list: sorafs_manifest::pop_credentials::PopRevocationListV1,
         witness: PopMembershipWitnessWireV1,
     }
-
     impl fmt::Debug for PopIssuanceDraftResultWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4008,13 +3838,11 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     #[derive(PartialEq, Eq, Decode, Encode)]
     struct PopWalletWrapDekRequestWireV1 {
         context: [u8; 32],
         dek: [u8; 32],
     }
-
     impl fmt::Debug for PopWalletWrapDekRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4023,19 +3851,16 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for PopWalletWrapDekRequestWireV1 {
         fn drop(&mut self) {
             self.dek.fill(0);
             let _ = std::hint::black_box(&self.dek);
         }
     }
-
     #[derive(PartialEq, Eq, Decode, Encode)]
     struct PopWalletWrapDekResultWireV1 {
         wrapped_dek: Vec<u8>,
     }
-
     impl fmt::Debug for PopWalletWrapDekResultWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4044,21 +3869,18 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for PopWalletWrapDekResultWireV1 {
         fn drop(&mut self) {
             self.wrapped_dek.fill(0);
             let _ = std::hint::black_box(&self.wrapped_dek);
         }
     }
-
     #[derive(PartialEq, Eq, Decode, Encode)]
     struct PopWalletUnwrapDekRequestWireV1 {
         key_id: String,
         context: [u8; 32],
         wrapped_dek: Vec<u8>,
     }
-
     impl fmt::Debug for PopWalletUnwrapDekRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4068,19 +3890,16 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for PopWalletUnwrapDekRequestWireV1 {
         fn drop(&mut self) {
             self.wrapped_dek.fill(0);
             let _ = std::hint::black_box(&self.wrapped_dek);
         }
     }
-
     #[derive(PartialEq, Eq, Decode, Encode)]
     struct PopWalletUnwrapDekResultWireV1 {
         dek: [u8; 32],
     }
-
     impl fmt::Debug for PopWalletUnwrapDekResultWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4089,20 +3908,17 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for PopWalletUnwrapDekResultWireV1 {
         fn drop(&mut self) {
             self.dek.fill(0);
             let _ = std::hint::black_box(&self.dek);
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct PopWalletWitnessRequestWireV1 {
         credential_commitment: [u8; 32],
         projection: sorafs_node::pop_credentials::PopFinalizedRegistryProjectionV1,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct PopFinalizedTimeResultWireV1 {
         finalized_block_height: u64,
@@ -4110,13 +3926,11 @@ mod protocol {
         finalized_epoch: u64,
         observed_epoch: u64,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct PorReplayArchiveAppendRequestWireV1 {
         canonical_record: Vec<u8>,
         expected_previous_head: Option<[u8; 32]>,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct PorReplayArchiveLookupRequestWireV1 {
         challenge_id: [u8; 32],
@@ -4124,7 +3938,6 @@ mod protocol {
         max_successor_receipts: u32,
         max_successor_proof_bytes: u64,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct PorReplayArchiveLookupOutcomeWireV1 {
         outcome: u8,
@@ -4134,26 +3947,22 @@ mod protocol {
         canonical_successor_receipts: Vec<u8>,
         absence_proof: Option<sorafs_node::PorFinalizedReplayArchiveAbsenceProofV1>,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct AppealFinanceCheckpointCompareAndSwapWireV1 {
         expected_revision: Option<[u8; 32]>,
         next: sorafs_node::appeal_finance_transaction_forwarder::
             AppealFinanceSealedCheckpointRecordV1,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerIssueChallengeRequestWireV1 {
         binding_digest: [u8; 32],
         issued_at_unix_ms: u64,
         expires_at_unix_ms: u64,
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerSecretResultWireV1 {
         secret: Vec<u8>,
     }
-
     impl fmt::Debug for EvidenceViewerSecretResultWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4162,14 +3971,12 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for EvidenceViewerSecretResultWireV1 {
         fn drop(&mut self) {
             self.secret.fill(0);
             let _ = std::hint::black_box(&self.secret);
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerVerifyAndConsumeRequestWireV1 {
         challenge: Vec<u8>,
@@ -4179,7 +3986,6 @@ mod protocol {
         allowed_origins: Vec<String>,
         now_unix_ms: u64,
     }
-
     impl fmt::Debug for EvidenceViewerVerifyAndConsumeRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4189,7 +3995,6 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for EvidenceViewerVerifyAndConsumeRequestWireV1 {
         fn drop(&mut self) {
             self.challenge.fill(0);
@@ -4197,7 +4002,6 @@ mod protocol {
             let _ = std::hint::black_box((&self.challenge, &self.assertion));
         }
     }
-
     fn validate_evidence_viewer_verify_and_consume_wire(
         request: &EvidenceViewerVerifyAndConsumeRequestWireV1,
         configured: &EvidenceViewerWebAuthnBindingWireV1,
@@ -4210,20 +4014,17 @@ mod protocol {
         }
         Ok(())
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerWebAuthnResultWireV1 {
         attestation_digest: [u8; 32],
         credential_id_digest: [u8; 32],
         authenticator_counter: u64,
     }
-
     fn scrub_evidence_viewer_string(value: &mut String) {
         let mut bytes = std::mem::take(value).into_bytes();
         bytes.fill(0);
         let _ = std::hint::black_box(&bytes);
     }
-
     fn scrub_evidence_viewer_grant_claims(
         claims: &mut sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1,
     ) {
@@ -4231,12 +4032,10 @@ mod protocol {
         scrub_evidence_viewer_string(&mut claims.round_id);
         scrub_evidence_viewer_string(&mut claims.viewer_account);
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerGrantIssueRequestWireV1 {
         claims: sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1,
     }
-
     impl fmt::Debug for EvidenceViewerGrantIssueRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4244,20 +4043,17 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for EvidenceViewerGrantIssueRequestWireV1 {
         fn drop(&mut self) {
             scrub_evidence_viewer_grant_claims(&mut self.claims);
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerGrantVerifyRequestWireV1 {
         token: Vec<u8>,
         claims: sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1,
         now_unix_ms: u64,
     }
-
     impl fmt::Debug for EvidenceViewerGrantVerifyRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4266,7 +4062,6 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for EvidenceViewerGrantVerifyRequestWireV1 {
         fn drop(&mut self) {
             self.token.fill(0);
@@ -4274,12 +4069,10 @@ mod protocol {
             let _ = std::hint::black_box(&self.token);
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerGrantRevokeRequestWireV1 {
         token_digest: [u8; 32],
     }
-
     impl fmt::Debug for EvidenceViewerGrantRevokeRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4287,14 +4080,12 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for EvidenceViewerGrantRevokeRequestWireV1 {
         fn drop(&mut self) {
             self.token_digest.fill(0);
             let _ = std::hint::black_box(&self.token_digest);
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerEraseRequestWireV1 {
         operation_id: [u8; 32],
@@ -4302,7 +4093,6 @@ mod protocol {
         object_id: [u8; 16],
         evidence_digest: [u8; 32],
     }
-
     impl fmt::Debug for EvidenceViewerEraseRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4310,7 +4100,6 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for EvidenceViewerEraseRequestWireV1 {
         fn drop(&mut self) {
             self.operation_id.fill(0);
@@ -4325,18 +4114,15 @@ mod protocol {
             ));
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerEraseResultWireV1 {
         commit_digest: [u8; 32],
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerCheckpointCompareAndSwapRequestWireV1 {
         expected_revision: Option<[u8; 32]>,
         next_record: Vec<u8>,
     }
-
     impl fmt::Debug for EvidenceViewerCheckpointCompareAndSwapRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4346,7 +4132,6 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for EvidenceViewerCheckpointCompareAndSwapRequestWireV1 {
         fn drop(&mut self) {
             if let Some(expected_revision) = self.expected_revision.as_mut() {
@@ -4356,14 +4141,12 @@ mod protocol {
             let _ = std::hint::black_box((&self.expected_revision, &self.next_record));
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerArchiveInstallRequestWireV1 {
         operation_id: [u8; 32],
         receipt_message: [u8; 32],
         canonical_artifact: Vec<u8>,
     }
-
     impl fmt::Debug for EvidenceViewerArchiveInstallRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4372,7 +4155,6 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for EvidenceViewerArchiveInstallRequestWireV1 {
         fn drop(&mut self) {
             self.operation_id.fill(0);
@@ -4385,12 +4167,10 @@ mod protocol {
             ));
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerArchiveReadRequestWireV1 {
         operation_id: [u8; 32],
     }
-
     impl fmt::Debug for EvidenceViewerArchiveReadRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4398,20 +4178,17 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for EvidenceViewerArchiveReadRequestWireV1 {
         fn drop(&mut self) {
             self.operation_id.fill(0);
             let _ = std::hint::black_box(&self.operation_id);
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct EvidenceViewerArchiveReadbackWireV1 {
         canonical_artifact: Vec<u8>,
         signature: [u8; 64],
     }
-
     impl fmt::Debug for EvidenceViewerArchiveReadbackWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4420,23 +4197,19 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for EvidenceViewerArchiveReadbackWireV1 {
         fn drop(&mut self) {
             self.canonical_artifact.fill(0);
             let _ = std::hint::black_box(&self.canonical_artifact);
         }
     }
-
     const MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1: u16 = 1;
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationArchiveQualifyRequestWireV1 {
         version: u16,
         slot: u16,
         network_id: NetworkId,
     }
-
     impl fmt::Debug for ModerationPanelNotificationArchiveQualifyRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4446,7 +4219,6 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationArchiveQualificationWireV1 {
         version: u16,
@@ -4456,7 +4228,6 @@ mod protocol {
         archive_id: [u8; 32],
         public_key: [u8; 32],
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationArchiveInstallRequestWireV1 {
         version: u16,
@@ -4466,7 +4237,6 @@ mod protocol {
         receipt_message: [u8; 32],
         canonical_artifact: Vec<u8>,
     }
-
     impl fmt::Debug for ModerationPanelNotificationArchiveInstallRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4477,7 +4247,6 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for ModerationPanelNotificationArchiveInstallRequestWireV1 {
         fn drop(&mut self) {
             self.operation_id.fill(0);
@@ -4490,14 +4259,12 @@ mod protocol {
             ));
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationArchiveInstallResultWireV1 {
         version: u16,
         slot: u16,
         signature: [u8; 64],
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationArchiveReadRequestWireV1 {
         version: u16,
@@ -4505,7 +4272,6 @@ mod protocol {
         network_id: NetworkId,
         operation_id: [u8; 32],
     }
-
     impl fmt::Debug for ModerationPanelNotificationArchiveReadRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4515,14 +4281,12 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for ModerationPanelNotificationArchiveReadRequestWireV1 {
         fn drop(&mut self) {
             self.operation_id.fill(0);
             let _ = std::hint::black_box(&self.operation_id);
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationArchiveReadbackWireV1 {
         version: u16,
@@ -4530,7 +4294,6 @@ mod protocol {
         canonical_artifact: Vec<u8>,
         signature: [u8; 64],
     }
-
     impl fmt::Debug for ModerationPanelNotificationArchiveReadbackWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4541,14 +4304,12 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for ModerationPanelNotificationArchiveReadbackWireV1 {
         fn drop(&mut self) {
             self.canonical_artifact.fill(0);
             let _ = std::hint::black_box(&self.canonical_artifact);
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationSourceAttestRequestWireV1 {
         version: u16,
@@ -4557,7 +4318,6 @@ mod protocol {
         statement:
             sorafs_node::moderation_orchestrator::ModerationPanelNotificationSourceAttestationV1,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationSourceAttestResultWireV1 {
         version: u16,
@@ -4565,7 +4325,6 @@ mod protocol {
         statement_digest: [u8; 32],
         signature: [u8; 64],
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
         version: u16,
@@ -4574,7 +4333,6 @@ mod protocol {
         head: sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1,
         canonical_head: Vec<u8>,
     }
-
     impl fmt::Debug for ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4586,14 +4344,12 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
         fn drop(&mut self) {
             self.canonical_head.fill(0);
             let _ = std::hint::black_box(&self.canonical_head);
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationArchiveHeadPublishResultWireV1 {
         version: u16,
@@ -4603,14 +4359,12 @@ mod protocol {
         chain_commitment: [u8; 32],
         outcome: u8,
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationArchiveHeadReadResultWireV1 {
         version: u16,
         slot: u16,
         canonical_head: Option<Vec<u8>>,
     }
-
     impl fmt::Debug for ModerationPanelNotificationArchiveHeadReadResultWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4624,7 +4378,6 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for ModerationPanelNotificationArchiveHeadReadResultWireV1 {
         fn drop(&mut self) {
             if let Some(bytes) = self.canonical_head.as_mut() {
@@ -4633,13 +4386,11 @@ mod protocol {
             }
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationQuarantineWrapDekRequestWireV1 {
         context_digest: [u8; 32],
         dek: [u8; 32],
     }
-
     impl fmt::Debug for ModerationQuarantineWrapDekRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4647,19 +4398,16 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for ModerationQuarantineWrapDekRequestWireV1 {
         fn drop(&mut self) {
             self.dek.fill(0);
             let _ = std::hint::black_box(&self.dek);
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationQuarantineWrapDekResultWireV1 {
         wrapped_dek: Vec<u8>,
     }
-
     impl fmt::Debug for ModerationQuarantineWrapDekResultWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4668,21 +4416,18 @@ mod protocol {
                 .finish()
         }
     }
-
     impl Drop for ModerationQuarantineWrapDekResultWireV1 {
         fn drop(&mut self) {
             self.wrapped_dek.fill(0);
             let _ = std::hint::black_box(&self.wrapped_dek);
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationQuarantineUnwrapDekRequestWireV1 {
         key_id: String,
         context_digest: [u8; 32],
         wrapped_dek: Vec<u8>,
     }
-
     impl fmt::Debug for ModerationQuarantineUnwrapDekRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4691,19 +4436,16 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for ModerationQuarantineUnwrapDekRequestWireV1 {
         fn drop(&mut self) {
             self.wrapped_dek.fill(0);
             let _ = std::hint::black_box(&self.wrapped_dek);
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationQuarantineUnwrapDekResultWireV1 {
         dek: [u8; 32],
     }
-
     impl fmt::Debug for ModerationQuarantineUnwrapDekResultWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4711,20 +4453,17 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     impl Drop for ModerationQuarantineUnwrapDekResultWireV1 {
         fn drop(&mut self) {
             self.dek.fill(0);
             let _ = std::hint::black_box(&self.dek);
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationDurableHandoffRequestWireV1 {
         handoff: sorafs_node::moderation_orchestrator::ModerationTerminalHandoffV1,
         canonical_handoff: Vec<u8>,
     }
-
     impl fmt::Debug for ModerationDurableHandoffRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4733,12 +4472,10 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct ModerationDurableHandoffOutcomeWireV1 {
         outcome: u8,
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct ModerationDurablePanelNotificationRequestWireV1 {
         notification: sorafs_node::moderation_orchestrator::ModerationPanelNotificationV1,
@@ -4747,7 +4484,6 @@ mod protocol {
         attempt: u32,
         attempt_limit: u32,
     }
-
     impl fmt::Debug for ModerationDurablePanelNotificationRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4761,14 +4497,12 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     #[derive(Clone, Copy, PartialEq, Eq, Decode, Encode)]
     struct ModerationPanelNotificationReceiptWireV1 {
         notification_id: [u8; 32],
         receipt_digest: [u8; 32],
         delivered_at_unix_ms: u64,
     }
-
     impl fmt::Debug for ModerationPanelNotificationReceiptWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -4776,45 +4510,38 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct SealedLoadRequestWireV1 {
         slot: u8,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct SealedRecordWireV1 {
         generation: u64,
         revision: [u8; 32],
         payload: Vec<u8>,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct SealedCompareAndSwapRequestWireV1 {
         slot: u8,
         expected_revision: Option<[u8; 32]>,
         next: SealedRecordWireV1,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct SealedDeleteRequestWireV1 {
         slot: u8,
         expected_revision: [u8; 32],
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestResolverQualificationWireV1 {
         revision: u64,
         policy_digest: [u8; 32],
         signer_binding: ProviderIngestSignerBindingWireV1,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestRuntimeQualificationWireV1 {
         revision: u64,
         policy_digest: [u8; 32],
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestSignerRequestContextWireV1 {
         provider_owner: Vec<u8>,
@@ -4826,69 +4553,57 @@ mod protocol {
         finalized_height: u64,
         finalized_block_hash: [u8; 32],
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestResolveSignerRequestWireV1 {
         context: ProviderIngestSignerRequestContextWireV1,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestResolveSignerResultWireV1 {
         eligible: bool,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestSignRequestWireV1 {
         context: ProviderIngestSignerRequestContextWireV1,
         transaction_payload: Vec<u8>,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestSignResultWireV1 {
         signed_transaction: Vec<u8>,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestCheckpointCompareAndSwapRequestWireV1 {
         expected_revision: Option<[u8; 32]>,
         next_record: Vec<u8>,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ReputationJournalCheckpointCompareAndSwapRequestWireV1 {
         expected_revision: Option<[u8; 32]>,
         next_record: Vec<u8>,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestRetentionLoadRequestWireV1 {
         network_id: NetworkId,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestRetentionCompareAndSwapRequestWireV1 {
         network_id: NetworkId,
         expected_revision: Option<[u8; 32]>,
         next_record: Vec<u8>,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ReputationRetentionLoadRequestWireV1 {
         network_id: NetworkId,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ReputationRetentionCompareAndSwapRequestWireV1 {
         network_id: NetworkId,
         expected_revision: Option<[u8; 32]>,
         next_record: Vec<u8>,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ReputationJournalSupportsAuthorityRequestWireV1 {
         authority: iroha_data_model::account::AccountId,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ReputationJournalTransactionRequestWireV1 {
         sequence: u64,
@@ -4901,13 +4616,11 @@ mod protocol {
         instruction_kind: u8,
         canonical_instruction: Vec<u8>,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct ReputationJournalTransactionSubmitResultWireV1 {
         outcome: u8,
         receipt: [u8; 32],
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ReputationThresholdSigningRequestWireV1 {
         sequence: u64,
@@ -4915,7 +4628,6 @@ mod protocol {
         idempotency_key: [u8; 32],
         material: sorafs_node::reputation::ReputationUnsignedSigningMaterialV1,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ReputationGovernanceDagPublicationRequestWireV1 {
         sequence: u64,
@@ -4924,26 +4636,22 @@ mod protocol {
         idempotency_key: [u8; 32],
         canonical_signed_result: Vec<u8>,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ReputationReconcileResultWireV1 {
         outcome: u8,
         canonical_result: Vec<u8>,
         failure_receipt: [u8; 32],
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingAdapterIdentityWireV1 {
         handle: String,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingStatementSignerIdentityWireV1 {
         provider_handle: String,
         signer_id: String,
         public_key: [u8; 32],
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingStatementPublisherIdentityWireV1 {
         provider_handle: String,
@@ -4951,38 +4659,32 @@ mod protocol {
         route_id: String,
         public_key: [u8; 32],
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingFinalizedQueryCapabilitiesWireV1 {
         supplies_period_closes: bool,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingQueryPositionWireV1 {
         next_sequence: u64,
         journal_commitment:
             Option<sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1>,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingQueryPageRequestWireV1 {
         position: BillingQueryPositionWireV1,
         max_events: u32,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingQueryPeriodCloseRequestWireV1 {
         period_end_unix: u64,
         position: BillingQueryPositionWireV1,
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct BillingVerifyPageRequestWireV1 {
         network_id: iroha_data_model::NetworkId,
         previous: Option<sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1>,
         page: sorafs_node::hedging_billing_service::HedgingBillingFinalizedEventPageV1,
     }
-
     impl fmt::Debug for BillingVerifyPageRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -5000,36 +4702,30 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingVerifyPeriodCloseRequestWireV1 {
         network_id: iroha_data_model::NetworkId,
         close: sorafs_node::hedging_billing_service::HedgingBillingFinalizedPeriodCloseV1,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingVerifyEpochTransitionRequestWireV1 {
         network_id: iroha_data_model::NetworkId,
         transition: sorafs_node::hedging_billing_service::HedgingBillingEpochTransitionV1,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingSignDigestRequestWireV1 {
         digest: [u8; 32],
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingSignDigestResultWireV1 {
         signature: [u8; 64],
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct BillingPublishStatementRequestWireV1 {
         idempotency_key: [u8; 32],
         signed_statement_digest: [u8; 32],
         statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1,
     }
-
     impl fmt::Debug for BillingPublishStatementRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -5039,18 +4735,15 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingLookupRequestWireV1 {
         record_id: [u8; 32],
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct BillingAuthoritativePublicationWireV1 {
         signed_statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1,
         receipt: sorafs_node::hedging_billing_service::BillingStatementPublicationReceiptV1,
     }
-
     impl fmt::Debug for BillingAuthoritativePublicationWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -5066,13 +4759,11 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct BillingAcknowledgementRequestWireV1 {
         statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1,
         acknowledgement: sorafs_node::hedging_billing_service::BillingStatementAcknowledgementV1,
     }
-
     impl fmt::Debug for BillingAcknowledgementRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -5085,18 +4776,15 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct BillingLoadEpochRequestWireV1 {
         epoch_sequence: u64,
     }
-
     #[derive(Clone, PartialEq, Eq, Decode, Encode)]
     struct BillingCompareAndSwapEpochRequestWireV1 {
         expected_revision: Option<[u8; 32]>,
         next: sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessRecordV1,
     }
-
     impl fmt::Debug for BillingCompareAndSwapEpochRequestWireV1 {
         fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
             formatter
@@ -5107,7 +4795,6 @@ mod protocol {
                 .finish_non_exhaustive()
         }
     }
-
     fn billing_hash_canonical<T: NoritoSerialize>(
         domain: &[u8],
         value: &T,
@@ -5120,21 +4807,18 @@ mod protocol {
         hasher.update(&bytes);
         Ok(*hasher.finalize().as_bytes())
     }
-
     fn validate_billing_record_id(record_id: [u8; 32]) -> Result<(), BrokerError> {
         if record_id == [0; 32] {
             return Err(BrokerError::Rejected);
         }
         Ok(())
     }
-
     fn validate_billing_public_identity_text(value: &str, max_bytes: usize) -> bool {
         !value.is_empty()
             && value.len() <= max_bytes
             && value.trim() == value
             && !value.chars().any(char::is_control)
     }
-
     fn validate_billing_cursor(
         cursor: sorafs_node::hedging_billing_service::HedgingBillingFinalizedCursorV1,
     ) -> Result<(), BrokerError> {
@@ -5143,7 +4827,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_billing_journal_commitment(
         commitment: sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1,
         network_id: iroha_data_model::NetworkId,
@@ -5159,7 +4842,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_billing_query_position(
         position: BillingQueryPositionWireV1,
         network_id: iroha_data_model::NetworkId,
@@ -5175,7 +4857,6 @@ mod protocol {
         }
         Ok(())
     }
-
     const fn billing_query_position_from_wire(
         position: BillingQueryPositionWireV1,
     ) -> sorafs_node::hedging_billing_service::HedgingBillingQueryPositionV1 {
@@ -5184,7 +4865,6 @@ mod protocol {
             journal_commitment: position.journal_commitment,
         }
     }
-
     const fn billing_query_position_to_wire(
         position: sorafs_node::hedging_billing_service::HedgingBillingQueryPositionV1,
     ) -> BillingQueryPositionWireV1 {
@@ -5193,7 +4873,6 @@ mod protocol {
             journal_commitment: position.journal_commitment,
         }
     }
-
     fn validate_billing_page_shape(
         page: &sorafs_node::hedging_billing_service::HedgingBillingFinalizedEventPageV1,
         request: Option<(BillingQueryPositionWireV1, u32)>,
@@ -5254,7 +4933,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_billing_period_close_shape(
         close: &sorafs_node::hedging_billing_service::HedgingBillingFinalizedPeriodCloseV1,
         expected_period_end_unix: Option<u64>,
@@ -5276,7 +4954,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_billing_signed_statement_shape(
         statement: &sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1,
     ) -> Result<[u8; 32], BrokerError> {
@@ -5304,7 +4981,6 @@ mod protocol {
         )?;
         Ok(*blake3::hash(&canonical).as_bytes())
     }
-
     fn validate_billing_publish_request(
         publish: &BillingPublishStatementRequestWireV1,
         network_id: iroha_data_model::NetworkId,
@@ -5320,7 +4996,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_billing_acknowledgement_request(
         request: &BillingAcknowledgementRequestWireV1,
         network_id: iroha_data_model::NetworkId,
@@ -5335,7 +5010,6 @@ mod protocol {
             network_id,
         )
     }
-
     fn validate_billing_acknowledgement_shape(
         acknowledgement: &sorafs_node::hedging_billing_service::BillingStatementAcknowledgementV1,
         expected_statement_id: [u8; 32],
@@ -5363,7 +5037,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_billing_publication_shape(
         publication: &BillingAuthoritativePublicationWireV1,
         requested_statement_id: [u8; 32],
@@ -5405,7 +5078,6 @@ mod protocol {
         message.extend_from_slice(&receipt.receipt_digest);
         verify_evidence_viewer_ed25519_signature(identity.public_key, receipt.signature, &message)
     }
-
     fn validate_billing_publication_receipt_shape(
         receipt: &sorafs_node::hedging_billing_service::BillingStatementPublicationReceiptV1,
         expected_statement_id: [u8; 32],
@@ -5442,21 +5114,18 @@ mod protocol {
         }
         Ok(())
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestSourceMusubiArchiveWireV1 {
         network_id: iroha_data_model::NetworkId,
         observed_finalized_cursor: sorafs_node::ProviderIngestFinalizedCursorV1,
         binding: iroha_data_model::musubi::MusubiReplicationOrderArchiveBindingV1,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestSourceFetchRequestWireV2 {
         authorization: sorafs_node::FinalizedProviderIngestAuthorizationV1,
         source_provider_ids: Vec<[u8; 32]>,
         musubi_archive: Option<ProviderIngestSourceMusubiArchiveWireV1>,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestCarPlanWireV1 {
         chunk_profile: ProviderIngestChunkProfileWireV1,
@@ -5465,7 +5134,6 @@ mod protocol {
         chunks: Vec<ProviderIngestCarChunkWireV1>,
         files: Vec<ProviderIngestFilePlanWireV1>,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestChunkProfileWireV1 {
         min_size: u64,
@@ -5473,7 +5141,6 @@ mod protocol {
         max_size: u64,
         break_mask: u64,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestCarChunkWireV1 {
         offset: u64,
@@ -5481,7 +5148,6 @@ mod protocol {
         digest: [u8; 32],
         taikai_segment_hint: Option<ProviderIngestTaikaiSegmentHintWireV1>,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestTaikaiSegmentHintWireV1 {
         event: String,
@@ -5491,7 +5157,6 @@ mod protocol {
         payload_len: Option<u64>,
         payload_digest: Option<[u8; 32]>,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestFilePlanWireV1 {
         path: Vec<String>,
@@ -5499,7 +5164,6 @@ mod protocol {
         chunk_count: u64,
         size: u64,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestSourceHeaderWireV1 {
         manifest: Vec<u8>,
@@ -5507,14 +5171,12 @@ mod protocol {
         content_length: u64,
         frame_count: u64,
     }
-
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestSourceChunkWireV1 {
         sequence: u64,
         offset: u64,
         bytes: Vec<u8>,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
     struct ProviderIngestSourceTrailerWireV1 {
         status: u8,
@@ -5524,7 +5186,6 @@ mod protocol {
         transcript_digest: [u8; 32],
         provider_metadata_digest: [u8; 32],
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     enum BrokerError {
         Unavailable,
@@ -5535,7 +5196,6 @@ mod protocol {
         Conflict,
         Ambiguous,
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct DecodeResourcePolicyV1 {
         max_sequence_elements: usize,
@@ -5552,7 +5212,6 @@ mod protocol {
         // is not acquired from the memory pool and may exceed the live peak.
         max_cumulative_bytes: usize,
     }
-
     impl DecodeResourcePolicyV1 {
         const fn new(
             field_caps: (usize, usize),
@@ -5574,7 +5233,6 @@ mod protocol {
             }
         }
     }
-
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct DecodeResourceBudgetV1 {
         max_sequence_elements: usize,
@@ -5584,7 +5242,6 @@ mod protocol {
         max_nesting_depth: usize,
         composed_charge_bytes: usize,
     }
-
     fn decode_resource_budget(
         encoded_len: usize,
         semantic_wire_limit: usize,
@@ -5628,13 +5285,11 @@ mod protocol {
             composed_charge_bytes,
         })
     }
-
     #[derive(Debug)]
     struct DecodeResourcePoolV1 {
         max_bytes: usize,
         used_bytes: AtomicUsize,
     }
-
     impl DecodeResourcePoolV1 {
         const fn new(max_bytes: usize) -> Self {
             Self {
@@ -5642,7 +5297,6 @@ mod protocol {
                 used_bytes: AtomicUsize::new(0),
             }
         }
-
         fn try_acquire(
             self: &Arc<Self>,
             bytes: usize,
@@ -5673,20 +5327,17 @@ mod protocol {
             }
         }
     }
-
     #[derive(Debug)]
     struct DecodeResourcePoolPermitV1 {
         pool: Arc<DecodeResourcePoolV1>,
         bytes: usize,
     }
-
     impl Drop for DecodeResourcePoolPermitV1 {
         fn drop(&mut self) {
             let previous = self.pool.used_bytes.fetch_sub(self.bytes, Ordering::AcqRel);
             debug_assert!(previous >= self.bytes);
         }
     }
-
     #[derive(Debug)]
     struct DecodeResourceAdmissionV1 {
         operation: Option<u16>,
@@ -5694,12 +5345,10 @@ mod protocol {
         usage: Mutex<DecodeResourceUsageV1>,
         _permit: DecodeResourcePoolPermitV1,
     }
-
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
     struct DecodeResourceUsageV1 {
         consumed_bytes: usize,
     }
-
     impl DecodeResourceAdmissionV1 {
         fn acquire(
             operation: Option<u16>,
@@ -5707,18 +5356,15 @@ mod protocol {
         ) -> Result<Arc<Self>, BrokerError> {
             Self::acquire_from(shared_decode_resource_pool(), operation, policy)
         }
-
         fn acquire_operation(operation: u16) -> Result<Arc<Self>, BrokerError> {
             Self::acquire(Some(operation), operation_decode_policy(operation))
         }
-
         fn acquire_operation_from(
             pool: Arc<DecodeResourcePoolV1>,
             operation: u16,
         ) -> Result<Arc<Self>, BrokerError> {
             Self::acquire_from(pool, Some(operation), operation_decode_policy(operation))
         }
-
         fn acquire_from(
             pool: Arc<DecodeResourcePoolV1>,
             operation: Option<u16>,
@@ -5732,7 +5378,6 @@ mod protocol {
                 _permit: permit,
             }))
         }
-
         fn reserve_raw_frame(
             &self,
             declared_len: usize,
@@ -5755,7 +5400,6 @@ mod protocol {
             usage.consumed_bytes = next;
             Ok(())
         }
-
         fn reserve_encoded_copy(
             &self,
             encoded_len: usize,
@@ -5769,7 +5413,6 @@ mod protocol {
             }
             self.reserve_bytes(encoded_len)
         }
-
         fn reserve_retained_bytes(
             &self,
             retained_len: usize,
@@ -5783,7 +5426,6 @@ mod protocol {
             }
             self.reserve_bytes(retained_len)
         }
-
         fn reserve_bytes(&self, bytes: usize) -> Result<(), BrokerError> {
             let mut usage = self.usage.lock().map_err(|_| BrokerError::Protocol)?;
             let next = usage
@@ -5796,7 +5438,6 @@ mod protocol {
             usage.consumed_bytes = next;
             Ok(())
         }
-
         fn reserve_decode(
             &self,
             encoded_len: usize,
@@ -5814,7 +5455,6 @@ mod protocol {
             usage.consumed_bytes = next;
             Ok(budget)
         }
-
         fn enter(self: &Arc<Self>) -> DecodeResourceAdmissionScopeV1 {
             CURRENT_DECODE_ADMISSIONS_V1.with(|stack| {
                 stack.borrow_mut().push(Arc::clone(self));
@@ -5824,11 +5464,9 @@ mod protocol {
             }
         }
     }
-
     struct DecodeResourceAdmissionScopeV1 {
         admission: Arc<DecodeResourceAdmissionV1>,
     }
-
     impl Drop for DecodeResourceAdmissionScopeV1 {
         fn drop(&mut self) {
             CURRENT_DECODE_ADMISSIONS_V1.with(|stack| {
@@ -5841,16 +5479,13 @@ mod protocol {
             });
         }
     }
-
     thread_local! {
         static CURRENT_DECODE_ADMISSIONS_V1:
             RefCell<Vec<Arc<DecodeResourceAdmissionV1>>> = const { RefCell::new(Vec::new()) };
     }
-
     fn current_decode_resource_admission() -> Option<Arc<DecodeResourceAdmissionV1>> {
         CURRENT_DECODE_ADMISSIONS_V1.with(|stack| stack.borrow().last().cloned())
     }
-
     fn shared_decode_resource_pool() -> Arc<DecodeResourcePoolV1> {
         static POOL: OnceLock<Arc<DecodeResourcePoolV1>> = OnceLock::new();
         Arc::clone(
@@ -5859,7 +5494,6 @@ mod protocol {
             }),
         )
     }
-
     fn source_stream_frame_count(content_length: u64) -> Result<u64, BrokerError> {
         if content_length == 0 {
             return Err(BrokerError::Rejected);
@@ -5868,7 +5502,6 @@ mod protocol {
             .map_err(|_| BrokerError::Protocol)?;
         Ok(content_length.div_ceil(payload_bytes))
     }
-
     fn validate_source_plan_counts(
         chunk_count: usize,
         file_count: usize,
@@ -5880,7 +5513,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_source_metadata_lengths(
         manifest_bytes: usize,
         plan_bytes: usize,
@@ -5894,7 +5526,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn source_retained_memory_bytes(plan: &sorafs_car::CarBuildPlan) -> Result<usize, BrokerError> {
         let validation = plan
             .validate_for_ingest_with_limit(MAX_PROVIDER_INGEST_SOURCE_PLAN_HEAP_BYTES_V1)
@@ -5907,13 +5538,11 @@ mod protocol {
             .checked_add(sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES)
             .ok_or(BrokerError::Protocol)
     }
-
     fn acquire_source_retained_memory(
         plan: &sorafs_car::CarBuildPlan,
     ) -> Result<DecodeResourcePoolPermitV1, BrokerError> {
         shared_decode_resource_pool().try_acquire(source_retained_memory_bytes(plan)?)
     }
-
     fn source_plan_to_wire(
         plan: &sorafs_car::CarBuildPlan,
     ) -> Result<ProviderIngestCarPlanWireV1, BrokerError> {
@@ -5969,7 +5598,6 @@ mod protocol {
             files,
         })
     }
-
     fn source_plan_from_wire(
         wire: ProviderIngestCarPlanWireV1,
     ) -> Result<sorafs_car::CarBuildPlan, BrokerError> {
@@ -6024,14 +5652,12 @@ mod protocol {
             .map_err(|_| BrokerError::Rejected)?;
         Ok(plan)
     }
-
     fn encode_source_plan(plan: &sorafs_car::CarBuildPlan) -> Result<Vec<u8>, BrokerError> {
         encode_canonical(
             &source_plan_to_wire(plan)?,
             MAX_PROVIDER_INGEST_SOURCE_PLAN_BYTES_V1,
         )
     }
-
     fn decode_source_plan(bytes: &[u8]) -> Result<sorafs_car::CarBuildPlan, BrokerError> {
         if bytes.is_empty() || bytes.len() > MAX_PROVIDER_INGEST_SOURCE_PLAN_BYTES_V1 {
             return Err(BrokerError::Rejected);
@@ -6044,7 +5670,6 @@ mod protocol {
         .map_err(|_| BrokerError::Rejected)?;
         source_plan_from_wire(wire)
     }
-
     fn source_request_from_wire(
         fetch: ProviderIngestSourceFetchRequestWireV2,
     ) -> Result<sorafs_node::ProviderIngestSourceRequestV1, BrokerError> {
@@ -6067,7 +5692,6 @@ mod protocol {
         )
         .map_err(|_| BrokerError::Rejected)
     }
-
     fn source_request_to_wire(
         request: sorafs_node::ProviderIngestSourceRequestV1,
     ) -> Result<ProviderIngestSourceFetchRequestWireV2, BrokerError> {
@@ -6093,7 +5717,6 @@ mod protocol {
         source_request_from_wire(fetch.clone())?;
         Ok(fetch)
     }
-
     fn validate_source_fetch_request(
         fetch: &ProviderIngestSourceFetchRequestWireV2,
         binding: &ProviderBindingWireV1,
@@ -6124,7 +5747,6 @@ mod protocol {
         source_stream_frame_count(fetch.authorization.content_length())?;
         Ok(())
     }
-
     fn validate_source_payload_metadata(
         authorization: &sorafs_node::FinalizedProviderIngestAuthorizationV1,
         manifest: &sorafs_manifest::ManifestV1,
@@ -6156,7 +5778,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn source_stream_transcript(
         request: &OperationRequestV1,
         response: &OperationResponseV1,
@@ -6167,7 +5788,6 @@ mod protocol {
         hasher.update(&response.response_digest);
         hasher
     }
-
     fn update_source_stream_transcript(
         hasher: &mut blake3::Hasher,
         chunk: &ProviderIngestSourceChunkWireV1,
@@ -6182,7 +5802,6 @@ mod protocol {
         );
         hasher.update(&chunk.bytes);
     }
-
     fn digest_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
         let mut hasher = blake3::Hasher::new();
         hasher.update(domain);
@@ -6192,7 +5811,6 @@ mod protocol {
         }
         *hasher.finalize().as_bytes()
     }
-
     fn encode_canonical<T: NoritoSerialize>(
         value: &T,
         limit: usize,
@@ -6212,14 +5830,12 @@ mod protocol {
         }
         Ok(bytes.take())
     }
-
     fn encode_sensitive_canonical<T: NoritoSerialize>(
         value: &T,
         limit: usize,
     ) -> Result<ScrubbedBytes, BrokerError> {
         encode_canonical(value, limit).map(ScrubbedBytes::new)
     }
-
     fn decode_canonical<T>(bytes: &[u8], limit: usize) -> Result<T, BrokerError>
     where
         T: NoritoSerialize,
@@ -6227,7 +5843,6 @@ mod protocol {
     {
         decode_canonical_with_policy(bytes, limit, CONTROL_DECODE_POLICY_V1)
     }
-
     fn decode_nested_canonical<T>(bytes: &[u8], limit: usize) -> Result<T, BrokerError>
     where
         T: NoritoSerialize,
@@ -6235,7 +5850,6 @@ mod protocol {
     {
         decode_canonical_with_policy(bytes, limit, OPAQUE_BLOB_DECODE_POLICY_V1)
     }
-
     fn decode_scrubbed_canonical<T>(bytes: &ScrubbedBytes, limit: usize) -> Result<T, BrokerError>
     where
         T: NoritoSerialize,
@@ -6244,7 +5858,6 @@ mod protocol {
         let _scope = bytes.enter_decode_admission();
         decode_canonical(bytes, limit)
     }
-
     fn reserve_external_canonical_decode(
         encoded_len: usize,
         semantic_wire_limit: usize,
@@ -6260,7 +5873,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn decode_canonical_with_policy<T>(
         bytes: &[u8],
         limit: usize,
@@ -6278,7 +5890,6 @@ mod protocol {
         let _scope = admission.enter();
         decode_canonical_with_admission(bytes, limit, &admission)
     }
-
     fn decode_canonical_with_admission<T>(
         bytes: &[u8],
         limit: usize,
@@ -6298,7 +5909,6 @@ mod protocol {
         );
         norito::decode_canonical_with_limits::<T>(bytes, limits).map_err(|_| BrokerError::Protocol)
     }
-
     fn encode_frame<T: NoritoSerialize>(
         kind: u8,
         value: &T,
@@ -6313,7 +5923,6 @@ mod protocol {
         };
         encode_canonical(&frame, limit).map(ScrubbedBytes::new)
     }
-
     fn decode_frame<T>(bytes: &[u8], expected_kind: u8, limit: usize) -> Result<T, BrokerError>
     where
         T: NoritoSerialize,
@@ -6321,7 +5930,6 @@ mod protocol {
     {
         decode_frame_with_policy(bytes, expected_kind, limit, CONTROL_DECODE_POLICY_V1)
     }
-
     fn decode_operation_frame<T>(
         bytes: &[u8],
         expected_kind: u8,
@@ -6343,7 +5951,6 @@ mod protocol {
         let _scope = admission.enter();
         decode_frame_with_admission(bytes, expected_kind, limit, &admission)
     }
-
     fn decode_frame_with_policy<T>(
         bytes: &[u8],
         expected_kind: u8,
@@ -6362,7 +5969,6 @@ mod protocol {
         let _scope = admission.enter();
         decode_frame_with_admission(bytes, expected_kind, limit, &admission)
     }
-
     fn decode_frame_with_admission<T>(
         bytes: &[u8],
         expected_kind: u8,
@@ -6382,7 +5988,6 @@ mod protocol {
         }
         decode_canonical_with_admission::<T>(&frame.body, limit, admission)
     }
-
     fn write_length_prefixed<W: std::io::Write>(
         writer: &mut W,
         frame: &[u8],
@@ -6400,7 +6005,6 @@ mod protocol {
             .map_err(|_| BrokerError::Unavailable)?;
         writer.flush().map_err(|_| BrokerError::Unavailable)
     }
-
     fn read_length_prefixed_inner<R: std::io::Read>(
         reader: &mut R,
         limit: usize,
@@ -6447,14 +6051,12 @@ mod protocol {
             None => ScrubbedBytes::new(frame),
         })
     }
-
     fn read_length_prefixed<R: std::io::Read>(
         reader: &mut R,
         limit: usize,
     ) -> Result<ScrubbedBytes, BrokerError> {
         read_length_prefixed_inner(reader, limit, None, None)
     }
-
     fn read_length_prefixed_with_decode_admission<R: std::io::Read>(
         reader: &mut R,
         limit: usize,
@@ -6462,7 +6064,6 @@ mod protocol {
     ) -> Result<ScrubbedBytes, BrokerError> {
         read_length_prefixed_inner(reader, limit, None, Some(decode_admission))
     }
-
     fn write_operation_request_frame<W: std::io::Write>(
         writer: &mut W,
         request: &OperationRequestV1,
@@ -6480,7 +6081,6 @@ mod protocol {
             .map_err(|_| BrokerError::Unavailable)?;
         write_length_prefixed(writer, frame, limit)
     }
-
     fn read_operation_request_frame_inner<R: std::io::Read>(
         reader: &mut R,
         inbound_budget: Option<std::sync::Arc<tokio::sync::Semaphore>>,
@@ -6513,7 +6113,6 @@ mod protocol {
         decode_admission.reserve_raw_frame(frame.len(), operation_frame_limit(operation))?;
         Ok((slot, operation, frame, decode_admission))
     }
-
     #[cfg(test)]
     fn read_operation_request_frame<R: std::io::Read>(
         reader: &mut R,
@@ -6522,14 +6121,12 @@ mod protocol {
             read_operation_request_frame_inner(reader, None, None)?;
         Ok((slot, operation, frame))
     }
-
     fn read_operation_request_frame_with_budget<R: std::io::Read>(
         reader: &mut R,
         inbound_budget: std::sync::Arc<tokio::sync::Semaphore>,
     ) -> Result<(u16, u16, ScrubbedBytes, Arc<DecodeResourceAdmissionV1>), BrokerError> {
         read_operation_request_frame_inner(reader, Some(inbound_budget), None)
     }
-
     fn catalog_digest(
         chain_id: &str,
         network_id: &NetworkId,
@@ -6547,7 +6144,6 @@ mod protocol {
             ],
         ))
     }
-
     fn client_transcript_digest(
         fields: &HandshakeTranscriptFieldsV1,
     ) -> Result<[u8; 32], BrokerError> {
@@ -6557,7 +6153,6 @@ mod protocol {
             &[&BROKER_MAGIC_V1, &BROKER_VERSION_V1.to_be_bytes(), &bytes],
         ))
     }
-
     fn server_transcript_digest(
         fields: &ServerTranscriptFieldsV1,
     ) -> Result<[u8; 32], BrokerError> {
@@ -6567,7 +6162,6 @@ mod protocol {
             &[&BROKER_MAGIC_V1, &BROKER_VERSION_V1.to_be_bytes(), &bytes],
         ))
     }
-
     fn provider_metadata_digest(
         signer_metadata: &Option<SignerMetadataWireV1>,
         governance_request_ingress_qualification: &Option<
@@ -6603,29 +6197,24 @@ mod protocol {
         )?;
         Ok(digest_parts(PROVIDER_METADATA_DOMAIN_V1, &[&bytes]))
     }
-
     fn operation_payload_digest(payload: &[u8]) -> [u8; 32] {
         digest_parts(OPERATION_PAYLOAD_DOMAIN_V1, &[payload])
     }
-
     fn operation_result_digest(result: &[u8]) -> [u8; 32] {
         digest_parts(OPERATION_RESULT_DOMAIN_V1, &[result])
     }
-
     fn operation_request_digest(
         fields: &OperationRequestFieldsV1,
     ) -> Result<[u8; 32], BrokerError> {
         let bytes = encode_canonical(fields, MAX_OPERATION_FRAME_BYTES_V1)?;
         Ok(digest_parts(OPERATION_REQUEST_DOMAIN_V1, &[&bytes]))
     }
-
     fn operation_response_digest(
         fields: &OperationResponseFieldsV1,
     ) -> Result<[u8; 32], BrokerError> {
         let bytes = encode_canonical(fields, MAX_OPERATION_FRAME_BYTES_V1)?;
         Ok(digest_parts(OPERATION_RESPONSE_DOMAIN_V1, &[&bytes]))
     }
-
     fn make_handshake_request(
         chain_id: &str,
         network_id: NetworkId,
@@ -6667,7 +6256,6 @@ mod protocol {
             client_transcript_digest,
         })
     }
-
     fn validate_handshake_request(request: &HandshakeRequestV1) -> Result<(), BrokerError> {
         let expected = make_handshake_request(
             &request.chain_id,
@@ -6680,7 +6268,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn make_handshake_response(
         request: &HandshakeRequestV1,
         session_id: [u8; 32],
@@ -6714,7 +6301,6 @@ mod protocol {
             server_transcript_digest: server_transcript_digest(&transcript)?,
         })
     }
-
     fn validate_observation(
         requested: &ProviderBindingWireV1,
         observed: &ProviderObservationWireV1,
@@ -7102,7 +6688,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_handshake_response(
         request: &HandshakeRequestV1,
         response: &HandshakeResponseV1,
@@ -7136,7 +6721,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn make_operation_request(
         session_id: [u8; 32],
         request_id: u64,
@@ -7173,7 +6757,6 @@ mod protocol {
             request_digest,
         })
     }
-
     #[cfg(test)]
     fn validate_operation_request(request: &OperationRequestV1) -> Result<(), BrokerError> {
         validate_operation_request_with_session(
@@ -7182,7 +6765,6 @@ mod protocol {
             &crate::runtime_provider_registry::runtime_provider_test_network_id(),
         )
     }
-
     fn validate_operation_request_for_session(
         request: &OperationRequestV1,
         session_chain_id: &str,
@@ -7190,7 +6772,6 @@ mod protocol {
     ) -> Result<(), BrokerError> {
         validate_operation_request_with_session(request, Some(session_chain_id), session_network_id)
     }
-
     fn validate_operation_request_with_session(
         request: &OperationRequestV1,
         session_chain_id: Option<&str>,
@@ -7221,7 +6802,6 @@ mod protocol {
         validate_operation_payload(request, session_chain_id, session_network_id)?;
         Ok(())
     }
-
     fn make_operation_response(
         request: &OperationRequestV1,
         status: u8,
@@ -7229,7 +6809,6 @@ mod protocol {
     ) -> Result<OperationResponseV1, BrokerError> {
         make_operation_response_scrubbed(request, status, ScrubbedBytes::new(result))
     }
-
     fn make_operation_response_scrubbed(
         request: &OperationRequestV1,
         status: u8,
@@ -7265,14 +6844,12 @@ mod protocol {
         validate_operation_response(request, &response)?;
         Ok(response)
     }
-
     fn validate_signing_payload_len(length: usize) -> Result<(), BrokerError> {
         if length == 0 || length > MAX_SIGNING_PAYLOAD_BYTES_V1 {
             return Err(BrokerError::Rejected);
         }
         Ok(())
     }
-
     fn validate_stream_token_signing_payload(payload: &[u8]) -> Result<(), BrokerError> {
         if payload.is_empty() || payload.len() > MAX_STREAM_TOKEN_SIGNING_PAYLOAD_BYTES_V1 {
             return Err(BrokerError::Rejected);
@@ -7296,7 +6873,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_potr_signing_payload(
         payload: &[u8],
         expected_provider_id: [u8; 32],
@@ -7332,13 +6908,11 @@ mod protocol {
         }
         Ok(())
     }
-
     fn encode_native_transaction_payload(
         payload: &iroha_data_model::transaction::TransactionPayload,
     ) -> Result<Vec<u8>, BrokerError> {
         encode_transaction_payload_bounded(payload, MAX_NATIVE_TRANSACTION_PAYLOAD_BYTES_V1)
     }
-
     fn encode_transaction_payload_bounded(
         payload: &iroha_data_model::transaction::TransactionPayload,
         max_bytes: usize,
@@ -7352,13 +6926,11 @@ mod protocol {
         }
         Ok(bytes)
     }
-
     fn decode_native_transaction_payload(
         bytes: &[u8],
     ) -> Result<iroha_data_model::transaction::TransactionPayload, BrokerError> {
         decode_transaction_payload_bounded(bytes, MAX_NATIVE_TRANSACTION_PAYLOAD_BYTES_V1)
     }
-
     fn decode_transaction_payload_bounded(
         bytes: &[u8],
         max_bytes: usize,
@@ -7370,7 +6942,6 @@ mod protocol {
             .map_err(|_| BrokerError::Rejected)?;
         builder.into_payload().map_err(|_| BrokerError::Rejected)
     }
-
     fn moderation_handoff_kind_for_slot(
         slot: u16,
     ) -> Option<sorafs_node::moderation_orchestrator::ModerationTerminalHandoffKindV1> {
@@ -7382,7 +6953,6 @@ mod protocol {
             None
         }
     }
-
     fn validate_moderation_handoff_request(
         wire: &ModerationDurableHandoffRequestWireV1,
         slot: u16,
@@ -7422,7 +6992,6 @@ mod protocol {
             },
         )
     }
-
     fn moderation_handoff_request_to_wire(
         request: &iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffRequestV1,
         slot: u16,
@@ -7434,7 +7003,6 @@ mod protocol {
         validate_moderation_handoff_request(&wire, slot, None)?;
         Ok(wire)
     }
-
     fn validate_moderation_panel_notification_archive_head_publish_request(
         wire: &ModerationPanelNotificationArchiveHeadPublishRequestWireV1,
         session_network_id: &NetworkId,
@@ -7477,7 +7045,6 @@ mod protocol {
                 },
         )
     }
-
     fn validate_moderation_panel_notification_archive_head_at_broker_boundary(
         canonical_head: &[u8],
         network_id: &NetworkId,
@@ -7549,7 +7116,6 @@ mod protocol {
             )
             .map_err(|_| BrokerError::Rejected)
     }
-
     fn validate_moderation_panel_notification_archive_public_head_readback_at_broker_boundary(
         canonical_head: &[u8],
         network_id: &NetworkId,
@@ -7585,7 +7151,6 @@ mod protocol {
         }
         Ok(head)
     }
-
     fn moderation_panel_notification_archive_head_publish_request_to_wire(
         request: &iroha_torii::sorafs::moderation_runtime::
             ModerationDurableArchiveHeadPublicationRequestV1,
@@ -7611,7 +7176,6 @@ mod protocol {
         }
         Ok(wire)
     }
-
     fn validate_moderation_panel_notification_request(
         wire: &ModerationDurablePanelNotificationRequestWireV1,
         expected_network_id: Option<&NetworkId>,
@@ -7652,7 +7216,6 @@ mod protocol {
             },
         )
     }
-
     fn moderation_panel_notification_request_to_wire(
         request: &iroha_torii::sorafs::moderation_runtime::
             ModerationDurablePanelNotificationRequestV1,
@@ -7667,7 +7230,6 @@ mod protocol {
         validate_moderation_panel_notification_request(&wire, None)?;
         Ok(wire)
     }
-
     fn validate_moderation_panel_notification_receipt(
         receipt: ModerationPanelNotificationReceiptWireV1,
         request: &ModerationDurablePanelNotificationRequestWireV1,
@@ -7690,7 +7252,6 @@ mod protocol {
             },
         )
     }
-
     const fn moderation_panel_notification_receipt_to_wire(
         receipt: sorafs_node::moderation_orchestrator::ModerationPanelNotificationDeliveryReceiptV1,
     ) -> ModerationPanelNotificationReceiptWireV1 {
@@ -7700,7 +7261,6 @@ mod protocol {
             delivered_at_unix_ms: receipt.delivered_at_unix_ms,
         }
     }
-
     fn validate_moderation_quarantine_key_id(key_id: &str) -> Result<(), BrokerError> {
         if key_id.is_empty()
             || key_id.len() > MAX_MODERATION_QUARANTINE_KEY_ID_BYTES_V1
@@ -7712,7 +7272,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_moderation_quarantine_context_and_dek(
         context_digest: [u8; 32],
         dek: [u8; 32],
@@ -7722,7 +7281,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_moderation_quarantine_wrapped_dek(wrapped_dek: &[u8]) -> Result<(), BrokerError> {
         if wrapped_dek.is_empty()
             || wrapped_dek.len() > MAX_MODERATION_QUARANTINE_WRAPPED_DEK_BYTES_V1
@@ -7731,7 +7289,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_gateway_dns_hostname(
         hostname: &str,
         allow_wildcard: bool,
@@ -7776,7 +7333,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_gateway_https_url(raw: &str) -> Result<reqwest::Url, BrokerError> {
         if raw.is_empty()
             || raw.len() > MAX_GATEWAY_COMPLIANCE_URL_BYTES_V1
@@ -7800,7 +7356,6 @@ mod protocol {
         validate_gateway_dns_hostname(hostname, false)?;
         Ok(parsed)
     }
-
     fn validate_gateway_acme_order(
         order: &GatewayAcmeOrderRequestWireV1,
     ) -> Result<(), BrokerError> {
@@ -7841,7 +7396,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_gateway_acme_outcome(
         outcome: &GatewayAcmeOrderOutcomeWireV1,
     ) -> Result<(), BrokerError> {
@@ -7890,7 +7444,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn gateway_address_is_public(address: std::net::IpAddr) -> bool {
         match address {
             std::net::IpAddr::V4(address) => {
@@ -7926,7 +7479,6 @@ mod protocol {
             }
         }
     }
-
     fn gateway_addresses_from_wire(
         addresses: &[IpAddressWireV1],
         require_canonical_order: bool,
@@ -7947,7 +7499,6 @@ mod protocol {
         }
         Ok(addresses)
     }
-
     fn validate_gateway_compliance_resolve_request(
         request: &GatewayComplianceResolveRequestWireV1,
     ) -> Result<Duration, BrokerError> {
@@ -7958,7 +7509,6 @@ mod protocol {
         }
         Ok(timeout)
     }
-
     fn validate_gateway_compliance_fetch_request(
         request: &GatewayComplianceFetchRequestWireV1,
     ) -> Result<
@@ -7994,7 +7544,6 @@ mod protocol {
             max_encoded_bytes,
         ))
     }
-
     fn gateway_compliance_error_wire(
         error: iroha_torii::sorafs::gateway::GatewayComplianceError,
     ) -> (u8, u64, u64) {
@@ -8017,7 +7566,6 @@ mod protocol {
             _ => (7, 0, 0),
         }
     }
-
     fn gateway_compliance_error_from_wire(
         outcome: u8,
         found: u64,
@@ -8041,7 +7589,6 @@ mod protocol {
             _ => Err(BrokerError::Protocol),
         }
     }
-
     fn validate_gateway_compliance_resolve_outcome(
         outcome: &GatewayComplianceResolveOutcomeWireV1,
     ) -> Result<(), BrokerError> {
@@ -8058,7 +7605,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_gateway_compliance_fetch_outcome(
         outcome: &GatewayComplianceFetchOutcomeWireV1,
         request: &GatewayComplianceFetchRequestWireV1,
@@ -8108,7 +7654,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn pop_runtime_bindings_from_wire(
         binding: &ProviderBindingWireV1,
     ) -> Result<iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderBindingsV1, BrokerError>
@@ -8130,7 +7675,6 @@ mod protocol {
         )
         .map_err(|_| BrokerError::BindingMismatch)
     }
-
     const fn pop_action_to_wire(
         action: sorafs_node::pop_credentials::PopCredentialApiActionV1,
     ) -> u8 {
@@ -8153,7 +7697,6 @@ mod protocol {
             Action::VerifyMembership => 15,
         }
     }
-
     fn pop_action_from_wire(
         action: u8,
     ) -> Result<sorafs_node::pop_credentials::PopCredentialApiActionV1, BrokerError> {
@@ -8177,7 +7720,6 @@ mod protocol {
             _ => Err(BrokerError::Rejected),
         }
     }
-
     fn validate_pop_authenticate_request(
         request: &PopAuthenticateRequestWireV1,
     ) -> Result<(), BrokerError> {
@@ -8191,7 +7733,6 @@ mod protocol {
         }
         pop_action_from_wire(request.action).map(drop)
     }
-
     fn validate_pop_principal(
         principal: PopAuthenticatedPrincipalWireV1,
         request: &PopAuthenticateRequestWireV1,
@@ -8207,7 +7748,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_pop_projection(
         projection: &sorafs_node::pop_credentials::PopFinalizedRegistryProjectionV1,
         exact: &PopCredentialRuntimeBindingWireV1,
@@ -8216,7 +7756,6 @@ mod protocol {
             PopCommitmentRootV1, PopRevocationListV1, verify_pop_commitment_root_signature_v1,
             verify_pop_revocation_list_signature_v1,
         };
-
         validate_pop_cursor(projection.cursor)?;
         if projection.version
             != sorafs_node::pop_credentials::POP_FINALIZED_REGISTRY_PROJECTION_VERSION_V1
@@ -8280,7 +7819,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_pop_witness_wire(witness: &PopMembershipWitnessWireV1) -> Result<(), BrokerError> {
         let witness = sorafs_manifest::pop_credentials::PopMembershipWitnessV1 {
             holder_secret: witness.holder_secret,
@@ -8294,7 +7832,6 @@ mod protocol {
         };
         witness.validate().map_err(|_| BrokerError::Rejected)
     }
-
     fn validate_pop_draft(
         draft: &PopIssuanceDraftResultWireV1,
         request: PopIssuanceDraftRequestWireV1,
@@ -8351,7 +7888,6 @@ mod protocol {
         }
         validate_pop_witness_wire(&draft.witness)
     }
-
     fn validate_pop_finalized_time(
         sample: PopFinalizedTimeResultWireV1,
     ) -> Result<(), BrokerError> {
@@ -8364,7 +7900,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn por_replay_archive_exact_binding(
         binding: &ProviderBindingWireV1,
     ) -> Result<sorafs_node::PorFinalizedReplayArchiveBindingV1, BrokerError> {
@@ -8386,7 +7921,6 @@ mod protocol {
         }
         Ok(exact)
     }
-
     fn por_replay_archive_configured_proof_bounds(
         binding: &ProviderBindingWireV1,
     ) -> Result<
@@ -8415,7 +7949,6 @@ mod protocol {
         .map_err(|_| BrokerError::BindingMismatch)?;
         Ok((limits, bounds))
     }
-
     fn decode_por_replay_archive_record(
         canonical_record: &[u8],
     ) -> Result<sorafs_node::PorFinalizedReplayArchiveRecordV1, BrokerError> {
@@ -8431,14 +7964,12 @@ mod protocol {
         record.validate().map_err(|_| BrokerError::Rejected)?;
         Ok(record)
     }
-
     fn encode_por_replay_archive_record(
         record: &sorafs_node::PorFinalizedReplayArchiveRecordV1,
     ) -> Result<Vec<u8>, BrokerError> {
         record.validate().map_err(|_| BrokerError::Rejected)?;
         encode_canonical(record, MAX_POR_REPLAY_ARCHIVE_RECORD_BYTES_V1)
     }
-
     fn validate_por_replay_archive_receipt(
         receipt: sorafs_node::PorFinalizedReplayArchiveReceiptV1,
         exact: sorafs_node::PorFinalizedReplayArchiveBindingV1,
@@ -8449,7 +7980,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_por_replay_archive_append_request(
         request: &PorReplayArchiveAppendRequestWireV1,
     ) -> Result<sorafs_node::PorFinalizedReplayArchiveRecordV1, BrokerError> {
@@ -8458,7 +7988,6 @@ mod protocol {
         }
         decode_por_replay_archive_record(&request.canonical_record)
     }
-
     fn validate_por_replay_archive_lookup_request(
         request: &PorReplayArchiveLookupRequestWireV1,
         binding: &ProviderBindingWireV1,
@@ -8480,7 +8009,6 @@ mod protocol {
         )
         .map_err(|_| BrokerError::Rejected)
     }
-
     fn por_replay_archive_lookup_to_wire(
         lookup: sorafs_node::PorFinalizedReplayArchiveLookupV1,
         request: &PorReplayArchiveLookupRequestWireV1,
@@ -8537,7 +8065,6 @@ mod protocol {
             }
         }
     }
-
     fn por_replay_archive_lookup_from_wire(
         outcome: &PorReplayArchiveLookupOutcomeWireV1,
         request: &PorReplayArchiveLookupRequestWireV1,
@@ -8611,7 +8138,6 @@ mod protocol {
             _ => Err(BrokerError::Rejected),
         }
     }
-
     fn reputation_hash_canonical<T: NoritoSerialize>(
         domain: &'static [u8],
         value: &T,
@@ -8624,7 +8150,6 @@ mod protocol {
         hasher.update(&canonical);
         Ok(*hasher.finalize().as_bytes())
     }
-
     fn reputation_publication_idempotency_key(
         domain: &'static [u8],
         sequence: u64,
@@ -8646,7 +8171,6 @@ mod protocol {
         }
         Ok(*hasher.finalize().as_bytes())
     }
-
     fn reputation_signed_result_digest(
         canonical_signed_result: &[u8],
     ) -> Result<[u8; 32], BrokerError> {
@@ -8664,7 +8188,6 @@ mod protocol {
         hasher.update(canonical_signed_result);
         Ok(*hasher.finalize().as_bytes())
     }
-
     fn validate_reputation_unsigned_material(
         material: &sorafs_node::reputation::ReputationUnsignedSigningMaterialV1,
     ) -> Result<(), BrokerError> {
@@ -8719,7 +8242,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn ensure_reputation_session_network(
         network_id: &iroha_data_model::NetworkId,
         session_network_id: &iroha_data_model::NetworkId,
@@ -8729,7 +8251,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn reputation_journal_request_to_wire(
         request: &sorafs_node::reputation::runtime::ReputationJournalTransactionRequestV1,
     ) -> Result<ReputationJournalTransactionRequestWireV1, BrokerError> {
@@ -8760,7 +8281,6 @@ mod protocol {
             canonical_instruction,
         })
     }
-
     fn reputation_journal_request_from_wire(
         wire: ReputationJournalTransactionRequestWireV1,
     ) -> Result<sorafs_node::reputation::runtime::ReputationJournalTransactionRequestV1, BrokerError>
@@ -8800,7 +8320,6 @@ mod protocol {
         request.validate().map_err(|_| BrokerError::Rejected)?;
         Ok(request)
     }
-
     fn reputation_journal_submit_result_to_wire(
         outcome: sorafs_node::reputation::runtime::ReputationJournalTransactionSubmitOutcomeV1,
     ) -> Result<ReputationJournalTransactionSubmitResultWireV1, BrokerError> {
@@ -8815,7 +8334,6 @@ mod protocol {
         }
         Ok(ReputationJournalTransactionSubmitResultWireV1 { outcome, receipt })
     }
-
     fn reputation_journal_submit_result_from_wire(
         wire: ReputationJournalTransactionSubmitResultWireV1,
     ) -> Result<
@@ -8839,7 +8357,6 @@ mod protocol {
             _ => Err(BrokerError::Rejected),
         }
     }
-
     fn reputation_threshold_request_to_wire(
         request: &sorafs_node::reputation::runtime::ReputationThresholdSigningRequestV1,
     ) -> Result<ReputationThresholdSigningRequestWireV1, BrokerError> {
@@ -8864,7 +8381,6 @@ mod protocol {
             material: request.material.clone(),
         })
     }
-
     fn reputation_threshold_request_from_wire(
         wire: ReputationThresholdSigningRequestWireV1,
     ) -> Result<sorafs_node::reputation::runtime::ReputationThresholdSigningRequestV1, BrokerError>
@@ -8878,7 +8394,6 @@ mod protocol {
         reputation_threshold_request_to_wire(&request)?;
         Ok(request)
     }
-
     fn validate_reputation_signed_result(
         request: &sorafs_node::reputation::runtime::ReputationThresholdSigningRequestV1,
         signed: &sorafs_manifest::reputation::signed::SignedReputationSnapshotV1,
@@ -8897,7 +8412,6 @@ mod protocol {
         }
         Ok(canonical)
     }
-
     fn reputation_governance_request_to_wire(
         request: &sorafs_node::reputation::runtime::ReputationGovernanceDagPublicationRequestV1,
     ) -> Result<ReputationGovernanceDagPublicationRequestWireV1, BrokerError> {
@@ -8929,7 +8443,6 @@ mod protocol {
             canonical_signed_result: request.canonical_signed_result.clone(),
         })
     }
-
     fn reputation_governance_request_from_wire(
         wire: ReputationGovernanceDagPublicationRequestWireV1,
     ) -> Result<
@@ -8956,7 +8469,6 @@ mod protocol {
         reputation_governance_request_to_wire(&request)?;
         Ok(request)
     }
-
     fn validate_reputation_governance_readback(
         readback: &sorafs_node::reputation::runtime::ReputationGovernanceDagReadbackV1,
         expected_signed_result: &sorafs_manifest::reputation::signed::SignedReputationSnapshotV1,
@@ -8995,7 +8507,6 @@ mod protocol {
         }
         Ok(())
     }
-
     const fn operation_decode_policy(operation: u16) -> DecodeResourcePolicyV1 {
         match operation {
             OPERATION_BILLING_IDENTITY_V1
@@ -9064,7 +8575,6 @@ mod protocol {
             _ => STANDARD_DECODE_POLICY_V1,
         }
     }
-
     const fn operation_semantic_frame_limit(operation: u16) -> usize {
         match operation {
             OPERATION_SIGN_V1 => MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1,
@@ -9219,7 +8729,6 @@ mod protocol {
             _ => MAX_BROKER_UNARY_FRAME_BYTES_V1,
         }
     }
-
     const fn operation_frame_limit(operation: u16) -> usize {
         let semantic_limit = operation_semantic_frame_limit(operation);
         let broker_limit = match operation {
@@ -9282,7 +8791,6 @@ mod protocol {
             broker_limit
         }
     }
-
     const fn operation_is_known(operation: u16) -> bool {
         matches!(
             operation,
@@ -9398,7 +8906,6 @@ mod protocol {
                 | OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1
         )
     }
-
     fn provider_ingest_signer_context_from_wire(
         context: &ProviderIngestSignerRequestContextWireV1,
     ) -> Result<sorafs_node::ProviderIngestCompletionSignerResolutionContextV1, BrokerError> {
@@ -9426,7 +8933,6 @@ mod protocol {
         }
         Ok(context)
     }
-
     fn validate_provider_ingest_account_canonical_bytes(
         canonical_account: &[u8],
     ) -> Result<(), BrokerError> {
@@ -9437,7 +8943,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn provider_ingest_signer_context_to_wire(
         context: &sorafs_node::ProviderIngestCompletionSignerResolutionContextV1,
     ) -> Result<ProviderIngestSignerRequestContextWireV1, BrokerError> {
@@ -9459,7 +8964,6 @@ mod protocol {
             finalized_block_hash: context.finalized_cursor.block_hash,
         })
     }
-
     fn provider_ingest_expected_signer_binding(
         binding: &ProviderBindingWireV1,
     ) -> Result<sorafs_node::ProviderIngestCompletionSignerBindingV1, BrokerError> {
@@ -9469,17 +8973,6 @@ mod protocol {
             .ok_or(BrokerError::BindingMismatch)?
             .to_binding()
     }
-
-    fn validate_provider_ingest_chain_id(chain_id: &str) -> Result<(), BrokerError> {
-        if chain_id.is_empty()
-            || chain_id.len() > MAX_CHAIN_ID_BYTES_V1
-            || chain_id.as_bytes().contains(&0)
-        {
-            return Err(BrokerError::Rejected);
-        }
-        Ok(())
-    }
-
     fn ensure_transaction_session_network(
         payload: &iroha_data_model::transaction::TransactionPayload,
         session_network_id: &NetworkId,
@@ -9489,7 +8982,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn ensure_provider_ingest_completion_payload(
         payload: &iroha_data_model::transaction::TransactionPayload,
         context: &sorafs_node::ProviderIngestCompletionSignerResolutionContextV1,
@@ -9498,7 +8990,6 @@ mod protocol {
         ensure_transaction_session_network(payload, session_network_id)?;
         ensure_provider_ingest_completion_payload_context(payload, context)
     }
-
     fn ensure_provider_ingest_completion_payload_context(
         payload: &iroha_data_model::transaction::TransactionPayload,
         context: &sorafs_node::ProviderIngestCompletionSignerResolutionContextV1,
@@ -9543,7 +9034,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn ensure_provider_ingest_completion_transaction(
         transaction: &iroha_data_model::transaction::SignedTransaction,
         context: &sorafs_node::ProviderIngestCompletionSignerResolutionContextV1,
@@ -9562,7 +9052,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn decode_provider_ingest_sign_operation(
         request: &OperationRequestV1,
     ) -> Result<
@@ -9599,7 +9088,6 @@ mod protocol {
         )?;
         Ok((context, expected, payload))
     }
-
     fn validate_evidence_viewer_secret(secret: &[u8]) -> Result<&str, BrokerError> {
         if secret.is_empty()
             || secret.len()
@@ -9613,7 +9101,6 @@ mod protocol {
         }
         std::str::from_utf8(secret).map_err(|_| BrokerError::Rejected)
     }
-
     fn validate_evidence_viewer_grant_claims(
         claims: &sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1,
         binding: &ProviderBindingWireV1,
@@ -9645,7 +9132,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_evidence_viewer_transparency_head_body(
         body: &sorafs_node::evidence_viewer::transparency_producer::
             EvidenceViewerTransparencyHeadBodyV1,
@@ -9681,7 +9167,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn evidence_viewer_checkpoint_record_limit(
         binding: &ProviderBindingWireV1,
     ) -> Result<usize, BrokerError> {
@@ -9696,7 +9181,6 @@ mod protocol {
             .filter(|limit| *limit <= MAX_EVIDENCE_VIEWER_ARCHIVE_BYTES_V1)
             .ok_or(BrokerError::Rejected)
     }
-
     fn decode_evidence_viewer_checkpoint_record(
         bytes: &[u8],
         binding: &ProviderBindingWireV1,
@@ -9752,7 +9236,6 @@ mod protocol {
         }
         Ok(record)
     }
-
     fn validate_evidence_viewer_checkpoint_successor(
         current: Option<&sorafs_node::evidence_viewer::EvidenceViewerCheckpointStoreRecordV1>,
         expected_revision: Option<[u8; 32]>,
@@ -9781,7 +9264,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn moderation_checkpoint_record_limit(
         binding: &ProviderBindingWireV1,
     ) -> Result<usize, BrokerError> {
@@ -9792,7 +9274,6 @@ mod protocol {
             .map(|max_bytes| max_bytes.saturating_add(16 * 1024))
             .map_err(|_| BrokerError::BindingMismatch)
     }
-
     fn decode_moderation_checkpoint_record(
         bytes: &[u8],
         binding: &ProviderBindingWireV1,
@@ -9820,7 +9301,6 @@ mod protocol {
         }
         Ok(record)
     }
-
     fn validate_moderation_checkpoint_successor(
         current: Option<&sorafs_node::moderation_orchestrator::ModerationCheckpointStoreRecordV1>,
         expected_revision: Option<[u8; 32]>,
@@ -9850,7 +9330,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn moderation_checkpoint_backend_error(
         error: sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1,
     ) -> BrokerError {
@@ -9866,7 +9345,6 @@ mod protocol {
             }
         }
     }
-
     fn moderation_panel_notification_archive_backend_error(
         error: sorafs_node::moderation_orchestrator::
             ModerationPanelNotificationArchiveExternalErrorV1,
@@ -9886,7 +9364,6 @@ mod protocol {
                 }
         }
     }
-
     fn validate_moderation_panel_notification_archive_artifact_at_broker_boundary(
         canonical_artifact: &[u8],
         network_id: &NetworkId,
@@ -9951,7 +9428,6 @@ mod protocol {
             )
             .map_err(|_| BrokerError::Rejected)
     }
-
     fn validate_moderation_panel_notification_archive_readback_at_broker_boundary(
         canonical_artifact: &[u8],
         network_id: &NetworkId,
@@ -10016,7 +9492,6 @@ mod protocol {
             )
             .map_err(|_| BrokerError::Rejected)
     }
-
     fn validate_moderation_panel_notification_source_attestation_at_broker_boundary(
         statement: &sorafs_node::moderation_orchestrator::
             ModerationPanelNotificationSourceAttestationV1,
@@ -10049,7 +9524,6 @@ mod protocol {
             )
             .map_err(|_| BrokerError::Rejected)
     }
-
     fn verify_evidence_viewer_ed25519_signature(
         public_key: [u8; 32],
         signature: [u8; 64],
@@ -10063,11 +9537,8 @@ mod protocol {
             .verify(&public_key, message)
             .map_err(|_| BrokerError::Rejected)
     }
-
     include!("runtime_provider_broker/governance_request_ingress.rs");
-
     include!("runtime_provider_broker/validate_operation_payload.rs");
-
     fn validate_operation_response(
         request: &OperationRequestV1,
         response: &OperationResponseV1,
@@ -10085,7 +9556,6 @@ mod protocol {
             _ => Err(BrokerError::Protocol),
         }
     }
-
     fn validate_operation_response_for_client(
         request: &OperationRequestV1,
         response: &OperationResponseV1,
@@ -10106,7 +9576,6 @@ mod protocol {
         }
         validate_operation_result(request, response.status, &response.result)
     }
-
     fn validate_operation_response_envelope(
         request: &OperationRequestV1,
         response: &OperationResponseV1,
@@ -10150,7 +9619,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_operation_result(
         request: &OperationRequestV1,
         status: u8,
@@ -10328,7 +9796,7 @@ mod protocol {
                     let (issue, authorization) = decode_bootle_lantern_issue_request(
                         &request.payload,
                         &request.binding,
-                        None,
+                        &request_network_id(&request.payload)?,
                     )
                     .map_err(|_| BrokerError::Protocol)?;
                     let request_digest = decode_canonical::<[u8; 32]>(
@@ -10353,7 +9821,7 @@ mod protocol {
                     let (issue, authorization) = decode_bootle_lantern_issue_request(
                         &request.payload,
                         &request.binding,
-                        None,
+                        &request_network_id(&request.payload)?,
                     )
                     .map_err(|_| BrokerError::Protocol)?;
                     let response = decode_canonical::<BootleLanternIssuanceResponseWireV1>(
@@ -11750,7 +11218,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn sealed_slot_to_wire(slot: sorafs_node::GovernanceDagSealedStateSlot) -> u8 {
         match slot {
             sorafs_node::GovernanceDagSealedStateSlot::Checkpoint => 1,
@@ -11761,7 +11228,6 @@ mod protocol {
             sorafs_node::GovernanceDagSealedStateSlot::SignedHeadRequestReplay => 6,
         }
     }
-
     fn sealed_slot_from_wire(
         slot: u8,
     ) -> Result<sorafs_node::GovernanceDagSealedStateSlot, BrokerError> {
@@ -11775,7 +11241,6 @@ mod protocol {
             _ => Err(BrokerError::Protocol),
         }
     }
-
     fn sealed_slot_is_transient(slot: sorafs_node::GovernanceDagSealedStateSlot) -> bool {
         matches!(
             slot,
@@ -11783,7 +11248,6 @@ mod protocol {
                 | sorafs_node::GovernanceDagSealedStateSlot::ProducerPublishIntent
         )
     }
-
     fn validate_sealed_record_fields(
         slot: sorafs_node::GovernanceDagSealedStateSlot,
         generation: u64,
@@ -11800,7 +11264,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_sealed_payload_len(
         slot: sorafs_node::GovernanceDagSealedStateSlot,
         payload_len: usize,
@@ -11812,7 +11275,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_sealed_successor(
         slot: sorafs_node::GovernanceDagSealedStateSlot,
         current: Option<&sorafs_node::GovernanceDagSealedStateRecord>,
@@ -11844,7 +11306,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn validate_sealed_delete(
         slot: sorafs_node::GovernanceDagSealedStateSlot,
         expected_revision: [u8; 32],
@@ -11854,7 +11315,6 @@ mod protocol {
         }
         Ok(())
     }
-
     fn qualification_from_binding(
         binding: &ProviderBindingWireV1,
     ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, BrokerError> {
@@ -11865,7 +11325,6 @@ mod protocol {
         }
         Ok(sorafs_node::GovernanceDagRuntimeProviderQualificationV1::new(revision, policy_digest))
     }
-
     fn reputation_qualification_from_binding(
         binding: &ProviderBindingWireV1,
     ) -> Result<
@@ -11884,7 +11343,6 @@ mod protocol {
             ),
         )
     }
-
     fn moderation_quarantine_qualification_from_binding(
         binding: &ProviderBindingWireV1,
     ) -> Result<sorafs_node::ModerationQuarantineKeyProviderQualificationV1, BrokerError> {
@@ -11900,7 +11358,6 @@ mod protocol {
             ),
         )
     }
-
     fn moderation_quarantine_operation_error(
         error: sorafs_node::ModerationQuarantineKeyOperationErrorV1,
         wrap_may_have_dispatched: bool,
@@ -11923,8 +11380,9 @@ mod protocol {
             }
         }
     }
-
     mod platform {
+        use super::*;
+        use iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1 as _;
         use std::{
             fmt, fs,
             os::unix::{
@@ -11935,9 +11393,6 @@ mod protocol {
             sync::{Arc, Mutex},
             time::Duration,
         };
-
-        use super::*;
-        use iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1 as _;
         #[path = "endpoint_recovery.rs"]
         mod endpoint_recovery;
         #[path = "stream_token_gateway_client.rs"]
@@ -11945,7 +11400,6 @@ mod protocol {
         #[cfg(test)]
         use std::io;
         use stream_token_gateway_client::StreamTokenGatewayAdmissionBrokerProvider;
-
         #[cfg(target_os = "linux")]
         const STOCK_BROKER_ENDPOINT_V1: &str =
             "/run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock";
@@ -11955,7 +11409,6 @@ mod protocol {
         const STOCK_BROKER_SOCKET_MODE_V1: u32 = 0o660;
         const BROKER_IO_TIMEOUT_V1: Duration = Duration::from_secs(15);
         const MAX_BROKER_SESSIONS_V1: usize = 8;
-
         #[derive(Clone)]
         struct BrokerServerStateV1 {
             chain_id: String,
@@ -11964,12 +11417,10 @@ mod protocol {
             observations: Vec<ProviderObservationWireV1>,
             backends: RuntimeProviderBrokerBackendsV1,
         }
-
         #[derive(Default)]
         struct PopBrokerServerSessionV1 {
             providers: Option<iroha_torii::sorafs::pop_api::PopCredentialRuntimeProvidersV1>,
         }
-
         fn server_error(error: BrokerError) -> RuntimeProviderBrokerServerErrorV1 {
             match error {
                 BrokerError::BindingMismatch | BrokerError::StaleOrRevoked => {
@@ -11982,7 +11433,6 @@ mod protocol {
                 | BrokerError::Ambiguous => RuntimeProviderBrokerServerErrorV1::Protocol,
             }
         }
-
         fn billing_external_error(
             error: sorafs_node::hedging_billing_service::HedgingBillingExternalError,
             mutating: bool,
@@ -12004,7 +11454,6 @@ mod protocol {
                 }
             }
         }
-
         fn qualification_matches(
             binding: &ProviderBindingWireV1,
             revision: u64,
@@ -12012,7 +11461,6 @@ mod protocol {
         ) -> bool {
             binding.revision == Some(revision) && binding.policy_digest == Some(policy_digest)
         }
-
         fn qualify_native_transaction_signer_backend(
             binding: &ProviderBindingWireV1,
             backends: &RuntimeProviderBrokerBackendsV1,
@@ -12070,7 +11518,6 @@ mod protocol {
                 }
             }
         }
-
         fn appeal_finance_signer_backend<'a>(
             backends: &'a RuntimeProviderBrokerBackendsV1,
             handle: &str,
@@ -12090,7 +11537,6 @@ mod protocol {
             }
             Ok(signer)
         }
-
         fn qualify_moderation_runtime_backend(
             binding: &ProviderBindingWireV1,
             provider: &dyn sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1,
@@ -12116,7 +11562,6 @@ mod protocol {
             }
             Ok(())
         }
-
         fn qualify_reputation_runtime_backend<P>(
             binding: &ProviderBindingWireV1,
             provider: &P,
@@ -12143,7 +11588,6 @@ mod protocol {
             }
             Ok(())
         }
-
         fn qualify_billing_runtime_backend<P>(
             binding: &ProviderBindingWireV1,
             provider: &P,
@@ -12171,7 +11615,6 @@ mod protocol {
             )
             .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)
         }
-
         fn make_server_observation(
             binding: &ProviderBindingWireV1,
             backends: &RuntimeProviderBrokerBackendsV1,
@@ -13510,7 +12953,6 @@ mod protocol {
             validate_observation(binding, &observation).map_err(server_error)?;
             Ok(observation)
         }
-
         fn validate_exact_backend_set(
             catalog: &[ProviderBindingWireV1],
             backends: &RuntimeProviderBrokerBackendsV1,
@@ -13687,7 +13129,6 @@ mod protocol {
             }
             Ok(())
         }
-
         #[cfg(test)]
         fn prepare_server_state(
             bindings: &IrohaRuntimeProviderBindingsV1,
@@ -13711,13 +13152,11 @@ mod protocol {
                 backends,
             })
         }
-
         #[derive(Debug)]
         enum StartupQualificationErrorV1 {
             Cancelled,
             Failed(RuntimeProviderBrokerServerErrorV1),
         }
-
         fn prepare_server_state_for_lifecycle(
             bindings: &IrohaRuntimeProviderBindingsV1,
             backends: RuntimeProviderBrokerBackendsV1,
@@ -13752,7 +13191,6 @@ mod protocol {
                 backends,
             })
         }
-
         fn requalify_server_state(
             state: &BrokerServerStateV1,
             lifecycle: &Arc<RuntimeProviderBrokerLifecycleV1>,
@@ -13780,7 +13218,6 @@ mod protocol {
             }
             Ok(())
         }
-
         /// Immutable endpoint and filesystem-identity policy for one connection.
         #[derive(Clone, Debug)]
         pub(super) struct EndpointPolicy {
@@ -13789,7 +13226,6 @@ mod protocol {
             socket_mode: u32,
             verify_all_ancestors: bool,
         }
-
         impl EndpointPolicy {
             /// Return the platform-fixed same-service-UID production policy.
             pub(super) fn production() -> Self {
@@ -13799,7 +13235,6 @@ mod protocol {
                     true,
                 )
             }
-
             fn for_service_uid(
                 path: PathBuf,
                 expected_service_uid: u32,
@@ -13812,19 +13247,16 @@ mod protocol {
                     verify_all_ancestors,
                 }
             }
-
             #[cfg(test)]
             fn for_test(path: PathBuf) -> Self {
                 Self::for_service_uid(path, rustix::process::geteuid().as_raw(), false)
             }
         }
-
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         struct SocketIdentity {
             device: u64,
             inode: u64,
         }
-
         fn endpoint_identity(policy: &EndpointPolicy) -> Result<SocketIdentity, BrokerError> {
             let metadata =
                 fs::symlink_metadata(&policy.path).map_err(|_| BrokerError::Unavailable)?;
@@ -13848,7 +13280,6 @@ mod protocol {
                 inode: metadata.ino(),
             })
         }
-
         fn verify_directory(
             path: &Path,
             expected_service_uid: u32,
@@ -13866,14 +13297,12 @@ mod protocol {
             }
             Ok(())
         }
-
         fn verify_peer_uid(observed_uid: u32, expected_uid: u32) -> Result<(), BrokerError> {
             if observed_uid != expected_uid {
                 return Err(BrokerError::Unavailable);
             }
             Ok(())
         }
-
         fn connect_verified(policy: &EndpointPolicy) -> Result<UnixStream, BrokerError> {
             let before = endpoint_identity(policy)?;
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -13905,7 +13334,6 @@ mod protocol {
                 .map_err(|_| BrokerError::Unavailable)?;
             Ok(stream)
         }
-
         fn configured_observation<'state>(
             state: &'state BrokerServerStateV1,
             binding: &ProviderBindingWireV1,
@@ -13917,7 +13345,6 @@ mod protocol {
                 .and_then(|index| state.observations.get(index))
                 .ok_or(BrokerError::BindingMismatch)
         }
-
         fn qualify_server_binding(
             state: &BrokerServerStateV1,
             binding: &ProviderBindingWireV1,
@@ -13934,7 +13361,6 @@ mod protocol {
             }
             Ok(live)
         }
-
         fn block_on_provider_future<T>(
             future: impl std::future::Future<Output = T>,
         ) -> Result<T, BrokerError> {
@@ -13944,7 +13370,6 @@ mod protocol {
                 .map_err(|_| BrokerError::Unavailable)?;
             Ok(runtime.block_on(future))
         }
-
         fn resolved_provider_signer(
             state: &BrokerServerStateV1,
             context: sorafs_node::ProviderIngestCompletionSignerResolutionContextV1,
@@ -13964,7 +13389,6 @@ mod protocol {
                 }
             })
         }
-
         fn validate_resolved_provider_signer(
             signer: &dyn sorafs_node::ProviderIngestCompletionSignerV1,
             expected: &sorafs_node::ProviderIngestCompletionSignerBindingV1,
@@ -13996,7 +13420,6 @@ mod protocol {
             }
             Ok(())
         }
-
         fn native_transaction_signer_qualification_error(
             error: iroha_torii::SorafsNativeTransactionSignerQualificationErrorV1,
         ) -> BrokerError {
@@ -14008,12 +13431,10 @@ mod protocol {
                 BrokerError::StaleOrRevoked
             }
         }
-
         fn soracloud_runtime_signer_qualification_error(
             error: crate::soracloud_runtime_signer::SoracloudRuntimeSignerQualificationErrorV1,
         ) -> BrokerError {
             use crate::soracloud_runtime_signer::SoracloudRuntimeSignerQualificationErrorV1 as Error;
-
             match error {
                 Error::ProviderUnavailable => BrokerError::Unavailable,
                 Error::InvalidProviderHandle
@@ -14030,7 +13451,6 @@ mod protocol {
                 | Error::ProviderDrift => BrokerError::StaleOrRevoked,
             }
         }
-
         fn qualified_soracloud_runtime_signer(
             state: &BrokerServerStateV1,
             binding: &ProviderBindingWireV1,
@@ -14051,13 +13471,11 @@ mod protocol {
             )
             .map_err(soracloud_runtime_signer_qualification_error)
         }
-
         fn soracloud_hf_credential_qualification_error(
             error: crate::soracloud_hf_credential::
                 SoracloudHfCredentialProviderQualificationErrorV1,
         ) -> BrokerError {
             use crate::soracloud_hf_credential::SoracloudHfCredentialProviderQualificationErrorV1 as Error;
-
             match error {
                 Error::ProviderUnavailable => BrokerError::Unavailable,
                 Error::InvalidProviderHandle
@@ -14070,7 +13488,6 @@ mod protocol {
                 | Error::ProviderDrift => BrokerError::StaleOrRevoked,
             }
         }
-
         fn qualified_soracloud_hf_credential_provider(
             state: &BrokerServerStateV1,
             binding: &ProviderBindingWireV1,
@@ -14091,24 +13508,20 @@ mod protocol {
             )
             .map_err(soracloud_hf_credential_qualification_error)
         }
-
         fn soracloud_hf_credential_operation_error(
             error: crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1,
         ) -> BrokerError {
             use crate::soracloud_hf_credential::SoracloudHfCredentialProviderOperationErrorV1 as Error;
-
             match error {
                 Error::Unavailable => BrokerError::Unavailable,
                 Error::Refused | Error::InvalidResponse => BrokerError::Rejected,
                 Error::QualificationChanged => BrokerError::StaleOrRevoked,
             }
         }
-
         fn map_soracloud_runtime_signing_error(
             error: crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1,
         ) -> BrokerError {
             use crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1 as Error;
-
             match error {
                 Error::Unavailable => BrokerError::Unavailable,
                 Error::Refused
@@ -14120,7 +13533,6 @@ mod protocol {
                 Error::QualificationChanged => BrokerError::StaleOrRevoked,
             }
         }
-
         fn sign_moderation_transaction(
             state: &BrokerServerStateV1,
             payload: iroha_data_model::transaction::TransactionPayload,
@@ -14147,7 +13559,6 @@ mod protocol {
             }
             Ok(signed)
         }
-
         fn sign_native_transaction(
             state: &BrokerServerStateV1,
             binding: &ProviderBindingWireV1,
@@ -14272,7 +13683,6 @@ mod protocol {
                 }
             }
         }
-
         fn dispatch_server_operation_with_session(
             state: &BrokerServerStateV1,
             pop_session: &mut PopBrokerServerSessionV1,
@@ -14377,7 +13787,6 @@ mod protocol {
                 IrohaRuntimeProviderSlotV1::SoracloudHfInferenceCredentialProvider.wire_id();
             let bootle_lantern_issuance_slot =
                 IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry.wire_id();
-
             let result = match (request.binding.slot, request.operation) {
                 (slot, OPERATION_MODERATION_PANEL_NOTIFICATION_ARCHIVE_QUALIFY_V1)
                     if slot == moderation_panel_notification_archive_slot =>
@@ -19452,7 +18861,6 @@ mod protocol {
             };
             result.map(ScrubbedBytes::new)
         }
-
         #[cfg(test)]
         fn dispatch_server_operation(
             state: &BrokerServerStateV1,
@@ -19464,7 +18872,6 @@ mod protocol {
                 request,
             )
         }
-
         fn broker_error_status(error: BrokerError) -> Option<(u8, bool)> {
             match error {
                 BrokerError::Rejected => Some((STATUS_REJECTED_V1, false)),
@@ -19475,7 +18882,6 @@ mod protocol {
                 BrokerError::Protocol | BrokerError::BindingMismatch => None,
             }
         }
-
         fn source_deadline_remaining(
             deadline: std::time::Instant,
         ) -> Result<Duration, BrokerError> {
@@ -19484,7 +18890,6 @@ mod protocol {
                 .filter(|remaining| !remaining.is_zero())
                 .ok_or(BrokerError::Unavailable)
         }
-
         fn apply_source_socket_deadline(
             stream: &UnixStream,
             deadline: std::time::Instant,
@@ -19497,7 +18902,6 @@ mod protocol {
                 .set_write_timeout(Some(remaining))
                 .map_err(|_| BrokerError::Unavailable)
         }
-
         fn source_fetch_error(error: sorafs_node::ProviderIngestSourceFetchErrorV1) -> BrokerError {
             match error {
                 sorafs_node::ProviderIngestSourceFetchErrorV1::Unavailable => {
@@ -19511,7 +18915,6 @@ mod protocol {
                 }
             }
         }
-
         fn fetch_provider_ingest_source(
             source: &dyn crate::sorafs_provider_ingest_runtime::
                 ProviderIngestAuthenticatedSourceRuntimeV1,
@@ -19533,7 +18936,6 @@ mod protocol {
                 .map_err(|_| BrokerError::Unavailable)?
                 .map_err(source_fetch_error)
         }
-
         fn write_source_trailer(
             stream: &mut UnixStream,
             trailer: ProviderIngestSourceTrailerWireV1,
@@ -19554,7 +18956,6 @@ mod protocol {
                 MAX_PROVIDER_INGEST_SOURCE_TRAILER_FRAME_BYTES_V1,
             )
         }
-
         fn write_source_failure_trailer(
             stream: &mut UnixStream,
             status: u8,
@@ -19577,7 +18978,6 @@ mod protocol {
                 deadline,
             );
         }
-
         fn serve_provider_ingest_source_fetch(
             mut stream: UnixStream,
             state: &BrokerServerStateV1,
@@ -19657,7 +19057,6 @@ mod protocol {
                 )?;
                 source_stream_transcript(request, &response)
             };
-
             let mut payload_hasher = blake3::Hasher::new();
             let mut offset = 0_u64;
             for sequence in 0..frame_count {
@@ -19765,7 +19164,6 @@ mod protocol {
                 deadline,
             )
         }
-
         fn serve_client(
             mut stream: UnixStream,
             state: &BrokerServerStateV1,
@@ -19823,7 +19221,6 @@ mod protocol {
                 MAX_HANDSHAKE_FRAME_BYTES_V1,
             )?;
             write_length_prefixed(&mut stream, &response_frame, MAX_HANDSHAKE_FRAME_BYTES_V1)?;
-
             let mut expected_request_id = 1_u64;
             let mut pop_session = PopBrokerServerSessionV1::default();
             loop {
@@ -19947,7 +19344,6 @@ mod protocol {
                 }
             }
         }
-
         struct BoundSocketGuard {
             parent_directory: fs::File,
             instance_lock: endpoint_recovery::InstanceLockGuard,
@@ -19957,7 +19353,6 @@ mod protocol {
             socket_mode: u32,
             armed: bool,
         }
-
         impl BoundSocketGuard {
             fn verify_entry(&self) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
                 self.instance_lock.verify(&self.parent_directory)?;
@@ -19977,7 +19372,6 @@ mod protocol {
                 }
                 Ok(())
             }
-
             fn promote(
                 &mut self,
                 canonical_name: std::ffi::OsString,
@@ -19993,7 +19387,6 @@ mod protocol {
                 self.socket_name = canonical_name;
                 self.verify_entry()
             }
-
             fn cleanup(mut self) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
                 self.armed = false;
                 self.instance_lock.verify(&self.parent_directory)?;
@@ -20007,7 +19400,6 @@ mod protocol {
                 )
             }
         }
-
         impl Drop for BoundSocketGuard {
             fn drop(&mut self) {
                 if !self.armed {
@@ -20027,12 +19419,10 @@ mod protocol {
                 );
             }
         }
-
         #[cfg(target_os = "linux")]
         const fn socket_device_identity_from_raw(device: rustix::fs::Dev) -> u64 {
             device
         }
-
         #[cfg(target_os = "macos")]
         const fn socket_device_identity_from_raw(device: rustix::fs::Dev) -> u64 {
             // `MetadataExt::dev()` exposes `dev_t` through Rust's unsigned
@@ -20042,7 +19432,6 @@ mod protocol {
             // filesystem identity.
             device as u64
         }
-
         fn socket_identity_from_stat(
             metadata: &rustix::fs::Stat,
         ) -> Result<SocketIdentity, RuntimeProviderBrokerServerErrorV1> {
@@ -20051,7 +19440,6 @@ mod protocol {
                 inode: metadata.st_ino,
             })
         }
-
         fn finish_startup_failure<T>(
             listener: UnixListener,
             guard: BoundSocketGuard,
@@ -20063,7 +19451,6 @@ mod protocol {
                 Err(cleanup_error) => Err(cleanup_error),
             }
         }
-
         fn bind_server_listener(
             policy: &EndpointPolicy,
         ) -> Result<(tokio::net::UnixListener, BoundSocketGuard), RuntimeProviderBrokerServerErrorV1>
@@ -20221,7 +19608,6 @@ mod protocol {
             };
             Ok((listener, guard))
         }
-
         fn verify_endpoint_is_pinned(
             policy: &EndpointPolicy,
             guard: &BoundSocketGuard,
@@ -20232,22 +19618,18 @@ mod protocol {
             }
             Ok(())
         }
-
         struct BrokerServingLifecycleGuard {
             lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
         }
-
         impl Drop for BrokerServingLifecycleGuard {
             fn drop(&mut self) {
                 self.lifecycle.request_shutdown();
             }
         }
-
         #[derive(Default)]
         struct AcceptedSessionControlsV1 {
             controls: std::collections::BTreeMap<u64, UnixStream>,
         }
-
         impl AcceptedSessionControlsV1 {
             fn insert(&mut self, session_token: u64, control: UnixStream) {
                 let replaced = self.controls.insert(session_token, control);
@@ -20256,18 +19638,15 @@ mod protocol {
                     "session tokens are monotonically allocated and never reused"
                 );
             }
-
             fn remove(&mut self, session_token: &u64) {
                 let _ = self.controls.remove(session_token);
             }
-
             fn shutdown_all(&self) {
                 for control in self.controls.values() {
                     let _ = control.shutdown(std::net::Shutdown::Both);
                 }
             }
         }
-
         impl Drop for AcceptedSessionControlsV1 {
             fn drop(&mut self) {
                 // A serving-thread panic or other unexpected unwind must wake
@@ -20277,7 +19656,6 @@ mod protocol {
                 self.shutdown_all();
             }
         }
-
         fn serve_with_policy_and_fallible_readiness<R>(
             bindings: &IrohaRuntimeProviderBindingsV1,
             backends: RuntimeProviderBrokerBackendsV1,
@@ -20370,7 +19748,6 @@ mod protocol {
                         };
                     }
                 }
-
                 let session_permits = Arc::new(tokio::sync::Semaphore::new(MAX_BROKER_SESSIONS_V1));
                 // Hold a permit for every declared inbound operation byte until
                 // the decoded request leaves its server-loop iteration. A
@@ -20387,7 +19764,6 @@ mod protocol {
                 let mut sessions = tokio::task::JoinSet::new();
                 let mut session_controls = AcceptedSessionControlsV1::default();
                 let mut next_session_token = 0_u64;
-
                 let mut serve_result = 'serve: loop {
                     while let Some(joined) = sessions.try_join_next() {
                         match joined {
@@ -20490,7 +19866,6 @@ mod protocol {
                         break Err(error);
                     }
                 };
-
                 lifecycle.request_shutdown();
                 drop(listener);
                 session_controls.shutdown_all();
@@ -20520,7 +19895,6 @@ mod protocol {
                 }
             })
         }
-
         fn serve_with_policy_and_lifecycle<R>(
             bindings: &IrohaRuntimeProviderBindingsV1,
             backends: RuntimeProviderBrokerBackendsV1,
@@ -20536,7 +19910,6 @@ mod protocol {
                 Ok(())
             })
         }
-
         fn serve_with_policy(
             bindings: &IrohaRuntimeProviderBindingsV1,
             backends: RuntimeProviderBrokerBackendsV1,
@@ -20545,14 +19918,12 @@ mod protocol {
         ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
             serve_with_policy_and_lifecycle(bindings, backends, policy, lifecycle, || {})
         }
-
         struct BrokerConnection {
             stream: UnixStream,
             session_id: [u8; 32],
             next_request_id: u64,
             poisoned: bool,
         }
-
         struct BrokerSession {
             connection: Mutex<BrokerConnection>,
             chain_id: String,
@@ -20560,7 +19931,6 @@ mod protocol {
             endpoint: EndpointPolicy,
             requested_catalog: Vec<ProviderBindingWireV1>,
         }
-
         fn connect_broker_connection(
             policy: &EndpointPolicy,
             chain_id: &str,
@@ -20611,7 +19981,6 @@ mod protocol {
                 response.observations,
             ))
         }
-
         impl fmt::Debug for BrokerSession {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -20619,7 +19988,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl BrokerSession {
             fn connect(
                 policy: &EndpointPolicy,
@@ -20645,7 +20013,6 @@ mod protocol {
                     observations,
                 ))
             }
-
             fn reconnect(&self) -> Result<(), BrokerError> {
                 let (connection, _) = connect_broker_connection(
                     &self.endpoint,
@@ -20661,13 +20028,11 @@ mod protocol {
                 *current = connection;
                 Ok(())
             }
-
             fn poison(&self) {
                 if let Ok(mut connection) = self.connection.lock() {
                     connection.poisoned = true;
                 }
             }
-
             fn decode_result<T>(&self, bytes: &ScrubbedBytes) -> Result<T, BrokerError>
             where
                 T: NoritoSerialize,
@@ -20678,7 +20043,6 @@ mod protocol {
                     self.poison();
                 })
             }
-
             fn decode_operation_result<T>(
                 &self,
                 bytes: &ScrubbedBytes,
@@ -20707,7 +20071,6 @@ mod protocol {
                     self.poison();
                 })
             }
-
             fn decode_nested_result<T>(
                 &self,
                 bytes: &ScrubbedBytes,
@@ -20722,7 +20085,6 @@ mod protocol {
                     self.poison();
                 })
             }
-
             fn call(
                 &self,
                 binding: &ProviderBindingWireV1,
@@ -20846,7 +20208,6 @@ mod protocol {
                     }
                 }
             }
-
             fn call_sensitive(
                 &self,
                 binding: &ProviderBindingWireV1,
@@ -20864,7 +20225,6 @@ mod protocol {
                 )
             }
         }
-
         #[derive(Clone)]
         struct BootleLanternBrokerProvider {
             session: Arc<BrokerSession>,
@@ -20873,7 +20233,6 @@ mod protocol {
             exact_bindings:
                 iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1,
         }
-
         impl fmt::Debug for BootleLanternBrokerProvider {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -20890,7 +20249,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl BootleLanternBrokerProvider {
             fn live_qualification(
                 &self,
@@ -20925,7 +20283,6 @@ mod protocol {
                         qualification.policy_digest,
                     ))
             }
-
             fn call_sensitive_requalified(
                 &self,
                 operation: u16,
@@ -20953,7 +20310,6 @@ mod protocol {
                     Err(error) => Err(error),
                 }
             }
-
             fn registry_error(
                 error: BrokerError,
             ) -> iroha_torii::privacy_issuance_api::
@@ -20977,7 +20333,6 @@ mod protocol {
                     }
                 }
             }
-
             fn crypto_error(
                 error: BrokerError,
             ) -> iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderErrorV1
@@ -20998,14 +20353,12 @@ mod protocol {
                 }
             }
         }
-
         impl iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderRegistryV1
             for BootleLanternBrokerProvider
         {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -21016,7 +20369,6 @@ mod protocol {
             >{
                 self.live_qualification().map_err(Self::registry_error)
             }
-
             fn resolve(
                 &self,
                 bindings: &iroha_torii::privacy_issuance_api::
@@ -21046,7 +20398,6 @@ mod protocol {
                 )
             }
         }
-
         impl iroha_torii::privacy_issuance_api::BootleLanternIssuanceAuthenticatorV1
             for BootleLanternBrokerProvider
         {
@@ -21130,18 +20481,15 @@ mod protocol {
                     })
             }
         }
-
         impl iroha_torii::privacy_issuance_api::BootleLanternIssuerCryptoProviderV1
             for BootleLanternBrokerProvider
         {
             fn issuer_id(&self) -> iroha_data_model::privacy::PrivacyIssuerIdV1 {
                 self.exact_bindings.issuer_id()
             }
-
             fn policy_id(&self) -> iroha_data_model::privacy::PrivacyPolicyIdV1 {
                 self.exact_bindings.policy_id()
             }
-
             fn prepare_authorization(
                 &self,
                 context: &iroha_data_model::privacy::PrivacyStatementContextV1,
@@ -21163,8 +20511,12 @@ mod protocol {
                     issued_at_height,
                     expires_at_height,
                 };
-                validate_bootle_lantern_prepare_request(&request, &self.binding, None)
-                    .map_err(Self::crypto_error)?;
+                validate_bootle_lantern_prepare_request(
+                    &request,
+                    &self.binding,
+                    &self.session.network_id,
+                )
+                .map_err(Self::crypto_error)?;
                 let payload = encode_sensitive_canonical(
                     &request,
                     MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1,
@@ -21219,7 +20571,6 @@ mod protocol {
                 }
                 Ok(authorization)
             }
-
             fn validate_request(
                 &self,
                 context: &iroha_data_model::privacy::PrivacyStatementContextV1,
@@ -21280,7 +20631,6 @@ mod protocol {
                 }
                 Ok(actual)
             }
-
             fn issue_validated(
                 &self,
                 context: &iroha_data_model::privacy::PrivacyStatementContextV1,
@@ -21358,11 +20708,9 @@ mod protocol {
                 Ok(response)
             }
         }
-
         fn source_reader_io_error(kind: std::io::ErrorKind) -> std::io::Error {
             std::io::Error::new(kind, "authenticated provider source stream failed")
         }
-
         struct ProviderIngestBrokerSourceReader {
             stream: UnixStream,
             deadline: std::time::Instant,
@@ -21380,7 +20728,6 @@ mod protocol {
             poisoned: bool,
             _retained_memory: Option<DecodeResourcePoolPermitV1>,
         }
-
         impl fmt::Debug for ProviderIngestBrokerSourceReader {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -21392,19 +20739,16 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl ProviderIngestBrokerSourceReader {
             fn poison(&mut self, kind: std::io::ErrorKind) -> std::io::Error {
                 self.poisoned = true;
                 let _ = self.stream.shutdown(std::net::Shutdown::Both);
                 source_reader_io_error(kind)
             }
-
             fn apply_deadline(&mut self) -> std::io::Result<()> {
                 apply_source_socket_deadline(&self.stream, self.deadline)
                     .map_err(|_| self.poison(std::io::ErrorKind::TimedOut))
             }
-
             fn transport_failure(&mut self) -> std::io::Error {
                 let kind = if std::time::Instant::now() >= self.deadline {
                     std::io::ErrorKind::TimedOut
@@ -21413,7 +20757,6 @@ mod protocol {
                 };
                 self.poison(kind)
             }
-
             fn load_chunk(&mut self) -> std::io::Result<()> {
                 if self.remaining == 0 || self.next_sequence >= self.frame_count {
                     return Err(self.poison(std::io::ErrorKind::InvalidData));
@@ -21471,7 +20814,6 @@ mod protocol {
                 self.pending_offset = 0;
                 Ok(())
             }
-
             fn finish(&mut self) -> std::io::Result<()> {
                 if self.finished {
                     return Ok(());
@@ -21532,7 +20874,6 @@ mod protocol {
                 }
             }
         }
-
         impl std::io::Read for ProviderIngestBrokerSourceReader {
             fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
                 if output.is_empty() {
@@ -21557,7 +20898,6 @@ mod protocol {
                 }
             }
         }
-
         impl Drop for ProviderIngestBrokerSourceReader {
             fn drop(&mut self) {
                 if !self.finished {
@@ -21566,7 +20906,6 @@ mod protocol {
                 }
             }
         }
-
         #[derive(Clone)]
         struct ProviderIngestBrokerAuthenticatedSource {
             session: Arc<BrokerSession>,
@@ -21577,7 +20916,6 @@ mod protocol {
             metadata_digest: [u8; 32],
             source_provider_ids: Vec<[u8; 32]>,
         }
-
         impl fmt::Debug for ProviderIngestBrokerAuthenticatedSource {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -21586,7 +20924,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl ProviderIngestBrokerAuthenticatedSource {
             fn live_qualification(
                 &self,
@@ -21617,7 +20954,6 @@ mod protocol {
                     ),
                 )
             }
-
             fn open_stream(
                 endpoint: EndpointPolicy,
                 chain_id: String,
@@ -21749,12 +21085,10 @@ mod protocol {
                 )
             }
         }
-
         impl sorafs_node::ProviderIngestAuthenticatedSourceFetchV1
             for ProviderIngestBrokerAuthenticatedSource
         {
             type Fetched = crate::sorafs_provider_ingest_runtime::VerifiedProviderIngestPayloadV1;
-
             fn fetch<'a>(
                 &'a self,
                 request: sorafs_node::ProviderIngestSourceRequestV1,
@@ -21798,14 +21132,12 @@ mod protocol {
                 })
             }
         }
-
         impl crate::sorafs_provider_ingest_runtime::ProviderIngestAuthenticatedSourceRuntimeV1
             for ProviderIngestBrokerAuthenticatedSource
         {
             fn runtime_handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -21825,11 +21157,9 @@ mod protocol {
                     }
                 })
             }
-
             fn source_provider_ids(&self) -> &[[u8; 32]] {
                 &self.source_provider_ids
             }
-
             fn check_readiness(&self) -> Result<(), sorafs_node::ProviderIngestSourceFetchErrorV1> {
                 let payload = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                     .map_err(|_| sorafs_node::ProviderIngestSourceFetchErrorV1::Rejected)?;
@@ -21858,7 +21188,6 @@ mod protocol {
                     .map_err(|_| sorafs_node::ProviderIngestSourceFetchErrorV1::Rejected)
             }
         }
-
         #[derive(Clone)]
         struct ModerationQuarantineBrokerKeyWrapper {
             session: Arc<BrokerSession>,
@@ -21866,7 +21195,6 @@ mod protocol {
             metadata_digest: [u8; 32],
             active_key_id: String,
         }
-
         impl fmt::Debug for ModerationQuarantineBrokerKeyWrapper {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -21874,7 +21202,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl ModerationQuarantineBrokerKeyWrapper {
             fn live_qualification(
                 &self,
@@ -21900,7 +21227,6 @@ mod protocol {
                 }
                 Ok(expected)
             }
-
             fn readiness_error(
                 error: BrokerError,
             ) -> sorafs_node::ModerationQuarantineKeyProviderReadinessErrorV1 {
@@ -21917,7 +21243,6 @@ mod protocol {
                     }
                 }
             }
-
             fn operation_error(
                 error: BrokerError,
                 wrap_may_have_dispatched: bool,
@@ -21941,12 +21266,10 @@ mod protocol {
                 }
             }
         }
-
         impl sorafs_node::ModerationQuarantineKeyWrapper for ModerationQuarantineBrokerKeyWrapper {
             fn provider_handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -21955,11 +21278,9 @@ mod protocol {
             > {
                 self.live_qualification().map_err(Self::readiness_error)
             }
-
             fn active_key_id(&self) -> &str {
                 &self.active_key_id
             }
-
             fn wrap_dek(
                 &self,
                 context_digest: [u8; 32],
@@ -21999,7 +21320,6 @@ mod protocol {
                 }
                 Ok(wrapped.take())
             }
-
             fn unwrap_dek(
                 &self,
                 key_id: &str,
@@ -22045,7 +21365,6 @@ mod protocol {
                 Ok(dek)
             }
         }
-
         fn live_exact_qualification(
             session: &BrokerSession,
             binding: &ProviderBindingWireV1,
@@ -22068,7 +21387,6 @@ mod protocol {
             }
             Ok(qualification)
         }
-
         fn map_stream_token_error(
             error: BrokerError,
         ) -> iroha_torii::sorafs::StreamTokenSigningError {
@@ -22085,7 +21403,6 @@ mod protocol {
                 }
             }
         }
-
         fn map_stream_token_probe_error(
             error: BrokerError,
         ) -> iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1 {
@@ -22102,7 +21419,6 @@ mod protocol {
                 }
             }
         }
-
         #[derive(Clone)]
         struct StreamTokenBrokerSigner {
             session: Arc<BrokerSession>,
@@ -22110,16 +21426,13 @@ mod protocol {
             metadata_digest: [u8; 32],
             public_key: [u8; 32],
         }
-
         impl iroha_torii::sorafs::StreamTokenRuntimeSigner for StreamTokenBrokerSigner {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn public_key(&self) -> [u8; 32] {
                 self.public_key
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -22143,7 +21456,6 @@ mod protocol {
                 })?;
                 Ok(qualification)
             }
-
             fn sign(
                 &self,
                 signing_payload: &[u8],
@@ -22197,7 +21509,6 @@ mod protocol {
                 Ok(signature)
             }
         }
-
         #[derive(Clone)]
         struct AppealFinanceBrokerSigner {
             session: Arc<BrokerSession>,
@@ -22206,7 +21517,6 @@ mod protocol {
             authority: iroha_data_model::account::AccountId,
             public_key: iroha_crypto::PublicKey,
         }
-
         impl AppealFinanceBrokerSigner {
             fn live_qualification(
                 &self,
@@ -22229,12 +21539,10 @@ mod protocol {
                 )
             }
         }
-
         impl iroha_torii::SoraFsAppealFinanceTransactionSigner for AppealFinanceBrokerSigner {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn public_key(
                 &self,
             ) -> Result<iroha_crypto::PublicKey, iroha_torii::SoraFsAppealFinanceSigningError>
@@ -22247,7 +21555,6 @@ mod protocol {
                 })?;
                 Ok(self.public_key.clone())
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -22262,7 +21569,6 @@ mod protocol {
                     _ => iroha_torii::SoraFsAppealFinanceSigningError::QualificationChanged,
                 })
             }
-
             fn sign(
                 &self,
                 payload: iroha_data_model::transaction::TransactionPayload,
@@ -22325,7 +21631,6 @@ mod protocol {
                 Ok(signed)
             }
         }
-
         #[derive(Clone)]
         struct AppealFinanceBrokerCheckpoint {
             session: Arc<BrokerSession>,
@@ -22334,7 +21639,6 @@ mod protocol {
             public_key: [u8; 32],
             checkpoint_max_bytes: u64,
         }
-
         impl fmt::Debug for AppealFinanceBrokerCheckpoint {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -22342,7 +21646,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl AppealFinanceBrokerCheckpoint {
             fn live_identity(
                 &self,
@@ -22371,7 +21674,6 @@ mod protocol {
                 )
             }
         }
-
         impl sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceCheckpointRuntime
             for AppealFinanceBrokerCheckpoint
         {
@@ -22394,7 +21696,6 @@ mod protocol {
                 }
                 })
             }
-
             fn sign_digest(
                 &self,
                 digest: [u8; 32],
@@ -22440,7 +21741,6 @@ mod protocol {
                 }
                 Ok(signature)
             }
-
             fn load_latest(
                 &self,
             ) -> Result<
@@ -22482,7 +21782,6 @@ mod protocol {
                 }
                 Ok(record)
             }
-
             fn compare_and_swap_latest(
                 &self,
                 expected_revision: Option<[u8; 32]>,
@@ -22578,7 +21877,6 @@ mod protocol {
                 Ok(())
             }
         }
-
         fn appeal_checkpoint_external_error(
             error: BrokerError,
         ) -> sorafs_node::appeal_finance_transaction_forwarder::AppealFinanceCheckpointExternalError
@@ -22596,7 +21894,6 @@ mod protocol {
                     AppealFinanceCheckpointExternalError::Rejected,
             }
         }
-
         #[derive(Clone)]
         struct PotrGatewayBrokerSigner {
             session: Arc<BrokerSession>,
@@ -22605,7 +21902,6 @@ mod protocol {
             public_key: [u8; 32],
             signer_id: [u8; 32],
         }
-
         #[derive(Clone)]
         struct PotrProviderBrokerSigner {
             session: Arc<BrokerSession>,
@@ -22615,7 +21911,6 @@ mod protocol {
             signer_id: [u8; 32],
             provider_id: [u8; 32],
         }
-
         fn potr_qualification(
             session: &BrokerSession,
             binding: &ProviderBindingWireV1,
@@ -22629,7 +21924,6 @@ mod protocol {
                 ),
             )
         }
-
         fn potr_service_error(error: BrokerError) -> iroha_torii::sorafs::PotrSignerServiceError {
             if error == BrokerError::Unavailable {
                 iroha_torii::sorafs::PotrSignerServiceError::Unavailable
@@ -22637,7 +21931,6 @@ mod protocol {
                 iroha_torii::sorafs::PotrSignerServiceError::Refused
             }
         }
-
         fn potr_sign(
             session: &BrokerSession,
             binding: &ProviderBindingWireV1,
@@ -22688,16 +21981,13 @@ mod protocol {
             }
             Ok(signature)
         }
-
         impl iroha_torii::sorafs::PotrGatewaySignerV1 for PotrGatewayBrokerSigner {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn signer_id(&self) -> [u8; 32] {
                 self.signer_id
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -22707,12 +21997,10 @@ mod protocol {
                 potr_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)
                     .map_err(potr_service_error)
             }
-
             fn public_key(&self) -> Result<[u8; 32], iroha_torii::sorafs::PotrSignerServiceError> {
                 self.qualification()?;
                 Ok(self.public_key)
             }
-
             fn sign(
                 &self,
                 payload: &[u8],
@@ -22728,16 +22016,13 @@ mod protocol {
                 )
             }
         }
-
         impl iroha_torii::sorafs::PotrProviderSignerV1 for PotrProviderBrokerSigner {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn signer_id(&self) -> [u8; 32] {
                 self.signer_id
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -22747,17 +22032,14 @@ mod protocol {
                 potr_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)
                     .map_err(potr_service_error)
             }
-
             fn provider_id(&self) -> Result<[u8; 32], iroha_torii::sorafs::PotrSignerServiceError> {
                 self.qualification()?;
                 Ok(self.provider_id)
             }
-
             fn public_key(&self) -> Result<Vec<u8>, iroha_torii::sorafs::PotrSignerServiceError> {
                 self.qualification()?;
                 Ok(self.public_key.clone())
             }
-
             fn sign(
                 &self,
                 payload: &[u8],
@@ -22773,14 +22055,12 @@ mod protocol {
                 )
             }
         }
-
         #[derive(Clone)]
         struct PopBrokerProvider {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl fmt::Debug for PopBrokerProvider {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -22790,7 +22070,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl PopBrokerProvider {
             fn live_qualification(
                 &self,
@@ -22810,7 +22089,6 @@ mod protocol {
                     ),
                 )
             }
-
             fn call(
                 &self,
                 operation: u16,
@@ -22845,7 +22123,6 @@ mod protocol {
                 }
                 result
             }
-
             fn decode<T>(&self, bytes: &ScrubbedBytes, max_bytes: usize) -> Result<T, BrokerError>
             where
                 T: NoritoSerialize,
@@ -22856,7 +22133,6 @@ mod protocol {
                     self.session.poison();
                 })
             }
-
             fn redacted_string_error(&self, error: BrokerError) -> String {
                 if matches!(
                     error,
@@ -22870,12 +22146,10 @@ mod protocol {
                 "PoP runtime provider unavailable".to_owned()
             }
         }
-
         #[derive(Clone)]
         struct PopCredentialBrokerRegistry {
             provider: PopBrokerProvider,
         }
-
         impl fmt::Debug for PopCredentialBrokerRegistry {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -22885,14 +22159,12 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1
             for PopCredentialBrokerRegistry
         {
             fn handle(&self) -> &str {
                 &self.provider.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -22903,7 +22175,6 @@ mod protocol {
                     .live_qualification()
                     .map_err(pop_registry_error)
             }
-
             fn resolve(
                 &self,
                 bindings: &iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderBindingsV1,
@@ -22980,16 +22251,13 @@ mod protocol {
                 )
             }
         }
-
         include!("runtime_provider_broker/pop_recipient_client.rs");
-
         #[derive(Clone)]
         struct PopBrokerIssuerSigner {
             provider: PopBrokerProvider,
             key_id: String,
             public_key: [u8; 32],
         }
-
         impl fmt::Debug for PopBrokerIssuerSigner {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -22999,16 +22267,13 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl sorafs_node::pop_credentials::PopIssuerSigner for PopBrokerIssuerSigner {
             fn key_id(&self) -> &str {
                 &self.key_id
             }
-
             fn public_key(&self) -> [u8; 32] {
                 self.public_key
             }
-
             fn sign_digest(
                 &self,
                 purpose: sorafs_node::pop_credentials::PopIssuerSigningPurposeV1,
@@ -23042,18 +22307,15 @@ mod protocol {
                 Ok(signed.signature)
             }
         }
-
         #[derive(Clone)]
         struct PopBrokerAuthenticator {
             provider: PopBrokerProvider,
         }
-
         impl fmt::Debug for PopBrokerAuthenticator {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("PopBrokerAuthenticator([REDACTED])")
             }
         }
-
         impl sorafs_node::pop_credentials::PopCredentialApiAuthenticator for PopBrokerAuthenticator {
             fn authenticate(
                 &self,
@@ -23097,18 +22359,15 @@ mod protocol {
                 })
             }
         }
-
         #[derive(Clone)]
         struct PopBrokerRegistrySubmitter {
             provider: PopBrokerProvider,
         }
-
         impl fmt::Debug for PopBrokerRegistrySubmitter {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("PopBrokerRegistrySubmitter([REDACTED])")
             }
         }
-
         impl sorafs_node::pop_credentials::PopRegistrySubmitter for PopBrokerRegistrySubmitter {
             fn submit(
                 &self,
@@ -23133,18 +22392,15 @@ mod protocol {
                     .map_err(|error| self.provider.redacted_string_error(error))
             }
         }
-
         #[derive(Clone)]
         struct PopBrokerRegistryReader {
             provider: PopBrokerProvider,
         }
-
         impl fmt::Debug for PopBrokerRegistryReader {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("PopBrokerRegistryReader([REDACTED])")
             }
         }
-
         impl sorafs_node::pop_credentials::PopFinalizedRegistryReader for PopBrokerRegistryReader {
             fn next_after(
                 &self,
@@ -23186,18 +22442,15 @@ mod protocol {
                 Ok(outcome.projection)
             }
         }
-
         #[derive(Clone)]
         struct PopBrokerIssuanceDraftProvider {
             provider: PopBrokerProvider,
         }
-
         impl fmt::Debug for PopBrokerIssuanceDraftProvider {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("PopBrokerIssuanceDraftProvider([REDACTED])")
             }
         }
-
         impl iroha_torii::sorafs::pop_api::PopIssuanceDraftProviderV1 for PopBrokerIssuanceDraftProvider {
             fn resolve(
                 &self,
@@ -23241,13 +22494,11 @@ mod protocol {
                 })
             }
         }
-
         #[derive(Clone)]
         struct PopBrokerWalletKeyWrapper {
             provider: PopBrokerProvider,
             active_key_id: String,
         }
-
         impl fmt::Debug for PopBrokerWalletKeyWrapper {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -23257,12 +22508,10 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl sorafs_node::pop_credentials::PopWalletKeyWrapper for PopBrokerWalletKeyWrapper {
             fn active_key_id(&self) -> &str {
                 &self.active_key_id
             }
-
             fn wrap_dek(&self, context: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
                 let wire = PopWalletWrapDekRequestWireV1 { context, dek: *dek };
                 if context == [0; 32] || *dek == [0; 32] {
@@ -23286,7 +22535,6 @@ mod protocol {
                 }
                 Ok(wrapped.wrapped_dek.clone())
             }
-
             fn unwrap_dek(
                 &self,
                 key_id: &str,
@@ -23325,18 +22573,15 @@ mod protocol {
                 Ok(unwrapped.dek)
             }
         }
-
         #[derive(Clone)]
         struct PopBrokerWalletWitnessProvider {
             provider: PopBrokerProvider,
         }
-
         impl fmt::Debug for PopBrokerWalletWitnessProvider {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("PopBrokerWalletWitnessProvider([REDACTED])")
             }
         }
-
         impl iroha_torii::sorafs::pop_api::PopWalletWitnessProviderV1 for PopBrokerWalletWitnessProvider {
             fn resolve(
                 &self,
@@ -23376,18 +22621,15 @@ mod protocol {
                 Ok(witness.into_witness())
             }
         }
-
         #[derive(Clone)]
         struct PopBrokerFinalizedTimeProvider {
             provider: PopBrokerProvider,
         }
-
         impl fmt::Debug for PopBrokerFinalizedTimeProvider {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("PopBrokerFinalizedTimeProvider([REDACTED])")
             }
         }
-
         impl iroha_torii::sorafs::pop_api::PopFinalizedTimeProviderV1 for PopBrokerFinalizedTimeProvider {
             fn sample(
                 &self,
@@ -23415,7 +22657,6 @@ mod protocol {
                 })
             }
         }
-
         fn por_replay_archive_external_error(
             error: BrokerError,
         ) -> sorafs_node::PorFinalizedReplayArchiveExternalErrorV1 {
@@ -23432,7 +22673,6 @@ mod protocol {
                 }
             }
         }
-
         fn privacy_cycle_prf_error(
             error: BrokerError,
         ) -> sorafs_node::PrivacyCyclePrfProviderErrorV1 {
@@ -23448,14 +22688,12 @@ mod protocol {
                 }
             }
         }
-
         #[derive(Clone)]
         struct PrivacyCyclePrfBrokerProvider {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl fmt::Debug for PrivacyCyclePrfBrokerProvider {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -23464,7 +22702,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl PrivacyCyclePrfBrokerProvider {
             fn live_qualification(
                 &self,
@@ -23483,12 +22720,10 @@ mod protocol {
                 )
             }
         }
-
         impl sorafs_node::ProductionTransparencyRuntimeProviderV1 for PrivacyCyclePrfBrokerProvider {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<sorafs_node::TransparencyRuntimeProviderQualificationV1, String>
@@ -23496,7 +22731,6 @@ mod protocol {
                 self.live_qualification().map_err(redacted_provider_error)
             }
         }
-
         impl sorafs_node::PrivacyCyclePrfProviderV1 for PrivacyCyclePrfBrokerProvider {
             fn derive_cycle_output(
                 &self,
@@ -23539,7 +22773,6 @@ mod protocol {
                 })
             }
         }
-
         fn privacy_release_anchor_error(
             error: BrokerError,
         ) -> sorafs_node::PrivacyReleaseAnchorErrorV1 {
@@ -23553,14 +22786,12 @@ mod protocol {
                 }
             }
         }
-
         #[derive(Clone)]
         struct PrivacyReleaseAnchorBroker {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl fmt::Debug for PrivacyReleaseAnchorBroker {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -23569,7 +22800,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl PrivacyReleaseAnchorBroker {
             fn live_qualification(
                 &self,
@@ -23589,7 +22819,6 @@ mod protocol {
                 }
                 Ok(exact.qualification())
             }
-
             fn call(
                 &self,
                 operation: u16,
@@ -23615,12 +22844,10 @@ mod protocol {
                 Ok(result)
             }
         }
-
         impl sorafs_node::ProductionTransparencyRuntimeProviderV1 for PrivacyReleaseAnchorBroker {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<sorafs_node::TransparencyRuntimeProviderQualificationV1, String>
@@ -23628,7 +22855,6 @@ mod protocol {
                 self.live_qualification().map_err(redacted_provider_error)
             }
         }
-
         impl sorafs_node::PrivacyReleaseAnchorV1 for PrivacyReleaseAnchorBroker {
             fn finalized_head(
                 &self,
@@ -23664,7 +22890,6 @@ mod protocol {
                 }
                 Ok(head)
             }
-
             fn compare_and_set_finalized_head(
                 &self,
                 expected: sorafs_node::PrivacyReleaseAnchorHeadV1,
@@ -23694,7 +22919,6 @@ mod protocol {
                     })
             }
         }
-
         const fn transparency_leader_lease_error(
             error: BrokerError,
         ) -> sorafs_node::TransparencyLeaderLeaseProviderErrorV1 {
@@ -23716,14 +22940,12 @@ mod protocol {
                 }
             }
         }
-
         #[derive(Clone)]
         struct TransparencyLeaderLeaseBroker {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl fmt::Debug for TransparencyLeaderLeaseBroker {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -23732,7 +22954,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl TransparencyLeaderLeaseBroker {
             fn exact_binding(
                 &self,
@@ -23740,7 +22961,6 @@ mod protocol {
             {
                 transparency_runtime_binding_from_wire(&self.binding)
             }
-
             fn live_qualification(
                 &self,
             ) -> Result<sorafs_node::TransparencyRuntimeProviderQualificationV1, BrokerError>
@@ -23759,7 +22979,6 @@ mod protocol {
                 }
                 Ok(exact.qualification())
             }
-
             fn call(&self, operation: u16, payload: Vec<u8>) -> Result<ScrubbedBytes, BrokerError> {
                 self.live_qualification()?;
                 let result = self.session.call(
@@ -23776,12 +22995,10 @@ mod protocol {
                 Ok(result)
             }
         }
-
         impl sorafs_node::ProductionTransparencyRuntimeProviderV1 for TransparencyLeaderLeaseBroker {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<sorafs_node::TransparencyRuntimeProviderQualificationV1, String>
@@ -23789,7 +23006,6 @@ mod protocol {
                 self.live_qualification().map_err(redacted_provider_error)
             }
         }
-
         impl sorafs_node::TransparencyLeaderLeaseProviderV1 for TransparencyLeaderLeaseBroker {
             fn acquire(
                 &self,
@@ -23825,7 +23041,6 @@ mod protocol {
                     })?;
                 Ok(grant)
             }
-
             fn renew(
                 &self,
                 request: &sorafs_node::TransparencyLeaderLeaseRenewRequestV1,
@@ -23860,7 +23075,6 @@ mod protocol {
                     })?;
                 Ok(grant)
             }
-
             fn release(
                 &self,
                 request: &sorafs_node::TransparencyLeaderLeaseReleaseRequestV1,
@@ -23897,7 +23111,6 @@ mod protocol {
                 Ok(receipt)
             }
         }
-
         const fn fenced_privacy_broker_error(
             error: BrokerError,
         ) -> sorafs_node::FencedTransparencyPublishErrorV1 {
@@ -23917,14 +23130,12 @@ mod protocol {
                 }
             }
         }
-
         #[derive(Clone)]
         struct FencedPrivacyPublisherBroker {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl fmt::Debug for FencedPrivacyPublisherBroker {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -23933,7 +23144,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl FencedPrivacyPublisherBroker {
             fn expected_qualification(
                 &self,
@@ -23941,7 +23151,6 @@ mod protocol {
             {
                 qualification_from_binding(&self.binding)
             }
-
             fn live_qualification(
                 &self,
             ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, BrokerError>
@@ -23960,7 +23169,6 @@ mod protocol {
                 }
                 Ok(expected)
             }
-
             fn call(&self, payload: Vec<u8>) -> Result<ScrubbedBytes, BrokerError> {
                 self.live_qualification()?;
                 let result = self.session.call(
@@ -23977,19 +23185,16 @@ mod protocol {
                 Ok(result)
             }
         }
-
         impl sorafs_node::FencedTransparencyPublisherV1 for FencedPrivacyPublisherBroker {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String>
             {
                 self.live_qualification().map_err(redacted_provider_error)
             }
-
             fn compare_and_append_privacy(
                 &self,
                 request: &sorafs_node::FencedPrivacyPublicationRequestV1,
@@ -24022,14 +23227,12 @@ mod protocol {
                 Ok(receipt)
             }
         }
-
         #[derive(Clone)]
         struct FencedPrivacyHeadReaderBroker {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl fmt::Debug for FencedPrivacyHeadReaderBroker {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -24038,7 +23241,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl FencedPrivacyHeadReaderBroker {
             fn expected_qualification(
                 &self,
@@ -24046,7 +23248,6 @@ mod protocol {
             {
                 qualification_from_binding(&self.binding)
             }
-
             fn live_qualification(
                 &self,
             ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, BrokerError>
@@ -24065,7 +23266,6 @@ mod protocol {
                 }
                 Ok(expected)
             }
-
             fn call(&self, payload: Vec<u8>) -> Result<ScrubbedBytes, BrokerError> {
                 self.live_qualification()?;
                 let result = self.session.call(
@@ -24079,19 +23279,16 @@ mod protocol {
                 Ok(result)
             }
         }
-
         impl sorafs_node::FencedTransparencyAuthoritativeHeadReaderV1 for FencedPrivacyHeadReaderBroker {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String>
             {
                 self.live_qualification().map_err(redacted_provider_error)
             }
-
             fn read_authoritative_head_with_ancestry(
                 &self,
                 required_ancestors: &[sorafs_node::FencedTransparencyTargetHeadV1],
@@ -24117,14 +23314,12 @@ mod protocol {
                 })
             }
         }
-
         #[derive(Clone)]
         struct PorReplayArchiveBroker {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl fmt::Debug for PorReplayArchiveBroker {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -24133,14 +23328,12 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl PorReplayArchiveBroker {
             fn exact(
                 &self,
             ) -> Result<sorafs_node::PorFinalizedReplayArchiveBindingV1, BrokerError> {
                 por_replay_archive_exact_binding(&self.binding)
             }
-
             fn live_binding(
                 &self,
             ) -> Result<sorafs_node::PorFinalizedReplayArchiveBindingV1, BrokerError> {
@@ -24152,7 +23345,6 @@ mod protocol {
                 )?;
                 Ok(exact)
             }
-
             fn call(
                 &self,
                 operation: u16,
@@ -24177,7 +23369,6 @@ mod protocol {
                 }
                 Ok(result)
             }
-
             fn decode<T>(&self, bytes: &ScrubbedBytes, max_bytes: usize) -> Result<T, BrokerError>
             where
                 T: NoritoSerialize,
@@ -24187,12 +23378,10 @@ mod protocol {
                 decode_canonical(bytes, max_bytes).inspect_err(|_| self.session.poison())
             }
         }
-
         impl sorafs_node::PorFinalizedReplayArchiveV1 for PorReplayArchiveBroker {
             fn runtime_handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn binding(
                 &self,
             ) -> Result<
@@ -24202,7 +23391,6 @@ mod protocol {
                 self.live_binding()
                     .map_err(por_replay_archive_external_error)
             }
-
             fn check_readiness(
                 &self,
             ) -> Result<(), sorafs_node::PorFinalizedReplayArchiveExternalErrorV1> {
@@ -24214,7 +23402,6 @@ mod protocol {
                 self.decode::<()>(&result, MAX_POR_REPLAY_ARCHIVE_CONTROL_FRAME_BYTES_V1)
                     .map_err(por_replay_archive_external_error)
             }
-
             fn current_head(
                 &self,
             ) -> Result<
@@ -24241,7 +23428,6 @@ mod protocol {
                 }
                 Ok(head)
             }
-
             fn append(
                 &self,
                 record: &sorafs_node::PorFinalizedReplayArchiveRecordV1,
@@ -24279,7 +23465,6 @@ mod protocol {
                     })?;
                 Ok(receipt)
             }
-
             fn lookup(
                 &self,
                 challenge_id: [u8; 32],
@@ -24321,14 +23506,12 @@ mod protocol {
                 })
             }
         }
-
         #[derive(Clone)]
         struct GatewayAcmeBrokerClient {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl fmt::Debug for GatewayAcmeBrokerClient {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -24337,7 +23520,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl GatewayAcmeBrokerClient {
             fn live_identity(
                 &self,
@@ -24356,7 +23538,6 @@ mod protocol {
                 })
             }
         }
-
         impl iroha_torii::sorafs::gateway::AcmeClient for GatewayAcmeBrokerClient {
             fn qualification(
                 &self,
@@ -24367,7 +23548,6 @@ mod protocol {
                 self.live_identity()
                     .map_err(|_| iroha_torii::sorafs::gateway::AcmeClientProbeError)
             }
-
             fn order_certificate(
                 &self,
                 order: &iroha_torii::sorafs::gateway::CertificateOrder,
@@ -24376,7 +23556,6 @@ mod protocol {
                 iroha_torii::sorafs::gateway::AcmeClientError,
             > {
                 use iroha_torii::sorafs::gateway::AcmeClientError as Error;
-
                 self.live_identity().map_err(|_| Error::Transport)?;
                 let wire = GatewayAcmeOrderRequestWireV1 {
                     hostnames: order.hostnames.clone(),
@@ -24441,14 +23620,12 @@ mod protocol {
                 }
             }
         }
-
         #[derive(Clone)]
         struct GatewayComplianceBrokerFeedTransport {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl fmt::Debug for GatewayComplianceBrokerFeedTransport {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -24457,7 +23634,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl GatewayComplianceBrokerFeedTransport {
             fn live_identity(
                 &self,
@@ -24479,7 +23655,6 @@ mod protocol {
                     },
                 )
             }
-
             fn operation_error(
                 &self,
                 error: BrokerError,
@@ -24496,7 +23671,6 @@ mod protocol {
                 iroha_torii::sorafs::gateway::GatewayComplianceError::FeedTransportOperationFailed
             }
         }
-
         impl iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport
             for GatewayComplianceBrokerFeedTransport
         {
@@ -24510,7 +23684,6 @@ mod protocol {
                     iroha_torii::sorafs::gateway::GatewayComplianceFeedTransportProbeError
                 })
             }
-
             fn resolve(
                 &self,
                 hostname: &str,
@@ -24556,7 +23729,6 @@ mod protocol {
                     Err(error)
                 }
             }
-
             fn fetch(
                 &self,
                 request: &iroha_torii::sorafs::gateway::GatewayComplianceFetchRequest,
@@ -24636,7 +23808,6 @@ mod protocol {
                 )
             }
         }
-
         fn moderation_signing_error(
             error: BrokerError,
         ) -> iroha_torii::sorafs::moderation_runtime::ModerationSigningFailureV1 {
@@ -24653,7 +23824,6 @@ mod protocol {
                 }
             }
         }
-
         fn moderation_readiness_error(
             error: BrokerError,
         ) -> sorafs_node::moderation_orchestrator::ModerationRuntimeProviderReadinessErrorV1
@@ -24673,14 +23843,12 @@ mod protocol {
                 }
             }
         }
-
         #[derive(Clone)]
         struct ModerationTransactionBrokerSigner {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl ModerationTransactionBrokerSigner {
             fn live_qualification(
                 &self,
@@ -24702,7 +23870,6 @@ mod protocol {
                 )
             }
         }
-
         impl fmt::Debug for ModerationTransactionBrokerSigner {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -24710,14 +23877,12 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
             for ModerationTransactionBrokerSigner
         {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -24728,7 +23893,6 @@ mod protocol {
                     .map_err(moderation_readiness_error)
             }
         }
-
         impl iroha_torii::sorafs::moderation_runtime::ModerationSignedTransactionSignerV1
             for ModerationTransactionBrokerSigner
         {
@@ -24778,7 +23942,6 @@ mod protocol {
                 Ok(signed)
             }
         }
-
         fn moderation_handoff_error(
             error: BrokerError,
         ) -> iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffFailureV1 {
@@ -24800,7 +23963,6 @@ mod protocol {
                 }
             }
         }
-
         fn moderation_panel_notification_error(
             error: BrokerError,
         ) -> sorafs_node::moderation_orchestrator::ModerationPanelNotificationFailureV1 {
@@ -24822,14 +23984,12 @@ mod protocol {
                 }
             }
         }
-
         #[derive(Clone)]
         struct ModerationDeliveryBrokerProvider {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl ModerationDeliveryBrokerProvider {
             fn live_qualification(
                 &self,
@@ -24851,7 +24011,6 @@ mod protocol {
                 )
             }
         }
-
         impl fmt::Debug for ModerationDeliveryBrokerProvider {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -24859,12 +24018,10 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         #[derive(Clone)]
         struct ModerationHandoffBrokerBoundary {
             provider: ModerationDeliveryBrokerProvider,
         }
-
         impl fmt::Debug for ModerationHandoffBrokerBoundary {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -24872,14 +24029,12 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
             for ModerationHandoffBrokerBoundary
         {
             fn handle(&self) -> &str {
                 &self.provider.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -24891,7 +24046,6 @@ mod protocol {
                     .map_err(moderation_readiness_error)
             }
         }
-
         impl iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1
             for ModerationHandoffBrokerBoundary
         {
@@ -24952,7 +24106,6 @@ mod protocol {
                 }
                 Ok(outcome)
             }
-
             fn publish_archive_head_once(
                 &self,
                 request: &iroha_torii::sorafs::moderation_runtime::
@@ -25022,7 +24175,6 @@ mod protocol {
                     _ => unreachable!("validated publication outcome"),
                 })
             }
-
             fn read_published_archive_head(
                 &self,
             ) -> Result<
@@ -25092,12 +24244,10 @@ mod protocol {
                 Ok(head)
             }
         }
-
         #[derive(Clone)]
         struct ModerationPanelNotificationBrokerBoundary {
             provider: ModerationDeliveryBrokerProvider,
         }
-
         impl fmt::Debug for ModerationPanelNotificationBrokerBoundary {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -25105,14 +24255,12 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
             for ModerationPanelNotificationBrokerBoundary
         {
             fn handle(&self) -> &str {
                 &self.provider.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -25124,7 +24272,6 @@ mod protocol {
                     .map_err(moderation_readiness_error)
             }
         }
-
         impl iroha_torii::sorafs::moderation_runtime::ModerationDurablePanelNotificationBoundaryV1
             for ModerationPanelNotificationBrokerBoundary
         {
@@ -25181,7 +24328,6 @@ mod protocol {
                 Ok(receipt)
             }
         }
-
         #[derive(Clone)]
         struct NativeTransactionBrokerCore {
             session: Arc<BrokerSession>,
@@ -25189,7 +24335,6 @@ mod protocol {
             metadata_digest: [u8; 32],
             exact_binding: iroha_torii::SorafsNativeTransactionSignerBindingV1,
         }
-
         impl NativeTransactionBrokerCore {
             fn live_qualification(
                 &self,
@@ -25223,7 +24368,6 @@ mod protocol {
                 }
                 Ok(expected)
             }
-
             fn sign_raw(
                 &self,
                 payload: iroha_data_model::transaction::TransactionPayload,
@@ -25250,7 +24394,6 @@ mod protocol {
                 })
             }
         }
-
         fn native_transaction_probe_error(
             error: BrokerError,
         ) -> iroha_torii::SorafsNativeTransactionSignerProbeErrorV1 {
@@ -25260,7 +24403,6 @@ mod protocol {
                 iroha_torii::SorafsNativeTransactionSignerProbeErrorV1::Unavailable
             }
         }
-
         macro_rules! define_native_transaction_broker_signer {
             (
                 $raw:ident,
@@ -25274,20 +24416,16 @@ mod protocol {
                 struct $raw {
                     core: NativeTransactionBrokerCore,
                 }
-
                 impl iroha_torii::SorafsNativeTransactionSignerProviderV1 for $raw {
                     fn role(&self) -> iroha_torii::SorafsNativeTransactionSignerRoleV1 {
                         iroha_torii::SorafsNativeTransactionSignerRoleV1::$role
                     }
-
                     fn handle(&self) -> &str {
                         self.core.exact_binding.handle()
                     }
-
                     fn authority(&self) -> iroha_data_model::account::AccountId {
                         self.core.exact_binding.authority().clone()
                     }
-
                     fn public_key(
                         &self,
                     ) -> Result<
@@ -25299,7 +24437,6 @@ mod protocol {
                             .map_err(native_transaction_probe_error)?;
                         Ok(self.core.exact_binding.public_key().clone())
                     }
-
                     fn qualification(
                         &self,
                     ) -> Result<
@@ -25311,7 +24448,6 @@ mod protocol {
                             .map_err(native_transaction_probe_error)
                     }
                 }
-
                 impl iroha_torii::$trait_name for $raw {
                     fn sign(
                         &self,
@@ -25336,25 +24472,20 @@ mod protocol {
                         })
                     }
                 }
-
                 #[derive(Clone)]
                 struct $proxy {
                     core: NativeTransactionBrokerCore,
                 }
-
                 impl iroha_torii::SorafsNativeTransactionSignerProviderV1 for $proxy {
                     fn role(&self) -> iroha_torii::SorafsNativeTransactionSignerRoleV1 {
                         iroha_torii::SorafsNativeTransactionSignerRoleV1::$role
                     }
-
                     fn handle(&self) -> &str {
                         self.core.exact_binding.handle()
                     }
-
                     fn authority(&self) -> iroha_data_model::account::AccountId {
                         self.core.exact_binding.authority().clone()
                     }
-
                     fn public_key(
                         &self,
                     ) -> Result<
@@ -25366,7 +24497,6 @@ mod protocol {
                             .map_err(native_transaction_probe_error)?;
                         Ok(self.core.exact_binding.public_key().clone())
                     }
-
                     fn qualification(
                         &self,
                     ) -> Result<
@@ -25378,7 +24508,6 @@ mod protocol {
                             .map_err(native_transaction_probe_error)
                     }
                 }
-
                 impl iroha_torii::$trait_name for $proxy {
                     fn sign(
                         &self,
@@ -25422,7 +24551,6 @@ mod protocol {
                 }
             };
         }
-
         define_native_transaction_broker_signer!(
             RawProofOutcomeBrokerSigner,
             ProofOutcomeBrokerSigner,
@@ -25455,7 +24583,6 @@ mod protocol {
             Orderbook,
             qualify_sorafs_orderbook_transaction_signer_v1
         );
-
         #[derive(Clone)]
         struct SoracloudRuntimeBrokerSigner {
             session: Arc<BrokerSession>,
@@ -25463,7 +24590,6 @@ mod protocol {
             metadata_digest: [u8; 32],
             exact_binding: crate::soracloud_runtime_signer::SoracloudRuntimeSignerBindingV1,
         }
-
         impl SoracloudRuntimeBrokerSigner {
             fn live_qualification(
                 &self,
@@ -25502,13 +24628,11 @@ mod protocol {
                 }
                 Ok(expected)
             }
-
             fn signing_error(
                 &self,
                 error: BrokerError,
             ) -> crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1 {
                 use crate::soracloud_runtime_signer::SoracloudRuntimeSigningErrorV1 as Error;
-
                 match error {
                     BrokerError::Unavailable => Error::Unavailable,
                     BrokerError::Rejected => Error::Refused,
@@ -25523,18 +24647,15 @@ mod protocol {
                 }
             }
         }
-
         impl crate::soracloud_runtime_signer::SoracloudRuntimeMutationSignerV1
             for SoracloudRuntimeBrokerSigner
         {
             fn handle(&self) -> &str {
                 self.exact_binding.handle()
             }
-
             fn authority(&self) -> iroha_data_model::account::AccountId {
                 self.exact_binding.authority().clone()
             }
-
             fn public_key(
                 &self,
             ) -> Result<
@@ -25550,7 +24671,6 @@ mod protocol {
                 })?;
                 Ok(self.exact_binding.public_key().clone())
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -25565,7 +24685,6 @@ mod protocol {
                     }
                 })
             }
-
             fn sign_transaction(
                 &self,
                 payload: iroha_data_model::transaction::TransactionPayload,
@@ -25599,7 +24718,6 @@ mod protocol {
                 )
                 .map_err(|error| self.signing_error(error))
             }
-
             fn sign_provenance(
                 &self,
                 purpose: iroha_data_model::soracloud::SoracloudRuntimeProvenancePurposeV1,
@@ -25649,7 +24767,6 @@ mod protocol {
                 })
             }
         }
-
         #[derive(Clone)]
         struct SoracloudHfCredentialBrokerProvider {
             session: Arc<BrokerSession>,
@@ -25657,7 +24774,6 @@ mod protocol {
             metadata_digest: [u8; 32],
             exact_binding: crate::soracloud_hf_credential::SoracloudHfCredentialProviderBindingV1,
         }
-
         impl fmt::Debug for SoracloudHfCredentialBrokerProvider {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -25666,7 +24782,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl SoracloudHfCredentialBrokerProvider {
             fn live_qualification(
                 &self,
@@ -25702,14 +24817,12 @@ mod protocol {
                 }
                 Ok(expected)
             }
-
             fn probe_error(
                 &self,
                 error: BrokerError,
             ) -> crate::soracloud_hf_credential::SoracloudHfCredentialProviderProbeErrorV1
             {
                 use crate::soracloud_hf_credential::SoracloudHfCredentialProviderProbeErrorV1 as Error;
-
                 match error {
                     BrokerError::Unavailable => Error::Unavailable,
                     BrokerError::Rejected => Error::Refused,
@@ -25723,7 +24836,6 @@ mod protocol {
                     }
                 }
             }
-
             fn operation_error(
                 &self,
                 error: BrokerError,
@@ -25745,14 +24857,12 @@ mod protocol {
                 }
             }
         }
-
         impl crate::soracloud_hf_credential::SoracloudHfInferenceCredentialProviderV1
             for SoracloudHfCredentialBrokerProvider
         {
             fn handle(&self) -> &str {
                 self.exact_binding.handle()
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -25762,7 +24872,6 @@ mod protocol {
                 self.live_qualification()
                     .map_err(|error| self.probe_error(error))
             }
-
             fn check_readiness(
                 &self,
             ) -> Result<(), crate::soracloud_hf_credential::SoracloudHfCredentialProviderProbeErrorV1>
@@ -25771,7 +24880,6 @@ mod protocol {
                     .map(|_| ())
                     .map_err(|error| self.probe_error(error))
             }
-
             fn execute_authenticated(
                 &self,
                 request: &crate::soracloud_hf_credential::
@@ -25825,7 +24933,6 @@ mod protocol {
                 Ok(response)
             }
         }
-
         #[derive(Clone)]
         struct GovernanceDagBrokerSigner {
             session: Arc<BrokerSession>,
@@ -25834,7 +24941,6 @@ mod protocol {
             publisher_peer_id: Vec<u8>,
             public_key: [u8; 32],
         }
-
         impl fmt::Debug for GovernanceDagBrokerSigner {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -25842,7 +24948,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl GovernanceDagBrokerSigner {
             fn live_qualification(
                 &self,
@@ -25869,27 +24974,22 @@ mod protocol {
                 Ok(expected)
             }
         }
-
         impl sorafs_node::GovernanceDagRuntimeSigner for GovernanceDagBrokerSigner {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String>
             {
                 self.live_qualification().map_err(redacted_provider_error)
             }
-
             fn publisher_peer_id(&self) -> &[u8] {
                 &self.publisher_peer_id
             }
-
             fn public_key(&self) -> [u8; 32] {
                 self.public_key
             }
-
             fn sign(
                 &self,
                 purpose: sorafs_node::GovernanceDagSigningPurposeV1,
@@ -25925,7 +25025,6 @@ mod protocol {
                 Ok(signature)
             }
         }
-
         #[derive(Clone)]
         struct GovernanceDagBrokerRequestAuthenticator {
             session: Arc<BrokerSession>,
@@ -25934,7 +25033,6 @@ mod protocol {
             ingress_binding: sorafs_node::GovernanceDagRequestIngressBindingV1,
             ingress_qualification: sorafs_node::GovernanceDagRequestIngressQualificationV1,
         }
-
         impl fmt::Debug for GovernanceDagBrokerRequestAuthenticator {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -25947,7 +25045,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl GovernanceDagBrokerRequestAuthenticator {
             fn live_ingress_qualification(
                 &self,
@@ -25973,7 +25070,6 @@ mod protocol {
                 }
                 Ok(qualification)
             }
-
             fn expected_scope(
                 &self,
             ) -> Result<sorafs_node::GovernanceDagAuthenticationScope, BrokerError> {
@@ -25990,12 +25086,10 @@ mod protocol {
                 }
             }
         }
-
         impl sorafs_node::GovernanceDagRequestAuthenticator for GovernanceDagBrokerRequestAuthenticator {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn ingress_qualification(
                 &self,
             ) -> Result<sorafs_node::GovernanceDagRequestIngressQualificationV1, String>
@@ -26003,7 +25097,6 @@ mod protocol {
                 self.live_ingress_qualification()
                     .map_err(redacted_provider_error)
             }
-
             fn authenticate(
                 &self,
                 request: &sorafs_node::GovernanceDagCanonicalRequestV1,
@@ -26058,14 +25151,12 @@ mod protocol {
                 Ok(envelope)
             }
         }
-
         #[derive(Clone)]
         struct GovernanceDagBrokerCheckpointStore {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl fmt::Debug for GovernanceDagBrokerCheckpointStore {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -26073,7 +25164,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl GovernanceDagBrokerCheckpointStore {
             fn live_qualification(
                 &self,
@@ -26100,19 +25190,16 @@ mod protocol {
                 Ok(expected)
             }
         }
-
         impl sorafs_node::GovernanceDagSealedCheckpointStore for GovernanceDagBrokerCheckpointStore {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String>
             {
                 self.live_qualification().map_err(redacted_provider_error)
             }
-
             fn load(
                 &self,
                 slot: sorafs_node::GovernanceDagSealedStateSlot,
@@ -26159,7 +25246,6 @@ mod protocol {
                     })
                     .transpose()
             }
-
             fn compare_and_swap(
                 &self,
                 slot: sorafs_node::GovernanceDagSealedStateSlot,
@@ -26204,7 +25290,6 @@ mod protocol {
                     .decode_result::<()>(&result)
                     .map_err(|_| ERROR_AMBIGUOUS.to_owned())
             }
-
             fn delete(
                 &self,
                 slot: sorafs_node::GovernanceDagSealedStateSlot,
@@ -26236,7 +25321,6 @@ mod protocol {
                     .map_err(|_| ERROR_AMBIGUOUS.to_owned())
             }
         }
-
         fn evidence_viewer_external_error(
             error: BrokerError,
         ) -> sorafs_node::evidence_viewer::EvidenceViewerExternalErrorV1 {
@@ -26253,7 +25337,6 @@ mod protocol {
                 }
             }
         }
-
         fn evidence_viewer_readiness_error(
             error: BrokerError,
         ) -> sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderReadinessErrorV1 {
@@ -26272,7 +25355,6 @@ mod protocol {
                 }
             }
         }
-
         fn evidence_viewer_checkpoint_error(
             error: BrokerError,
         ) -> sorafs_node::evidence_viewer::EvidenceViewerCheckpointStoreExternalErrorV1 {
@@ -26295,7 +25377,6 @@ mod protocol {
                 }
             }
         }
-
         fn evidence_viewer_transparency_publisher_error(
             error: BrokerError,
         ) -> sorafs_node::evidence_viewer::transparency_producer::
@@ -26320,14 +25401,12 @@ mod protocol {
                 }
             }
         }
-
         #[derive(Clone)]
         struct EvidenceViewerBrokerProvider {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl fmt::Debug for EvidenceViewerBrokerProvider {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -26336,12 +25415,10 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl EvidenceViewerBrokerProvider {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn live_qualification(
                 &self,
             ) -> Result<
@@ -26380,7 +25457,6 @@ mod protocol {
                     ),
                 )
             }
-
             fn call_sensitive<T: NoritoSerialize>(
                 &self,
                 operation: u16,
@@ -26397,7 +25473,6 @@ mod protocol {
                     mutating,
                 )
             }
-
             fn decode_sensitive<T>(
                 &self,
                 result: &ScrubbedBytes,
@@ -26411,14 +25486,12 @@ mod protocol {
                 decode_canonical::<T>(result, limit).inspect_err(|_| self.session.poison())
             }
         }
-
         macro_rules! impl_evidence_viewer_runtime_provider {
             ($provider:ty) => {
                 impl sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderV1 for $provider {
                     fn handle(&self) -> &str {
                         self.provider.handle()
                     }
-
                     fn qualification(
                         &self,
                     ) -> Result<
@@ -26432,14 +25505,11 @@ mod protocol {
                 }
             };
         }
-
         #[derive(Clone, Debug)]
         struct EvidenceViewerBrokerWebAuthn {
             provider: EvidenceViewerBrokerProvider,
         }
-
         impl_evidence_viewer_runtime_provider!(EvidenceViewerBrokerWebAuthn);
-
         impl sorafs_node::evidence_viewer::EvidenceViewerWebAuthnBoundaryV1
             for EvidenceViewerBrokerWebAuthn
         {
@@ -26488,7 +25558,6 @@ mod protocol {
                     })?;
                 sorafs_node::evidence_viewer::OpaqueEvidenceViewerSecretV1::new(secret)
             }
-
             fn verify_and_consume(
                 &self,
                 challenge: &str,
@@ -26546,14 +25615,11 @@ mod protocol {
                 )
             }
         }
-
         #[derive(Clone, Debug)]
         struct EvidenceViewerBrokerGrants {
             provider: EvidenceViewerBrokerProvider,
         }
-
         impl_evidence_viewer_runtime_provider!(EvidenceViewerBrokerGrants);
-
         impl sorafs_node::evidence_viewer::EvidenceViewerGrantBoundaryV1 for EvidenceViewerBrokerGrants {
             fn issue(
                 &self,
@@ -26587,7 +25653,6 @@ mod protocol {
                     })?;
                 sorafs_node::evidence_viewer::OpaqueEvidenceViewerSecretV1::new(secret)
             }
-
             fn verify(
                 &self,
                 token: &str,
@@ -26612,7 +25677,6 @@ mod protocol {
                     .decode_sensitive::<()>(&result, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
                     .map_err(evidence_viewer_external_error)
             }
-
             fn revoke(
                 &self,
                 token_digest: [u8; 32],
@@ -26632,22 +25696,18 @@ mod protocol {
                     .map_err(evidence_viewer_external_error)
             }
         }
-
         #[derive(Clone, Debug)]
         struct EvidenceViewerBrokerReceiptSigner {
             provider: EvidenceViewerBrokerProvider,
             public_key: [u8; 32],
         }
-
         impl_evidence_viewer_runtime_provider!(EvidenceViewerBrokerReceiptSigner);
-
         impl sorafs_node::evidence_viewer::EvidenceViewerReceiptSignerV1
             for EvidenceViewerBrokerReceiptSigner
         {
             fn public_key(&self) -> [u8; 32] {
                 self.public_key
             }
-
             fn sign(
                 &self,
                 purpose: sorafs_node::evidence_viewer::EvidenceViewerSigningPurposeV1,
@@ -26685,14 +25745,11 @@ mod protocol {
                 Ok(signed.signature)
             }
         }
-
         #[derive(Clone, Debug)]
         struct EvidenceViewerBrokerErasure {
             provider: EvidenceViewerBrokerProvider,
         }
-
         impl_evidence_viewer_runtime_provider!(EvidenceViewerBrokerErasure);
-
         impl sorafs_node::evidence_viewer::EvidenceViewerErasureBoundaryV1 for EvidenceViewerBrokerErasure {
             fn erase(
                 &self,
@@ -26726,14 +25783,11 @@ mod protocol {
                 Ok(erased.commit_digest)
             }
         }
-
         #[derive(Clone, Debug)]
         struct EvidenceViewerBrokerCheckpointStore {
             provider: EvidenceViewerBrokerProvider,
         }
-
         impl_evidence_viewer_runtime_provider!(EvidenceViewerBrokerCheckpointStore);
-
         impl sorafs_node::evidence_viewer::EvidenceViewerCheckpointStoreV1
             for EvidenceViewerBrokerCheckpointStore
         {
@@ -26766,7 +25820,6 @@ mod protocol {
                     })
                     .transpose()
             }
-
             fn compare_and_swap_latest(
                 &self,
                 expected_revision: Option<[u8; 32]>,
@@ -26798,7 +25851,6 @@ mod protocol {
                     .map_err(evidence_viewer_checkpoint_error)
             }
         }
-
         fn moderation_checkpoint_error(
             error: BrokerError,
         ) -> sorafs_node::moderation_orchestrator::ModerationCheckpointStoreExternalErrorV1
@@ -26816,7 +25868,6 @@ mod protocol {
                     ModerationCheckpointStoreExternalErrorV1::Rejected,
             }
         }
-
         fn moderation_panel_notification_archive_error(
             error: BrokerError,
         ) -> sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveExternalErrorV1
@@ -26834,19 +25885,16 @@ mod protocol {
                     ModerationPanelNotificationArchiveExternalErrorV1::Rejected,
             }
         }
-
         #[derive(Clone, Debug)]
         struct ModerationCheckpointBrokerStore {
             provider: EvidenceViewerBrokerProvider,
         }
-
         impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
             for ModerationCheckpointBrokerStore
         {
             fn handle(&self) -> &str {
                 self.provider.handle()
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -26880,7 +25928,6 @@ mod protocol {
                     })
             }
         }
-
         impl sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1
             for ModerationCheckpointBrokerStore
         {
@@ -26890,7 +25937,6 @@ mod protocol {
                     .moderation_checkpoint_attestation_public_key
                     .unwrap_or([0; 32])
             }
-
             fn load_latest(
                 &self,
             ) -> Result<
@@ -26924,7 +25970,6 @@ mod protocol {
                     })
                     .transpose()
             }
-
             fn compare_and_swap_latest(
                 &self,
                 expected_revision: Option<[u8; 32]>,
@@ -26953,7 +25998,6 @@ mod protocol {
                     .decode_sensitive::<()>(&result, MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)
                     .map_err(moderation_checkpoint_error)
             }
-
             fn attest_terminal_set(
                 &self,
                 statement: &sorafs_node::moderation_orchestrator::
@@ -27011,14 +26055,12 @@ mod protocol {
                 Ok(signed.signature)
             }
         }
-
         #[derive(Clone, Debug)]
         struct ModerationPanelNotificationBrokerArchive {
             provider: EvidenceViewerBrokerProvider,
             archive_id: [u8; 32],
             public_key: [u8; 32],
         }
-
         impl ModerationPanelNotificationBrokerArchive {
             fn live_qualification(
                 &self,
@@ -27071,14 +26113,12 @@ mod protocol {
                     ))
             }
         }
-
         impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
             for ModerationPanelNotificationBrokerArchive
         {
             fn handle(&self) -> &str {
                 self.provider.handle()
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -27103,18 +26143,15 @@ mod protocol {
                 })
             }
         }
-
         impl sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveV1
             for ModerationPanelNotificationBrokerArchive
         {
             fn archive_id(&self) -> [u8; 32] {
                 self.archive_id
             }
-
             fn signing_public_key(&self) -> [u8; 32] {
                 self.public_key
             }
-
             fn install(
                 &self,
                 operation_id: [u8; 32],
@@ -27179,7 +26216,6 @@ mod protocol {
                 .map_err(moderation_panel_notification_archive_error)?;
                 Ok(signed.signature)
             }
-
             fn read(
                 &self,
                 operation_id: [u8; 32],
@@ -27256,27 +26292,22 @@ mod protocol {
                     .transpose()
             }
         }
-
         #[derive(Clone, Debug)]
         struct EvidenceViewerBrokerCompactionArchive {
             provider: EvidenceViewerBrokerProvider,
             archive_id: [u8; 32],
             public_key: [u8; 32],
         }
-
         impl_evidence_viewer_runtime_provider!(EvidenceViewerBrokerCompactionArchive);
-
         impl sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveV1
             for EvidenceViewerBrokerCompactionArchive
         {
             fn archive_id(&self) -> [u8; 32] {
                 self.archive_id
             }
-
             fn signing_public_key(&self) -> [u8; 32] {
                 self.public_key
             }
-
             fn install(
                 &self,
                 operation_id: [u8; 32],
@@ -27312,7 +26343,6 @@ mod protocol {
                 .map_err(evidence_viewer_external_error)?;
                 Ok(signed.signature)
             }
-
             fn read(
                 &self,
                 operation_id: [u8; 32],
@@ -27348,20 +26378,17 @@ mod protocol {
                     })
             }
         }
-
         #[derive(Clone, Debug)]
         struct EvidenceViewerBrokerTransparencyPublisher {
             provider: EvidenceViewerBrokerProvider,
             public_key: [u8; 32],
         }
-
         impl sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderV1
             for EvidenceViewerBrokerTransparencyPublisher
         {
             fn handle(&self) -> &str {
                 self.provider.handle()
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -27383,14 +26410,12 @@ mod protocol {
                 }
             }
         }
-
         impl sorafs_node::evidence_viewer::transparency_producer::
             EvidenceViewerTransparencyPublisherV1 for EvidenceViewerBrokerTransparencyPublisher
         {
             fn public_key(&self) -> [u8; 32] {
                 self.public_key
             }
-
             fn load_head(
                 &self,
             ) -> Result<
@@ -27429,7 +26454,6 @@ mod protocol {
                     >(&result, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1)
                     .map_err(evidence_viewer_transparency_publisher_error)
             }
-
             fn compare_and_publish(
                 &self,
                 body: &sorafs_node::evidence_viewer::transparency_producer::
@@ -27466,7 +26490,6 @@ mod protocol {
                     .map_err(evidence_viewer_transparency_publisher_error)
             }
         }
-
         #[derive(Clone)]
         struct ProviderIngestBrokerSignerResolver {
             session: Arc<BrokerSession>,
@@ -27476,7 +26499,6 @@ mod protocol {
             signer_metadata_digest: [u8; 32],
             expected_signer_binding: sorafs_node::ProviderIngestCompletionSignerBindingV1,
         }
-
         impl fmt::Debug for ProviderIngestBrokerSignerResolver {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -27484,7 +26506,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl ProviderIngestBrokerSignerResolver {
             fn live_state(
                 &self,
@@ -27524,7 +26545,6 @@ mod protocol {
                     ),
                 )
             }
-
             fn resolve_blocking(
                 &self,
                 context: sorafs_node::ProviderIngestCompletionSignerResolutionContextV1,
@@ -27583,14 +26603,12 @@ mod protocol {
                 })))
             }
         }
-
         impl crate::sorafs_provider_ingest_runtime::ProviderIngestGovernedSignerResolverRuntimeV1
             for ProviderIngestBrokerSignerResolver
         {
             fn runtime_handle(&self) -> &str {
                 &self.resolver_binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -27599,7 +26617,6 @@ mod protocol {
             > {
                 self.live_state().map_err(provider_ingest_resolver_error)
             }
-
             fn signer_binding(
                 &self,
             ) -> Result<
@@ -27609,7 +26626,6 @@ mod protocol {
                 self.live_state().map_err(provider_ingest_resolver_error)?;
                 Ok(self.expected_signer_binding.clone())
             }
-
             fn check_readiness(
                 &self,
             ) -> Result<(), sorafs_node::ProviderIngestCompletionSignerResolverErrorV1>
@@ -27633,7 +26649,6 @@ mod protocol {
                 self.live_state().map_err(provider_ingest_resolver_error)?;
                 Ok(())
             }
-
             fn resolve(
                 &self,
                 context: sorafs_node::ProviderIngestCompletionSignerResolutionContextV1,
@@ -27654,7 +26669,6 @@ mod protocol {
                 })
             }
         }
-
         #[derive(Clone)]
         struct ProviderIngestBrokerCompletionSigner {
             session: Arc<BrokerSession>,
@@ -27665,7 +26679,6 @@ mod protocol {
             expected_binding: sorafs_node::ProviderIngestCompletionSignerBindingV1,
             resolution_context: sorafs_node::ProviderIngestCompletionSignerResolutionContextV1,
         }
-
         impl ProviderIngestBrokerCompletionSigner {
             fn live_resolver_state(&self) -> Result<(), BrokerError> {
                 let payload = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)?;
@@ -27689,7 +26702,6 @@ mod protocol {
                 }
                 Ok(())
             }
-
             fn sign_blocking(
                 &self,
                 transaction_payload: iroha_data_model::transaction::TransactionPayload,
@@ -27761,16 +26773,13 @@ mod protocol {
                 Ok(signed)
             }
         }
-
         impl sorafs_node::ProviderIngestCompletionSignerV1 for ProviderIngestBrokerCompletionSigner {
             fn runtime_handle(&self) -> &str {
                 &self.expected_binding.runtime_handle
             }
-
             fn authority(&self) -> &iroha_data_model::account::AccountId {
                 &self.resolution_context.provider_owner
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -27779,14 +26788,12 @@ mod protocol {
             > {
                 Ok(self.expected_binding.qualification.clone())
             }
-
             fn signer_policy(
                 &self,
             ) -> iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1
             {
                 self.expected_binding.qualification.signer_policy
             }
-
             fn current_eligibility(
                 &self,
             ) -> Result<
@@ -27798,7 +26805,6 @@ mod protocol {
                 // atomically inside every resolve/sign request.
                 Ok(self.expected_binding.qualification.signer_policy)
             }
-
             fn sign(
                 &self,
                 payload: iroha_data_model::transaction::TransactionPayload,
@@ -27819,7 +26825,6 @@ mod protocol {
                 })
             }
         }
-
         #[derive(Clone)]
         struct ProviderIngestBrokerCheckpointStore {
             session: Arc<BrokerSession>,
@@ -27827,7 +26832,6 @@ mod protocol {
             metadata_digest: [u8; 32],
             checkpoint_max_bytes: u64,
         }
-
         impl fmt::Debug for ProviderIngestBrokerCheckpointStore {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -27835,7 +26839,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl ProviderIngestBrokerCheckpointStore {
             fn live_qualification(
                 &self,
@@ -27866,7 +26869,6 @@ mod protocol {
                     ),
                 )
             }
-
             fn load_latest_raw(
                 &self,
             ) -> Result<Option<sorafs_node::ProviderIngestSealedCheckpointRecordV1>, BrokerError>
@@ -27899,12 +26901,10 @@ mod protocol {
                     .inspect_err(|_| self.session.poison())
             }
         }
-
         impl sorafs_node::ProviderIngestCheckpointRuntimeV1 for ProviderIngestBrokerCheckpointStore {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -27914,7 +26914,6 @@ mod protocol {
                 self.live_qualification()
                     .map_err(provider_ingest_checkpoint_error)
             }
-
             fn load_latest(
                 &self,
             ) -> Result<
@@ -27930,7 +26929,6 @@ mod protocol {
                     .map_err(provider_ingest_checkpoint_error)?;
                 Ok(record)
             }
-
             fn compare_and_swap_latest(
                 &self,
                 expected_revision: Option<[u8; 32]>,
@@ -28018,14 +27016,12 @@ mod protocol {
                 Ok(())
             }
         }
-
         #[derive(Clone)]
         struct ProviderIngestBrokerRetentionAuthority {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl fmt::Debug for ProviderIngestBrokerRetentionAuthority {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -28033,7 +27029,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl ProviderIngestBrokerRetentionAuthority {
             fn expected_qualification(
                 &self,
@@ -28051,7 +27046,6 @@ mod protocol {
                         ),
                 )
             }
-
             fn live_qualification(
                 &self,
             ) -> Result<
@@ -28079,14 +27073,12 @@ mod protocol {
                 }
                 Ok(expected)
             }
-
             fn network_id_wire(&self, network_id: &NetworkId) -> Result<NetworkId, BrokerError> {
                 if &self.session.network_id != network_id {
                     return Err(BrokerError::BindingMismatch);
                 }
                 Ok(*network_id)
             }
-
             fn load_latest_raw(
                 &self,
                 network_id: &NetworkId,
@@ -28138,7 +27130,6 @@ mod protocol {
                 Ok(record)
             }
         }
-
         impl
             iroha_core::query::provider_ingest_finalized::
                 ProviderIngestFinalizedArchiveRetentionAuthorityV1
@@ -28147,7 +27138,6 @@ mod protocol {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -28159,7 +27149,6 @@ mod protocol {
                 self.live_qualification()
                     .map_err(provider_ingest_retention_error)
             }
-
             fn load_latest(
                 &self,
                 network_id: &NetworkId,
@@ -28180,7 +27169,6 @@ mod protocol {
                     .map_err(provider_ingest_retention_error)?;
                 Ok(record)
             }
-
             fn compare_and_swap_latest(
                 &self,
                 network_id: &NetworkId,
@@ -28194,7 +27182,6 @@ mod protocol {
             > {
                 use iroha_core::query::provider_ingest_finalized::
                     ProviderIngestFinalizedArchiveRetentionAuthorityExternalErrorV1 as Error;
-
                 if expected_revision == Some([0; 32])
                     || next.predecessor_revision() != expected_revision
                     || next.authority_qualification()
@@ -28286,14 +27273,12 @@ mod protocol {
                 Ok(())
             }
         }
-
         #[derive(Clone)]
         struct ReputationBrokerRetentionAuthority {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl fmt::Debug for ReputationBrokerRetentionAuthority {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -28301,7 +27286,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl ReputationBrokerRetentionAuthority {
             fn expected_qualification(
                 &self,
@@ -28319,7 +27303,6 @@ mod protocol {
                         ),
                 )
             }
-
             fn live_qualification(
                 &self,
             ) -> Result<
@@ -28347,14 +27330,12 @@ mod protocol {
                 }
                 Ok(expected)
             }
-
             fn network_id_wire(&self, network_id: &NetworkId) -> Result<NetworkId, BrokerError> {
                 if &self.session.network_id != network_id {
                     return Err(BrokerError::BindingMismatch);
                 }
                 Ok(*network_id)
             }
-
             fn load_latest_raw(
                 &self,
                 network_id: &NetworkId,
@@ -28407,14 +27388,12 @@ mod protocol {
                 Ok(record)
             }
         }
-
         impl iroha_core::query::reputation_finalized::ReputationFinalizedArchiveRetentionAuthorityV1
             for ReputationBrokerRetentionAuthority
         {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -28426,7 +27405,6 @@ mod protocol {
                 self.live_qualification()
                     .map_err(reputation_retention_error)
             }
-
             fn load_latest(
                 &self,
                 network_id: &NetworkId,
@@ -28447,7 +27425,6 @@ mod protocol {
                     .map_err(reputation_retention_error)?;
                 Ok(record)
             }
-
             fn compare_and_swap_latest(
                 &self,
                 network_id: &NetworkId,
@@ -28555,14 +27532,12 @@ mod protocol {
                 Ok(())
             }
         }
-
         #[derive(Clone)]
         struct ReputationBrokerProvider {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl fmt::Debug for ReputationBrokerProvider {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -28571,7 +27546,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl ReputationBrokerProvider {
             fn live_qualification(
                 &self,
@@ -28599,7 +27573,6 @@ mod protocol {
                 }
                 Ok(expected)
             }
-
             fn external_failure(
                 &self,
                 error: BrokerError,
@@ -28625,7 +27598,6 @@ mod protocol {
                 sorafs_node::reputation::runtime::ReputationExternalFailureV1::try_new(receipt)
                     .expect("domain-separated reputation broker failure receipt is nonzero")
             }
-
             fn request_failure(
                 idempotency_key: [u8; 32],
             ) -> sorafs_node::reputation::runtime::ReputationExternalFailureV1 {
@@ -28643,12 +27615,10 @@ mod protocol {
                     .expect("domain-separated reputation request failure receipt is nonzero")
             }
         }
-
         impl sorafs_node::reputation::runtime::ReputationRuntimeProviderV1 for ReputationBrokerProvider {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -28659,12 +27629,10 @@ mod protocol {
                     .map_err(|error| self.external_failure(error))
             }
         }
-
         #[derive(Clone, Debug)]
         struct ReputationJournalBrokerCheckpoint {
             provider: ReputationBrokerProvider,
         }
-
         impl ReputationJournalBrokerCheckpoint {
             fn load_latest_raw(
                 &self,
@@ -28706,14 +27674,12 @@ mod protocol {
                     .inspect_err(|_| self.provider.session.poison())
             }
         }
-
         impl sorafs_node::reputation::runtime::ReputationRuntimeProviderV1
             for ReputationJournalBrokerCheckpoint
         {
             fn handle(&self) -> &str {
                 &self.provider.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -28725,7 +27691,6 @@ mod protocol {
                 )
             }
         }
-
         impl sorafs_node::reputation::runtime::ReputationJournalCheckpointRuntimeV1
             for ReputationJournalBrokerCheckpoint
         {
@@ -28746,7 +27711,6 @@ mod protocol {
                     .map_err(reputation_journal_checkpoint_error)?;
                 Ok(record)
             }
-
             fn compare_and_swap_latest(
                 &self,
                 expected_revision: Option<[u8; 32]>,
@@ -28843,19 +27807,16 @@ mod protocol {
                 Ok(())
             }
         }
-
         #[derive(Clone, Debug)]
         struct ReputationJournalBrokerSubmitter {
             provider: ReputationBrokerProvider,
         }
-
         impl sorafs_node::reputation::runtime::ReputationRuntimeProviderV1
             for ReputationJournalBrokerSubmitter
         {
             fn handle(&self) -> &str {
                 &self.provider.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -28867,7 +27828,6 @@ mod protocol {
                 )
             }
         }
-
         impl sorafs_node::reputation::runtime::ReputationJournalTransactionSubmitterV1
             for ReputationJournalBrokerSubmitter
         {
@@ -28899,7 +27859,6 @@ mod protocol {
                         false
                     })
             }
-
             fn submit(
                 &self,
                 request: &sorafs_node::reputation::runtime::ReputationJournalTransactionRequestV1,
@@ -28949,19 +27908,16 @@ mod protocol {
                 }
             }
         }
-
         #[derive(Clone, Debug)]
         struct ReputationThresholdBrokerSigner {
             provider: ReputationBrokerProvider,
         }
-
         impl sorafs_node::reputation::runtime::ReputationRuntimeProviderV1
             for ReputationThresholdBrokerSigner
         {
             fn handle(&self) -> &str {
                 &self.provider.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -28973,7 +27929,6 @@ mod protocol {
                 )
             }
         }
-
         impl sorafs_node::reputation::runtime::ReputationThresholdSignerClientV1
             for ReputationThresholdBrokerSigner
         {
@@ -29055,19 +28010,16 @@ mod protocol {
                 }
             }
         }
-
         #[derive(Clone, Debug)]
         struct ReputationGovernanceBrokerClient {
             provider: ReputationBrokerProvider,
         }
-
         impl sorafs_node::reputation::runtime::ReputationRuntimeProviderV1
             for ReputationGovernanceBrokerClient
         {
             fn handle(&self) -> &str {
                 &self.provider.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -29079,7 +28031,6 @@ mod protocol {
                 )
             }
         }
-
         impl sorafs_node::reputation::runtime::ReputationGovernanceDagClientV1
             for ReputationGovernanceBrokerClient
         {
@@ -29156,14 +28107,12 @@ mod protocol {
                 }
             }
         }
-
         #[derive(Clone)]
         struct BillingBrokerProvider {
             session: Arc<BrokerSession>,
             binding: ProviderBindingWireV1,
             metadata_digest: [u8; 32],
         }
-
         impl fmt::Debug for BillingBrokerProvider {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter
@@ -29172,7 +28121,6 @@ mod protocol {
                     .finish_non_exhaustive()
             }
         }
-
         impl BillingBrokerProvider {
             fn expected_qualification(
                 &self,
@@ -29189,7 +28137,6 @@ mod protocol {
                         ),
                 )
             }
-
             fn live_qualification(
                 &self,
             ) -> Result<
@@ -29219,7 +28166,6 @@ mod protocol {
                 }
                 Ok(expected)
             }
-
             fn call_unit(&self, operation: u16) -> Result<(), BrokerError> {
                 let payload = encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)?;
                 let result = self.session.call(
@@ -29232,7 +28178,6 @@ mod protocol {
                 self.session
                     .decode_operation_result::<()>(&result, operation)
             }
-
             fn ensure_network_id(
                 &self,
                 network_id: &iroha_data_model::NetworkId,
@@ -29242,7 +28187,6 @@ mod protocol {
                 }
                 Ok(())
             }
-
             fn adapter_identity(&self) -> Result<BillingAdapterIdentityWireV1, BrokerError> {
                 let payload = encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)?;
                 let result = self.session.call(
@@ -29264,7 +28208,6 @@ mod protocol {
                 }
                 Ok(identity)
             }
-
             fn signer_identity(&self) -> Result<BillingStatementSignerIdentityWireV1, BrokerError> {
                 let payload = encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1)?;
                 let result = self.session.call(
@@ -29292,7 +28235,6 @@ mod protocol {
                 }
                 Ok(identity)
             }
-
             fn publisher_identity(
                 &self,
             ) -> Result<BillingStatementPublisherIdentityWireV1, BrokerError> {
@@ -29327,7 +28269,6 @@ mod protocol {
                 }
                 Ok(identity)
             }
-
             fn lookup_publication_raw(
                 &self,
                 statement_id: [u8; 32],
@@ -29398,7 +28339,6 @@ mod protocol {
                     })
                     .transpose()
             }
-
             fn load_epoch_record(
                 &self,
                 operation: u16,
@@ -29480,7 +28420,6 @@ mod protocol {
                 Ok(record)
             }
         }
-
         fn billing_client_external_error(
             error: BrokerError,
         ) -> sorafs_node::hedging_billing_service::HedgingBillingExternalError {
@@ -29500,14 +28439,12 @@ mod protocol {
                 }
             }
         }
-
         impl sorafs_node::hedging_billing_service::HedgingBillingRuntimeProviderV1
             for BillingBrokerProvider
         {
             fn handle(&self) -> &str {
                 &self.binding.handle
             }
-
             fn qualification(
                 &self,
             ) -> Result<
@@ -29532,7 +28469,6 @@ mod protocol {
                 })
             }
         }
-
         impl sorafs_node::hedging_billing_service::HedgingBillingFinalizedQuery for BillingBrokerProvider {
             fn identity(
                 &self,
@@ -29549,7 +28485,6 @@ mod protocol {
                     })
                     .map_err(billing_client_external_error)
             }
-
             fn check_readiness(
                 &self,
             ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
@@ -29557,7 +28492,6 @@ mod protocol {
                 self.call_unit(OPERATION_BILLING_READINESS_V1)
                     .map_err(billing_client_external_error)
             }
-
             fn supplies_period_closes(&self) -> bool {
                 let payload = match encode_canonical(&(), MAX_BILLING_CONTROL_FRAME_BYTES_V1) {
                     Ok(payload) => payload,
@@ -29584,7 +28518,6 @@ mod protocol {
                         false
                     })
             }
-
             fn finalized_head(
                 &self,
             ) -> Result<
@@ -29616,7 +28549,6 @@ mod protocol {
                 })?;
                 Ok(head)
             }
-
             fn query_finalized_page(
                 &self,
                 position: sorafs_node::hedging_billing_service::HedgingBillingQueryPositionV1,
@@ -29676,7 +28608,6 @@ mod protocol {
                 }
                 Ok(page)
             }
-
             fn query_finalized_period_close(
                 &self,
                 period_end_unix: u64,
@@ -29732,7 +28663,6 @@ mod protocol {
                 Ok(close)
             }
         }
-
         impl sorafs_node::hedging_billing_service::HedgingBillingJournalVerifier for BillingBrokerProvider {
             fn identity(
                 &self,
@@ -29749,7 +28679,6 @@ mod protocol {
                     })
                     .map_err(billing_client_external_error)
             }
-
             fn check_readiness(
                 &self,
             ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
@@ -29757,7 +28686,6 @@ mod protocol {
                 self.call_unit(OPERATION_BILLING_READINESS_V1)
                     .map_err(billing_client_external_error)
             }
-
             fn verify_page(
                 &self,
                 network_id: &iroha_data_model::NetworkId,
@@ -29802,7 +28730,6 @@ mod protocol {
                     .decode_operation_result::<()>(&result, OPERATION_BILLING_VERIFY_PAGE_V1)
                     .map_err(billing_client_external_error)
             }
-
             fn verify_period_close(
                 &self,
                 network_id: &iroha_data_model::NetworkId,
@@ -29843,7 +28770,6 @@ mod protocol {
                     )
                     .map_err(billing_client_external_error)
             }
-
             fn verify_epoch_transition(
                 &self,
                 network_id: &iroha_data_model::NetworkId,
@@ -29888,7 +28814,6 @@ mod protocol {
                     .map_err(billing_client_external_error)
             }
         }
-
         impl sorafs_node::hedging_billing_service::BillingStatementRuntimeSigner for BillingBrokerProvider {
             fn identity(
                 &self,
@@ -29906,7 +28831,6 @@ mod protocol {
                     })
                     .map_err(billing_client_external_error)
             }
-
             fn check_readiness(
                 &self,
             ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
@@ -29914,7 +28838,6 @@ mod protocol {
                 self.call_unit(OPERATION_BILLING_READINESS_V1)
                     .map_err(billing_client_external_error)
             }
-
             fn sign_digest(
                 &self,
                 digest: [u8; 32],
@@ -29971,7 +28894,6 @@ mod protocol {
                 Ok(signed.signature)
             }
         }
-
         impl sorafs_node::hedging_billing_service::BillingStatementPublisher for BillingBrokerProvider {
             fn identity(
                 &self,
@@ -29990,7 +28912,6 @@ mod protocol {
                     })
                     .map_err(billing_client_external_error)
             }
-
             fn check_readiness(
                 &self,
             ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
@@ -29998,7 +28919,6 @@ mod protocol {
                 self.call_unit(OPERATION_BILLING_READINESS_V1)
                     .map_err(billing_client_external_error)
             }
-
             fn publish(
                 &self,
                 idempotency_key: [u8; 32],
@@ -30065,7 +28985,6 @@ mod protocol {
                 }
                 Ok(receipt)
             }
-
             fn lookup(
                 &self,
                 statement_id: [u8; 32],
@@ -30095,7 +29014,6 @@ mod protocol {
                 Ok(publication)
             }
         }
-
         impl sorafs_node::hedging_billing_service::BillingStatementAcknowledgementAuthority
             for BillingBrokerProvider
         {
@@ -30115,7 +29033,6 @@ mod protocol {
                     })
                     .map_err(billing_client_external_error)
             }
-
             fn check_readiness(
                 &self,
             ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
@@ -30123,7 +29040,6 @@ mod protocol {
                 self.call_unit(OPERATION_BILLING_READINESS_V1)
                     .map_err(billing_client_external_error)
             }
-
             fn verify(
                 &self,
                 statement: &sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1,
@@ -30156,7 +29072,6 @@ mod protocol {
                     )
                     .map_err(billing_client_external_error)
             }
-
             fn record(
                 &self,
                 statement: &sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1,
@@ -30227,7 +29142,6 @@ mod protocol {
                 })?;
                 Ok(recorded)
             }
-
             fn lookup(
                 &self,
                 statement_id: [u8; 32],
@@ -30276,7 +29190,6 @@ mod protocol {
                 Ok(acknowledgement)
             }
         }
-
         impl sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessStore
             for BillingBrokerProvider
         {
@@ -30287,7 +29200,6 @@ mod protocol {
                 self.call_unit(OPERATION_BILLING_READINESS_V1)
                     .map_err(billing_client_external_error)
             }
-
             fn load_latest(
                 &self,
             ) -> Result<
@@ -30297,7 +29209,6 @@ mod protocol {
                 self.load_epoch_record(OPERATION_BILLING_LOAD_LATEST_EPOCH_V1, None, false)
                     .map_err(billing_client_external_error)
             }
-
             fn load_epoch(
                 &self,
                 epoch_sequence: u64,
@@ -30308,7 +29219,6 @@ mod protocol {
                 self.load_epoch_record(OPERATION_BILLING_LOAD_EPOCH_V1, Some(epoch_sequence), false)
                     .map_err(billing_client_external_error)
             }
-
             fn compare_and_swap_latest(
                 &self,
                 expected_revision: Option<[u8; 32]>,
@@ -30398,7 +29308,6 @@ mod protocol {
                 Ok(())
             }
         }
-
         fn provider_ingest_resolver_error(
             error: BrokerError,
         ) -> sorafs_node::ProviderIngestCompletionSignerResolverErrorV1 {
@@ -30415,7 +29324,6 @@ mod protocol {
                 }
             }
         }
-
         fn provider_ingest_signer_error(
             error: BrokerError,
         ) -> sorafs_node::ProviderIngestCompletionSignerErrorV1 {
@@ -30432,7 +29340,6 @@ mod protocol {
                 }
             }
         }
-
         fn provider_ingest_checkpoint_error(
             error: BrokerError,
         ) -> sorafs_node::ProviderIngestCheckpointExternalErrorV1 {
@@ -30452,7 +29359,6 @@ mod protocol {
                 }
             }
         }
-
         fn reputation_journal_checkpoint_error(
             error: BrokerError,
         ) -> sorafs_node::reputation::runtime::ReputationJournalCheckpointExternalErrorV1 {
@@ -30468,7 +29374,6 @@ mod protocol {
                 | BrokerError::Conflict => Error::Rejected,
             }
         }
-
         fn provider_ingest_retention_error(
             error: BrokerError,
         ) -> iroha_core::query::provider_ingest_finalized::
@@ -30485,7 +29390,6 @@ mod protocol {
                 | BrokerError::Conflict => Error::Rejected,
             }
         }
-
         fn reputation_retention_error(
             error: BrokerError,
         ) -> iroha_core::query::reputation_finalized::
@@ -30502,7 +29406,6 @@ mod protocol {
                 | BrokerError::Conflict => Error::Rejected,
             }
         }
-
         fn redacted_provider_error(error: BrokerError) -> String {
             match error {
                 BrokerError::StaleOrRevoked => ERROR_STALE_OR_REVOKED.to_owned(),
@@ -30514,7 +29417,6 @@ mod protocol {
                 }
             }
         }
-
         fn registry_error(error: BrokerError) -> IrohaRuntimeProviderRegistryErrorV1 {
             match error {
                 BrokerError::Unavailable | BrokerError::Ambiguous => {
@@ -30528,7 +29430,6 @@ mod protocol {
                 }
             }
         }
-
         /// Resolve supported bindings through an explicitly selected endpoint.
         pub(super) fn resolve(
             bindings: &IrohaRuntimeProviderBindingsV1,
@@ -30561,7 +29462,6 @@ mod protocol {
                 requested_catalog.clone(),
             )
             .map_err(registry_error)?;
-
             let mut dependencies = IrohaRuntimeDeps::default();
             let mut appeal_finance_signers: Vec<
                 Arc<dyn iroha_torii::SoraFsAppealFinanceTransactionSigner>,
@@ -31667,7 +30567,6 @@ mod protocol {
             }
             Ok(dependencies)
         }
-
         /// Serve the stock catalog on the platform-fixed endpoint.
         pub(super) fn serve(
             bindings: &IrohaRuntimeProviderBindingsV1,
@@ -31680,26 +30579,6 @@ mod protocol {
                 Arc::new(RuntimeProviderBrokerLifecycleV1::new()),
             )
         }
-
-        /// Serve the stock catalog with caller-owned lifecycle controls.
-        pub(super) fn serve_with_lifecycle<R>(
-            bindings: &IrohaRuntimeProviderBindingsV1,
-            backends: RuntimeProviderBrokerBackendsV1,
-            lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
-            on_ready: R,
-        ) -> Result<(), RuntimeProviderBrokerServerErrorV1>
-        where
-            R: FnOnce(),
-        {
-            serve_with_policy_and_lifecycle(
-                bindings,
-                backends,
-                &EndpointPolicy::production(),
-                lifecycle,
-                on_ready,
-            )
-        }
-
         /// Serve the stock catalog with a fallible readiness publication.
         pub(super) fn serve_with_fallible_readiness<R>(
             bindings: &IrohaRuntimeProviderBindingsV1,
@@ -31718,7 +30597,6 @@ mod protocol {
                 on_ready,
             )
         }
-
         #[cfg(test)]
         fn set_socket_mode(path: &Path) -> io::Result<()> {
             use std::os::unix::fs::PermissionsExt as _;
@@ -31728,7 +30606,6 @@ mod protocol {
                 fs::Permissions::from_mode(STOCK_BROKER_SOCKET_MODE_V1),
             )
         }
-
         #[cfg(test)]
         mod tests {
             use std::{
@@ -31813,7 +30690,6 @@ mod protocol {
                 "transparency://sorafs/evidence-viewer/publisher-primary";
             const SERVER_TEST_BOOTLE_LANTERN_HANDLE: &str =
                 "runtime://sorafs/privacy/bootle-lantern-primary";
-
             fn test_network_id(byte: u8) -> NetworkId {
                 NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
                     iroha_data_model::block::BlockHeader,
@@ -31821,11 +30697,9 @@ mod protocol {
                     iroha_crypto::Hash::prehashed([byte; iroha_crypto::Hash::LENGTH]),
                 ))
             }
-
             fn server_test_network_id() -> NetworkId {
                 test_network_id(0x15)
             }
-
             struct ServerTestBootleLanternBackend {
                 revision: AtomicU64,
                 unavailable: AtomicBool,
@@ -31833,7 +30707,6 @@ mod protocol {
                 bindings: iroha_torii::privacy_issuance_api::
                     BootleLanternIssuanceRuntimeProviderBindingsV1,
             }
-
             impl ServerTestBootleLanternBackend {
                 fn new(
                     bindings: iroha_torii::privacy_issuance_api::
@@ -31847,14 +30720,12 @@ mod protocol {
                     }
                 }
             }
-
             impl crate::runtime_provider_broker::BootleLanternIssuanceBrokerBackendV1
                 for ServerTestBootleLanternBackend
             {
                 fn handle(&self) -> &str {
                     SERVER_TEST_BOOTLE_LANTERN_HANDLE
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -31873,7 +30744,6 @@ mod protocol {
                             TEST_POLICY_DIGEST,
                         ))
                 }
-
                 fn bindings(
                     &self,
                 ) -> Result<
@@ -31888,7 +30758,6 @@ mod protocol {
                     }
                     Ok(self.bindings)
                 }
-
                 fn authenticate(
                     &self,
                     opaque_credential: &[u8],
@@ -31923,7 +30792,6 @@ mod protocol {
                             expires_at_height,
                         })
                 }
-
                 fn prepare_authorization(
                     &self,
                     _: &iroha_data_model::privacy::PrivacyStatementContextV1,
@@ -31940,7 +30808,6 @@ mod protocol {
                 >{
                     panic!("qualification-only adversarial backend must not issue")
                 }
-
                 fn validate_request(
                     &self,
                     _: &iroha_data_model::privacy::PrivacyStatementContextV1,
@@ -31956,7 +30823,6 @@ mod protocol {
                 > {
                     panic!("qualification-only adversarial backend must not validate")
                 }
-
                 fn issue_validated(
                     &self,
                     _: &iroha_data_model::privacy::PrivacyStatementContextV1,
@@ -31975,19 +30841,16 @@ mod protocol {
                     panic!("qualification-only adversarial backend must not issue")
                 }
             }
-
             #[derive(Debug, Default)]
             struct ServerTestEvidenceTransparencyPublisher {
                 compare_calls: AtomicU64,
             }
-
             impl sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderV1
                 for ServerTestEvidenceTransparencyPublisher
             {
                 fn handle(&self) -> &str {
                     SERVER_TEST_EVIDENCE_TRANSPARENCY_PUBLISHER_HANDLE
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -32003,7 +30866,6 @@ mod protocol {
                     )
                 }
             }
-
             impl sorafs_node::evidence_viewer::transparency_producer::
                 EvidenceViewerTransparencyPublisherV1
                 for ServerTestEvidenceTransparencyPublisher
@@ -32011,7 +30873,6 @@ mod protocol {
                 fn public_key(&self) -> [u8; 32] {
                     TEST_SIGNER_KEY
                 }
-
                 fn load_head(
                     &self,
                 ) -> Result<
@@ -32024,7 +30885,6 @@ mod protocol {
                 > {
                     Ok(None)
                 }
-
                 fn compare_and_publish(
                     &self,
                     _body: &sorafs_node::evidence_viewer::transparency_producer::
@@ -32041,13 +30901,11 @@ mod protocol {
                     )
                 }
             }
-
             #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
             struct NestedDecodeBudgetProbeV1 {
                 first: Vec<u8>,
                 second: Vec<u8>,
             }
-
             #[test]
             fn decode_policies_are_explicit_and_cover_supported_operation_frames() {
                 let tiny = decode_resource_budget(
@@ -32102,7 +30960,6 @@ mod protocol {
                         panic!("operation {operation} exact supported frame must budget: {error:?}")
                     });
                 }
-
                 for (operation, supported_limit, expected_policy) in [
                     (
                         OPERATION_SIGN_V1,
@@ -32193,7 +31050,6 @@ mod protocol {
                         "operation {operation} rejects cap + 1 before decode allocation"
                     );
                 }
-
                 decode_resource_budget(
                     MAX_PROVIDER_INGEST_SOURCE_PLAN_BYTES_V1,
                     MAX_PROVIDER_INGEST_SOURCE_PLAN_BYTES_V1,
@@ -32233,7 +31089,6 @@ mod protocol {
                     "amplification arithmetic must fail closed"
                 );
             }
-
             #[test]
             fn cumulative_admission_rejects_layers_that_individually_fit() {
                 let policy =
@@ -32260,7 +31115,6 @@ mod protocol {
                     Err(BrokerError::Protocol)
                 );
             }
-
             fn assert_exact_maximal_phase_profile_without_allocation(
                 operation: u16,
                 frame_bytes: usize,
@@ -32342,7 +31196,6 @@ mod protocol {
                     "the audited profile's exact cumulative boundary rejects one extra byte"
                 );
             }
-
             #[test]
             fn billing_publish_deepest_phase_profile_fits_exact_limit_without_allocation() {
                 assert_eq!(BILLING_PUBLISH_DEEPEST_PHASES_V1.encoded_copies, 12);
@@ -32354,7 +31207,6 @@ mod protocol {
                     BILLING_PUBLISH_DEEPEST_PHASES_V1,
                 );
             }
-
             #[test]
             fn reputation_threshold_deepest_phase_profile_fits_exact_limit_without_allocation() {
                 assert_eq!(REPUTATION_THRESHOLD_DEEPEST_PHASES_V1.encoded_copies, 9);
@@ -32366,7 +31218,6 @@ mod protocol {
                     REPUTATION_THRESHOLD_DEEPEST_PHASES_V1,
                 );
             }
-
             #[test]
             fn provider_checkpoint_maximal_phase_sequence_fits_without_allocation() {
                 let policy = PROVIDER_INGEST_CHECKPOINT_DECODE_POLICY_V1;
@@ -32410,7 +31261,6 @@ mod protocol {
                     "the explicit full-call phase inventory remains a hard cumulative ceiling"
                 );
             }
-
             #[test]
             fn compact_server_sequence_exceeds_live_peak_but_fits_cumulative_cap() {
                 let state = prepare_server_state(&server_test_catalog(), server_test_backends())
@@ -32488,7 +31338,6 @@ mod protocol {
                 );
                 assert!(consumed <= compact_policy.max_cumulative_bytes);
             }
-
             #[test]
             fn decode_limits_reject_allocation_bombs_depth_and_trailing_bytes() {
                 let bomb = NestedDecodeBudgetProbeV1 {
@@ -32518,7 +31367,6 @@ mod protocol {
                     Err(BrokerError::Protocol)
                 );
                 drop(allocation_scope);
-
                 let nested = vec![vec![vec![0xA5_u8]]];
                 let nested_bytes = norito::to_bytes(&nested).expect("encode deep value");
                 let depth_policy = DecodeResourcePolicyV1::new(
@@ -32545,7 +31393,6 @@ mod protocol {
                     Err(BrokerError::Protocol)
                 );
                 drop(depth_scope);
-
                 let mut trailing = norito::to_bytes(&7_u64).expect("encode canonical integer");
                 trailing.push(0);
                 assert_eq!(
@@ -32557,7 +31404,6 @@ mod protocol {
                     Err(BrokerError::Protocol)
                 );
             }
-
             #[test]
             fn operation_policies_decode_actual_request_and_response_frames() {
                 let binding = signer_binding();
@@ -32585,7 +31431,6 @@ mod protocol {
                 );
                 let limit = operation_frame_limit(OPERATION_SIGN_V1);
                 let policy = operation_decode_policy(OPERATION_SIGN_V1);
-
                 let request_frame = encode_frame(FRAME_KIND_OPERATION_REQUEST_V1, &request, limit)
                     .expect("encode request frame");
                 let request_pool = Arc::new(DecodeResourcePoolV1::new(policy.max_composed_bytes));
@@ -32607,7 +31452,6 @@ mod protocol {
                 .expect("decode actual request frame");
                 validate_operation_request(&decoded_request).expect("validate decoded request");
                 drop(request_scope);
-
                 let response_frame =
                     encode_frame(FRAME_KIND_OPERATION_RESPONSE_V1, &response, limit)
                         .expect("encode response frame");
@@ -32632,7 +31476,6 @@ mod protocol {
                     .expect("validate decoded response");
                 drop(response_scope);
             }
-
             #[test]
             fn outbound_admission_is_process_wide_and_follows_result_lifetime() {
                 let operation = OPERATION_PROVIDER_INGEST_CHECKPOINT_COMPARE_AND_SWAP_V1;
@@ -32647,7 +31490,6 @@ mod protocol {
                         operation_frame_limit(operation),
                     )
                     .expect("account large outbound payload before encoding");
-
                 let attempted_encode = Arc::new(AtomicBool::new(false));
                 let attempted_encode_thread = Arc::clone(&attempted_encode);
                 let pool_thread = Arc::clone(&pool);
@@ -32663,7 +31505,6 @@ mod protocol {
                     !attempted_encode.load(Ordering::Acquire),
                     "a concurrent large request must be rejected before canonical encoding"
                 );
-
                 let result = ScrubbedBytes::with_decode_admission(vec![0xA5], first);
                 assert_eq!(
                     pool.used_bytes.load(Ordering::Acquire),
@@ -32672,13 +31513,11 @@ mod protocol {
                 drop(result);
                 assert_eq!(pool.used_bytes.load(Ordering::Acquire), 0);
             }
-
             struct ServerTestPrivacyCyclePrfProvider {
                 revision: AtomicU64,
                 drift_on_probe: bool,
                 derive_calls: AtomicU64,
             }
-
             impl ServerTestPrivacyCyclePrfProvider {
                 const fn exact() -> Self {
                     Self {
@@ -32687,7 +31526,6 @@ mod protocol {
                         derive_calls: AtomicU64::new(0),
                     }
                 }
-
                 const fn drifting() -> Self {
                     Self {
                         revision: AtomicU64::new(7),
@@ -32696,12 +31534,10 @@ mod protocol {
                     }
                 }
             }
-
             impl sorafs_node::ProductionTransparencyRuntimeProviderV1 for ServerTestPrivacyCyclePrfProvider {
                 fn handle(&self) -> &str {
                     SERVER_TEST_PRIVACY_PRF_HANDLE
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<sorafs_node::TransparencyRuntimeProviderQualificationV1, String>
@@ -32719,7 +31555,6 @@ mod protocol {
                     )
                 }
             }
-
             impl sorafs_node::PrivacyCyclePrfProviderV1 for ServerTestPrivacyCyclePrfProvider {
                 fn derive_cycle_output(
                     &self,
@@ -32733,7 +31568,6 @@ mod protocol {
                         .map_err(|_| sorafs_node::PrivacyCyclePrfProviderErrorV1::Internal)
                 }
             }
-
             struct ServerTestPrivacyReleaseAnchor {
                 handle: &'static str,
                 revision: AtomicU64,
@@ -32742,7 +31576,6 @@ mod protocol {
                 compare_and_set_calls: AtomicU64,
                 skip_write: bool,
             }
-
             impl ServerTestPrivacyReleaseAnchor {
                 fn exact() -> Self {
                     Self {
@@ -32754,21 +31587,18 @@ mod protocol {
                         skip_write: false,
                     }
                 }
-
                 fn drifting() -> Self {
                     Self {
                         drift_on_probe: true,
                         ..Self::exact()
                     }
                 }
-
                 fn substituted() -> Self {
                     Self {
                         handle: "governance-dag://sorafs/transparency/release-anchor-substitute",
                         ..Self::exact()
                     }
                 }
-
                 fn without_readback() -> Self {
                     Self {
                         skip_write: true,
@@ -32776,12 +31606,10 @@ mod protocol {
                     }
                 }
             }
-
             impl sorafs_node::ProductionTransparencyRuntimeProviderV1 for ServerTestPrivacyReleaseAnchor {
                 fn handle(&self) -> &str {
                     self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<sorafs_node::TransparencyRuntimeProviderQualificationV1, String>
@@ -32799,7 +31627,6 @@ mod protocol {
                     )
                 }
             }
-
             impl sorafs_node::PrivacyReleaseAnchorV1 for ServerTestPrivacyReleaseAnchor {
                 fn finalized_head(
                     &self,
@@ -32817,7 +31644,6 @@ mod protocol {
                     }
                     Ok(head)
                 }
-
                 fn compare_and_set_finalized_head(
                     &self,
                     expected: sorafs_node::PrivacyReleaseAnchorHeadV1,
@@ -32838,7 +31664,6 @@ mod protocol {
                     Ok(())
                 }
             }
-
             struct ServerTestTransparencyLeaderLeaseProvider {
                 handle: &'static str,
                 revision: AtomicU64,
@@ -32848,7 +31673,6 @@ mod protocol {
                 renew_calls: AtomicU64,
                 release_calls: AtomicU64,
             }
-
             impl ServerTestTransparencyLeaderLeaseProvider {
                 fn exact() -> Self {
                     Self {
@@ -32861,35 +31685,30 @@ mod protocol {
                         release_calls: AtomicU64::new(0),
                     }
                 }
-
                 fn drifting() -> Self {
                     Self {
                         drift_on_probe: true,
                         ..Self::exact()
                     }
                 }
-
                 fn substituted() -> Self {
                     Self {
                         handle: "sealed-cas://sorafs/transparency/leader-substitute",
                         ..Self::exact()
                     }
                 }
-
                 fn lease_id(fencing_token: u64) -> [u8; 32] {
                     let mut lease_id = [0x7A; 32];
                     lease_id[..8].copy_from_slice(&fencing_token.to_le_bytes());
                     lease_id
                 }
             }
-
             impl sorafs_node::ProductionTransparencyRuntimeProviderV1
                 for ServerTestTransparencyLeaderLeaseProvider
             {
                 fn handle(&self) -> &str {
                     self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<sorafs_node::TransparencyRuntimeProviderQualificationV1, String>
@@ -32907,7 +31726,6 @@ mod protocol {
                     )
                 }
             }
-
             impl sorafs_node::TransparencyLeaderLeaseProviderV1 for ServerTestTransparencyLeaderLeaseProvider {
                 fn acquire(
                     &self,
@@ -32937,7 +31755,6 @@ mod protocol {
                     *active = Some(grant.clone());
                     Ok(grant)
                 }
-
                 fn renew(
                     &self,
                     request: &sorafs_node::TransparencyLeaderLeaseRenewRequestV1,
@@ -32966,7 +31783,6 @@ mod protocol {
                     *active = Some(grant.clone());
                     Ok(grant)
                 }
-
                 fn release(
                     &self,
                     request: &sorafs_node::TransparencyLeaderLeaseReleaseRequestV1,
@@ -32991,7 +31807,6 @@ mod protocol {
                     Ok(receipt)
                 }
             }
-
             struct ServerTestFencedPrivacyPublisher {
                 handle: &'static str,
                 receipt_handle: &'static str,
@@ -32999,7 +31814,6 @@ mod protocol {
                 drift_on_probe: bool,
                 compare_and_append_calls: AtomicU64,
             }
-
             impl ServerTestFencedPrivacyPublisher {
                 const fn exact() -> Self {
                     Self {
@@ -33010,21 +31824,18 @@ mod protocol {
                         compare_and_append_calls: AtomicU64::new(0),
                     }
                 }
-
                 const fn drifting() -> Self {
                     Self {
                         drift_on_probe: true,
                         ..Self::exact()
                     }
                 }
-
                 const fn substituted() -> Self {
                     Self {
                         handle: "governance-cas://sorafs/transparency/privacy-substitute",
                         ..Self::exact()
                     }
                 }
-
                 const fn substituted_receipt() -> Self {
                     Self {
                         receipt_handle: "governance-cas://sorafs/transparency/privacy-substitute",
@@ -33032,18 +31843,15 @@ mod protocol {
                     }
                 }
             }
-
             impl fmt::Debug for ServerTestFencedPrivacyPublisher {
                 fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                     formatter.write_str("ServerTestFencedPrivacyPublisher(<runtime-only>)")
                 }
             }
-
             impl sorafs_node::FencedTransparencyPublisherV1 for ServerTestFencedPrivacyPublisher {
                 fn handle(&self) -> &str {
                     self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String>
@@ -33060,7 +31868,6 @@ mod protocol {
                         ),
                     )
                 }
-
                 fn compare_and_append_privacy(
                     &self,
                     request: &sorafs_node::FencedPrivacyPublicationRequestV1,
@@ -33079,7 +31886,6 @@ mod protocol {
                     )
                 }
             }
-
             struct ServerTestFencedPrivacyHeadReader {
                 handle: &'static str,
                 revision: AtomicU64,
@@ -33088,7 +31894,6 @@ mod protocol {
                 substitute_proof: bool,
                 read_calls: AtomicU64,
             }
-
             impl ServerTestFencedPrivacyHeadReader {
                 const fn exact() -> Self {
                     Self {
@@ -33100,28 +31905,24 @@ mod protocol {
                         read_calls: AtomicU64::new(0),
                     }
                 }
-
                 const fn drifting() -> Self {
                     Self {
                         drift_on_probe: true,
                         ..Self::exact()
                     }
                 }
-
                 const fn drifting_after_read() -> Self {
                     Self {
                         drift_after_read: true,
                         ..Self::exact()
                     }
                 }
-
                 const fn substituted() -> Self {
                     Self {
                         handle: "governance-cas://sorafs/transparency/privacy-substitute",
                         ..Self::exact()
                     }
                 }
-
                 const fn substituted_proof() -> Self {
                     Self {
                         substitute_proof: true,
@@ -33129,20 +31930,17 @@ mod protocol {
                     }
                 }
             }
-
             impl fmt::Debug for ServerTestFencedPrivacyHeadReader {
                 fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                     formatter.write_str("ServerTestFencedPrivacyHeadReader(<runtime-only>)")
                 }
             }
-
             impl sorafs_node::FencedTransparencyAuthoritativeHeadReaderV1
                 for ServerTestFencedPrivacyHeadReader
             {
                 fn handle(&self) -> &str {
                     self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String>
@@ -33159,7 +31957,6 @@ mod protocol {
                         ),
                     )
                 }
-
                 fn read_authoritative_head_with_ancestry(
                     &self,
                     required_ancestors: &[sorafs_node::FencedTransparencyTargetHeadV1],
@@ -33191,12 +31988,10 @@ mod protocol {
                     Ok(proof)
                 }
             }
-
             struct ServerTestAcmeClient {
                 revision: AtomicU64,
                 drift_on_probe: bool,
             }
-
             impl iroha_torii::sorafs::gateway::AcmeClient for ServerTestAcmeClient {
                 fn qualification(
                     &self,
@@ -33216,7 +32011,6 @@ mod protocol {
                         test_marked: false,
                     })
                 }
-
                 fn order_certificate(
                     &self,
                     _order: &iroha_torii::sorafs::gateway::CertificateOrder,
@@ -33227,12 +32021,10 @@ mod protocol {
                     Err(iroha_torii::sorafs::gateway::AcmeClientError::Rejected)
                 }
             }
-
             struct ServerTestComplianceTransport {
                 revision: AtomicU64,
                 drift_on_probe: bool,
             }
-
             impl iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport
                 for ServerTestComplianceTransport
             {
@@ -33256,7 +32048,6 @@ mod protocol {
                         },
                     )
                 }
-
                 fn resolve(
                     &self,
                     _hostname: &str,
@@ -33268,7 +32059,6 @@ mod protocol {
                     Err(iroha_torii::sorafs::gateway::
                         GatewayComplianceError::FeedTransportOperationFailed)
                 }
-
                 fn fetch(
                     &self,
                     _request: &iroha_torii::sorafs::gateway::GatewayComplianceFetchRequest,
@@ -33280,27 +32070,23 @@ mod protocol {
                         GatewayComplianceError::FeedTransportOperationFailed)
                 }
             }
-
             #[derive(Debug)]
             struct ServerTestPorReplayArchive {
                 binding: sorafs_node::PorFinalizedReplayArchiveBindingV1,
                 later_binding: Option<sorafs_node::PorFinalizedReplayArchiveBindingV1>,
                 binding_calls: AtomicU64,
             }
-
             #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
             struct PorReplayArchiveChallengeStateFixtureV1 {
                 challenge: sorafs_manifest::por::PorChallengeV1,
                 proof_digest: Option<[u8; 32]>,
                 proof_submitted_at: Option<u64>,
             }
-
             #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
             #[norito(schema_name = "sorafs_node::por::PorFinalizedReplayArchiveRecordV1")]
             struct PorReplayArchiveRecordFixtureV1 {
                 finalized: PorReplayArchiveFinalizedStateFixtureV1,
             }
-
             #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
             struct PorReplayArchiveFinalizedStateFixtureV1 {
                 state: PorReplayArchiveChallengeStateFixtureV1,
@@ -33310,7 +32096,6 @@ mod protocol {
                 reputation_sequence: u64,
                 reputation_terminal: iroha_data_model::sorafs::reputation::PorTerminalOutcomeV1,
             }
-
             impl ServerTestPorReplayArchive {
                 fn exact(binding: sorafs_node::PorFinalizedReplayArchiveBindingV1) -> Self {
                     Self {
@@ -33319,7 +32104,6 @@ mod protocol {
                         binding_calls: AtomicU64::new(0),
                     }
                 }
-
                 fn drifting(
                     binding: sorafs_node::PorFinalizedReplayArchiveBindingV1,
                     later_binding: sorafs_node::PorFinalizedReplayArchiveBindingV1,
@@ -33331,12 +32115,10 @@ mod protocol {
                     }
                 }
             }
-
             impl sorafs_node::PorFinalizedReplayArchiveV1 for ServerTestPorReplayArchive {
                 fn runtime_handle(&self) -> &str {
                     SERVER_TEST_POR_ARCHIVE_HANDLE
                 }
-
                 fn binding(
                     &self,
                 ) -> Result<
@@ -33350,14 +32132,12 @@ mod protocol {
                         self.later_binding.unwrap_or(self.binding)
                     })
                 }
-
                 fn check_readiness(
                     &self,
                 ) -> Result<(), sorafs_node::PorFinalizedReplayArchiveExternalErrorV1>
                 {
                     Ok(())
                 }
-
                 fn current_head(
                     &self,
                 ) -> Result<
@@ -33366,7 +32146,6 @@ mod protocol {
                 > {
                     Ok(None)
                 }
-
                 fn append(
                     &self,
                     _record: &sorafs_node::PorFinalizedReplayArchiveRecordV1,
@@ -33377,7 +32156,6 @@ mod protocol {
                 > {
                     Err(sorafs_node::PorFinalizedReplayArchiveExternalErrorV1::Rejected)
                 }
-
                 fn lookup(
                     &self,
                     _challenge_id: [u8; 32],
@@ -33390,20 +32168,17 @@ mod protocol {
                     Err(sorafs_node::PorFinalizedReplayArchiveExternalErrorV1::Rejected)
                 }
             }
-
             #[derive(Debug)]
             struct ServerTestPopRegistry {
                 revision: AtomicU64,
                 drift_on_probe: bool,
             }
-
             impl iroha_torii::sorafs::pop_api::PopCredentialRuntimeProviderRegistryV1
                 for ServerTestPopRegistry
             {
                 fn handle(&self) -> &str {
                     SERVER_TEST_POP_HANDLE
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -33421,7 +32196,6 @@ mod protocol {
                             TEST_POLICY_DIGEST,
                         ))
                 }
-
                 fn resolve(
                     &self,
                     _bindings: &iroha_torii::sorafs::pop_api::
@@ -33434,15 +32208,12 @@ mod protocol {
                         PopCredentialRuntimeProviderRegistryErrorV1::Unavailable)
                 }
             }
-
             #[derive(Debug)]
             struct ServerTestGovernanceSigner;
-
             impl sorafs_node::GovernanceDagRuntimeSigner for ServerTestGovernanceSigner {
                 fn handle(&self) -> &str {
                     SERVER_TEST_SIGNER_HANDLE
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String>
@@ -33454,15 +32225,12 @@ mod protocol {
                         ),
                     )
                 }
-
                 fn publisher_peer_id(&self) -> &[u8] {
                     b"12D3KooWRuntimeBrokerServerPrimary"
                 }
-
                 fn public_key(&self) -> [u8; 32] {
                     TEST_SIGNER_KEY
                 }
-
                 fn sign(
                     &self,
                     _purpose: sorafs_node::GovernanceDagSigningPurposeV1,
@@ -33471,19 +32239,16 @@ mod protocol {
                     Ok([0xA5; 64])
                 }
             }
-
             #[derive(Debug)]
             struct ServerTestAppealFinanceSigner {
                 sign_calls: AtomicU64,
             }
-
             impl ServerTestAppealFinanceSigner {
                 const fn exact() -> Self {
                     Self {
                         sign_calls: AtomicU64::new(0),
                     }
                 }
-
                 fn keypair(&self) -> iroha_crypto::KeyPair {
                     iroha_crypto::KeyPair::try_from_seed(
                         vec![0x96; 32],
@@ -33492,19 +32257,16 @@ mod protocol {
                     .expect("derive appeal-finance transaction signer test key")
                 }
             }
-
             impl iroha_torii::SoraFsAppealFinanceTransactionSigner for ServerTestAppealFinanceSigner {
                 fn handle(&self) -> &str {
                     SERVER_TEST_APPEAL_FINANCE_SIGNER_HANDLE
                 }
-
                 fn public_key(
                     &self,
                 ) -> Result<iroha_crypto::PublicKey, iroha_torii::SoraFsAppealFinanceSigningError>
                 {
                     Ok(self.keypair().public_key().clone())
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -33520,7 +32282,6 @@ mod protocol {
                             ),
                     )
                 }
-
                 fn sign(
                     &self,
                     payload: iroha_data_model::transaction::TransactionPayload,
@@ -33535,7 +32296,6 @@ mod protocol {
                         .map_err(|_| iroha_torii::SoraFsAppealFinanceSigningError::Refused)
                 }
             }
-
             fn server_test_request_auth_keypair() -> iroha_crypto::KeyPair {
                 iroha_crypto::KeyPair::try_from_seed(
                     vec![0x83; 32],
@@ -33543,7 +32303,6 @@ mod protocol {
                 )
                 .expect("request-auth test keypair")
             }
-
             fn server_test_request_auth_public_key() -> [u8; 32] {
                 let keypair = server_test_request_auth_keypair();
                 let public_key = keypair.public_key().to_bytes().1;
@@ -33551,7 +32310,6 @@ mod protocol {
                 bytes.copy_from_slice(&public_key);
                 bytes
             }
-
             fn server_test_request_ingress_binding(
                 public_key: [u8; 32],
             ) -> sorafs_node::GovernanceDagRequestIngressBindingV1 {
@@ -33572,7 +32330,6 @@ mod protocol {
                 )
                 .expect("request-auth test ingress binding must be valid")
             }
-
             fn server_test_request_ingress_qualification(
                 public_key: [u8; 32],
             ) -> sorafs_node::GovernanceDagRequestIngressQualificationV1 {
@@ -33588,13 +32345,11 @@ mod protocol {
                 )
                 .expect("request-auth test ingress qualification must be valid")
             }
-
             #[derive(Debug)]
             struct ServerTestGovernanceRequestAuthenticator {
                 public_key_override: Option<[u8; 32]>,
                 nonce: AtomicU64,
             }
-
             impl ServerTestGovernanceRequestAuthenticator {
                 const fn exact() -> Self {
                     Self {
@@ -33602,25 +32357,21 @@ mod protocol {
                         nonce: AtomicU64::new(1),
                     }
                 }
-
                 const fn with_public_key(public_key: [u8; 32]) -> Self {
                     Self {
                         public_key_override: Some(public_key),
                         nonce: AtomicU64::new(1),
                     }
                 }
-
                 fn request_auth_public_key(&self) -> [u8; 32] {
                     self.public_key_override
                         .unwrap_or_else(server_test_request_auth_public_key)
                 }
             }
-
             impl sorafs_node::GovernanceDagRequestAuthenticator for ServerTestGovernanceRequestAuthenticator {
                 fn handle(&self) -> &str {
                     SERVER_TEST_IPFS_AUTH_HANDLE
                 }
-
                 fn ingress_qualification(
                     &self,
                 ) -> Result<sorafs_node::GovernanceDagRequestIngressQualificationV1, String>
@@ -33629,7 +32380,6 @@ mod protocol {
                         self.request_auth_public_key(),
                     ))
                 }
-
                 fn authenticate(
                     &self,
                     request: &sorafs_node::GovernanceDagCanonicalRequestV1,
@@ -33675,14 +32425,12 @@ mod protocol {
                     .map_err(str::to_owned)
                 }
             }
-
             #[derive(Clone, Copy)]
             enum ServerTestNativeSignerMode {
                 Exact,
                 InvalidSignature,
                 DriftAfterSign,
             }
-
             struct ServerTestNativeSigner {
                 role: iroha_torii::SorafsNativeTransactionSignerRoleV1,
                 handle: &'static str,
@@ -33691,7 +32439,6 @@ mod protocol {
                 sign_calls: AtomicU64,
                 signed: AtomicBool,
             }
-
             impl ServerTestNativeSigner {
                 fn exact(role: iroha_torii::SorafsNativeTransactionSignerRoleV1) -> Self {
                     Self {
@@ -33703,7 +32450,6 @@ mod protocol {
                         signed: AtomicBool::new(false),
                     }
                 }
-
                 fn with_role(
                     mut self,
                     role: iroha_torii::SorafsNativeTransactionSignerRoleV1,
@@ -33711,17 +32457,14 @@ mod protocol {
                     self.role = role;
                     self
                 }
-
                 fn with_seed(mut self, seed: u8) -> Self {
                     self.seed = seed;
                     self
                 }
-
                 fn with_mode(mut self, mode: ServerTestNativeSignerMode) -> Self {
                     self.mode = mode;
                     self
                 }
-
                 fn keypair(&self) -> iroha_crypto::KeyPair {
                     iroha_crypto::KeyPair::try_from_seed(
                         vec![self.seed; 32],
@@ -33729,7 +32472,6 @@ mod protocol {
                     )
                     .expect("derive native transaction signer test key")
                 }
-
                 fn binding(&self) -> iroha_torii::SorafsNativeTransactionSignerBindingV1 {
                     let public_key = self.keypair().public_key().clone();
                     iroha_torii::SorafsNativeTransactionSignerBindingV1::try_new(
@@ -33744,7 +32486,6 @@ mod protocol {
                     )
                     .expect("construct native transaction signer test binding")
                 }
-
                 fn sign_payload(
                     &self,
                     payload: iroha_data_model::transaction::TransactionPayload,
@@ -33780,7 +32521,6 @@ mod protocol {
                     Ok(signed)
                 }
             }
-
             fn native_test_handle(
                 role: iroha_torii::SorafsNativeTransactionSignerRoleV1,
             ) -> &'static str {
@@ -33799,7 +32539,6 @@ mod protocol {
                     }
                 }
             }
-
             const fn native_test_seed(
                 role: iroha_torii::SorafsNativeTransactionSignerRoleV1,
             ) -> u8 {
@@ -33810,20 +32549,16 @@ mod protocol {
                     iroha_torii::SorafsNativeTransactionSignerRoleV1::Orderbook => 0x94,
                 }
             }
-
             impl iroha_torii::SorafsNativeTransactionSignerProviderV1 for ServerTestNativeSigner {
                 fn role(&self) -> iroha_torii::SorafsNativeTransactionSignerRoleV1 {
                     self.role
                 }
-
                 fn handle(&self) -> &str {
                     self.handle
                 }
-
                 fn authority(&self) -> iroha_data_model::account::AccountId {
                     iroha_data_model::account::AccountId::new(self.keypair().public_key().clone())
                 }
-
                 fn public_key(
                     &self,
                 ) -> Result<
@@ -33832,7 +32567,6 @@ mod protocol {
                 > {
                     Ok(self.keypair().public_key().clone())
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -33852,7 +32586,6 @@ mod protocol {
                     )
                 }
             }
-
             macro_rules! impl_server_test_native_signer {
                 ($trait_name:ident, $error:ident) => {
                     impl iroha_torii::$trait_name for ServerTestNativeSigner {
@@ -33869,7 +32602,6 @@ mod protocol {
                     }
                 };
             }
-
             impl_server_test_native_signer!(
                 SoraFsProofOutcomeTransactionSigner,
                 SoraFsProofOutcomeSigningError
@@ -33886,7 +32618,6 @@ mod protocol {
                 SoraFsOrderbookTransactionSigner,
                 SoraFsOrderbookTransactionSigningError
             );
-
             #[derive(Clone, Copy, Debug)]
             enum ServerTestModerationTransactionSignerMode {
                 Exact,
@@ -33895,7 +32626,6 @@ mod protocol {
                 DriftAfterSign,
                 DriftOnSecondQualification,
             }
-
             #[derive(Debug)]
             struct ServerTestModerationTransactionSigner {
                 handle: String,
@@ -33905,7 +32635,6 @@ mod protocol {
                 sign_calls: AtomicU64,
                 signed: AtomicBool,
             }
-
             impl ServerTestModerationTransactionSigner {
                 fn exact() -> Self {
                     Self {
@@ -33917,22 +32646,18 @@ mod protocol {
                         signed: AtomicBool::new(false),
                     }
                 }
-
                 fn with_handle(mut self, handle: impl Into<String>) -> Self {
                     self.handle = handle.into();
                     self
                 }
-
                 fn with_revision(self, revision: u64) -> Self {
                     self.revision.store(revision, Ordering::Release);
                     self
                 }
-
                 fn with_mode(mut self, mode: ServerTestModerationTransactionSignerMode) -> Self {
                     self.mode = mode;
                     self
                 }
-
                 fn keypair(&self) -> iroha_crypto::KeyPair {
                     iroha_crypto::KeyPair::try_from_seed(
                         vec![0x95; 32],
@@ -33941,14 +32666,12 @@ mod protocol {
                     .expect("derive moderation transaction signer test key")
                 }
             }
-
             impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
                 for ServerTestModerationTransactionSigner
             {
                 fn handle(&self) -> &str {
                     &self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -33975,7 +32698,6 @@ mod protocol {
                     )
                 }
             }
-
             impl iroha_torii::sorafs::moderation_runtime::ModerationSignedTransactionSignerV1
                 for ServerTestModerationTransactionSigner
             {
@@ -34061,7 +32783,6 @@ mod protocol {
                     Ok(signed)
                 }
             }
-
             #[derive(Clone, Copy, Debug)]
             enum ServerTestModerationDeliveryMode {
                 Exact,
@@ -34072,7 +32793,6 @@ mod protocol {
                 DriftOnSecondQualification,
                 InvalidReceipt,
             }
-
             #[derive(Debug)]
             struct ServerTestModerationCheckpointStore {
                 handle: String,
@@ -34091,7 +32811,6 @@ mod protocol {
                 expected_statement_digest: [u8; 32],
                 attest_calls: AtomicU64,
             }
-
             impl ServerTestModerationCheckpointStore {
                 fn from_fixture(
                     fixture: &sorafs_node::moderation_orchestrator::
@@ -34109,14 +32828,12 @@ mod protocol {
                     }
                 }
             }
-
             impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
                 for ServerTestModerationCheckpointStore
             {
                 fn handle(&self) -> &str {
                     &self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -34126,14 +32843,12 @@ mod protocol {
                     Ok(self.qualification)
                 }
             }
-
             impl sorafs_node::moderation_orchestrator::ModerationCheckpointStoreV1
                 for ServerTestModerationCheckpointStore
             {
                 fn attestation_public_key(&self) -> [u8; 32] {
                     self.attestation_public_key
                 }
-
                 fn load_latest(
                     &self,
                 ) -> Result<
@@ -34146,7 +32861,6 @@ mod protocol {
                         .expect("moderation checkpoint fixture lock")
                         .clone())
                 }
-
                 fn compare_and_swap_latest(
                     &self,
                     expected_revision: Option<[u8; 32]>,
@@ -34168,7 +32882,6 @@ mod protocol {
                     *current = Some(next.clone());
                     Ok(())
                 }
-
                 fn attest_terminal_set(
                     &self,
                     statement: &sorafs_node::moderation_orchestrator::
@@ -34206,7 +32919,6 @@ mod protocol {
                     })
                 }
             }
-
             #[derive(Debug)]
             struct ServerTestModerationPanelNotificationArchive {
                 handle: String,
@@ -34226,7 +32938,6 @@ mod protocol {
                 >,
                 install_calls: AtomicU64,
             }
-
             impl ServerTestModerationPanelNotificationArchive {
                 fn from_fixture(
                     fixture: &sorafs_node::moderation_orchestrator::
@@ -34246,14 +32957,12 @@ mod protocol {
                     }
                 }
             }
-
             impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
                 for ServerTestModerationPanelNotificationArchive
             {
                 fn handle(&self) -> &str {
                     &self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -34263,18 +32972,15 @@ mod protocol {
                     Ok(self.qualification)
                 }
             }
-
             impl sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveV1
                 for ServerTestModerationPanelNotificationArchive
             {
                 fn archive_id(&self) -> [u8; 32] {
                     self.archive_id
                 }
-
                 fn signing_public_key(&self) -> [u8; 32] {
                     self.public_key
                 }
-
                 fn install(
                     &self,
                     operation_id: [u8; 32],
@@ -34311,7 +33017,6 @@ mod protocol {
                     );
                     Ok(self.expected_signature)
                 }
-
                 fn read(
                     &self,
                     operation_id: [u8; 32],
@@ -34333,7 +33038,6 @@ mod protocol {
                         .clone())
                 }
             }
-
             #[derive(Debug)]
             struct ServerTestModerationHandoffBoundary {
                 handle: String,
@@ -34350,7 +33054,6 @@ mod protocol {
                     >,
                 >,
             }
-
             impl ServerTestModerationHandoffBoundary {
                 fn exact(
                     kind: sorafs_node::moderation_orchestrator::ModerationTerminalHandoffKindV1,
@@ -34376,25 +33079,21 @@ mod protocol {
                         published_heads: Mutex::new(Vec::new()),
                     }
                 }
-
                 fn with_handle(mut self, handle: impl Into<String>) -> Self {
                     self.handle = handle.into();
                     self
                 }
-
                 fn with_mode(mut self, mode: ServerTestModerationDeliveryMode) -> Self {
                     self.mode = mode;
                     self
                 }
             }
-
             impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
                 for ServerTestModerationHandoffBoundary
             {
                 fn handle(&self) -> &str {
                     &self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -34420,7 +33119,6 @@ mod protocol {
                     )
                 }
             }
-
             impl iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffBoundaryV1
                 for ServerTestModerationHandoffBoundary
             {
@@ -34436,7 +33134,6 @@ mod protocol {
                         ModerationDurableHandoffFailureV1 as Failure,
                         ModerationDurableHandoffOutcomeV1 as Outcome,
                     };
-
                     self.delivery_calls.fetch_add(1, Ordering::Relaxed);
                     match self.mode {
                         ServerTestModerationDeliveryMode::NotDelivered => {
@@ -34477,7 +33174,6 @@ mod protocol {
                     self.delivered.store(true, Ordering::Release);
                     Ok(Outcome::Delivered)
                 }
-
                 fn publish_archive_head_once(
                     &self,
                     request: &iroha_torii::sorafs::moderation_runtime::
@@ -34490,7 +33186,6 @@ mod protocol {
                         ModerationDurableHandoffFailureV1 as Failure,
                         ModerationDurableHandoffOutcomeV1 as Outcome,
                     };
-
                     self.delivery_calls.fetch_add(1, Ordering::Relaxed);
                     match self.mode {
                         ServerTestModerationDeliveryMode::NotDelivered => {
@@ -34563,7 +33258,6 @@ mod protocol {
                     self.delivered.store(true, Ordering::Release);
                     Ok(Outcome::Delivered)
                 }
-
                 fn read_published_archive_head(
                     &self,
                 ) -> Result<
@@ -34581,7 +33275,6 @@ mod protocol {
                         .cloned())
                 }
             }
-
             #[derive(Debug)]
             struct ServerTestModerationPanelBoundary {
                 handle: String,
@@ -34598,7 +33291,6 @@ mod protocol {
                     )>,
                 >,
             }
-
             impl ServerTestModerationPanelBoundary {
                 fn exact() -> Self {
                     Self {
@@ -34610,25 +33302,21 @@ mod protocol {
                         retained: Mutex::new(Vec::new()),
                     }
                 }
-
                 fn with_handle(mut self, handle: impl Into<String>) -> Self {
                     self.handle = handle.into();
                     self
                 }
-
                 fn with_mode(mut self, mode: ServerTestModerationDeliveryMode) -> Self {
                     self.mode = mode;
                     self
                 }
             }
-
             impl sorafs_node::moderation_orchestrator::ModerationRuntimeProviderV1
                 for ServerTestModerationPanelBoundary
             {
                 fn handle(&self) -> &str {
                     &self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -34654,7 +33342,6 @@ mod protocol {
                     )
                 }
             }
-
             impl iroha_torii::sorafs::moderation_runtime::
                 ModerationDurablePanelNotificationBoundaryV1 for ServerTestModerationPanelBoundary
             {
@@ -34670,7 +33357,6 @@ mod protocol {
                 > {
                     use sorafs_node::moderation_orchestrator::
                         ModerationPanelNotificationFailureV1 as Failure;
-
                     self.delivery_calls.fetch_add(1, Ordering::Relaxed);
                     match self.mode {
                         ServerTestModerationDeliveryMode::NotDelivered => {
@@ -34729,7 +33415,6 @@ mod protocol {
                     Ok(receipt)
                 }
             }
-
             #[derive(Debug)]
             struct ServerTestModerationKeyWrapper {
                 handle: String,
@@ -34742,7 +33427,6 @@ mod protocol {
                 wrap_failure: Option<sorafs_node::ModerationQuarantineKeyOperationErrorV1>,
                 unwrap_failure: Option<sorafs_node::ModerationQuarantineKeyOperationErrorV1>,
             }
-
             impl ServerTestModerationKeyWrapper {
                 fn exact() -> Self {
                     Self {
@@ -34757,37 +33441,30 @@ mod protocol {
                         unwrap_failure: None,
                     }
                 }
-
                 fn with_handle(mut self, handle: impl Into<String>) -> Self {
                     self.handle = handle.into();
                     self
                 }
-
                 fn with_revision(self, revision: u64) -> Self {
                     self.revision.store(revision, Ordering::Release);
                     self
                 }
-
                 fn with_active_key_id(mut self, active_key_id: impl Into<String>) -> Self {
                     self.active_key_id = active_key_id.into();
                     self
                 }
-
                 fn with_post_wrap_drift(mut self) -> Self {
                     self.drift_after_wrap = true;
                     self
                 }
-
                 fn with_post_unwrap_drift(mut self) -> Self {
                     self.drift_after_unwrap = true;
                     self
                 }
-
                 fn with_zero_unwrap_output(mut self) -> Self {
                     self.zero_unwrap_output = true;
                     self
                 }
-
                 fn with_wrap_failure(
                     mut self,
                     failure: sorafs_node::ModerationQuarantineKeyOperationErrorV1,
@@ -34795,7 +33472,6 @@ mod protocol {
                     self.wrap_failure = Some(failure);
                     self
                 }
-
                 fn with_unwrap_failure(
                     mut self,
                     failure: sorafs_node::ModerationQuarantineKeyOperationErrorV1,
@@ -34804,12 +33480,10 @@ mod protocol {
                     self
                 }
             }
-
             impl sorafs_node::ModerationQuarantineKeyWrapper for ServerTestModerationKeyWrapper {
                 fn provider_handle(&self) -> &str {
                     &self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -34823,11 +33497,9 @@ mod protocol {
                         ),
                     )
                 }
-
                 fn active_key_id(&self) -> &str {
                     &self.active_key_id
                 }
-
                 fn wrap_dek(
                     &self,
                     context_digest: [u8; 32],
@@ -34848,7 +33520,6 @@ mod protocol {
                     }
                     Ok(wrapped)
                 }
-
                 fn unwrap_dek(
                     &self,
                     key_id: &str,
@@ -34881,14 +33552,12 @@ mod protocol {
                     Ok(dek)
                 }
             }
-
             #[derive(Debug)]
             struct ServerTestReputationRetentionAuthority {
                 handle: String,
                 revision: u64,
                 policy_digest: [u8; 32],
             }
-
             impl ServerTestReputationRetentionAuthority {
                 fn exact() -> Self {
                     Self {
@@ -34898,7 +33567,6 @@ mod protocol {
                     }
                 }
             }
-
             impl
                 iroha_core::query::reputation_finalized::
                     ReputationFinalizedArchiveRetentionAuthorityV1
@@ -34907,7 +33575,6 @@ mod protocol {
                 fn handle(&self) -> &str {
                     &self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -34924,7 +33591,6 @@ mod protocol {
                             ),
                     )
                 }
-
                 fn load_latest(
                     &self,
                     _network_id: &NetworkId,
@@ -34938,7 +33604,6 @@ mod protocol {
                 > {
                     Ok(None)
                 }
-
                 fn compare_and_swap_latest(
                     &self,
                     _network_id: &NetworkId,
@@ -34956,7 +33621,6 @@ mod protocol {
                     )
                 }
             }
-
             #[derive(Debug)]
             struct LaxGovernanceCheckpointStore {
                 handle: String,
@@ -34972,7 +33636,6 @@ mod protocol {
                 delete_calls: AtomicU64,
                 drift_after_compare_and_swap: bool,
             }
-
             impl LaxGovernanceCheckpointStore {
                 fn new(handle: impl Into<String>, revision: u64) -> Self {
                     Self {
@@ -34985,7 +33648,6 @@ mod protocol {
                         drift_after_compare_and_swap: false,
                     }
                 }
-
                 fn with_record(
                     self,
                     slot: sorafs_node::GovernanceDagSealedStateSlot,
@@ -34997,23 +33659,19 @@ mod protocol {
                         .push((slot, record));
                     self
                 }
-
                 fn with_post_compare_and_swap_drift(mut self) -> Self {
                     self.drift_after_compare_and_swap = true;
                     self
                 }
-
                 fn with_policy_digest(mut self, policy_digest: [u8; 32]) -> Self {
                     self.policy_digest = policy_digest;
                     self
                 }
             }
-
             impl sorafs_node::GovernanceDagSealedCheckpointStore for LaxGovernanceCheckpointStore {
                 fn handle(&self) -> &str {
                     &self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<sorafs_node::GovernanceDagRuntimeProviderQualificationV1, String>
@@ -35025,7 +33683,6 @@ mod protocol {
                         ),
                     )
                 }
-
                 fn load(
                     &self,
                     slot: sorafs_node::GovernanceDagSealedStateSlot,
@@ -35039,7 +33696,6 @@ mod protocol {
                         .find(|(candidate, _)| *candidate == slot)
                         .map(|(_, record)| record.clone()))
                 }
-
                 fn compare_and_swap(
                     &self,
                     slot: sorafs_node::GovernanceDagSealedStateSlot,
@@ -35064,7 +33720,6 @@ mod protocol {
                     }
                     Ok(())
                 }
-
                 fn delete(
                     &self,
                     slot: sorafs_node::GovernanceDagSealedStateSlot,
@@ -35078,12 +33733,10 @@ mod protocol {
                     Ok(())
                 }
             }
-
             struct RevisionOnEofReader {
                 inner: Cursor<Vec<u8>>,
                 revision: Arc<AtomicU64>,
             }
-
             impl std::io::Read for RevisionOnEofReader {
                 fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
                     let read = std::io::Read::read(&mut self.inner, output)?;
@@ -35093,7 +33746,6 @@ mod protocol {
                     Ok(read)
                 }
             }
-
             #[derive(Clone)]
             struct ServerTestProviderSource {
                 payload: Vec<u8>,
@@ -35105,7 +33757,6 @@ mod protocol {
                 observed_request:
                     Option<Arc<Mutex<Option<sorafs_node::ProviderIngestSourceRequestV1>>>>,
             }
-
             impl fmt::Debug for ServerTestProviderSource {
                 fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                     formatter
@@ -35114,11 +33765,9 @@ mod protocol {
                         .finish_non_exhaustive()
                 }
             }
-
             impl sorafs_node::ProviderIngestAuthenticatedSourceFetchV1 for ServerTestProviderSource {
                 type Fetched =
                     crate::sorafs_provider_ingest_runtime::VerifiedProviderIngestPayloadV1;
-
                 fn fetch<'a>(
                     &'a self,
                     request: sorafs_node::ProviderIngestSourceRequestV1,
@@ -35156,14 +33805,12 @@ mod protocol {
                     })
                 }
             }
-
             impl crate::sorafs_provider_ingest_runtime::ProviderIngestAuthenticatedSourceRuntimeV1
                 for ServerTestProviderSource
             {
                 fn runtime_handle(&self) -> &str {
                     SERVER_TEST_SOURCE_HANDLE
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -35177,18 +33824,15 @@ mod protocol {
                         ),
                     )
                 }
-
                 fn source_provider_ids(&self) -> &[[u8; 32]] {
                     &SERVER_TEST_SOURCE_PROVIDER_IDS
                 }
-
                 fn check_readiness(
                     &self,
                 ) -> Result<(), sorafs_node::ProviderIngestSourceFetchErrorV1> {
                     Ok(())
                 }
             }
-
             fn test_source_material(
                 payload: Vec<u8>,
             ) -> (
@@ -35249,7 +33893,6 @@ mod protocol {
                     .expect("build source authorization");
                 (authorization, manifest, plan)
             }
-
             fn test_source_musubi_fetch_binding(
                 authorization: &sorafs_node::FinalizedProviderIngestAuthorizationV1,
                 manifest: &sorafs_manifest::ManifestV1,
@@ -35336,7 +33979,6 @@ mod protocol {
                 .expect("construct Musubi source binding");
                 (musubi_authorization, fetch_binding)
             }
-
             fn source_test_catalog(
                 timeout: Duration,
                 max_content_bytes: u64,
@@ -35356,7 +33998,6 @@ mod protocol {
                     },
                 )
             }
-
             fn server_test_catalog() -> IrohaRuntimeProviderBindingsV1 {
                 IrohaRuntimeProviderBindingsV1::qualified_governance_dag_signer_for_test(
                     "server-test-chain",
@@ -35367,7 +34008,6 @@ mod protocol {
                     "1509a611ad6d97b01d871e58ed00c8fd7c3917b6ca61a8c2833a19e000aac2e4",
                 )
             }
-
             fn evidence_transparency_publisher_test_catalog() -> IrohaRuntimeProviderBindingsV1 {
                 IrohaRuntimeProviderBindingsV1::
                     qualified_evidence_viewer_transparency_publisher_for_test(
@@ -35378,7 +34018,6 @@ mod protocol {
                         TEST_SIGNER_KEY,
                     )
             }
-
             fn evidence_transparency_test_body()
             -> sorafs_node::evidence_viewer::transparency_producer::
             EvidenceViewerTransparencyHeadBodyV1{
@@ -35422,7 +34061,6 @@ mod protocol {
                         publisher_public_key: TEST_SIGNER_KEY,
                     }
             }
-
             fn request_auth_server_test_catalog() -> IrohaRuntimeProviderBindingsV1 {
                 IrohaRuntimeProviderBindingsV1::qualified_governance_request_auth_for_test(
                     "server-test-chain",
@@ -35434,7 +34072,6 @@ mod protocol {
                     1024,
                 )
             }
-
             fn native_signer_test_catalog() -> IrohaRuntimeProviderBindingsV1 {
                 use iroha_torii::SorafsNativeTransactionSignerRoleV1 as Role;
 
@@ -35461,7 +34098,6 @@ mod protocol {
                 )
                 .with_network_id_for_test(server_test_network_id())
             }
-
             fn proof_native_signer_test_catalog() -> IrohaRuntimeProviderBindingsV1 {
                 let signer = ServerTestNativeSigner::exact(
                     iroha_torii::SorafsNativeTransactionSignerRoleV1::ProofOutcome,
@@ -35475,7 +34111,6 @@ mod protocol {
                 )
                 .with_network_id_for_test(server_test_network_id())
             }
-
             fn native_signer_test_backends() -> RuntimeProviderBrokerBackendsV1 {
                 use iroha_torii::SorafsNativeTransactionSignerRoleV1 as Role;
 
@@ -35493,7 +34128,6 @@ mod protocol {
                         Role::Orderbook,
                     )))
             }
-
             fn native_signer_test_payload_for_network(
                 network_id: NetworkId,
                 authority: iroha_data_model::account::AccountId,
@@ -35506,13 +34140,11 @@ mod protocol {
                 .into_payload()
                 .expect("build native signer test payload")
             }
-
             fn native_signer_test_payload(
                 authority: iroha_data_model::account::AccountId,
             ) -> iroha_data_model::transaction::TransactionPayload {
                 native_signer_test_payload_for_network(server_test_network_id(), authority)
             }
-
             fn provider_ingest_completion_test_keypair() -> iroha_crypto::KeyPair {
                 iroha_crypto::KeyPair::try_from_seed(
                     vec![0x42; 32],
@@ -35520,7 +34152,6 @@ mod protocol {
                 )
                 .expect("provider-ingest completion test key")
             }
-
             const fn provider_ingest_completion_test_policy()
             -> iroha_data_model::sorafs::pin_registry::ProviderIngestCompletionSignerPolicyV1
             {
@@ -35531,7 +34162,6 @@ mod protocol {
                     policy_digest: [0xA2; 32],
                 }
             }
-
             const fn provider_ingest_completion_test_cursor()
             -> sorafs_node::ProviderIngestFinalizedCursorV1 {
                 sorafs_node::ProviderIngestFinalizedCursorV1 {
@@ -35539,7 +34169,6 @@ mod protocol {
                     block_hash: [0x17; 32],
                 }
             }
-
             fn provider_ingest_completion_test_context(
                 owner: iroha_data_model::account::AccountId,
             ) -> sorafs_node::ProviderIngestCompletionSignerResolutionContextV1 {
@@ -35550,7 +34179,6 @@ mod protocol {
                     provider_ingest_completion_test_cursor(),
                 )
             }
-
             fn provider_ingest_completion_test_instruction(
                 owner: iroha_data_model::account::AccountId,
             ) -> iroha_data_model::isi::sorafs::CompleteReplicationOrder {
@@ -35574,7 +34202,6 @@ mod protocol {
                         },
                 }
             }
-
             fn provider_ingest_completion_test_payload_with_executable(
                 network_id: NetworkId,
                 authority: iroha_data_model::account::AccountId,
@@ -35589,7 +34216,6 @@ mod protocol {
                 .into_payload()
                 .expect("build provider-ingest completion payload")
             }
-
             fn provider_ingest_completion_test_payload(
                 owner: iroha_data_model::account::AccountId,
             ) -> iroha_data_model::transaction::TransactionPayload {
@@ -35602,7 +34228,6 @@ mod protocol {
                     ),
                 )
             }
-
             fn moderation_transaction_signer_test_catalog() -> IrohaRuntimeProviderBindingsV1 {
                 IrohaRuntimeProviderBindingsV1::qualified_for_test(
                     "server-test-chain",
@@ -35613,7 +34238,6 @@ mod protocol {
                 )
                 .with_network_id_for_test(server_test_network_id())
             }
-
             fn moderation_transaction_signer_test_payload()
             -> iroha_data_model::transaction::TransactionPayload {
                 let public_key = ServerTestModerationTransactionSigner::exact()
@@ -35622,7 +34246,6 @@ mod protocol {
                     .clone();
                 native_signer_test_payload(iroha_data_model::account::AccountId::new(public_key))
             }
-
             fn moderation_transaction_signer_test_state(
                 signer: Arc<
                     dyn iroha_torii::sorafs::moderation_runtime::
@@ -35636,7 +34259,6 @@ mod protocol {
                 )
                 .expect("prepare exact moderation transaction signer broker state")
             }
-
             fn moderation_delivery_test_handle(slot: IrohaRuntimeProviderSlotV1) -> &'static str {
                 match slot {
                     IrohaRuntimeProviderSlotV1::ModerationSettlementHandoff => {
@@ -35651,7 +34273,6 @@ mod protocol {
                     _ => panic!("slot is not a moderation delivery boundary"),
                 }
             }
-
             fn moderation_delivery_test_catalog(
                 slot: IrohaRuntimeProviderSlotV1,
             ) -> IrohaRuntimeProviderBindingsV1 {
@@ -35663,7 +34284,6 @@ mod protocol {
                     TEST_POLICY_DIGEST,
                 )
             }
-
             fn moderation_handoff_test_request(
                 kind: sorafs_node::moderation_orchestrator::ModerationTerminalHandoffKindV1,
             ) -> iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffRequestV1
@@ -35716,7 +34336,6 @@ mod protocol {
                     canonical_handoff,
                 }
             }
-
             fn moderation_panel_test_request()
             -> iroha_torii::sorafs::moderation_runtime::ModerationDurablePanelNotificationRequestV1
             {
@@ -35758,7 +34377,6 @@ mod protocol {
                         attempt_limit: 3,
                     }
             }
-
             fn moderation_handoff_test_state(
                 slot: IrohaRuntimeProviderSlotV1,
                 boundary: Arc<
@@ -35779,7 +34397,6 @@ mod protocol {
                 prepare_server_state(&moderation_delivery_test_catalog(slot), backends)
                     .expect("prepare exact moderation handoff broker state")
             }
-
             fn moderation_panel_test_state(
                 boundary: Arc<
                     dyn iroha_torii::sorafs::moderation_runtime::
@@ -35795,7 +34412,6 @@ mod protocol {
                 )
                 .expect("prepare exact moderation panel broker state")
             }
-
             fn moderation_delivery_operation_request(
                 state: &BrokerServerStateV1,
                 request_id: u64,
@@ -35812,7 +34428,6 @@ mod protocol {
                 )
                 .expect("build moderation delivery broker operation")
             }
-
             fn dispatch_moderation_delivery_operation(
                 state: &BrokerServerStateV1,
                 request_id: u64,
@@ -35824,7 +34439,6 @@ mod protocol {
                 validate_operation_request(&request)?;
                 dispatch_server_operation(state, &request)
             }
-
             fn checkpoint_server_test_catalog() -> IrohaRuntimeProviderBindingsV1 {
                 IrohaRuntimeProviderBindingsV1::qualified_for_test(
                     "server-test-chain",
@@ -35834,7 +34448,6 @@ mod protocol {
                     TEST_POLICY_DIGEST,
                 )
             }
-
             fn moderation_server_test_catalog() -> IrohaRuntimeProviderBindingsV1 {
                 IrohaRuntimeProviderBindingsV1::qualified_for_test(
                     "server-test-chain",
@@ -35844,7 +34457,6 @@ mod protocol {
                     TEST_POLICY_DIGEST,
                 )
             }
-
             fn reputation_retention_server_test_catalog() -> IrohaRuntimeProviderBindingsV1 {
                 IrohaRuntimeProviderBindingsV1::qualified_for_test(
                     "server-test-chain",
@@ -35855,7 +34467,6 @@ mod protocol {
                 )
                 .with_network_id_for_test(server_test_network_id())
             }
-
             fn reputation_runtime_test_handle(slot: IrohaRuntimeProviderSlotV1) -> &'static str {
                 match slot {
                     IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter => {
@@ -35873,7 +34484,6 @@ mod protocol {
                     _ => panic!("slot is not a reputation runtime provider"),
                 }
             }
-
             fn reputation_runtime_test_catalog(
                 slot: IrohaRuntimeProviderSlotV1,
             ) -> IrohaRuntimeProviderBindingsV1 {
@@ -35890,7 +34500,6 @@ mod protocol {
                     TEST_POLICY_DIGEST,
                 )
             }
-
             fn reputation_runtime_test_binding(
                 slot: IrohaRuntimeProviderSlotV1,
             ) -> ProviderBindingWireV1 {
@@ -35900,15 +34509,12 @@ mod protocol {
                 )
                 .expect("project reputation test binding")
             }
-
             include!("runtime_provider_broker/hedging_billing_domain_tests.rs");
-
             #[derive(Debug)]
             struct ServerTestBillingProvider {
                 handle: &'static str,
                 revision: u64,
             }
-
             impl ServerTestBillingProvider {
                 fn exact(slot: IrohaRuntimeProviderSlotV1) -> Self {
                     Self {
@@ -35916,7 +34522,6 @@ mod protocol {
                         revision: 7,
                     }
                 }
-
                 const fn substituted() -> Self {
                     Self {
                         handle: "runtime://sorafs/billing/substituted-primary",
@@ -35924,14 +34529,12 @@ mod protocol {
                     }
                 }
             }
-
             impl sorafs_node::hedging_billing_service::HedgingBillingRuntimeProviderV1
                 for ServerTestBillingProvider
             {
                 fn handle(&self) -> &str {
                     self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -35949,7 +34552,6 @@ mod protocol {
                     )
                 }
             }
-
             impl sorafs_node::hedging_billing_service::HedgingBillingFinalizedQuery
                 for ServerTestBillingProvider
             {
@@ -35966,18 +34568,15 @@ mod protocol {
                             },
                     )
                 }
-
                 fn check_readiness(
                     &self,
                 ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
                 {
                     Ok(())
                 }
-
                 fn supplies_period_closes(&self) -> bool {
                     true
                 }
-
                 fn finalized_head(
                     &self,
                 ) -> Result<
@@ -35986,7 +34585,6 @@ mod protocol {
                 > {
                     Err(sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected)
                 }
-
                 fn query_finalized_page(
                     &self,
                     _position: sorafs_node::hedging_billing_service::HedgingBillingQueryPositionV1,
@@ -35999,7 +34597,6 @@ mod protocol {
                 > {
                     Err(sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected)
                 }
-
                 fn query_finalized_period_close(
                     &self,
                     _period_end_unix: u64,
@@ -36013,7 +34610,6 @@ mod protocol {
                     Err(sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected)
                 }
             }
-
             impl sorafs_node::hedging_billing_service::HedgingBillingJournalVerifier
                 for ServerTestBillingProvider
             {
@@ -36030,14 +34626,12 @@ mod protocol {
                             },
                     )
                 }
-
                 fn check_readiness(
                     &self,
                 ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
                 {
                     Ok(())
                 }
-
                 fn verify_page(
                     &self,
                     _network_id: &iroha_data_model::NetworkId,
@@ -36050,7 +34644,6 @@ mod protocol {
                 {
                     Err(sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected)
                 }
-
                 fn verify_period_close(
                     &self,
                     _network_id: &iroha_data_model::NetworkId,
@@ -36060,7 +34653,6 @@ mod protocol {
                 {
                     Err(sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected)
                 }
-
                 fn verify_epoch_transition(
                     &self,
                     _network_id: &iroha_data_model::NetworkId,
@@ -36071,7 +34663,6 @@ mod protocol {
                     Err(sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected)
                 }
             }
-
             impl sorafs_node::hedging_billing_service::BillingStatementRuntimeSigner
                 for ServerTestBillingProvider
             {
@@ -36089,14 +34680,12 @@ mod protocol {
                         },
                     )
                 }
-
                 fn check_readiness(
                     &self,
                 ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
                 {
                     Ok(())
                 }
-
                 fn sign_digest(
                     &self,
                     _digest: [u8; 32],
@@ -36107,7 +34696,6 @@ mod protocol {
                     Err(sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected)
                 }
             }
-
             impl sorafs_node::hedging_billing_service::BillingStatementPublisher for ServerTestBillingProvider {
                 fn identity(
                     &self,
@@ -36124,14 +34712,12 @@ mod protocol {
                         },
                     )
                 }
-
                 fn check_readiness(
                     &self,
                 ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
                 {
                     Ok(())
                 }
-
                 fn publish(
                     &self,
                     _idempotency_key: [u8; 32],
@@ -36144,7 +34730,6 @@ mod protocol {
                 > {
                     Err(sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected)
                 }
-
                 fn lookup(
                     &self,
                     _statement_id: [u8; 32],
@@ -36158,7 +34743,6 @@ mod protocol {
                     Err(sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected)
                 }
             }
-
             impl sorafs_node::hedging_billing_service::BillingStatementAcknowledgementAuthority
                 for ServerTestBillingProvider
             {
@@ -36176,14 +34760,12 @@ mod protocol {
                             },
                     )
                 }
-
                 fn check_readiness(
                     &self,
                 ) -> Result<(), sorafs_node::hedging_billing_service::HedgingBillingExternalError>
                 {
                     Ok(())
                 }
-
                 fn verify(
                     &self,
                     _statement: &sorafs_node::hedging_billing_service::
@@ -36194,7 +34776,6 @@ mod protocol {
                 {
                     Err(sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected)
                 }
-
                 fn record(
                     &self,
                     _statement: &sorafs_node::hedging_billing_service::
@@ -36207,7 +34788,6 @@ mod protocol {
                 > {
                     Err(sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected)
                 }
-
                 fn lookup(
                     &self,
                     _statement_id: [u8; 32],
@@ -36218,7 +34798,6 @@ mod protocol {
                     Err(sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected)
                 }
             }
-
             impl sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessStore
                 for ServerTestBillingProvider
             {
@@ -36228,7 +34807,6 @@ mod protocol {
                 {
                     Ok(())
                 }
-
                 fn load_latest(
                     &self,
                 ) -> Result<
@@ -36239,7 +34817,6 @@ mod protocol {
                 > {
                     Err(sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected)
                 }
-
                 fn load_epoch(
                     &self,
                     _epoch_sequence: u64,
@@ -36251,7 +34828,6 @@ mod protocol {
                 > {
                     Err(sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected)
                 }
-
                 fn compare_and_swap_latest(
                     &self,
                     _expected_revision: Option<[u8; 32]>,
@@ -36262,7 +34838,6 @@ mod protocol {
                     Err(sorafs_node::hedging_billing_service::HedgingBillingExternalError::Rejected)
                 }
             }
-
             fn billing_runtime_backends(
                 slot: IrohaRuntimeProviderSlotV1,
                 substituted: bool,
@@ -36302,7 +34877,6 @@ mod protocol {
                     _ => panic!("slot is not a hedging/billing runtime provider"),
                 }
             }
-
             fn reputation_runtime_exact_backends(
                 slot: IrohaRuntimeProviderSlotV1,
             ) -> RuntimeProviderBrokerBackendsV1 {
@@ -36331,7 +34905,6 @@ mod protocol {
                     _ => panic!("slot is not a reputation runtime provider"),
                 }
             }
-
             fn reputation_runtime_substituted_backends(
                 slot: IrohaRuntimeProviderSlotV1,
             ) -> RuntimeProviderBrokerBackendsV1 {
@@ -36360,7 +34933,6 @@ mod protocol {
                     _ => panic!("slot is not a reputation runtime provider"),
                 }
             }
-
             #[derive(Debug)]
             struct ServerTestReputationJournalSubmitter {
                 handle: &'static str,
@@ -36368,7 +34940,6 @@ mod protocol {
                 drift_after_operation: bool,
                 submit_calls: AtomicU64,
             }
-
             impl ServerTestReputationJournalSubmitter {
                 const fn exact() -> Self {
                     Self {
@@ -36378,35 +34949,30 @@ mod protocol {
                         submit_calls: AtomicU64::new(0),
                     }
                 }
-
                 const fn drifting_after_operation() -> Self {
                     Self {
                         drift_after_operation: true,
                         ..Self::exact()
                     }
                 }
-
                 const fn substituted() -> Self {
                     Self {
                         handle: "queue://sorafs/reputation/journal-substitute",
                         ..Self::exact()
                     }
                 }
-
                 fn finish_operation(&self) {
                     if self.drift_after_operation {
                         self.revision.store(8, Ordering::SeqCst);
                     }
                 }
             }
-
             impl sorafs_node::reputation::runtime::ReputationRuntimeProviderV1
                 for ServerTestReputationJournalSubmitter
             {
                 fn handle(&self) -> &str {
                     self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -36422,7 +34988,6 @@ mod protocol {
                     )
                 }
             }
-
             impl sorafs_node::reputation::runtime::ReputationJournalTransactionSubmitterV1
                 for ServerTestReputationJournalSubmitter
             {
@@ -36433,7 +34998,6 @@ mod protocol {
                     self.finish_operation();
                     true
                 }
-
                 fn submit(
                     &self,
                     _request: &sorafs_node::reputation::runtime::
@@ -36448,7 +35012,6 @@ mod protocol {
                         }
                 }
             }
-
             #[derive(Debug)]
             struct ServerTestReputationThresholdSigner {
                 handle: &'static str,
@@ -36456,7 +35019,6 @@ mod protocol {
                 drift_after_operation: bool,
                 reconciled_keys: Mutex<Vec<[u8; 32]>>,
             }
-
             impl ServerTestReputationThresholdSigner {
                 fn exact() -> Self {
                     Self {
@@ -36466,14 +35028,12 @@ mod protocol {
                         reconciled_keys: Mutex::new(Vec::new()),
                     }
                 }
-
                 fn drifting_after_operation() -> Self {
                     Self {
                         drift_after_operation: true,
                         ..Self::exact()
                     }
                 }
-
                 fn substituted() -> Self {
                     Self {
                         handle: "software://sorafs/reputation/substitute",
@@ -36481,14 +35041,12 @@ mod protocol {
                     }
                 }
             }
-
             impl sorafs_node::reputation::runtime::ReputationRuntimeProviderV1
                 for ServerTestReputationThresholdSigner
             {
                 fn handle(&self) -> &str {
                     self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -36504,7 +35062,6 @@ mod protocol {
                     )
                 }
             }
-
             impl sorafs_node::reputation::runtime::ReputationThresholdSignerClientV1
                 for ServerTestReputationThresholdSigner
             {
@@ -36525,7 +35082,6 @@ mod protocol {
                     Ok(None)
                 }
             }
-
             #[derive(Debug)]
             struct ServerTestReputationGovernanceDag {
                 handle: &'static str,
@@ -36533,7 +35089,6 @@ mod protocol {
                 drift_after_operation: bool,
                 reconciled_keys: Mutex<Vec<[u8; 32]>>,
             }
-
             impl ServerTestReputationGovernanceDag {
                 fn exact() -> Self {
                     Self {
@@ -36543,14 +35098,12 @@ mod protocol {
                         reconciled_keys: Mutex::new(Vec::new()),
                     }
                 }
-
                 fn drifting_after_operation() -> Self {
                     Self {
                         drift_after_operation: true,
                         ..Self::exact()
                     }
                 }
-
                 fn substituted() -> Self {
                     Self {
                         handle: "dag://sorafs/reputation/publication-substitute",
@@ -36558,14 +35111,12 @@ mod protocol {
                     }
                 }
             }
-
             impl sorafs_node::reputation::runtime::ReputationRuntimeProviderV1
                 for ServerTestReputationGovernanceDag
             {
                 fn handle(&self) -> &str {
                     self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -36581,7 +35132,6 @@ mod protocol {
                     )
                 }
             }
-
             impl sorafs_node::reputation::runtime::ReputationGovernanceDagClientV1
                 for ServerTestReputationGovernanceDag
             {
@@ -36603,33 +35153,28 @@ mod protocol {
                     Ok(None)
                 }
             }
-
             #[derive(Debug)]
             struct ServerTestReputationJournalCheckpoint {
                 handle: &'static str,
             }
-
             impl ServerTestReputationJournalCheckpoint {
                 const fn exact() -> Self {
                     Self {
                         handle: SERVER_TEST_REPUTATION_CHECKPOINT_HANDLE,
                     }
                 }
-
                 const fn substituted() -> Self {
                     Self {
                         handle: "sealed://sorafs/reputation/checkpoint-substitute",
                     }
                 }
             }
-
             impl sorafs_node::reputation::runtime::ReputationRuntimeProviderV1
                 for ServerTestReputationJournalCheckpoint
             {
                 fn handle(&self) -> &str {
                     self.handle
                 }
-
                 fn qualification(
                     &self,
                 ) -> Result<
@@ -36646,7 +35191,6 @@ mod protocol {
                     )
                 }
             }
-
             impl sorafs_node::reputation::runtime::ReputationJournalCheckpointRuntimeV1
                 for ServerTestReputationJournalCheckpoint
             {
@@ -36660,7 +35204,6 @@ mod protocol {
                 > {
                     Ok(None)
                 }
-
                 fn compare_and_swap_latest(
                     &self,
                     _expected_revision: Option<[u8; 32]>,
@@ -36676,7 +35219,6 @@ mod protocol {
                     )
                 }
             }
-
             fn reputation_test_signed_snapshot()
             -> sorafs_manifest::reputation::signed::SignedReputationSnapshotV1 {
                 let scoring_evidence =
@@ -36753,7 +35295,6 @@ mod protocol {
                     ],
                 }
             }
-
             fn reputation_test_threshold_request()
             -> sorafs_node::reputation::runtime::ReputationThresholdSigningRequestV1 {
                 let signed = reputation_test_signed_snapshot();
@@ -36802,7 +35343,6 @@ mod protocol {
                     material,
                 }
             }
-
             fn reputation_test_governance_request()
             -> sorafs_node::reputation::runtime::ReputationGovernanceDagPublicationRequestV1
             {
@@ -36830,7 +35370,6 @@ mod protocol {
                     canonical_signed_result,
                 }
             }
-
             fn reputation_operation_request(
                 state: &BrokerServerStateV1,
                 request_id: u64,
@@ -36847,18 +35386,15 @@ mod protocol {
                 )
                 .expect("build reputation broker operation")
             }
-
             fn server_test_backends() -> RuntimeProviderBrokerBackendsV1 {
                 RuntimeProviderBrokerBackendsV1::new()
                     .with_governance_dag_signer(Arc::new(ServerTestGovernanceSigner))
             }
-
             fn request_auth_server_test_backends() -> RuntimeProviderBrokerBackendsV1 {
                 RuntimeProviderBrokerBackendsV1::new().with_governance_dag_ipfs_authenticator(
                     Arc::new(ServerTestGovernanceRequestAuthenticator::exact()),
                 )
             }
-
             fn proof_native_signer_test_state(
                 signer: Arc<dyn iroha_torii::SoraFsProofOutcomeTransactionSigner>,
             ) -> BrokerServerStateV1 {
@@ -36869,7 +35405,6 @@ mod protocol {
                 )
                 .expect("prepare exact proof-outcome signer broker state")
             }
-
             fn request_auth_server_test_state() -> BrokerServerStateV1 {
                 prepare_server_state(
                     &request_auth_server_test_catalog(),
@@ -36877,7 +35412,6 @@ mod protocol {
                 )
                 .expect("prepare exact request-auth broker state")
             }
-
             fn canonical_request_auth_test_request(
                 scope: sorafs_node::GovernanceDagAuthenticationScope,
             ) -> sorafs_node::GovernanceDagCanonicalRequestV1 {
@@ -36898,7 +35432,6 @@ mod protocol {
                 )
                 .expect("canonical request-auth descriptor")
             }
-
             fn checkpoint_server_test_state(
                 store: Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore>,
             ) -> BrokerServerStateV1 {
@@ -36909,7 +35442,6 @@ mod protocol {
                 )
                 .expect("prepare exact checkpoint broker state")
             }
-
             fn moderation_server_test_state(
                 key_wrapper: Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>,
             ) -> BrokerServerStateV1 {
@@ -36920,7 +35452,6 @@ mod protocol {
                 )
                 .expect("prepare exact moderation quarantine broker state")
             }
-
             fn checkpoint_operation_request(
                 state: &BrokerServerStateV1,
                 request_id: u64,
@@ -36937,7 +35468,6 @@ mod protocol {
                 )
                 .expect("build checkpoint broker operation")
             }
-
             fn dispatch_checkpoint_test_operation(
                 state: &BrokerServerStateV1,
                 request_id: u64,
@@ -36948,7 +35478,6 @@ mod protocol {
                 validate_operation_request(&request)?;
                 dispatch_server_operation(state, &request)
             }
-
             fn dispatch_moderation_test_operation(
                 state: &BrokerServerStateV1,
                 request_id: u64,
@@ -36967,7 +35496,6 @@ mod protocol {
                 validate_operation_request(&request)?;
                 dispatch_server_operation(state, &request)
             }
-
             fn sealed_compare_payload(
                 slot: sorafs_node::GovernanceDagSealedStateSlot,
                 expected_revision: Option<[u8; 32]>,
@@ -36987,7 +35515,6 @@ mod protocol {
                 )
                 .expect("encode sealed compare-and-swap request")
             }
-
             fn sealed_delete_payload(
                 slot: sorafs_node::GovernanceDagSealedStateSlot,
                 expected_revision: [u8; 32],
@@ -37001,7 +35528,6 @@ mod protocol {
                 )
                 .expect("encode sealed delete request")
             }
-
             fn signer_binding() -> ProviderBindingWireV1 {
                 ProviderBindingWireV1 {
                     slot: IrohaRuntimeProviderSlotV1::GovernanceDagSigner.wire_id(),
@@ -37044,7 +35570,6 @@ mod protocol {
                     moderation_panel_notification_archive_binding: None,
                 }
             }
-
             fn stream_token_signer_binding() -> ProviderBindingWireV1 {
                 let mut binding = plain_runtime_binding(
                     IrohaRuntimeProviderSlotV1::StreamTokenSigner,
@@ -37053,7 +35578,6 @@ mod protocol {
                 binding.stream_token_signer_public_key = Some(TEST_SIGNER_KEY);
                 binding
             }
-
             fn plain_runtime_binding(
                 slot: IrohaRuntimeProviderSlotV1,
                 handle: &str,
@@ -37065,7 +35589,6 @@ mod protocol {
                 binding.governance_dag_publisher_public_key = None;
                 binding
             }
-
             fn bootle_lantern_test_bindings()
             -> iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1
             {
@@ -37077,7 +35600,6 @@ mod protocol {
                     )
                     .expect("valid Bootle/Lantern broker test bindings")
             }
-
             fn bootle_lantern_runtime_binding() -> ProviderBindingWireV1 {
                 let exact = bootle_lantern_test_bindings();
                 let mut binding = plain_runtime_binding(
@@ -37092,7 +35614,6 @@ mod protocol {
                     });
                 binding
             }
-
             fn bootle_lantern_test_state(
                 backend: Arc<ServerTestBootleLanternBackend>,
             ) -> BrokerServerStateV1 {
@@ -37109,7 +35630,6 @@ mod protocol {
                     backends,
                 }
             }
-
             fn bootle_lantern_state_auth_operation(
                 state: &BrokerServerStateV1,
                 request_id: u64,
@@ -37135,7 +35655,6 @@ mod protocol {
                 )
                 .expect("build Bootle/Lantern state authentication operation")
             }
-
             fn bootle_lantern_auth_operation(
                 request_id: u64,
                 binding: ProviderBindingWireV1,
@@ -37153,33 +35672,26 @@ mod protocol {
                 )
                 .expect("build Bootle/Lantern authentication operation")
             }
-
             #[test]
             fn bootle_lantern_binding_rejects_slot_handle_qualification_and_metadata_substitution()
             {
                 let binding = bootle_lantern_runtime_binding();
                 validate_wire_binding(&binding).expect("accept exact slot-56 binding");
-
                 let mut wrong = binding.clone();
                 wrong.slot = IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider.wire_id();
                 assert!(validate_wire_binding(&wrong).is_err());
-
                 let mut wrong = binding.clone();
                 wrong.handle = "test://privacy/bootle-lantern".to_owned();
                 assert!(validate_wire_binding(&wrong).is_err());
-
                 let mut wrong = binding.clone();
                 wrong.revision = Some(0);
                 assert!(validate_wire_binding(&wrong).is_err());
-
                 let mut wrong = binding.clone();
                 wrong.policy_digest = Some([0; 32]);
                 assert!(validate_wire_binding(&wrong).is_err());
-
                 let mut wrong = binding.clone();
                 wrong.bootle_lantern_issuance_bindings = None;
                 assert!(validate_wire_binding(&wrong).is_err());
-
                 let mut wrong = binding.clone();
                 wrong
                     .bootle_lantern_issuance_bindings
@@ -37187,7 +35699,6 @@ mod protocol {
                     .expect("slot metadata")
                     .issuer_id = [0; 32];
                 assert!(validate_wire_binding(&wrong).is_err());
-
                 let mut wrong = binding.clone();
                 wrong
                     .bootle_lantern_issuance_bindings
@@ -37195,7 +35706,6 @@ mod protocol {
                     .expect("slot metadata")
                     .policy_id = [0; 32];
                 assert!(validate_wire_binding(&wrong).is_err());
-
                 for lifetime in [
                     0,
                     iroha_core::privacy_engines::bootle_lantern::issuer::
@@ -37210,12 +35720,10 @@ mod protocol {
                         .authorization_lifetime_blocks = lifetime;
                     assert!(validate_wire_binding(&wrong).is_err());
                 }
-
                 let mut wrong = binding;
                 wrong.evidence_viewer_grant_ttl_ms = Some(1);
                 assert!(validate_wire_binding(&wrong).is_err());
             }
-
             #[test]
             fn bootle_lantern_auth_rejects_action_body_height_and_canonical_wire_attacks() {
                 let binding = bootle_lantern_runtime_binding();
@@ -37232,7 +35740,6 @@ mod protocol {
                     &server_test_network_id(),
                 )
                 .expect("accept exact authentication payload");
-
                 let mut invalid_requests = Vec::new();
                 let mut invalid = valid.clone();
                 invalid.action = 0;
@@ -37260,7 +35767,6 @@ mod protocol {
                             .is_err()
                     );
                 }
-
                 let mut wrong_slot = bootle_lantern_auth_operation(3, binding.clone(), &valid);
                 wrong_slot.binding.slot =
                     IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider.wire_id();
@@ -37268,7 +35774,6 @@ mod protocol {
                     validate_operation_payload(&wrong_slot, None, &server_test_network_id())
                         .is_err()
                 );
-
                 let mut wrong_operation = bootle_lantern_auth_operation(4, binding, &valid);
                 wrong_operation.operation =
                     OPERATION_BOOTLE_LANTERN_ISSUANCE_PREPARE_AUTHORIZATION_V1;
@@ -37276,28 +35781,24 @@ mod protocol {
                     validate_operation_payload(&wrong_operation, None, &server_test_network_id())
                         .is_err()
                 );
-
                 let mut truncated = request.clone();
                 truncated.payload.pop();
                 assert!(
                     validate_operation_payload(&truncated, None, &server_test_network_id())
                         .is_err()
                 );
-
                 let mut trailing = request;
                 trailing.payload.push(0);
                 assert!(
                     validate_operation_payload(&trailing, None, &server_test_network_id()).is_err()
                 );
             }
-
             #[test]
             fn bootle_lantern_auth_dispatch_requalifies_and_redacts_backend_failures() {
                 let backend = Arc::new(ServerTestBootleLanternBackend::new(
                     bootle_lantern_test_bindings(),
                 ));
                 let state = bootle_lantern_test_state(Arc::clone(&backend));
-
                 let request = bootle_lantern_state_auth_operation(&state, 1, vec![0x31; 32]);
                 validate_operation_request(&request).expect("accept exact broker request");
                 let result = dispatch_server_operation(&state, &request)
@@ -37311,19 +35812,16 @@ mod protocol {
                 assert_eq!(principal.principal_digest, [0x95; 32]);
                 assert_eq!(principal.issued_at_height, 17);
                 assert_eq!(principal.expires_at_height, 21);
-
                 let denied = bootle_lantern_state_auth_operation(&state, 2, vec![0]);
                 assert!(matches!(
                     dispatch_server_operation(&state, &denied),
                     Err(BrokerError::Rejected)
                 ));
-
                 let unavailable = bootle_lantern_state_auth_operation(&state, 3, vec![u8::MAX]);
                 assert!(matches!(
                     dispatch_server_operation(&state, &unavailable),
                     Err(BrokerError::Unavailable)
                 ));
-
                 backend
                     .drift_after_authenticate
                     .store(true, Ordering::Release);
@@ -37333,7 +35831,6 @@ mod protocol {
                     Err(BrokerError::StaleOrRevoked)
                 ));
             }
-
             #[test]
             fn bootle_lantern_response_validation_rejects_operation_and_body_substitution() {
                 let request = bootle_lantern_auth_operation(
@@ -37357,12 +35854,10 @@ mod protocol {
                 .expect("encode principal result");
                 validate_operation_result(&request, STATUS_OK_V1, &result)
                     .expect("accept exact principal result");
-
                 let substituted =
                     encode_canonical(&[0xB4; 32], MAX_BOOTLE_LANTERN_ISSUANCE_FRAME_BYTES_V1)
                         .expect("encode substituted digest result");
                 assert!(validate_operation_result(&request, STATUS_OK_V1, &substituted).is_err());
-
                 let mut truncated = result.clone();
                 truncated.pop();
                 assert!(validate_operation_result(&request, STATUS_OK_V1, &truncated).is_err());
@@ -37370,14 +35865,12 @@ mod protocol {
                 trailing.push(0);
                 assert!(validate_operation_result(&request, STATUS_OK_V1, &trailing).is_err());
                 assert!(validate_operation_result(&request, STATUS_REJECTED_V1, &result).is_err());
-
                 let mut wrong_operation = request;
                 wrong_operation.operation = OPERATION_BOOTLE_LANTERN_ISSUANCE_VALIDATE_REQUEST_V1;
                 assert!(
                     validate_operation_result(&wrong_operation, STATUS_OK_V1, &result).is_err()
                 );
             }
-
             #[test]
             fn bootle_lantern_backend_set_rejects_drift_unavailability_and_substitution() {
                 let binding = bootle_lantern_runtime_binding();
@@ -37390,7 +35883,6 @@ mod protocol {
                     .expect("accept exact slot-56 backend set");
                 make_server_observation(&binding, &backends)
                     .expect("observe exact slot-56 backend");
-
                 let mutations: [fn(&mut ProviderBindingWireV1); 4] = [
                     |binding: &mut ProviderBindingWireV1| binding.revision = Some(8),
                     |binding: &mut ProviderBindingWireV1| {
@@ -37413,14 +35905,12 @@ mod protocol {
                     mutate(&mut substituted);
                     assert!(make_server_observation(&substituted, &backends).is_err());
                 }
-
                 backend.revision.store(8, Ordering::Release);
                 assert!(make_server_observation(&binding, &backends).is_err());
                 backend.revision.store(7, Ordering::Release);
                 backend.unavailable.store(true, Ordering::Release);
                 assert!(make_server_observation(&binding, &backends).is_err());
                 backend.unavailable.store(false, Ordering::Release);
-
                 assert!(
                     validate_exact_backend_set(
                         std::slice::from_ref(&binding),
@@ -37430,7 +35920,6 @@ mod protocol {
                 );
                 assert!(validate_exact_backend_set(&[], &backends).is_err());
             }
-
             fn appeal_finance_signer_test_state(
                 signer: Arc<ServerTestAppealFinanceSigner>,
             ) -> BrokerServerStateV1 {
@@ -37460,7 +35949,6 @@ mod protocol {
                     backends,
                 }
             }
-
             fn pop_runtime_binding() -> ProviderBindingWireV1 {
                 let mut binding = plain_runtime_binding(
                     IrohaRuntimeProviderSlotV1::PopCredentialProviderRegistry,
@@ -37479,7 +35967,6 @@ mod protocol {
                 });
                 binding
             }
-
             fn por_replay_archive_runtime_binding() -> ProviderBindingWireV1 {
                 let mut binding = plain_runtime_binding(
                     IrohaRuntimeProviderSlotV1::PorFinalizedReplayArchive,
@@ -37500,7 +35987,6 @@ mod protocol {
                 });
                 binding
             }
-
             fn server_test_ed25519_signature(payload: &[u8]) -> [u8; 64] {
                 let signature = iroha_crypto::Signature::try_new(
                     server_test_request_auth_keypair().private_key(),
@@ -37512,7 +35998,6 @@ mod protocol {
                     .try_into()
                     .expect("Ed25519 signatures are exactly 64 bytes")
             }
-
             fn por_replay_archive_record_fixture() -> sorafs_node::PorFinalizedReplayArchiveRecordV1
             {
                 use iroha_data_model::sorafs::reputation::{
@@ -37526,12 +36011,10 @@ mod protocol {
                     },
                     provider_advert::{AdvertSignature, SignatureAlgorithm},
                 };
-
                 const ISSUED_AT: u64 = 1_700_000_000;
                 const SUBMITTED_AT: u64 = 1_700_000_100;
                 const DECIDED_AT: u64 = 1_700_000_300;
                 const DEADLINE_AT: u64 = 1_700_000_600;
-
                 let manifest_digest = [0x22; 32];
                 let provider_id = [0x33; 32];
                 let epoch_id = 123;
@@ -37569,7 +36052,6 @@ mod protocol {
                 challenge
                     .validate()
                     .expect("valid replay-archive challenge");
-
                 let proof_digest = [0x52; 32];
                 let mut verdict = AuditVerdictV1 {
                     version: AUDIT_VERDICT_VERSION_V1,
@@ -37606,7 +36088,6 @@ mod protocol {
                 verdict
                     .verify_signatures()
                     .expect("authenticated replay-archive verdict");
-
                 let fixture = PorReplayArchiveRecordFixtureV1 {
                     finalized: PorReplayArchiveFinalizedStateFixtureV1 {
                         state: PorReplayArchiveChallengeStateFixtureV1 {
@@ -37648,42 +36129,36 @@ mod protocol {
                 decode_por_replay_archive_record(&canonical)
                     .expect("fixture is the canonical production record layout")
             }
-
             fn privacy_cycle_prf_runtime_binding() -> ProviderBindingWireV1 {
                 plain_runtime_binding(
                     IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider,
                     SERVER_TEST_PRIVACY_PRF_HANDLE,
                 )
             }
-
             fn privacy_release_anchor_runtime_binding() -> ProviderBindingWireV1 {
                 plain_runtime_binding(
                     IrohaRuntimeProviderSlotV1::PrivacyReleaseAnchor,
                     SERVER_TEST_PRIVACY_RELEASE_ANCHOR_HANDLE,
                 )
             }
-
             fn transparency_leader_lease_runtime_binding() -> ProviderBindingWireV1 {
                 plain_runtime_binding(
                     IrohaRuntimeProviderSlotV1::TransparencyLeaderLease,
                     SERVER_TEST_TRANSPARENCY_LEADER_LEASE_HANDLE,
                 )
             }
-
             fn fenced_privacy_publisher_runtime_binding() -> ProviderBindingWireV1 {
                 plain_runtime_binding(
                     IrohaRuntimeProviderSlotV1::FencedPrivacyPublisher,
                     SERVER_TEST_FENCED_PRIVACY_PUBLISHER_HANDLE,
                 )
             }
-
             fn fenced_privacy_head_reader_runtime_binding() -> ProviderBindingWireV1 {
                 plain_runtime_binding(
                     IrohaRuntimeProviderSlotV1::FencedPrivacyHeadReader,
                     SERVER_TEST_FENCED_PRIVACY_PUBLISHER_HANDLE,
                 )
             }
-
             fn sample_fenced_privacy_head_evidence() -> (
                 sorafs_node::FencedTransparencyTargetHeadV1,
                 sorafs_node::FencedTransparencyPublicationInclusionV1,
@@ -37696,7 +36171,6 @@ mod protocol {
                 .expect("canonical fenced privacy publication inclusion");
                 (head, publication)
             }
-
             fn sample_fenced_privacy_request() -> sorafs_node::FencedPrivacyPublicationRequestV1 {
                 let query_id = [0x51; 32];
                 let cycle_start_unix = 1_000;
@@ -37809,7 +36283,6 @@ mod protocol {
                 )
                 .expect("canonical fenced publication request")
             }
-
             fn checkpoint_binding() -> ProviderBindingWireV1 {
                 ProviderBindingWireV1 {
                     slot: IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore.wire_id(),
@@ -37850,7 +36323,6 @@ mod protocol {
                     moderation_panel_notification_archive_binding: None,
                 }
             }
-
             fn moderation_binding() -> ProviderBindingWireV1 {
                 ProviderBindingWireV1 {
                     slot: IrohaRuntimeProviderSlotV1::ModerationQuarantineKeyWrapper.wire_id(),
@@ -37891,7 +36363,6 @@ mod protocol {
                     moderation_panel_notification_archive_binding: None,
                 }
             }
-
             fn evidence_viewer_binding(slot: IrohaRuntimeProviderSlotV1) -> ProviderBindingWireV1 {
                 let mut binding = ProviderBindingWireV1 {
                     slot: slot.wire_id(),
@@ -37980,7 +36451,6 @@ mod protocol {
                 }
                 binding
             }
-
             fn observation(binding: &ProviderBindingWireV1) -> ProviderObservationWireV1 {
                 let signer_metadata =
                     if binding.slot == IrohaRuntimeProviderSlotV1::GovernanceDagSigner.wire_id() {
@@ -38084,7 +36554,6 @@ mod protocol {
                     moderation_panel_notification_archive_binding,
                 }
             }
-
             fn refresh_metadata_digest(observed: &mut ProviderObservationWireV1) {
                 observed.metadata_digest = provider_metadata_digest(
                     &observed.signer_metadata,
@@ -38101,7 +36570,6 @@ mod protocol {
                 )
                 .expect("encode mutated test provider metadata");
             }
-
             fn validated_test_operation(
                 binding: ProviderBindingWireV1,
                 operation: u16,
@@ -38138,7 +36606,6 @@ mod protocol {
                 }
                 request
             }
-
             fn handshake_response(request: &HandshakeRequestV1) -> HandshakeResponseV1 {
                 let observations = request
                     .requested_catalog
@@ -38168,7 +36635,6 @@ mod protocol {
                         .expect("seal test server transcript"),
                 }
             }
-
             fn assert_valid_handshake_request(request: &HandshakeRequestV1) {
                 assert_eq!(
                     request.catalog_digest,
@@ -38191,7 +36657,6 @@ mod protocol {
                     client_transcript_digest(&transcript).expect("digest test client transcript")
                 );
             }
-
             fn operation_response(
                 request: &OperationRequestV1,
                 status: u8,
@@ -38225,7 +36690,6 @@ mod protocol {
                         .expect("seal test operation response"),
                 }
             }
-
             fn reseal_response(response: &mut OperationResponseV1) {
                 let fields = OperationResponseFieldsV1 {
                     session_id: response.session_id,
@@ -38243,7 +36707,6 @@ mod protocol {
                 response.response_digest =
                     operation_response_digest(&fields).expect("reseal test response");
             }
-
             fn start_test_server() -> (
                 tempfile::TempDir,
                 std::path::PathBuf,
@@ -38275,7 +36738,6 @@ mod protocol {
                 endpoint_identity(&policy).expect("ready broker endpoint remains pinned");
                 (directory, path, policy, shutdown, server)
             }
-
             fn start_request_auth_test_server() -> (
                 tempfile::TempDir,
                 EndpointPolicy,
@@ -38310,7 +36772,6 @@ mod protocol {
                 endpoint_identity(&policy).expect("ready request-auth endpoint remains pinned");
                 (directory, policy, shutdown, server)
             }
-
             fn start_native_signer_server(
                 bindings: IrohaRuntimeProviderBindingsV1,
                 backends: RuntimeProviderBrokerBackendsV1,
@@ -38348,7 +36809,6 @@ mod protocol {
                 endpoint_identity(&policy).expect("ready native signer endpoint remains pinned");
                 (directory, policy, shutdown, server)
             }
-
             fn start_native_signer_test_server() -> (
                 tempfile::TempDir,
                 EndpointPolicy,
@@ -38360,7 +36820,6 @@ mod protocol {
                     native_signer_test_backends(),
                 )
             }
-
             fn start_source_test_server(
                 source: ServerTestProviderSource,
                 bindings: IrohaRuntimeProviderBindingsV1,
@@ -38400,7 +36859,6 @@ mod protocol {
                 endpoint_identity(&policy).expect("ready source endpoint remains pinned");
                 (directory, policy, shutdown, server)
             }
-
             fn connect_test_source(
                 policy: &EndpointPolicy,
                 bindings: &IrohaRuntimeProviderBindingsV1,
@@ -38440,7 +36898,6 @@ mod protocol {
                     source_provider_ids: observation.provider_ingest_source_provider_ids.clone(),
                 })
             }
-
             fn connect_test_server_session(policy: &EndpointPolicy) -> Arc<BrokerSession> {
                 let binding = signer_binding_for_server();
                 let (session, _) = BrokerSession::connect(
@@ -38452,7 +36909,6 @@ mod protocol {
                 .expect("connect authenticated broker server session");
                 session
             }
-
             fn signer_binding_for_server() -> ProviderBindingWireV1 {
                 ProviderBindingWireV1 {
                     slot: IrohaRuntimeProviderSlotV1::GovernanceDagSigner.wire_id(),
@@ -38495,7 +36951,6 @@ mod protocol {
                     moderation_panel_notification_archive_binding: None,
                 }
             }
-
             include!("runtime_provider_broker/server_source_tests.rs");
             include!("runtime_provider_broker/codec_signer_tests.rs");
             #[test]
@@ -38525,7 +36980,6 @@ mod protocol {
                         prepare_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
                         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
                     ));
-
                     match slot {
                         IrohaRuntimeProviderSlotV1::ModerationSettlementHandoff => {
                             prepare_server_state(
@@ -38564,7 +37018,6 @@ mod protocol {
                         _ => unreachable!(),
                     }
                 }
-
                 let settlement_catalog = moderation_delivery_test_catalog(
                     IrohaRuntimeProviderSlotV1::ModerationSettlementHandoff,
                 );
@@ -38594,7 +37047,6 @@ mod protocol {
                         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                     ));
                 }
-
                 let panel_catalog = moderation_delivery_test_catalog(
                     IrohaRuntimeProviderSlotV1::ModerationPanelNotification,
                 );
@@ -38613,7 +37065,6 @@ mod protocol {
                         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                     ));
                 }
-
                 let mut role_confused = settlement_catalog
                     .iter()
                     .next()
@@ -38631,7 +37082,6 @@ mod protocol {
                     Err(BrokerError::BindingMismatch)
                 );
             }
-
             #[test]
             fn moderation_delivery_hard_cut_rejects_kind_canonical_and_bounds_before_provider() {
                 use sorafs_node::moderation_orchestrator::ModerationTerminalHandoffKindV1 as Kind;
@@ -38657,7 +37107,6 @@ mod protocol {
                 );
                 validate_operation_request(&exact_handoff)
                     .expect("accept exact canonical settlement handoff");
-
                 let publication_state = moderation_handoff_test_state(
                     IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff,
                     Arc::new(ServerTestModerationHandoffBoundary::exact(
@@ -38675,7 +37124,6 @@ mod protocol {
                     validate_operation_request(&wrong_kind),
                     Err(BrokerError::Rejected)
                 );
-
                 let mut invalid_handoffs = Vec::new();
                 let mut trailing_canonical = handoff_wire.clone();
                 trailing_canonical.canonical_handoff.push(0);
@@ -38715,7 +37163,6 @@ mod protocol {
                     Err(BrokerError::Protocol)
                 );
                 assert_eq!(handoff_boundary.delivery_calls.load(Ordering::Relaxed), 0);
-
                 let panel_boundary = Arc::new(ServerTestModerationPanelBoundary::exact());
                 let panel_state = moderation_panel_test_state(panel_boundary.clone());
                 let panel_request = moderation_panel_test_request();
@@ -38733,7 +37180,6 @@ mod protocol {
                 );
                 validate_operation_request(&exact_panel)
                     .expect("accept exact canonical panel notification");
-
                 let mut invalid_panels = Vec::new();
                 let mut trailing_canonical = panel_wire.clone();
                 trailing_canonical.canonical_notification.push(0);
@@ -38767,7 +37213,6 @@ mod protocol {
                 }
                 assert_eq!(panel_boundary.delivery_calls.load(Ordering::Relaxed), 0);
             }
-
             #[test]
             fn moderation_delivery_server_enforces_replay_failures_receipts_and_post_drift() {
                 use iroha_torii::sorafs::moderation_runtime::ModerationDurableHandoffRequestV1;
@@ -38821,7 +37266,6 @@ mod protocol {
                     .outcome,
                     2
                 );
-
                 let mut conflicting_handoff = handoff_request.handoff.clone();
                 conflicting_handoff.outcome_digest = [0x99; 32];
                 let conflicting_request = ModerationDurableHandoffRequestV1 {
@@ -38847,7 +37291,6 @@ mod protocol {
                     Err(BrokerError::Rejected)
                 );
                 assert_eq!(handoff_boundary.delivery_calls.load(Ordering::Relaxed), 3);
-
                 for (mode, expected) in [
                     (
                         ServerTestModerationDeliveryMode::NotDelivered,
@@ -38892,7 +37335,6 @@ mod protocol {
                         Err(expected)
                     );
                 }
-
                 let panel_boundary = Arc::new(ServerTestModerationPanelBoundary::exact());
                 let panel_state = moderation_panel_test_state(panel_boundary.clone());
                 let panel_request = moderation_panel_test_request();
@@ -38931,7 +37373,6 @@ mod protocol {
                     first.notification_id,
                     panel_request.notification.notification_id
                 );
-
                 let mut conflicting_panel = moderation_panel_test_request();
                 conflicting_panel.notification.source_operation_id = [0xA1; 32];
                 conflicting_panel.canonical_notification =
@@ -38952,7 +37393,6 @@ mod protocol {
                     Err(BrokerError::Rejected)
                 );
                 assert_eq!(panel_boundary.delivery_calls.load(Ordering::Relaxed), 3);
-
                 for (mode, expected) in [
                     (
                         ServerTestModerationDeliveryMode::NotDelivered,
@@ -38997,7 +37437,6 @@ mod protocol {
                     );
                 }
             }
-
             #[test]
             fn moderation_delivery_round_trips_and_poisons_after_ambiguous_results() {
                 use iroha_torii::sorafs::moderation_runtime::{
@@ -39009,7 +37448,6 @@ mod protocol {
                     ModerationRuntimeProviderReadinessErrorV1 as ReadinessError,
                     ModerationTerminalHandoffKindV1 as Kind,
                 };
-
                 for (slot, kind) in [
                     (
                         IrohaRuntimeProviderSlotV1::ModerationSettlementHandoff,
@@ -39085,7 +37523,6 @@ mod protocol {
                         .expect("join moderation handoff broker")
                         .expect("moderation handoff broker exits cleanly");
                 }
-
                 let panel_catalog = moderation_delivery_test_catalog(
                     IrohaRuntimeProviderSlotV1::ModerationPanelNotification,
                 );
@@ -39124,7 +37561,6 @@ mod protocol {
                     .join()
                     .expect("join panel-notification broker")
                     .expect("panel-notification broker exits cleanly");
-
                 let handoff_catalog = moderation_delivery_test_catalog(
                     IrohaRuntimeProviderSlotV1::ModerationSettlementHandoff,
                 );
@@ -39165,7 +37601,6 @@ mod protocol {
                     .join()
                     .expect("join drifting handoff broker")
                     .expect("drifting handoff broker exits cleanly");
-
                 let (_directory, policy, shutdown, server) = start_native_signer_server(
                     panel_catalog.clone(),
                     RuntimeProviderBrokerBackendsV1::new().with_moderation_panel_notification(
@@ -39204,7 +37639,6 @@ mod protocol {
                     .expect("join invalid-receipt panel broker")
                     .expect("invalid-receipt panel broker exits cleanly");
             }
-
             #[test]
             fn catalog_slot_ids_are_bounded_by_configured_multiplicities() {
                 let mut maximum = Vec::with_capacity(MAX_CATALOG_ENTRIES_V1);
@@ -39217,7 +37651,6 @@ mod protocol {
                 assert_eq!(maximum.len(), MAX_CATALOG_ENTRIES_V1);
                 assert_eq!(MAX_CATALOG_ENTRIES_V1, 182);
                 assert_eq!(validate_catalog_slot_ids(maximum.iter().copied()), Ok(()));
-
                 let mut oversized = maximum;
                 oversized
                     .push(IrohaRuntimeProviderSlotV1::AppealFinanceTransactionSigner.wire_id());
@@ -39244,7 +37677,6 @@ mod protocol {
                     "a catalog missing every role is not a handshake catalog"
                 );
             }
-
             #[test]
             fn signing_payload_bound_matches_canonical_governance_ceiling() {
                 assert_eq!(
@@ -39272,7 +37704,6 @@ mod protocol {
                     Err(BrokerError::Rejected)
                 );
             }
-
             #[test]
             fn stream_token_and_potr_signers_reject_noncanonical_or_unbound_payloads() {
                 let token_body = sorafs_manifest::StreamTokenBodyV1 {
@@ -39311,7 +37742,6 @@ mod protocol {
                     ),
                     Err(BrokerError::Rejected)
                 );
-
                 let mut receipt = sorafs_manifest::PotrReceiptV1 {
                     version: sorafs_manifest::POTR_RECEIPT_VERSION_V1,
                     manifest_digest: [0x31; 32],
@@ -39350,7 +37780,6 @@ mod protocol {
                 let mut trailing_potr = potr_payload;
                 trailing_potr.push(0);
                 assert!(validate_potr_signing_payload(&trailing_potr, [0x32; 32]).is_err());
-
                 receipt.gateway_signature = Some(sorafs_manifest::PotrSignatureV1 {
                     algorithm: sorafs_manifest::PotrSignatureAlgorithm::Ed25519,
                     public_key: vec![0x41; 32],
@@ -39367,12 +37796,10 @@ mod protocol {
                     "the external signer accepts only the canonical unsigned receipt"
                 );
             }
-
             #[test]
             fn stream_token_signer_binding_and_qualification_frames_are_exact() {
                 let binding = stream_token_signer_binding();
                 assert_eq!(validate_wire_binding(&binding), Ok(()));
-
                 for mutate in [
                     |binding: &mut ProviderBindingWireV1| binding.revision = None,
                     |binding: &mut ProviderBindingWireV1| binding.revision = Some(0),
@@ -39386,7 +37813,6 @@ mod protocol {
                         Err(BrokerError::BindingMismatch)
                     );
                 }
-
                 let request = validated_test_operation(
                     binding,
                     OPERATION_QUALIFY_V1,
@@ -39418,7 +37844,6 @@ mod protocol {
                     Err(BrokerError::Protocol)
                 );
             }
-
             #[test]
             fn stream_token_server_observation_rejects_drift_and_test_markers() {
                 struct SignerProbe {
@@ -39426,16 +37851,13 @@ mod protocol {
                     drift: bool,
                     calls: AtomicU64,
                 }
-
                 impl iroha_torii::sorafs::StreamTokenRuntimeSigner for SignerProbe {
                     fn handle(&self) -> &str {
                         self.handle
                     }
-
                     fn public_key(&self) -> [u8; 32] {
                         TEST_SIGNER_KEY
                     }
-
                     fn qualification(
                         &self,
                     ) -> Result<
@@ -39450,7 +37872,6 @@ mod protocol {
                             ),
                         )
                     }
-
                     fn sign(
                         &self,
                         _signing_payload: &[u8],
@@ -39459,7 +37880,6 @@ mod protocol {
                         Err(iroha_torii::sorafs::StreamTokenSigningError::Refused)
                     }
                 }
-
                 let binding = stream_token_signer_binding();
                 let exact = Arc::new(SignerProbe {
                     handle: "software://sorafs/stream-token/primary",
@@ -39471,7 +37891,6 @@ mod protocol {
                 make_server_observation(&binding, &backends)
                     .expect("observe exact stream-token signer twice");
                 assert_eq!(exact.calls.load(Ordering::SeqCst), 2);
-
                 for provider in [
                     SignerProbe {
                         handle: "software://sorafs/stream-token/primary",
@@ -39492,7 +37911,6 @@ mod protocol {
                     ));
                 }
             }
-
             #[test]
             fn moderation_quarantine_server_binds_key_identity_and_revalidates_operations() {
                 let catalog = moderation_server_test_catalog();
@@ -39516,7 +37934,6 @@ mod protocol {
                         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                     ));
                 }
-
                 let state =
                     moderation_server_test_state(Arc::new(ServerTestModerationKeyWrapper::exact()));
                 assert_eq!(
@@ -39544,7 +37961,6 @@ mod protocol {
                         policy_digest: TEST_POLICY_DIGEST,
                     }
                 );
-
                 let context_digest = [0x31; 32];
                 let dek = [0x52; 32];
                 let wrapped = dispatch_moderation_test_operation(
@@ -39568,7 +37984,6 @@ mod protocol {
                 .expect("decode moderation wrapped DEK");
                 let wrapped = std::mem::take(&mut wrapped.wrapped_dek);
                 assert_eq!(wrapped.len(), 64);
-
                 let unwrapped = dispatch_moderation_test_operation(
                     &state,
                     3,
@@ -39593,7 +38008,6 @@ mod protocol {
                     .dek,
                     dek
                 );
-
                 let zero_context = make_operation_request(
                     TEST_SESSION_ID,
                     4,
@@ -39614,7 +38028,6 @@ mod protocol {
                     validate_operation_request(&zero_context),
                     Err(BrokerError::Rejected)
                 );
-
                 let oversized_wrapped = make_operation_request(
                     TEST_SESSION_ID,
                     5,
@@ -39639,7 +38052,6 @@ mod protocol {
                     validate_operation_request(&oversized_wrapped),
                     Err(BrokerError::Rejected)
                 );
-
                 let drifting = moderation_server_test_state(Arc::new(
                     ServerTestModerationKeyWrapper::exact().with_post_wrap_drift(),
                 ));
@@ -39660,14 +38072,12 @@ mod protocol {
                     Err(BrokerError::Ambiguous)
                 );
             }
-
             #[test]
             fn moderation_quarantine_server_rejects_malformed_inputs_and_unwrap_drift() {
                 let state =
                     moderation_server_test_state(Arc::new(ServerTestModerationKeyWrapper::exact()));
                 let context_digest = [0x31; 32];
                 let dek = [0x52; 32];
-
                 let zero_dek = make_operation_request(
                     TEST_SESSION_ID,
                     1,
@@ -39688,7 +38098,6 @@ mod protocol {
                     validate_operation_request(&zero_dek),
                     Err(BrokerError::Rejected)
                 );
-
                 for key_id in [
                     String::new(),
                     " kms:key".to_owned(),
@@ -39721,7 +38130,6 @@ mod protocol {
                         Err(BrokerError::Rejected)
                     );
                 }
-
                 let empty_wrapped = make_operation_request(
                     TEST_SESSION_ID,
                     3,
@@ -39743,7 +38151,6 @@ mod protocol {
                     validate_operation_request(&empty_wrapped),
                     Err(BrokerError::Rejected)
                 );
-
                 let maximum_wrapped = make_operation_request(
                     TEST_SESSION_ID,
                     4,
@@ -39789,7 +38196,6 @@ mod protocol {
                     Err(BrokerError::Rejected),
                     "the maximum payload reaches the backend before semantic rejection"
                 );
-
                 let mut wrapped = context_digest.to_vec();
                 wrapped.extend(
                     dek.iter()
@@ -39807,7 +38213,6 @@ mod protocol {
                     )
                     .expect("encode valid unwrap")
                 };
-
                 let zero_output = moderation_server_test_state(Arc::new(
                     ServerTestModerationKeyWrapper::exact().with_zero_unwrap_output(),
                 ));
@@ -39820,7 +38225,6 @@ mod protocol {
                     ),
                     Err(BrokerError::Rejected)
                 );
-
                 let drifting = moderation_server_test_state(Arc::new(
                     ServerTestModerationKeyWrapper::exact().with_post_unwrap_drift(),
                 ));
@@ -39833,7 +38237,6 @@ mod protocol {
                     ),
                     Err(BrokerError::StaleOrRevoked)
                 );
-
                 for (failure, expected) in [
                     (
                         sorafs_node::ModerationQuarantineKeyOperationErrorV1::Unavailable,
@@ -39872,7 +38275,6 @@ mod protocol {
                         Err(expected)
                     );
                 }
-
                 let invalid_ambiguous_unwrap = moderation_server_test_state(Arc::new(
                     ServerTestModerationKeyWrapper::exact().with_unwrap_failure(
                         sorafs_node::ModerationQuarantineKeyOperationErrorV1::Ambiguous,
@@ -39889,7 +38291,6 @@ mod protocol {
                     "read-only unwrap uncertainty is never represented as ambiguous"
                 );
             }
-
             #[test]
             fn moderation_quarantine_broker_debug_output_redacts_key_material() {
                 assert_eq!(
@@ -39919,7 +38320,6 @@ mod protocol {
                 )
                 .expect("build redaction test request");
                 let result = ModerationQuarantineUnwrapDekResultWireV1 { dek: [222; 32] };
-
                 for rendered in [
                     format!("{wire:?}"),
                     format!("{request:?}"),
@@ -39931,7 +38331,6 @@ mod protocol {
                     );
                 }
             }
-
             #[test]
             fn soracloud_hf_inference_broker_is_bounded_and_redacts_payloads() {
                 assert_eq!(
@@ -39942,7 +38341,6 @@ mod protocol {
                     operation_decode_policy(OPERATION_SORACLOUD_HF_AUTHENTICATED_INFERENCE_V1),
                     SORACLOUD_HF_DECODE_POLICY_V1
                 );
-
                 let request_wire = SoracloudHfAuthenticatedInferenceRequestWireV1 {
                     url: "https://router.huggingface.co/models/example?private-query-value"
                         .to_owned(),
@@ -39973,7 +38371,6 @@ mod protocol {
                         .expect("encode bounded HF inference response"),
                 );
                 assert_eq!(validate_operation_response(&request, &response), Ok(()));
-
                 for rendered in [
                     format!("{request_wire:?}"),
                     format!("{request:?}"),
@@ -39985,7 +38382,6 @@ mod protocol {
                     assert!(!rendered.contains("private-query-value"));
                 }
             }
-
             #[test]
             fn reputation_retention_slot_is_exact_bounded_and_backend_symmetric() {
                 let catalog = reputation_retention_server_test_catalog();
@@ -40003,7 +38399,6 @@ mod protocol {
                     ),
                     Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
                 ));
-
                 for backend in [
                     ServerTestReputationRetentionAuthority {
                         handle: "sealed://sorafs/reputation/retention-substitute".to_owned(),
@@ -40029,7 +38424,6 @@ mod protocol {
                         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                     ));
                 }
-
                 let state = prepare_server_state(
                     &catalog,
                     RuntimeProviderBrokerBackendsV1::new()
@@ -40058,7 +38452,6 @@ mod protocol {
                     operation_frame_limit(OPERATION_REPUTATION_RETENTION_COMPARE_AND_SWAP_V1),
                     MAX_REPUTATION_RETENTION_FRAME_BYTES_V1
                 );
-
                 let observation = state.observations[0].clone();
                 let request = make_operation_request(
                     TEST_SESSION_ID,
@@ -40079,7 +38472,6 @@ mod protocol {
                     dispatch_server_operation(&state, &request),
                     Err(BrokerError::BindingMismatch)
                 );
-
                 for next_record in [
                     Vec::new(),
                     vec![0xA5; MAX_REPUTATION_RETENTION_APPROVAL_BYTES_V1 + 1],
@@ -40111,7 +38503,6 @@ mod protocol {
                         Err(BrokerError::Rejected)
                     );
                 }
-
                 let mut oversized_prelude = Vec::new();
                 oversized_prelude.extend_from_slice(&binding.slot.to_be_bytes());
                 oversized_prelude.extend_from_slice(
@@ -40128,7 +38519,6 @@ mod protocol {
                     "the 64 KiB record envelope is bounded before frame allocation"
                 );
             }
-
             #[test]
             fn governance_checkpoint_server_requires_exact_backend_identity_and_policy() {
                 let catalog = checkpoint_server_test_catalog();
@@ -40136,7 +38526,6 @@ mod protocol {
                     prepare_server_state(&catalog, RuntimeProviderBrokerBackendsV1::new()),
                     Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
                 ));
-
                 for backend in [
                     LaxGovernanceCheckpointStore::new(
                         "sealed://governance/runtime-broker-checkpoint-substitute",
@@ -40155,7 +38544,6 @@ mod protocol {
                         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                     ));
                 }
-
                 prepare_server_state(
                     &catalog,
                     RuntimeProviderBrokerBackendsV1::new().with_governance_dag_checkpoint_store(
@@ -40167,7 +38555,6 @@ mod protocol {
                 )
                 .expect("exact checkpoint backend must qualify");
             }
-
             #[test]
             fn governance_checkpoint_slot_wire_mapping_roundtrips_replay_state() {
                 use sorafs_node::GovernanceDagSealedStateSlot as Slot;
@@ -40188,14 +38575,12 @@ mod protocol {
                 assert!(!sealed_slot_is_transient(Slot::IpfsRequestReplay));
                 assert!(!sealed_slot_is_transient(Slot::SignedHeadRequestReplay));
             }
-
             #[test]
             fn governance_checkpoint_broker_enforces_monotonic_cas_and_transient_delete() {
                 use sorafs_node::{
                     GovernanceDagSealedCheckpointStore as _, GovernanceDagSealedStateRecord,
                     GovernanceDagSealedStateSlot as Slot,
                 };
-
                 let durable = GovernanceDagSealedStateRecord::new(Slot::Checkpoint, 3, vec![0x31]);
                 let intent =
                     GovernanceDagSealedStateRecord::new(Slot::PublishIntent, 5, vec![0x51]);
@@ -40206,7 +38591,6 @@ mod protocol {
                 );
                 let state = checkpoint_server_test_state(store.clone());
                 let mut request_id = 1_u64;
-
                 for next in [
                     GovernanceDagSealedStateRecord::new(Slot::Checkpoint, 2, vec![0x22]),
                     GovernanceDagSealedStateRecord::new(Slot::Checkpoint, 3, vec![0x33]),
@@ -40227,7 +38611,6 @@ mod protocol {
                     0,
                     "a permissive backend must never see durable generation rollback"
                 );
-
                 let successor =
                     GovernanceDagSealedStateRecord::new(Slot::Checkpoint, 4, vec![0x44]);
                 assert_eq!(
@@ -40245,7 +38628,6 @@ mod protocol {
                     0,
                     "an exact-CAS mismatch must be rejected before the backend mutation"
                 );
-
                 dispatch_checkpoint_test_operation(
                     &state,
                     request_id,
@@ -40260,7 +38642,6 @@ mod protocol {
                         .expect("load durable checkpoint"),
                     Some(successor)
                 );
-
                 assert_eq!(
                     dispatch_checkpoint_test_operation(
                         &state,
@@ -40276,7 +38657,6 @@ mod protocol {
                     0,
                     "durable checkpoint slots are not deletable"
                 );
-
                 let intent_rollback =
                     GovernanceDagSealedStateRecord::new(Slot::PublishIntent, 4, vec![0x42]);
                 assert_eq!(
@@ -40293,7 +38673,6 @@ mod protocol {
                     Err(BrokerError::Rejected)
                 );
                 request_id += 1;
-
                 let intent_successor =
                     GovernanceDagSealedStateRecord::new(Slot::PublishIntent, 5, vec![0x52]);
                 dispatch_checkpoint_test_operation(
@@ -40308,7 +38687,6 @@ mod protocol {
                 )
                 .expect("an active intent may advance at the same generation");
                 request_id += 1;
-
                 assert_eq!(
                     dispatch_checkpoint_test_operation(
                         &state,
@@ -40324,7 +38702,6 @@ mod protocol {
                     0,
                     "a stale transient revision must not reach a permissive backend"
                 );
-
                 dispatch_checkpoint_test_operation(
                     &state,
                     request_id,
@@ -40339,13 +38716,11 @@ mod protocol {
                     None
                 );
             }
-
             #[test]
             fn governance_checkpoint_broker_rejects_empty_state_and_post_mutation_drift() {
                 use sorafs_node::{
                     GovernanceDagSealedStateRecord, GovernanceDagSealedStateSlot as Slot,
                 };
-
                 let write_store = Arc::new(LaxGovernanceCheckpointStore::new(
                     SERVER_TEST_CHECKPOINT_HANDLE,
                     7,
@@ -40412,7 +38787,6 @@ mod protocol {
                     0,
                     "producer intent limit + 1 must fail before backend allocation or mutation"
                 );
-
                 let empty_store = Arc::new(
                     LaxGovernanceCheckpointStore::new(SERVER_TEST_CHECKPOINT_HANDLE, 7)
                         .with_record(Slot::ProducerPublishIntent, empty),
@@ -40433,7 +38807,6 @@ mod protocol {
                     ),
                     Err(BrokerError::Protocol)
                 );
-
                 let store = Arc::new(
                     LaxGovernanceCheckpointStore::new(SERVER_TEST_CHECKPOINT_HANDLE, 7)
                         .with_post_compare_and_swap_drift(),
@@ -40472,7 +38845,6 @@ mod protocol {
                     Err(BrokerError::StaleOrRevoked)
                 );
             }
-
             #[test]
             fn pop_acme_and_compliance_bindings_are_exact_and_drift_checked() {
                 let pop = pop_runtime_binding();
@@ -40489,7 +38861,6 @@ mod protocol {
                     assert_eq!(validate_observation(binding, &observation(binding)), Ok(()));
                 }
                 pop_runtime_bindings_from_wire(&pop).expect("reconstruct exact public PoP binding");
-
                 let backends = RuntimeProviderBrokerBackendsV1::new()
                     .with_pop_credential_provider_registry(Arc::new(ServerTestPopRegistry {
                         revision: AtomicU64::new(7),
@@ -40516,7 +38887,6 @@ mod protocol {
                     make_server_observation(binding, &backends)
                         .expect("stable exact backend qualifies twice");
                 }
-
                 let mut substituted_pop = pop.clone();
                 substituted_pop
                     .pop_credential_runtime_binding
@@ -40555,7 +38925,6 @@ mod protocol {
                     validate_wire_binding(&confused_acme),
                     Err(BrokerError::BindingMismatch)
                 );
-
                 for (binding, backends) in [
                     (
                         pop.clone(),
@@ -40593,7 +38962,6 @@ mod protocol {
                     );
                 }
             }
-
             #[test]
             fn privacy_cycle_prf_binding_is_exact_and_drift_checked() {
                 let binding = privacy_cycle_prf_runtime_binding();
@@ -40602,7 +38970,6 @@ mod protocol {
                     validate_observation(&binding, &observation(&binding)),
                     Ok(())
                 );
-
                 let backends = RuntimeProviderBrokerBackendsV1::new()
                     .with_privacy_cycle_prf_provider(Arc::new(
                         ServerTestPrivacyCyclePrfProvider::exact(),
@@ -40624,7 +38991,6 @@ mod protocol {
                     ),
                     Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
                 );
-
                 let mut confused = binding.clone();
                 confused.governance_request_ingress_binding =
                     Some(governance_request_ingress_binding_to_wire(
@@ -40634,7 +39000,6 @@ mod protocol {
                     validate_wire_binding(&confused),
                     Err(BrokerError::BindingMismatch)
                 );
-
                 let drifted = RuntimeProviderBrokerBackendsV1::new()
                     .with_privacy_cycle_prf_provider(Arc::new(
                         ServerTestPrivacyCyclePrfProvider::drifting(),
@@ -40644,7 +39009,6 @@ mod protocol {
                     Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                 );
             }
-
             #[test]
             fn privacy_cycle_prf_operation_is_canonical_bounded_and_read_only() {
                 assert!(operation_is_known(OPERATION_PRIVACY_CYCLE_PRF_DERIVE_V1));
@@ -40652,7 +39016,6 @@ mod protocol {
                     operation_frame_limit(OPERATION_PRIVACY_CYCLE_PRF_DERIVE_V1),
                     MAX_TRANSPARENCY_PRF_FRAME_BYTES_V1
                 );
-
                 let binding = privacy_cycle_prf_runtime_binding();
                 let provider = Arc::new(ServerTestPrivacyCyclePrfProvider::exact());
                 let backends = RuntimeProviderBrokerBackendsV1::new()
@@ -40702,7 +39065,6 @@ mod protocol {
                 .expect("decode scrubbed threshold-PRF output");
                 assert_eq!(output.output, [0xD5; 32]);
                 assert_eq!(provider.derive_calls.load(Ordering::SeqCst), 1);
-
                 let mut noncanonical = wire;
                 noncanonical.cycle_id[0] ^= 1;
                 let invalid = make_operation_request(
@@ -40724,7 +39086,6 @@ mod protocol {
                     1,
                     "noncanonical requests fail before provider evaluation"
                 );
-
                 let zero_output = encode_canonical(
                     &PrivacyCyclePrfOutputWireV1 { output: [0; 32] },
                     MAX_TRANSPARENCY_PRF_FRAME_BYTES_V1,
@@ -40742,7 +39103,6 @@ mod protocol {
                     "read-only PRF derivation can never report an ambiguous mutation"
                 );
             }
-
             #[test]
             fn privacy_release_anchor_binding_is_exact_and_drift_checked() {
                 let binding = privacy_release_anchor_runtime_binding();
@@ -40751,7 +39111,6 @@ mod protocol {
                     validate_observation(&binding, &observation(&binding)),
                     Ok(())
                 );
-
                 let backends = RuntimeProviderBrokerBackendsV1::new()
                     .with_privacy_release_anchor(Arc::new(ServerTestPrivacyReleaseAnchor::exact()));
                 assert_eq!(
@@ -40771,7 +39130,6 @@ mod protocol {
                     ),
                     Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
                 );
-
                 let mut confused = binding.clone();
                 confused.governance_request_ingress_binding =
                     Some(governance_request_ingress_binding_to_wire(
@@ -40781,7 +39139,6 @@ mod protocol {
                     validate_wire_binding(&confused),
                     Err(BrokerError::BindingMismatch)
                 );
-
                 let substituted = RuntimeProviderBrokerBackendsV1::new()
                     .with_privacy_release_anchor(Arc::new(
                         ServerTestPrivacyReleaseAnchor::substituted(),
@@ -40790,7 +39147,6 @@ mod protocol {
                     make_server_observation(&binding, &substituted),
                     Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                 );
-
                 let drifted = RuntimeProviderBrokerBackendsV1::new().with_privacy_release_anchor(
                     Arc::new(ServerTestPrivacyReleaseAnchor::drifting()),
                 );
@@ -40799,7 +39155,6 @@ mod protocol {
                     Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                 );
             }
-
             #[test]
             fn privacy_release_anchor_operations_are_canonical_and_read_back_cas() {
                 assert!(operation_is_known(
@@ -40816,7 +39171,6 @@ mod protocol {
                     operation_frame_limit(OPERATION_PRIVACY_RELEASE_ANCHOR_COMPARE_AND_SET_V1),
                     MAX_PRIVACY_RELEASE_ANCHOR_FRAME_BYTES_V1
                 );
-
                 let binding = privacy_release_anchor_runtime_binding();
                 let provider = Arc::new(ServerTestPrivacyReleaseAnchor::exact());
                 let backends = RuntimeProviderBrokerBackendsV1::new()
@@ -40864,7 +39218,6 @@ mod protocol {
                     lease_binding,
                 )
                 .expect("canonical leader-lease grant");
-
                 let finalized_request = make_operation_request(
                     [0xB1; 32],
                     1,
@@ -40889,7 +39242,6 @@ mod protocol {
                 .and_then(PrivacyReleaseAnchorHeadWireV1::to_head)
                 .expect("decode canonical finalized head");
                 assert_eq!(decoded, genesis);
-
                 let compare = PrivacyReleaseAnchorCompareAndSetRequestWireV1 {
                     expected: PrivacyReleaseAnchorHeadWireV1::from_head(genesis),
                     next: PrivacyReleaseAnchorHeadWireV1::from_head(next),
@@ -40920,7 +39272,6 @@ mod protocol {
                     .expect("read back committed finalized head"),
                     next
                 );
-
                 let mut noncanonical = compare.clone();
                 noncanonical.next.sequence = 3;
                 let invalid_request = make_operation_request(
@@ -40942,7 +39293,6 @@ mod protocol {
                     1,
                     "noncanonical requests fail before provider evaluation"
                 );
-
                 let no_readback = Arc::new(ServerTestPrivacyReleaseAnchor::without_readback());
                 let no_readback_backends = RuntimeProviderBrokerBackendsV1::new()
                     .with_privacy_release_anchor(no_readback.clone());
@@ -40960,7 +39310,6 @@ mod protocol {
                     Err(BrokerError::Ambiguous)
                 );
                 assert_eq!(no_readback.compare_and_set_calls.load(Ordering::SeqCst), 1);
-
                 let unit = encode_canonical(&(), MAX_PRIVACY_RELEASE_ANCHOR_FRAME_BYTES_V1)
                     .expect("encode payload-free failure");
                 assert!(
@@ -40975,7 +39324,6 @@ mod protocol {
                     make_operation_response(&finalized_request, STATUS_AMBIGUOUS_V1, unit),
                     Err(BrokerError::Protocol)
                 );
-
                 let zero_query =
                     PrivacyReleaseAnchorFinalizedHeadRequestWireV1 { query_id: [0; 32] };
                 assert_eq!(
@@ -40983,7 +39331,6 @@ mod protocol {
                     Err(BrokerError::Rejected)
                 );
             }
-
             #[test]
             fn transparency_leader_lease_binding_is_exact_and_drift_checked() {
                 let binding = transparency_leader_lease_runtime_binding();
@@ -40992,7 +39339,6 @@ mod protocol {
                     validate_observation(&binding, &observation(&binding)),
                     Ok(())
                 );
-
                 let backends = RuntimeProviderBrokerBackendsV1::new()
                     .with_transparency_leader_lease_provider(Arc::new(
                         ServerTestTransparencyLeaderLeaseProvider::exact(),
@@ -41014,7 +39360,6 @@ mod protocol {
                     ),
                     Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
                 );
-
                 let mut confused = binding.clone();
                 confused.governance_request_ingress_binding =
                     Some(governance_request_ingress_binding_to_wire(
@@ -41024,7 +39369,6 @@ mod protocol {
                     validate_wire_binding(&confused),
                     Err(BrokerError::BindingMismatch)
                 );
-
                 let substituted = RuntimeProviderBrokerBackendsV1::new()
                     .with_transparency_leader_lease_provider(Arc::new(
                         ServerTestTransparencyLeaderLeaseProvider::substituted(),
@@ -41033,7 +39377,6 @@ mod protocol {
                     make_server_observation(&binding, &substituted),
                     Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                 );
-
                 let drifted = RuntimeProviderBrokerBackendsV1::new()
                     .with_transparency_leader_lease_provider(Arc::new(
                         ServerTestTransparencyLeaderLeaseProvider::drifting(),
@@ -41043,7 +39386,6 @@ mod protocol {
                     Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                 );
             }
-
             #[test]
             fn transparency_leader_lease_operations_are_canonical_fenced_and_bounded() {
                 for operation in [
@@ -41057,7 +39399,6 @@ mod protocol {
                         MAX_TRANSPARENCY_LEADER_LEASE_FRAME_BYTES_V1
                     );
                 }
-
                 let binding = transparency_leader_lease_runtime_binding();
                 let configured = transparency_runtime_binding_from_wire(&binding)
                     .expect("exact leader-lease binding");
@@ -41121,7 +39462,6 @@ mod protocol {
                 .expect("decode acquired grant");
                 assert_eq!(acquired.fencing_token(), 1);
                 assert_eq!(provider.acquire_calls.load(Ordering::SeqCst), 1);
-
                 let renew = sorafs_node::TransparencyLeaderLeaseRenewRequestV1::try_new(
                     acquired.clone(),
                     2_500,
@@ -41157,7 +39497,6 @@ mod protocol {
                 .expect("decode renewed grant");
                 assert_eq!(renewed.fencing_token(), 2);
                 assert_eq!(provider.renew_calls.load(Ordering::SeqCst), 1);
-
                 let release = sorafs_node::TransparencyLeaderLeaseReleaseRequestV1::try_new(
                     renewed.clone(),
                     3_000,
@@ -41193,7 +39532,6 @@ mod protocol {
                 assert_eq!(receipt.lease_id(), renewed.lease_id());
                 assert_eq!(receipt.fencing_token(), renewed.fencing_token());
                 assert_eq!(provider.release_calls.load(Ordering::SeqCst), 1);
-
                 let mut substituted_request = acquire_wire;
                 substituted_request.provider_binding.revision += 1;
                 let invalid_request = make_operation_request(
@@ -41218,7 +39556,6 @@ mod protocol {
                     1,
                     "substituted binding fails before provider evaluation"
                 );
-
                 let unit = encode_canonical(&(), MAX_TRANSPARENCY_LEADER_LEASE_FRAME_BYTES_V1)
                     .expect("encode payload-free transition failure");
                 for request in [&acquire_request, &renew_request, &release_request] {
@@ -41230,7 +39567,6 @@ mod protocol {
                     );
                 }
             }
-
             #[test]
             fn fenced_privacy_publisher_binding_is_exact_and_drift_checked() {
                 let binding = fenced_privacy_publisher_runtime_binding();
@@ -41239,7 +39575,6 @@ mod protocol {
                     validate_observation(&binding, &observation(&binding)),
                     Ok(())
                 );
-
                 let backends = RuntimeProviderBrokerBackendsV1::new()
                     .with_fenced_privacy_publisher(Arc::new(
                         ServerTestFencedPrivacyPublisher::exact(),
@@ -41261,7 +39596,6 @@ mod protocol {
                     ),
                     Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
                 );
-
                 let mut confused = binding.clone();
                 confused.governance_request_ingress_binding =
                     Some(governance_request_ingress_binding_to_wire(
@@ -41271,7 +39605,6 @@ mod protocol {
                     validate_wire_binding(&confused),
                     Err(BrokerError::BindingMismatch)
                 );
-
                 let substituted = RuntimeProviderBrokerBackendsV1::new()
                     .with_fenced_privacy_publisher(Arc::new(
                         ServerTestFencedPrivacyPublisher::substituted(),
@@ -41280,7 +39613,6 @@ mod protocol {
                     make_server_observation(&binding, &substituted),
                     Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                 );
-
                 let drifted = RuntimeProviderBrokerBackendsV1::new().with_fenced_privacy_publisher(
                     Arc::new(ServerTestFencedPrivacyPublisher::drifting()),
                 );
@@ -41289,7 +39621,6 @@ mod protocol {
                     Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                 );
             }
-
             #[test]
             fn fenced_privacy_nested_payload_rejects_compressed_noncanonical_and_allocation_bombs()
             {
@@ -41306,7 +39637,6 @@ mod protocol {
                     Err(BrokerError::Rejected),
                     "cap + 1 is rejected without allocating the claimed payload"
                 );
-
                 let request = sample_fenced_privacy_request();
                 let wire = FencedPrivacyPublicationRequestWireV1::from_request(&request);
                 let canonical = request.canonical_payload().to_vec();
@@ -41329,7 +39659,6 @@ mod protocol {
                 assert_ne!(noncanonical, canonical);
                 let mut trailing = canonical.clone();
                 trailing.push(0);
-
                 for invalid in [
                     compressed.as_slice(),
                     noncanonical.as_slice(),
@@ -41353,7 +39682,6 @@ mod protocol {
                         "the wire entrypoint rejects the nested representation before reconstruction"
                     );
                 }
-
                 // A valid payload under a one-byte decoded-allocation ceiling
                 // models an attacker-controlled sequence allocation bomb while
                 // retaining the exact production schema and outer framing.
@@ -41384,7 +39712,6 @@ mod protocol {
                     "nested decoded allocations obey the active broker admission"
                 );
             }
-
             #[test]
             fn fenced_privacy_nested_payload_charges_full_broker_admission() {
                 let request = sample_fenced_privacy_request();
@@ -41433,7 +39760,6 @@ mod protocol {
                     "the full server validation/dispatch/response path remains within inventory"
                 );
             }
-
             #[test]
             fn fenced_privacy_publisher_operation_is_canonical_bounded_and_read_back() {
                 assert!(operation_is_known(
@@ -41443,7 +39769,6 @@ mod protocol {
                     operation_frame_limit(OPERATION_FENCED_PRIVACY_COMPARE_AND_APPEND_V1),
                     MAX_FENCED_PRIVACY_PUBLICATION_FRAME_BYTES_V1
                 );
-
                 let binding = fenced_privacy_publisher_runtime_binding();
                 let qualification =
                     qualification_from_binding(&binding).expect("exact publisher qualification");
@@ -41481,7 +39806,6 @@ mod protocol {
                 assert!(wire_debug.contains("canonical_payload_len"));
                 assert!(!wire_debug.contains("canonical_payload:"));
                 assert!(!wire_debug.contains(&format!("{:?}", wire.canonical_payload)));
-
                 let request = make_operation_request(
                     [0xD1; 32],
                     1,
@@ -41507,7 +39831,6 @@ mod protocol {
                 ));
                 assert_eq!(receipt.included_head(), receipt.readback_head());
                 assert_eq!(provider.compare_and_append_calls.load(Ordering::SeqCst), 1);
-
                 let mut tampered = wire.clone();
                 tampered.payload_digest[0] ^= 1;
                 let invalid_request = make_operation_request(
@@ -41529,7 +39852,6 @@ mod protocol {
                     1,
                     "noncanonical request fails before provider evaluation"
                 );
-
                 let substituted_provider =
                     Arc::new(ServerTestFencedPrivacyPublisher::substituted_receipt());
                 let substituted_backends = RuntimeProviderBrokerBackendsV1::new()
@@ -41553,7 +39875,6 @@ mod protocol {
                         .load(Ordering::SeqCst),
                     1
                 );
-
                 let unit = encode_canonical(&(), MAX_FENCED_PRIVACY_PUBLICATION_FRAME_BYTES_V1)
                     .expect("encode payload-free publication failure");
                 assert!(
@@ -41561,7 +39882,6 @@ mod protocol {
                 );
                 assert!(make_operation_response(&request, STATUS_AMBIGUOUS_V1, unit).is_ok());
             }
-
             #[test]
             fn fenced_privacy_head_reader_binding_is_exact_and_drift_checked() {
                 let binding = fenced_privacy_head_reader_runtime_binding();
@@ -41575,7 +39895,6 @@ mod protocol {
                     validate_observation(&binding, &observation(&binding)),
                     Ok(())
                 );
-
                 let backends = RuntimeProviderBrokerBackendsV1::new()
                     .with_fenced_privacy_head_reader(Arc::new(
                         ServerTestFencedPrivacyHeadReader::exact(),
@@ -41597,7 +39916,6 @@ mod protocol {
                     ),
                     Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
                 );
-
                 let mut confused = binding.clone();
                 confused.governance_request_ingress_binding =
                     Some(governance_request_ingress_binding_to_wire(
@@ -41607,7 +39925,6 @@ mod protocol {
                     validate_wire_binding(&confused),
                     Err(BrokerError::BindingMismatch)
                 );
-
                 let substituted = RuntimeProviderBrokerBackendsV1::new()
                     .with_fenced_privacy_head_reader(Arc::new(
                         ServerTestFencedPrivacyHeadReader::substituted(),
@@ -41616,7 +39933,6 @@ mod protocol {
                     make_server_observation(&binding, &substituted),
                     Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                 );
-
                 let drifted = RuntimeProviderBrokerBackendsV1::new()
                     .with_fenced_privacy_head_reader(Arc::new(
                         ServerTestFencedPrivacyHeadReader::drifting(),
@@ -41626,7 +39942,6 @@ mod protocol {
                     Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                 );
             }
-
             #[test]
             fn fenced_privacy_head_reader_operation_is_canonical_bounded_and_exact() {
                 assert!(operation_is_known(
@@ -41636,7 +39951,6 @@ mod protocol {
                     operation_frame_limit(OPERATION_FENCED_PRIVACY_READ_HEAD_WITH_ANCESTRY_V1),
                     MAX_FENCED_PRIVACY_HEAD_FRAME_BYTES_V1
                 );
-
                 let binding = fenced_privacy_head_reader_runtime_binding();
                 let reader = Arc::new(ServerTestFencedPrivacyHeadReader::exact());
                 let backends = RuntimeProviderBrokerBackendsV1::new()
@@ -41685,7 +39999,6 @@ mod protocol {
                 assert_eq!(proof.verified_ancestors(), required_ancestors);
                 assert_eq!(proof.verified_publications(), required_publications);
                 assert_eq!(reader.read_calls.load(Ordering::SeqCst), 1);
-
                 let genesis_wire =
                     FencedPrivacyHeadReadRequestWireV1::from_required_evidence(&[], &[]);
                 let genesis_request = make_operation_request(
@@ -41708,7 +40021,6 @@ mod protocol {
                 .expect("decode authenticated genesis proof");
                 assert_eq!(genesis_proof.authoritative_head(), None);
                 assert_eq!(reader.read_calls.load(Ordering::SeqCst), 2);
-
                 let mut malformed = wire.clone();
                 malformed.version =
                     sorafs_node::FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1.wrapping_add(1);
@@ -41727,7 +40039,6 @@ mod protocol {
                     Err(BrokerError::Rejected)
                 );
                 assert_eq!(reader.read_calls.load(Ordering::SeqCst), 2);
-
                 let excessive = FencedPrivacyHeadReadRequestWireV1 {
                     version: sorafs_node::FENCED_TRANSPARENCY_PUBLICATION_VERSION_V1,
                     required_ancestors: vec![
@@ -41751,7 +40062,6 @@ mod protocol {
                     Err(BrokerError::Rejected)
                 );
                 assert_eq!(reader.read_calls.load(Ordering::SeqCst), 2);
-
                 let substituted_reader =
                     Arc::new(ServerTestFencedPrivacyHeadReader::substituted_proof());
                 let substituted_backends = RuntimeProviderBrokerBackendsV1::new()
@@ -41770,7 +40080,6 @@ mod protocol {
                     Err(BrokerError::Rejected)
                 );
                 assert_eq!(substituted_reader.read_calls.load(Ordering::SeqCst), 1);
-
                 let drift_reader =
                     Arc::new(ServerTestFencedPrivacyHeadReader::drifting_after_read());
                 let drift_backends = RuntimeProviderBrokerBackendsV1::new()
@@ -41789,7 +40098,6 @@ mod protocol {
                     Err(BrokerError::StaleOrRevoked)
                 );
                 assert_eq!(drift_reader.read_calls.load(Ordering::SeqCst), 1);
-
                 let unit = encode_canonical(&(), MAX_FENCED_PRIVACY_HEAD_FRAME_BYTES_V1)
                     .expect("encode payload-free head-read failure");
                 assert_eq!(
@@ -41802,7 +40110,6 @@ mod protocol {
                 );
                 assert!(make_operation_response(&request, STATUS_UNAVAILABLE_V1, unit).is_ok());
             }
-
             #[test]
             fn por_replay_archive_binding_is_exact_bounded_and_drift_checked() {
                 let binding = por_replay_archive_runtime_binding();
@@ -41819,7 +40126,6 @@ mod protocol {
                     validate_observation(&binding, &observation(&binding)),
                     Ok(())
                 );
-
                 let backends = RuntimeProviderBrokerBackendsV1::new()
                     .with_por_finalized_replay_archive(Arc::new(
                         ServerTestPorReplayArchive::exact(exact),
@@ -41834,16 +40140,13 @@ mod protocol {
                     validate_exact_backend_set(&[], &backends),
                     Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch)
                 );
-
                 let mut confused = binding.clone();
                 confused.pop_credential_runtime_binding =
                     pop_runtime_binding().pop_credential_runtime_binding;
                 assert!(validate_wire_binding(&confused).is_err());
-
                 let mut missing_limits = binding.clone();
                 missing_limits.por_replay_archive_proof_limits = None;
                 assert!(validate_wire_binding(&missing_limits).is_err());
-
                 let mut zero_limits = binding.clone();
                 zero_limits
                     .por_replay_archive_proof_limits
@@ -41851,7 +40154,6 @@ mod protocol {
                     .expect("proof limits")
                     .max_successor_receipts = 0;
                 assert!(validate_wire_binding(&zero_limits).is_err());
-
                 let mut excessive_limits = binding.clone();
                 excessive_limits
                     .por_replay_archive_proof_limits
@@ -41862,7 +40164,6 @@ mod protocol {
                         .expect("proof ceiling fits u64")
                         + 1;
                 assert!(validate_wire_binding(&excessive_limits).is_err());
-
                 let later = sorafs_node::PorFinalizedReplayArchiveBindingV1::try_new(
                     exact.archive_id,
                     exact.revision + 1,
@@ -41879,7 +40180,6 @@ mod protocol {
                     Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                 );
             }
-
             #[test]
             fn por_replay_archive_lookup_results_round_trip_found_and_absent() {
                 let binding = por_replay_archive_runtime_binding();
@@ -41900,7 +40200,6 @@ mod protocol {
                     server_test_ed25519_signature(&receipt_digest),
                 )
                 .expect("authenticate replay-archive receipt");
-
                 let found_request = PorReplayArchiveLookupRequestWireV1 {
                     challenge_id: record.challenge_id(),
                     expected_checkpoint_head: receipt,
@@ -41930,7 +40229,6 @@ mod protocol {
                     por_replay_archive_lookup_from_wire(&found_decoded, &found_request, &binding,),
                     Ok(found)
                 );
-
                 let absent_challenge_id = [0xFA; 32];
                 let absence_digest =
                     sorafs_node::PorFinalizedReplayArchiveAbsenceProofV1::signing_digest(
@@ -41974,7 +40272,6 @@ mod protocol {
                     por_replay_archive_lookup_from_wire(&absent_decoded, &absent_request, &binding,),
                     Ok(absent)
                 );
-
                 let mut substituted_request = absent_request;
                 substituted_request.challenge_id = [0xFB; 32];
                 assert_eq!(
@@ -41986,7 +40283,6 @@ mod protocol {
                     Err(BrokerError::Rejected)
                 );
             }
-
             #[test]
             fn por_replay_archive_operations_are_bounded_and_append_is_ambiguous() {
                 for operation in [
@@ -42013,7 +40309,6 @@ mod protocol {
                     operation_frame_limit(OPERATION_POR_REPLAY_ARCHIVE_LOOKUP_V1),
                     MAX_POR_REPLAY_ARCHIVE_FRAME_BYTES_V1
                 );
-
                 let binding = por_replay_archive_runtime_binding();
                 let exact = por_replay_archive_exact_binding(&binding)
                     .expect("exact replay-archive binding");
@@ -42066,7 +40361,6 @@ mod protocol {
                         );
                     }
                 }
-
                 let invalid_append = PorReplayArchiveAppendRequestWireV1 {
                     canonical_record: Vec::new(),
                     expected_previous_head: None,
@@ -42092,7 +40386,6 @@ mod protocol {
                         .is_ok(),
                     "append is the only replay-archive operation allowed to be ambiguous"
                 );
-
                 let lookup_request = make_operation_request(
                     [0xA3; 32],
                     4,
@@ -42107,7 +40400,6 @@ mod protocol {
                     Err(BrokerError::Protocol)
                 );
             }
-
             #[test]
             fn gateway_and_pop_wires_enforce_bounds_and_mutation_ambiguity() {
                 let acme_binding = plain_runtime_binding(
@@ -42153,7 +40445,6 @@ mod protocol {
                     validate_operation_response(&acme_request, &ambiguous),
                     Ok(())
                 );
-
                 let compliance_binding = plain_runtime_binding(
                     IrohaRuntimeProviderSlotV1::GatewayComplianceFeedTransport,
                     SERVER_TEST_COMPLIANCE_HANDLE,
@@ -42210,7 +40501,6 @@ mod protocol {
                     validate_operation_response(&compliance_request, &invalid_ambiguity),
                     Err(BrokerError::Protocol)
                 );
-
                 let pop_binding = pop_runtime_binding();
                 let exact = pop_binding
                     .pop_credential_runtime_binding
@@ -42257,7 +40547,6 @@ mod protocol {
                     Ok(())
                 );
             }
-
             #[test]
             fn reputation_runtime_bindings_and_observations_are_exactly_slot_shaped() {
                 let slots = [
@@ -42293,7 +40582,6 @@ mod protocol {
                         ),
                         Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
                     ));
-
                     let mut zero_revision = binding.clone();
                     zero_revision.revision = Some(0);
                     assert_eq!(
@@ -42317,7 +40605,6 @@ mod protocol {
                     );
                 }
             }
-
             #[test]
             fn reputation_checkpoint_load_is_bounded_and_slot_exact() {
                 assert_eq!(OPERATION_REPUTATION_JOURNAL_CHECKPOINT_LOAD_V1, 101);
@@ -42339,7 +40626,6 @@ mod protocol {
                         REPUTATION_DECODE_POLICY_V1
                     );
                 }
-
                 let slot = IrohaRuntimeProviderSlotV1::ReputationJournalCheckpoint;
                 let catalog = reputation_runtime_test_catalog(slot);
                 let state = prepare_server_state(&catalog, reputation_runtime_exact_backends(slot))
@@ -42418,7 +40704,6 @@ mod protocol {
                 );
                 validate_operation_result(&request, STATUS_OK_V1, &result)
                     .expect("validate checkpoint load result");
-
                 let unsupported_version = CHECKPOINT_LOAD_REQUEST_VERSION_V1 ^ u8::MAX;
                 let alternate_version = make_operation_request(
                     TEST_SESSION_ID,
@@ -42452,7 +40737,6 @@ mod protocol {
                     validate_operation_request(&trailing),
                     Err(BrokerError::Protocol)
                 );
-
                 let malformed_compare = encode_canonical(
                     &ReputationJournalCheckpointCompareAndSwapRequestWireV1 {
                         expected_revision: Some([0; 32]),
@@ -42485,7 +40769,6 @@ mod protocol {
                     validate_operation_response(&malformed_compare, &ambiguous_compare),
                     Ok(())
                 );
-
                 let journal_binding = reputation_runtime_test_binding(
                     IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter,
                 );
@@ -42507,7 +40790,6 @@ mod protocol {
                     Err(BrokerError::BindingMismatch)
                 );
             }
-
             #[test]
             fn reputation_runtime_operations_are_strict_and_reconcile_exact_keys() {
                 assert_eq!(OPERATION_REPUTATION_JOURNAL_SUPPORTS_AUTHORITY_V1, 16);
@@ -42521,7 +40803,6 @@ mod protocol {
                         MAX_REPUTATION_RUNTIME_FRAME_BYTES_V1
                     );
                 }
-
                 let authority_keypair = iroha_crypto::KeyPair::try_from_seed(
                     vec![0x88; 32],
                     iroha_crypto::Algorithm::Ed25519,
@@ -42572,7 +40853,6 @@ mod protocol {
                     )
                     .expect("decode supports-authority result")
                 );
-
                 let drifting_journal_state = prepare_server_state(
                     &reputation_runtime_test_catalog(
                         IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter,
@@ -42596,7 +40876,6 @@ mod protocol {
                     Err(BrokerError::StaleOrRevoked),
                     "read-only post-operation qualification drift is definitive"
                 );
-
                 let mut trailing_supports = supports_payload.clone();
                 trailing_supports.push(0);
                 let trailing = reputation_operation_request(
@@ -42606,7 +40885,6 @@ mod protocol {
                     trailing_supports,
                 );
                 assert!(validate_operation_request(&trailing).is_err());
-
                 let malformed_submit = ReputationJournalTransactionRequestWireV1 {
                     sequence: 0,
                     network_id: server_test_network_id(),
@@ -42660,7 +40938,6 @@ mod protocol {
                     ),
                     Err(BrokerError::Rejected)
                 );
-
                 let threshold_backend = Arc::new(ServerTestReputationThresholdSigner::exact());
                 let threshold_state = prepare_server_state(
                     &reputation_runtime_test_catalog(
@@ -42748,7 +41025,6 @@ mod protocol {
                     ],
                     "reconciliation retries preserve the exact operation key"
                 );
-
                 let drifting_threshold_state = prepare_server_state(
                     &reputation_runtime_test_catalog(
                         IrohaRuntimeProviderSlotV1::ReputationThresholdSigner,
@@ -42771,7 +41047,6 @@ mod protocol {
                     Err(BrokerError::Ambiguous),
                     "post-dispatch qualification drift is an ambiguous mutation"
                 );
-
                 let governance_backend = Arc::new(ServerTestReputationGovernanceDag::exact());
                 let governance_state = prepare_server_state(
                     &reputation_runtime_test_catalog(
@@ -42814,7 +41089,6 @@ mod protocol {
                     ],
                     "publication reconciliation preserves the exact operation key"
                 );
-
                 let drifting_governance_state = prepare_server_state(
                     &reputation_runtime_test_catalog(
                         IrohaRuntimeProviderSlotV1::ReputationGovernanceDag,
@@ -42837,7 +41111,6 @@ mod protocol {
                     Err(BrokerError::Ambiguous),
                     "post-publication qualification drift is ambiguous"
                 );
-
                 let threshold_binding = reputation_runtime_test_binding(
                     IrohaRuntimeProviderSlotV1::ReputationThresholdSigner,
                 );
@@ -42854,7 +41127,6 @@ mod protocol {
                     validate_operation_request(&cross_slot),
                     Err(BrokerError::BindingMismatch)
                 );
-
                 let mut trailing_threshold = threshold_payload;
                 trailing_threshold.push(0);
                 let trailing_threshold = make_operation_request(
@@ -42868,7 +41140,6 @@ mod protocol {
                 .expect("seal trailing threshold request");
                 assert!(validate_operation_request(&trailing_threshold).is_err());
             }
-
             #[test]
             fn reputation_qualification_results_are_exactly_bound() {
                 for (slot, request_id) in [
@@ -42893,7 +41164,6 @@ mod protocol {
                     .expect("seal reputation qualification operation");
                     validate_operation_request(&operation)
                         .expect("validate reputation qualification operation");
-
                     let exact = QualificationResultWireV1 {
                         revision: binding.revision.expect("qualification revision"),
                         policy_digest: binding.policy_digest.expect("qualification policy digest"),
@@ -42905,7 +41175,6 @@ mod protocol {
                         Ok(()),
                         "{slot:?}"
                     );
-
                     let stale = QualificationResultWireV1 {
                         revision: binding
                             .revision
@@ -42920,7 +41189,6 @@ mod protocol {
                         Err(BrokerError::Protocol),
                         "{slot:?}"
                     );
-
                     let mut trailing = exact;
                     trailing.push(0);
                     assert_eq!(
@@ -42930,7 +41198,6 @@ mod protocol {
                     );
                 }
             }
-
             #[test]
             fn reputation_runtime_result_shapes_and_ambiguity_are_exact() {
                 let threshold_request = reputation_test_threshold_request();
@@ -42953,7 +41220,6 @@ mod protocol {
                 .expect("seal threshold operation");
                 validate_operation_request(&threshold_operation)
                     .expect("validate threshold operation");
-
                 let pending = ReputationReconcileResultWireV1 {
                     outcome: 0,
                     canonical_result: Vec::new(),
@@ -42963,7 +41229,6 @@ mod protocol {
                     .expect("encode pending reconciliation");
                 validate_operation_result(&threshold_operation, STATUS_OK_V1, &pending)
                     .expect("accept canonical pending result");
-
                 for invalid in [
                     ReputationReconcileResultWireV1 {
                         outcome: 0,
@@ -42988,14 +41253,12 @@ mod protocol {
                         Err(BrokerError::Protocol)
                     );
                 }
-
                 let unit = encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1)
                     .expect("encode payload-free broker status");
                 assert_eq!(
                     validate_operation_result(&threshold_operation, STATUS_AMBIGUOUS_V1, &unit,),
                     Ok(())
                 );
-
                 let governance_request = reputation_test_governance_request();
                 let governance_binding = reputation_runtime_test_binding(
                     IrohaRuntimeProviderSlotV1::ReputationGovernanceDag,
@@ -43020,7 +41283,6 @@ mod protocol {
                     validate_operation_result(&governance_operation, STATUS_AMBIGUOUS_V1, &unit,),
                     Ok(())
                 );
-
                 let journal_binding = reputation_runtime_test_binding(
                     IrohaRuntimeProviderSlotV1::ReputationJournalTransactionSubmitter,
                 );
@@ -43060,7 +41322,6 @@ mod protocol {
                     "journal submission is mutation-ambiguous"
                 );
             }
-
             #[test]
             fn evidence_viewer_and_moderation_archive_wire_shapes_are_exact() {
                 assert_eq!(
@@ -43093,7 +41354,6 @@ mod protocol {
                         Err(RuntimeProviderBrokerServerErrorV1::BackendSetMismatch),
                         "{slot:?}"
                     );
-
                     let mut confused = binding.clone();
                     confused.slot = if slot == IrohaRuntimeProviderSlotV1::EvidenceViewerErasure {
                         IrohaRuntimeProviderSlotV1::EvidenceViewerWebAuthn.wire_id()
@@ -43106,7 +41366,6 @@ mod protocol {
                         "{slot:?}"
                     );
                 }
-
                 let receipt = evidence_viewer_binding(
                     IrohaRuntimeProviderSlotV1::EvidenceViewerReceiptSigner,
                 );
@@ -43117,7 +41376,6 @@ mod protocol {
                     validate_observation(&receipt, &substituted_receipt),
                     Err(BrokerError::BindingMismatch)
                 );
-
                 let archive = evidence_viewer_binding(
                     IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive,
                 );
@@ -43129,7 +41387,6 @@ mod protocol {
                     Err(BrokerError::BindingMismatch)
                 );
             }
-
             #[test]
             fn moderation_archive_pre_dispatch_validation_is_slot_exact_and_body_bounded() {
                 let moderation_archive = evidence_viewer_binding(
@@ -43158,7 +41415,6 @@ mod protocol {
                     ),
                     Ok(())
                 );
-
                 let install_payload = encode_canonical(
                     &ModerationPanelNotificationArchiveInstallRequestWireV1 {
                         version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
@@ -43185,7 +41441,6 @@ mod protocol {
                     ),
                     Ok(())
                 );
-
                 let read_payload = encode_canonical(
                     &ModerationPanelNotificationArchiveReadRequestWireV1 {
                         version: MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1,
@@ -43210,7 +41465,6 @@ mod protocol {
                     ),
                     Ok(())
                 );
-
                 let evidence_archive = evidence_viewer_binding(
                     IrohaRuntimeProviderSlotV1::EvidenceViewerCompactionArchive,
                 );
@@ -43289,7 +41543,6 @@ mod protocol {
                         Err(BrokerError::BindingMismatch)
                     );
                 }
-
                 for (request_id, operation, payload) in [
                     (
                         96,
@@ -43334,7 +41587,6 @@ mod protocol {
                         Err(BrokerError::BindingMismatch)
                     );
                 }
-
                 let mut one_byte_archive = moderation_archive;
                 one_byte_archive
                     .moderation_panel_notification_archive_binding
@@ -43373,9 +41625,7 @@ mod protocol {
                     Err(BrokerError::Rejected)
                 );
             }
-
             include!("runtime_provider_broker/moderation_source_attestation_tests.rs");
-
             #[test]
             fn moderation_archive_fixture_is_preflighted_before_every_mutating_backend() {
                 let fixture = sorafs_node::moderation_orchestrator::
@@ -43405,7 +41655,6 @@ mod protocol {
                         .with_moderation_panel_notification_archive(archive.clone()),
                 )
                 .expect("prepare exact moderation archive broker state");
-
                 let operation_for_slot =
                     |request_id: u64, slot: IrohaRuntimeProviderSlotV1, operation, payload| {
                         let index = state
@@ -43423,7 +41672,6 @@ mod protocol {
                         )
                         .expect("seal fixture operation request")
                     };
-
                 let mut substituted_receipt = fixture.validation.receipt_message;
                 substituted_receipt[0] ^= 1;
                 let substituted_install = operation_for_slot(
@@ -43459,7 +41707,6 @@ mod protocol {
                     0,
                     "derived receipt substitution must be rejected before archive installation"
                 );
-
                 let install = operation_for_slot(
                     2,
                     IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive,
@@ -43496,7 +41743,6 @@ mod protocol {
                 .expect("decode archive install result");
                 assert_eq!(install_result.signature, fixture.archive_signature);
                 assert_eq!(archive.install_calls.load(Ordering::Acquire), 1);
-
                 let read = operation_for_slot(
                     3,
                     IrohaRuntimeProviderSlotV1::ModerationPanelNotificationArchive,
@@ -43525,7 +41771,6 @@ mod protocol {
                     fixture.canonical_artifact.as_slice()
                 );
                 assert_eq!(readback.signature, fixture.archive_signature);
-
                 let mut substituted_statement = fixture.source_attestation.clone();
                 substituted_statement.terminal_set_digest[0] ^= 1;
                 let substituted_attestation = operation_for_slot(
@@ -43558,7 +41803,6 @@ mod protocol {
                     0,
                     "source substitution must be rejected before checkpoint attestation signing"
                 );
-
                 let attest = operation_for_slot(
                     5,
                     IrohaRuntimeProviderSlotV1::ModerationCheckpointStore,
@@ -43591,7 +41835,6 @@ mod protocol {
                     .verify(attest_result.signature)
                     .expect("verify independently signed source attestation");
                 assert_eq!(checkpoint.attest_calls.load(Ordering::Acquire), 1);
-
                 let head = decode_canonical::<
                     sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1,
                 >(
@@ -43620,7 +41863,6 @@ mod protocol {
                     dispatch_server_operation(&state, &cross_slot_read),
                     Err(BrokerError::BindingMismatch)
                 );
-
                 let mut trailing_read_payload = archive_head_read_payload.clone();
                 trailing_read_payload.push(0);
                 let trailing_read = operation_for_slot(
@@ -43641,7 +41883,6 @@ mod protocol {
                     dispatch_server_operation(&state, &trailing_read),
                     Err(BrokerError::Protocol)
                 );
-
                 let empty_head_read = operation_for_slot(
                     62,
                     IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff,
@@ -43701,7 +41942,6 @@ mod protocol {
                     dispatch_server_operation(&state, &cross_slot_publish),
                     Err(BrokerError::BindingMismatch)
                 );
-
                 let mut substituted_head = head;
                 substituted_head.source_checkpoint_revision[0] ^= 1;
                 let substituted_head_bytes =
@@ -43780,7 +42020,6 @@ mod protocol {
                     0,
                     "cross-slot and signed-head substitution must precede publication"
                 );
-
                 let publish = operation_for_slot(
                     8,
                     IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff,
@@ -43811,7 +42050,6 @@ mod protocol {
                 );
                 assert_eq!(publish_result.outcome, 1);
                 assert_eq!(publication.delivery_calls.load(Ordering::Acquire), 1);
-
                 let published_head_read = operation_for_slot(
                     63,
                     IrohaRuntimeProviderSlotV1::ModerationPublicationHandoff,
@@ -43849,7 +42087,6 @@ mod protocol {
                     "public head reads must never replay publication"
                 );
             }
-
             #[test]
             fn evidence_transparency_ambiguity_reconnects_for_readback_without_replay() {
                 let catalog = evidence_transparency_publisher_test_catalog();
@@ -43865,7 +42102,6 @@ mod protocol {
                     .sorafs_evidence_viewer_transparency_publisher
                     .as_ref()
                     .expect("resolved transparency publisher");
-
                 assert_eq!(
                     publisher.compare_and_publish(&evidence_transparency_test_body()),
                     Err(
@@ -43897,7 +42133,6 @@ mod protocol {
                     1,
                     "qualification and readback must not replay the mutation"
                 );
-
                 drop(dependencies);
                 shutdown.request_shutdown();
                 server
@@ -43905,18 +42140,15 @@ mod protocol {
                     .expect("join transparency-publisher broker")
                     .expect("transparency-publisher broker exits cleanly");
             }
-
             include!("runtime_provider_broker/runtime_operation_tests.rs");
         }
     }
-
     /// Resolve the stock catalog through the platform-fixed production endpoint.
     pub(super) fn resolve(
         bindings: &IrohaRuntimeProviderBindingsV1,
     ) -> Result<IrohaRuntimeDeps, IrohaRuntimeProviderRegistryErrorV1> {
         platform::resolve(bindings, &platform::EndpointPolicy::production())
     }
-
     /// Serve the exact stock catalog on the platform-fixed production endpoint.
     pub(super) fn serve(
         bindings: &IrohaRuntimeProviderBindingsV1,
@@ -43924,20 +42156,6 @@ mod protocol {
     ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
         platform::serve(bindings, backends)
     }
-
-    /// Serve the stock catalog with caller-owned lifecycle controls.
-    pub(super) fn serve_with_lifecycle<R>(
-        bindings: &IrohaRuntimeProviderBindingsV1,
-        backends: RuntimeProviderBrokerBackendsV1,
-        lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
-        on_ready: R,
-    ) -> Result<(), RuntimeProviderBrokerServerErrorV1>
-    where
-        R: FnOnce(),
-    {
-        platform::serve_with_lifecycle(bindings, backends, lifecycle, on_ready)
-    }
-
     /// Serve the stock catalog with a fallible readiness publication.
     pub(super) fn serve_with_fallible_readiness<R>(
         bindings: &IrohaRuntimeProviderBindingsV1,

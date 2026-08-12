@@ -931,6 +931,9 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 )
                 .expect("request signature replay cache must be non-zero"),
             },
+            app_api_routed_read_body_read_timeout: Duration::from_millis(
+                defaults::torii::APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS,
+            ),
             attachments_ttl_secs: 7 * 24 * 60 * 60,
             attachments_max_bytes: 4 * 1024 * 1024,
             attachments_per_tenant_max_count: defaults::torii::ATTACHMENTS_PER_TENANT_MAX_COUNT,

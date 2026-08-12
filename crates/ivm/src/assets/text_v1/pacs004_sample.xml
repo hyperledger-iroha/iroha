@@ -1,0 +1,62 @@
+
+<DataEnvelope xmlns="urn:sample:iso">
+  <Body>
+    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.004.001.09">
+      <PmtRtr>
+        <GrpHdr>
+          <MsgId>ISO-PACS004-MSG</MsgId>
+          <CreDtTm>2025-11-06T12:42:25.758Z</CreDtTm>
+          <BtchBookg>false</BtchBookg>
+          <NbOfTxs>1</NbOfTxs>
+          <SttlmInf><SttlmMtd>CLRG</SttlmMtd></SttlmInf>
+          <InstdAgt><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></InstdAgt>
+        </GrpHdr>
+        <OrgnlGrpInf>
+          <OrgnlMsgId>ORIGINAL-008</OrgnlMsgId>
+          <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
+          <OrgnlCreDtTm>2025-11-06T12:42:07.770Z</OrgnlCreDtTm>
+        </OrgnlGrpInf>
+        <TxInf>
+          <RtrId>RETURN-5310</RtrId>
+          <OrgnlInstrId>ORIGINAL-INSTR-008</OrgnlInstrId>
+          <OrgnlEndToEndId>ORIGINAL-E2E-008</OrgnlEndToEndId>
+          <OrgnlTxId>ORIGINAL-TX-008</OrgnlTxId>
+          <OrgnlIntrBkSttlmDt>2025-11-06</OrgnlIntrBkSttlmDt>
+          <RtrdIntrBkSttlmAmt Ccy="USD">10.00</RtrdIntrBkSttlmAmt>
+          <IntrBkSttlmDt>2025-11-06</IntrBkSttlmDt>
+          <ChrgBr>SLEV</ChrgBr>
+          <InstgAgt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></InstgAgt>
+          <InstdAgt><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></InstdAgt>
+          <RtrRsnInf><Rsn><Prtry>TechnicalProblem</Prtry></Rsn></RtrRsnInf>
+          <OrgnlTxRef>
+            <IntrBkSttlmAmt Ccy="USD">10.00</IntrBkSttlmAmt>
+            <PmtTpInf>
+              <ClrChanl>RTNS</ClrChanl>
+              <SvcLvl><Prtry>0100</Prtry></SvcLvl>
+              <LclInstrm><Prtry>CTAA</Prtry></LclInstrm>
+              <CtgyPurp><Prtry>001</Prtry></CtgyPurp>
+            </PmtTpInf>
+            <Dbtr><Pty><Nm>Debtor One</Nm></Pty></Dbtr>
+            <DbtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></DbtrAcct>
+            <DbtrAgt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></DbtrAgt>
+            <CdtrAgt><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></CdtrAgt>
+            <Cdtr><Pty><Nm>Creditor One</Nm></Pty></Cdtr>
+            <CdtrAcct><Id><IBAN>GB33BUKB20201555555555</IBAN></Id></CdtrAcct>
+          </OrgnlTxRef>
+        </TxInf>
+      </PmtRtr>
+    </Document>
+    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+      <Fr><FIId><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></Fr>
+      <To><FIId><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></To>
+      <BizMsgIdr>ISO-PACS004-MSG</BizMsgIdr>
+      <MsgDefIdr>pacs.004.001.09</MsgDefIdr>
+      <BizSvc>IPS</BizSvc>
+      <CreDt>2025-11-06T07:42:25.771Z</CreDt>
+      <Sgntr>
+        <SignedInfo><SignatureMethod>sample</SignatureMethod></SignedInfo>
+        <SignatureValue>ignored</SignatureValue>
+      </Sgntr>
+    </AppHdr>
+  </Body>
+</DataEnvelope>

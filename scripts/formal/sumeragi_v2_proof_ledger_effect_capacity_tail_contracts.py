@@ -372,15 +372,20 @@ assert_eq!(retained_runtime_token.manifest(), &fixture.manifest);
         ),
         (
             """
+let mut timeout = timeout_at_view(&fixture, 0);
 timeout.groups[0].highest_prepare_qc = Some(prepare.clone());
+executor.runtime.round_tag = Some(tag(1));
+executor
+    .consume_effects(
+        vec![AdapterEffect::EnterView {
+            tag: tag(1),
+            certificate: timeout,
+            protected_lock: Some(prepare),
+        }],
+        &mut services,
+    )
 """,
-            "protected-view regression must bind the exact PrepareQC into its TC",
-        ),
-        (
-            """
-protected_lock: Some(prepare),
-""",
-            "protected-view regression must install the exact validated lock selected by its TC",
+            "protected-view regression must bind the same highest PrepareQC into the TC and installed lock",
         ),
         (
             """

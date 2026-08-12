@@ -300,6 +300,7 @@ impl<T> ExactBoxBuilder<T> {
         Ok(())
     }
 
+    #[allow(unsafe_code)]
     fn finish(mut self) -> Result<Box<[T]>, PolicyLoadError> {
         if self.initialized != self.storage.len() {
             return Err(PolicyLoadError::Invalid(
@@ -315,6 +316,7 @@ impl<T> ExactBoxBuilder<T> {
 }
 
 impl<T> Drop for ExactBoxBuilder<T> {
+    #[allow(unsafe_code)]
     fn drop(&mut self) {
         for value in &mut self.storage[..self.initialized] {
             // SAFETY: exactly this prefix was initialized by successful calls
@@ -324,6 +326,7 @@ impl<T> Drop for ExactBoxBuilder<T> {
     }
 }
 
+#[allow(unsafe_code)]
 fn parse_exact_json_string(
     parser: &mut Parser<'_>,
     maximum_decoded_bytes: usize,
@@ -500,6 +503,7 @@ fn validate_alias_literal(alias: &str, dataspace: &str) -> Result<(), &'static s
     Ok(())
 }
 
+#[allow(unsafe_code)]
 fn read_exact_stable_policy_file(
     path: &Path,
     maximum: usize,
@@ -570,6 +574,7 @@ fn read_exact_stable_policy_file(
     Ok(bytes)
 }
 
+#[allow(unsafe_code)]
 fn allocate_exact_uninit<T>(
     length: usize,
 ) -> Result<Box<[std::mem::MaybeUninit<T>]>, PolicyLoadError> {

@@ -85,13 +85,11 @@ pub const HEDGING_BILLING_TRANSITION_AUTHORITY_VERSION_V1: u8 = 1;
 pub const HEDGING_BILLING_EPOCH_TRANSITION_VERSION_V1: u8 = 1;
 /// Runtime sealed epoch-witness record schema version.
 pub const HEDGING_BILLING_EPOCH_WITNESS_RECORD_VERSION_V1: u8 = 1;
-
 /// Canonical durable checkpoint file name.
 pub const HEDGING_BILLING_CHECKPOINT_FILE_NAME_V1: &str =
     "hedging-billing-committed-projector-v1.to";
 /// Canonical single-writer lock file name.
 pub const HEDGING_BILLING_LOCK_FILE_NAME_V1: &str = "hedging-billing-committed-projector-v1.lock";
-
 /// Maximum finalized events accepted in one page.
 pub const HEDGING_BILLING_MAX_EVENTS_PER_PAGE_V1: u32 = 65_536;
 /// Maximum finalized query pages consumed in one reconciliation scan.
@@ -140,12 +138,10 @@ pub const HEDGING_BILLING_WITNESS_HANDLE_MAX_BYTES_V1: usize = 256;
 pub const HEDGING_BILLING_SERVICE_POLICY_MAX_BYTES_V1: usize = 64 * 1024;
 /// Fixed canonical wrapper allowance around one embedded checkpoint witness.
 pub const HEDGING_BILLING_EPOCH_WITNESS_WRAPPER_MAX_BYTES_V1: u64 = 16 * 1024;
-
 const CHECKPOINT_ELEMENT_AMPLIFICATION_LIMIT: usize = 24;
 const CHECKPOINT_ALLOCATION_AMPLIFICATION_LIMIT: usize = 24;
 const CHECKPOINT_ALLOCATION_FIXED_OVERHEAD_BYTES: usize = 4 * 1024 * 1024;
 const CHECKPOINT_MAX_NESTING_DEPTH: usize = 96;
-
 const POLICY_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.hedging-billing.policy.v1";
 const PAGE_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.hedging-billing.finalized-page.v1";
 const SOURCE_RECEIPT_DOMAIN_V1: &[u8] = b"sorafs.hedging-billing.source-receipt.v1";
@@ -174,7 +170,6 @@ const COMPACTED_SOURCE_DOMAIN_V1: &[u8] = b"sorafs.hedging-billing.compacted-sou
 const COMPACTED_ECONOMIC_STATE_DOMAIN_V1: &[u8] =
     b"sorafs.hedging-billing.compacted-economic-state.v1";
 const RETAINED_EPOCH_STATE_DOMAIN_V1: &[u8] = b"sorafs.hedging-billing.retained-epoch-state.v1";
-
 /// One finalized block identity.
 #[derive(
     Debug,
@@ -197,7 +192,6 @@ pub struct HedgingBillingFinalizedCursorV1 {
     /// Finalized block timestamp in Unix seconds.
     pub finalized_at_unix: u64,
 }
-
 impl HedgingBillingFinalizedCursorV1 {
     fn validate(self) -> Result<(), HedgingBillingServiceError> {
         if self.height == 0 || self.block_hash == [0; 32] || self.finalized_at_unix == 0 {
@@ -206,7 +200,6 @@ impl HedgingBillingFinalizedCursorV1 {
         Ok(())
     }
 }
-
 /// Exact consensus-committed billing-journal identity at one finalized cursor.
 #[derive(
     Debug,
@@ -231,7 +224,6 @@ pub struct HedgingBillingJournalCommitmentV1 {
     /// Consensus-committed cumulative root for sequences below the tail.
     pub journal_root: [u8; 32],
 }
-
 impl HedgingBillingJournalCommitmentV1 {
     fn validate(self, network_id: NetworkId) -> Result<(), HedgingBillingServiceError> {
         self.finalized_cursor.validate()?;
@@ -245,7 +237,6 @@ impl HedgingBillingJournalCommitmentV1 {
         Ok(())
     }
 }
-
 /// Native committed source from which a billing line is projected.
 #[derive(
     Debug,
@@ -276,7 +267,6 @@ pub enum BillingAccrualSourceV1 {
     /// Explicit governance-approved adjustment.
     GovernanceAdjustment,
 }
-
 /// One typed billing event returned by a finalized native-ledger query.
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgingBillingFinalizedEventV1 {
@@ -307,7 +297,6 @@ pub struct HedgingBillingFinalizedEventV1 {
     /// Committed event timestamp in Unix seconds.
     pub occurred_at_unix: u64,
 }
-
 impl HedgingBillingFinalizedEventV1 {
     fn validate(
         &self,
@@ -376,7 +365,6 @@ impl HedgingBillingFinalizedEventV1 {
         Ok(())
     }
 }
-
 /// One bounded contiguous page from the authoritative finalized billing journal.
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgingBillingFinalizedEventPageV1 {
@@ -397,7 +385,6 @@ pub struct HedgingBillingFinalizedEventPageV1 {
     /// Events in strictly contiguous sequence order.
     pub events: Vec<HedgingBillingFinalizedEventV1>,
 }
-
 impl HedgingBillingFinalizedEventPageV1 {
     fn validate(
         &self,
@@ -459,7 +446,6 @@ impl HedgingBillingFinalizedEventPageV1 {
         hash_canonical(PAGE_DIGEST_DOMAIN_V1, self)
     }
 }
-
 /// Durable position supplied to the authoritative finalized-journal query.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HedgingBillingQueryPositionV1 {
@@ -468,7 +454,6 @@ pub struct HedgingBillingQueryPositionV1 {
     /// Latest authenticated consensus journal commitment already observed.
     pub journal_commitment: Option<HedgingBillingJournalCommitmentV1>,
 }
-
 /// Public, payload-free qualification for one hedging/billing runtime provider.
 ///
 /// `revision` identifies the deployment-owned adapter and public policy
@@ -479,7 +464,6 @@ pub struct HedgingBillingRuntimeProviderQualificationV1 {
     revision: u64,
     policy_digest: [u8; 32],
 }
-
 impl HedgingBillingRuntimeProviderQualificationV1 {
     /// Construct one provider qualification observation.
     #[must_use]
@@ -489,24 +473,20 @@ impl HedgingBillingRuntimeProviderQualificationV1 {
             policy_digest,
         }
     }
-
     /// Return the non-zero deployment adapter/policy revision.
     #[must_use]
     pub const fn revision(self) -> u64 {
         self.revision
     }
-
     /// Return the non-zero digest of the public provider policy.
     #[must_use]
     pub const fn policy_digest(self) -> [u8; 32] {
         self.policy_digest
     }
-
     fn is_valid(self) -> bool {
         self.revision != 0 && self.policy_digest != [0; 32]
     }
 }
-
 /// Stable, payload-free hedging/billing provider-qualification failures.
 ///
 /// Provider implementations retain credentials, key identifiers, customer
@@ -544,7 +524,6 @@ pub enum HedgingBillingRuntimeProviderQualificationErrorV1 {
     #[error("hedging/billing runtime provider identity or policy changed after qualification")]
     IdentityOrPolicyChanged,
 }
-
 /// Fixed readiness failures returned by a hedging/billing runtime provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum HedgingBillingRuntimeProviderReadinessErrorV1 {
@@ -555,7 +534,6 @@ pub enum HedgingBillingRuntimeProviderReadinessErrorV1 {
     #[error("hedging/billing runtime provider rejected qualification")]
     Rejected,
 }
-
 /// Stable identity and readiness exposed by an external production provider.
 ///
 /// Implementations own credentials, signing keys, authentication material,
@@ -565,7 +543,6 @@ pub enum HedgingBillingRuntimeProviderReadinessErrorV1 {
 pub trait HedgingBillingRuntimeProviderV1: Send + Sync + fmt::Debug {
     /// Return the stable opaque deployment handle for this provider.
     fn handle(&self) -> &str;
-
     /// Qualify the active adapter and its public policy revision.
     fn qualification(
         &self,
@@ -574,7 +551,6 @@ pub trait HedgingBillingRuntimeProviderV1: Send + Sync + fmt::Debug {
         HedgingBillingRuntimeProviderReadinessErrorV1,
     >;
 }
-
 /// Qualify one provider against an independently configured exact binding.
 ///
 /// # Errors
@@ -610,7 +586,6 @@ pub fn qualify_hedging_billing_runtime_provider_v1<P: HedgingBillingRuntimeProvi
     }
     Ok(())
 }
-
 /// Revalidate an already pinned provider immediately around external work.
 ///
 /// # Errors
@@ -638,7 +613,6 @@ pub fn revalidate_hedging_billing_runtime_provider_v1<
     }
     Ok(())
 }
-
 fn validate_hedging_billing_runtime_provider_handle(
     handle: &str,
     configured: bool,
@@ -658,14 +632,12 @@ fn validate_hedging_billing_runtime_provider_handle(
         }
     })
 }
-
 /// Public runtime identity of one non-secret production adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HedgingBillingRuntimeAdapterIdentityV1 {
     /// Stable opaque provider handle resolved by the deployment launcher.
     pub handle: String,
 }
-
 /// Runtime verifier for consensus-committed journal pages and period closes.
 ///
 /// Implementations must authenticate finality against the configured chain,
@@ -685,14 +657,12 @@ pub trait HedgingBillingJournalVerifier: HedgingBillingRuntimeProviderV1 {
     fn identity(
         &self,
     ) -> Result<HedgingBillingRuntimeAdapterIdentityV1, HedgingBillingExternalError>;
-
     /// Authenticate provider readiness without accepting ledger material.
     ///
     /// # Errors
     ///
     /// Returns a fixed payload-free dependency failure.
     fn check_readiness(&self) -> Result<(), HedgingBillingExternalError>;
-
     /// Authenticate one exact page and its append/inclusion proofs.
     ///
     /// # Errors
@@ -705,7 +675,6 @@ pub trait HedgingBillingJournalVerifier: HedgingBillingRuntimeProviderV1 {
         previous: Option<HedgingBillingJournalCommitmentV1>,
         page: &HedgingBillingFinalizedEventPageV1,
     ) -> Result<(), HedgingBillingExternalError>;
-
     /// Authenticate one exact consensus-committed period close.
     ///
     /// # Errors
@@ -717,7 +686,6 @@ pub trait HedgingBillingJournalVerifier: HedgingBillingRuntimeProviderV1 {
         network_id: &NetworkId,
         close: &HedgingBillingFinalizedPeriodCloseV1,
     ) -> Result<(), HedgingBillingExternalError>;
-
     /// Authenticate one governance-signed compaction frontier against consensus.
     ///
     /// Verification must bind the exact predecessor root/tail and close
@@ -735,7 +703,6 @@ pub trait HedgingBillingJournalVerifier: HedgingBillingRuntimeProviderV1 {
         transition: &HedgingBillingEpochTransitionV1,
     ) -> Result<(), HedgingBillingExternalError>;
 }
-
 /// Runtime adapter for the native finalized billing-journal query.
 pub trait HedgingBillingFinalizedQuery: HedgingBillingRuntimeProviderV1 {
     /// Return the current exact-view query identity.
@@ -746,18 +713,15 @@ pub trait HedgingBillingFinalizedQuery: HedgingBillingRuntimeProviderV1 {
     fn identity(
         &self,
     ) -> Result<HedgingBillingRuntimeAdapterIdentityV1, HedgingBillingExternalError>;
-
     /// Authenticate provider readiness, including typed period-close support.
     ///
     /// # Errors
     ///
     /// Returns a fixed payload-free dependency failure.
     fn check_readiness(&self) -> Result<(), HedgingBillingExternalError>;
-
     /// Whether this adapter supplies typed consensus-authenticated period-close
     /// records as well as finalized journal pages.
     fn supplies_period_closes(&self) -> bool;
-
     /// Return the exact current finalized chain head authenticated by this
     /// query provider.
     ///
@@ -773,7 +737,6 @@ pub trait HedgingBillingFinalizedQuery: HedgingBillingRuntimeProviderV1 {
     fn finalized_head(
         &self,
     ) -> Result<HedgingBillingFinalizedCursorV1, HedgingBillingExternalError>;
-
     /// Return the next bounded page after the durable projector position.
     ///
     /// `None` means the adapter has no newer complete finalized view. Local
@@ -788,7 +751,6 @@ pub trait HedgingBillingFinalizedQuery: HedgingBillingRuntimeProviderV1 {
         position: HedgingBillingQueryPositionV1,
         max_events: u32,
     ) -> Result<Option<HedgingBillingFinalizedEventPageV1>, HedgingBillingExternalError>;
-
     /// Return the exact next finalized period-close record when committed.
     ///
     /// `None` means the requested boundary has not yet finalized. Implementors
@@ -803,7 +765,6 @@ pub trait HedgingBillingFinalizedQuery: HedgingBillingRuntimeProviderV1 {
         position: HedgingBillingQueryPositionV1,
     ) -> Result<Option<HedgingBillingFinalizedPeriodCloseV1>, HedgingBillingExternalError>;
 }
-
 /// Expected runtime identity for the statement-signing HSM/KMS provider.
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct BillingStatementSignerPolicyV1 {
@@ -818,7 +779,6 @@ pub struct BillingStatementSignerPolicyV1 {
     /// First finalized height at which this signer is revoked.
     pub revoked_at_block_height: Option<u64>,
 }
-
 impl BillingStatementSignerPolicyV1 {
     fn validate(&self) -> Result<(), HedgingBillingServiceError> {
         if self.version != BILLING_STATEMENT_SIGNER_POLICY_VERSION_V1
@@ -838,7 +798,6 @@ impl BillingStatementSignerPolicyV1 {
             .map_err(|_| HedgingBillingServiceError::InvalidPolicy)?;
         Ok(())
     }
-
     fn active_at(&self, height: u64) -> bool {
         height >= self.valid_from_block_height
             && self
@@ -846,7 +805,6 @@ impl BillingStatementSignerPolicyV1 {
                 .is_none_or(|revoked_at| height < revoked_at)
     }
 }
-
 /// Governed identity for the authoritative statement publication service.
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct BillingStatementPublisherPolicyV1 {
@@ -859,7 +817,6 @@ pub struct BillingStatementPublisherPolicyV1 {
     /// Strong Ed25519 key used to sign immutable publication receipts.
     pub public_key: [u8; 32],
 }
-
 impl BillingStatementPublisherPolicyV1 {
     fn validate(&self) -> Result<(), HedgingBillingServiceError> {
         if self.version != BILLING_STATEMENT_PUBLISHER_POLICY_VERSION_V1 {
@@ -880,7 +837,6 @@ impl BillingStatementPublisherPolicyV1 {
         Ok(())
     }
 }
-
 /// Governance key allowed to authorize the next billing epoch and policy.
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgingBillingTransitionAuthorityV1 {
@@ -891,7 +847,6 @@ pub struct HedgingBillingTransitionAuthorityV1 {
     /// Exact Ed25519 verification key.
     pub public_key: [u8; 32],
 }
-
 impl HedgingBillingTransitionAuthorityV1 {
     fn validate(&self) -> Result<(), HedgingBillingServiceError> {
         if self.version != HEDGING_BILLING_TRANSITION_AUTHORITY_VERSION_V1 {
@@ -907,7 +862,6 @@ impl HedgingBillingTransitionAuthorityV1 {
         Ok(())
     }
 }
-
 /// Deterministic resource, billing-cycle, signer, and exposure policy.
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgingBillingServicePolicyV1 {
@@ -972,7 +926,6 @@ pub struct HedgingBillingServicePolicyV1 {
     /// Maximum canonical checkpoint bytes.
     pub checkpoint_max_bytes: u64,
 }
-
 impl HedgingBillingServicePolicyV1 {
     /// Validate all deterministic first-release policy bounds.
     ///
@@ -1035,7 +988,6 @@ impl HedgingBillingServicePolicyV1 {
             HedgingBillingServiceError::InvalidPolicy,
         )
     }
-
     /// Return the canonical digest used by policy succession and signed records.
     ///
     /// # Errors
@@ -1045,7 +997,6 @@ impl HedgingBillingServicePolicyV1 {
         self.validate()?;
         hash_canonical(POLICY_DIGEST_DOMAIN_V1, self)
     }
-
     /// Encode one exact canonical public service-policy artifact.
     ///
     /// # Errors
@@ -1061,7 +1012,6 @@ impl HedgingBillingServicePolicyV1 {
         }
         Ok(bytes)
     }
-
     /// Decode one exact canonical public service-policy artifact.
     ///
     /// # Errors
@@ -1090,12 +1040,10 @@ impl HedgingBillingServicePolicyV1 {
         }
         Ok(policy)
     }
-
     fn digest(&self) -> Result<[u8; 32], HedgingBillingServiceError> {
         self.canonical_digest()
     }
 }
-
 /// Counts of exact records archived by one authenticated epoch transition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgingBillingCompactionCountsV1 {
@@ -1112,7 +1060,6 @@ pub struct HedgingBillingCompactionCountsV1 {
     /// Archived hedge projections.
     pub hedge_intents: u64,
 }
-
 /// Signed audit witness for compaction and an optional signer/feed-policy rotation.
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgingBillingEpochTransitionV1 {
@@ -1157,7 +1104,6 @@ pub struct HedgingBillingEpochTransitionV1 {
     /// Bounded consensus inclusion/finality proof for the compacted frontier.
     pub consensus_authentication_proof: Vec<u8>,
 }
-
 impl HedgingBillingEpochTransitionV1 {
     /// Derive the exact transition identity/signing digest.
     ///
@@ -1170,7 +1116,6 @@ impl HedgingBillingEpochTransitionV1 {
         canonical.signature = [0; 64];
         hash_canonical(EPOCH_TRANSITION_DOMAIN_V1, &canonical)
     }
-
     /// Verify the policy chain, compaction bindings, and Ed25519 authorization.
     ///
     /// The opaque consensus proof is only shape-checked here. Callers must also
@@ -1255,7 +1200,6 @@ impl HedgingBillingEpochTransitionV1 {
         .map_err(|_| HedgingBillingServiceError::InvalidEpochTransition)
     }
 }
-
 /// Sealed immutable recovery record for one authenticated billing epoch.
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgingBillingEpochWitnessRecordV1 {
@@ -1274,7 +1218,6 @@ pub struct HedgingBillingEpochWitnessRecordV1 {
     /// Deterministic CAS revision.
     pub revision: [u8; 32],
 }
-
 impl HedgingBillingEpochWitnessRecordV1 {
     fn new(
         network_id: NetworkId,
@@ -1295,7 +1238,6 @@ impl HedgingBillingEpochWitnessRecordV1 {
         record.revision = epoch_witness_record_revision(&record);
         record
     }
-
     /// Validate schema, checkpoint bounds, digest binding, and CAS revision.
     ///
     /// # Errors
@@ -1317,7 +1259,6 @@ impl HedgingBillingEpochWitnessRecordV1 {
         }
         Ok(())
     }
-
     /// Encode the one canonical Norito record accepted by sealed stores.
     ///
     /// # Errors
@@ -1336,7 +1277,6 @@ impl HedgingBillingEpochWitnessRecordV1 {
         }
         Ok(bytes)
     }
-
     /// Decode one exact canonical Norito record returned by a sealed store.
     ///
     /// # Errors
@@ -1372,7 +1312,6 @@ impl HedgingBillingEpochWitnessRecordV1 {
         Ok(record)
     }
 }
-
 /// Runtime-only sealed, monotonic, immutable billing epoch witness archive.
 ///
 /// Implementations must authenticate records at rest, preserve every epoch for
@@ -1388,7 +1327,6 @@ pub trait HedgingBillingEpochWitnessStore: HedgingBillingRuntimeProviderV1 {
     ///
     /// Returns a fixed payload-free provider failure.
     fn check_readiness(&self) -> Result<(), HedgingBillingExternalError>;
-
     /// Load the latest authenticated epoch record.
     ///
     /// # Errors
@@ -1397,7 +1335,6 @@ pub trait HedgingBillingEpochWitnessStore: HedgingBillingRuntimeProviderV1 {
     fn load_latest(
         &self,
     ) -> Result<Option<HedgingBillingEpochWitnessRecordV1>, HedgingBillingExternalError>;
-
     /// Load one immutable historical audit witness.
     ///
     /// # Errors
@@ -1407,7 +1344,6 @@ pub trait HedgingBillingEpochWitnessStore: HedgingBillingRuntimeProviderV1 {
         &self,
         epoch_sequence: u64,
     ) -> Result<Option<HedgingBillingEpochWitnessRecordV1>, HedgingBillingExternalError>;
-
     /// Atomically append `next` if the latest exact revision is unchanged.
     ///
     /// A successful return must preserve the record immutably for both lookup
@@ -1422,7 +1358,6 @@ pub trait HedgingBillingEpochWitnessStore: HedgingBillingRuntimeProviderV1 {
         next: &HedgingBillingEpochWitnessRecordV1,
     ) -> Result<(), HedgingBillingExternalError>;
 }
-
 /// Exact consensus-authenticated close of one billing period.
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgingBillingFinalizedPeriodCloseV1 {
@@ -1447,7 +1382,6 @@ pub struct HedgingBillingFinalizedPeriodCloseV1 {
     /// Bounded consensus proof authenticating the close record.
     pub authentication_proof: Vec<u8>,
 }
-
 impl HedgingBillingFinalizedPeriodCloseV1 {
     fn validate(
         &self,
@@ -1482,7 +1416,6 @@ impl HedgingBillingFinalizedPeriodCloseV1 {
             .verify(feed_policy, self.feed_admitted_at_unix)?;
         Ok(())
     }
-
     /// Derive the exact close-record digest, excluding transport proof bytes.
     ///
     /// # Errors
@@ -1510,7 +1443,6 @@ impl HedgingBillingFinalizedPeriodCloseV1 {
         )
     }
 }
-
 #[derive(Debug, Clone, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 struct HedgingBillingPeriodClosePreimageV1 {
     version: u8,
@@ -1523,7 +1455,6 @@ struct HedgingBillingPeriodClosePreimageV1 {
     feed_admitted_at_unix: u64,
     governed_reference_price: GovernedHedgingReferencePriceDecisionV1,
 }
-
 /// Runtime signer identity rechecked around every HSM operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BillingStatementSignerIdentityV1 {
@@ -1534,7 +1465,6 @@ pub struct BillingStatementSignerIdentityV1 {
     /// Exact strong Ed25519 public key.
     pub public_key: [u8; 32],
 }
-
 /// Fixed, payload-free failure classes returned by external dependencies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum HedgingBillingExternalError {
@@ -1551,7 +1481,6 @@ pub enum HedgingBillingExternalError {
     #[error("external result is ambiguous")]
     Ambiguous,
 }
-
 /// Runtime-only HSM/KMS statement signer.
 pub trait BillingStatementRuntimeSigner: HedgingBillingRuntimeProviderV1 {
     /// Return the current public signer identity.
@@ -1560,14 +1489,12 @@ pub trait BillingStatementRuntimeSigner: HedgingBillingRuntimeProviderV1 {
     ///
     /// Returns a fixed failure class without provider diagnostics.
     fn identity(&self) -> Result<BillingStatementSignerIdentityV1, HedgingBillingExternalError>;
-
     /// Authenticate HSM/KMS readiness without signing payload material.
     ///
     /// # Errors
     ///
     /// Returns a fixed payload-free provider failure.
     fn check_readiness(&self) -> Result<(), HedgingBillingExternalError>;
-
     /// Sign one exact domain-separated digest.
     ///
     /// # Errors
@@ -1575,7 +1502,6 @@ pub trait BillingStatementRuntimeSigner: HedgingBillingRuntimeProviderV1 {
     /// Returns a fixed failure class without key material or provider diagnostics.
     fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], HedgingBillingExternalError>;
 }
-
 /// Signed, governed billing statement returned by a runtime HSM/KMS provider.
 #[derive(
     Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
@@ -1604,7 +1530,6 @@ pub struct SignedGovernedBillingStatementV1 {
     /// Strong Ed25519 signature over [`Self::signing_digest`].
     pub signature: [u8; 64],
 }
-
 impl SignedGovernedBillingStatementV1 {
     /// Derive the exact statement-signing digest.
     ///
@@ -1626,7 +1551,6 @@ impl SignedGovernedBillingStatementV1 {
         };
         hash_canonical(STATEMENT_SIGNATURE_DOMAIN_V1, &preimage)
     }
-
     /// Verify policy binding, statement structure, signer activation, and signature.
     ///
     /// # Errors
@@ -1680,7 +1604,6 @@ impl SignedGovernedBillingStatementV1 {
         }
         Ok(())
     }
-
     /// Return bounded canonical bytes.
     ///
     /// # Errors
@@ -1701,7 +1624,6 @@ impl SignedGovernedBillingStatementV1 {
         Ok(bytes)
     }
 }
-
 #[derive(Debug, Clone, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 struct BillingStatementSignaturePreimageV1 {
     version: u8,
@@ -1715,7 +1637,6 @@ struct BillingStatementSignaturePreimageV1 {
     feed_admitted_at_unix: u64,
     governed_statement: GovernedBillingStatementV1,
 }
-
 /// Durable receipt returned by an authenticated statement publication sink.
 #[derive(
     Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
@@ -1738,7 +1659,6 @@ pub struct BillingStatementPublicationReceiptV1 {
     /// Strong Ed25519 signature over `receipt_digest`.
     pub signature: [u8; 64],
 }
-
 impl BillingStatementPublicationReceiptV1 {
     fn validate(
         &self,
@@ -1783,7 +1703,6 @@ impl BillingStatementPublicationReceiptV1 {
         Ok(())
     }
 }
-
 /// Runtime identity for the authoritative publication service.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BillingStatementPublisherIdentityV1 {
@@ -1796,7 +1715,6 @@ pub struct BillingStatementPublisherIdentityV1 {
     /// Exact receipt-verification key.
     pub public_key: [u8; 32],
 }
-
 /// Exact immutable statement and signed receipt returned by publisher lookup.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BillingStatementAuthoritativePublicationV1 {
@@ -1805,7 +1723,6 @@ pub struct BillingStatementAuthoritativePublicationV1 {
     /// Publisher-signed receipt for those exact bytes.
     pub receipt: BillingStatementPublicationReceiptV1,
 }
-
 /// Authenticated immutable statement publication and lookup adapter.
 pub trait BillingStatementPublisher: HedgingBillingRuntimeProviderV1 {
     /// Return the currently active publisher identity.
@@ -1814,14 +1731,12 @@ pub trait BillingStatementPublisher: HedgingBillingRuntimeProviderV1 {
     ///
     /// Returns a fixed failure class without credentials or provider payloads.
     fn identity(&self) -> Result<BillingStatementPublisherIdentityV1, HedgingBillingExternalError>;
-
     /// Authenticate immutable-publisher readiness without writing.
     ///
     /// # Errors
     ///
     /// Returns a fixed payload-free provider failure.
     fn check_readiness(&self) -> Result<(), HedgingBillingExternalError>;
-
     /// Publish exact signed statement bytes.
     ///
     /// # Errors
@@ -1837,7 +1752,6 @@ pub trait BillingStatementPublisher: HedgingBillingRuntimeProviderV1 {
         signed_statement_digest: [u8; 32],
         statement: &SignedGovernedBillingStatementV1,
     ) -> Result<BillingStatementPublicationReceiptV1, HedgingBillingExternalError>;
-
     /// Look up an immutable publication by statement identity.
     ///
     /// The returned record must include the exact signed statement, allowing
@@ -1853,7 +1767,6 @@ pub trait BillingStatementPublisher: HedgingBillingRuntimeProviderV1 {
         statement_id: [u8; 32],
     ) -> Result<Option<BillingStatementAuthoritativePublicationV1>, HedgingBillingExternalError>;
 }
-
 /// Durable authenticated account acknowledgement.
 #[derive(Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct BillingStatementAcknowledgementV1 {
@@ -1874,7 +1787,6 @@ pub struct BillingStatementAcknowledgementV1 {
     /// Deterministic acknowledgement identity.
     pub acknowledgement_id: [u8; 32],
 }
-
 impl fmt::Debug for BillingStatementAcknowledgementV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -1890,14 +1802,12 @@ impl fmt::Debug for BillingStatementAcknowledgementV1 {
             .finish()
     }
 }
-
 /// Runtime identity of the authoritative acknowledgement service.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BillingStatementAcknowledgementAuthorityIdentityV1 {
     /// Stable opaque provider handle.
     pub provider_handle: String,
 }
-
 /// Authoritative verifier and lookup service for account acknowledgements.
 pub trait BillingStatementAcknowledgementAuthority: HedgingBillingRuntimeProviderV1 {
     /// Return the current acknowledgement-authority identity.
@@ -1908,7 +1818,6 @@ pub trait BillingStatementAcknowledgementAuthority: HedgingBillingRuntimeProvide
     fn identity(
         &self,
     ) -> Result<BillingStatementAcknowledgementAuthorityIdentityV1, HedgingBillingExternalError>;
-
     /// Authenticate acknowledgement-authority readiness without reading
     /// account material.
     ///
@@ -1916,7 +1825,6 @@ pub trait BillingStatementAcknowledgementAuthority: HedgingBillingRuntimeProvide
     ///
     /// Returns a fixed payload-free provider failure.
     fn check_readiness(&self) -> Result<(), HedgingBillingExternalError>;
-
     /// Authenticate an acknowledgement against the exact published statement.
     ///
     /// # Errors
@@ -1927,7 +1835,6 @@ pub trait BillingStatementAcknowledgementAuthority: HedgingBillingRuntimeProvide
         statement: &SignedGovernedBillingStatementV1,
         acknowledgement: &BillingStatementAcknowledgementV1,
     ) -> Result<(), HedgingBillingExternalError>;
-
     /// Idempotently record one authenticated acknowledgement.
     ///
     /// The authority must key the operation by `acknowledgement_id`, reject a
@@ -1942,7 +1849,6 @@ pub trait BillingStatementAcknowledgementAuthority: HedgingBillingRuntimeProvide
         statement: &SignedGovernedBillingStatementV1,
         acknowledgement: &BillingStatementAcknowledgementV1,
     ) -> Result<BillingStatementAcknowledgementV1, HedgingBillingExternalError>;
-
     /// Look up the authoritative acknowledgement for one statement.
     ///
     /// # Errors
@@ -1953,7 +1859,6 @@ pub trait BillingStatementAcknowledgementAuthority: HedgingBillingRuntimeProvide
         statement_id: [u8; 32],
     ) -> Result<Option<BillingStatementAcknowledgementV1>, HedgingBillingExternalError>;
 }
-
 /// Provider wrapper that pins one production identity and public policy.
 ///
 /// The wrapper revalidates the exact handle, revision, and policy digest
@@ -1966,7 +1871,6 @@ pub struct QualifiedHedgingBillingRuntimeProviderV1<P: HedgingBillingRuntimeProv
     qualification: HedgingBillingRuntimeProviderQualificationV1,
     provider: Arc<P>,
 }
-
 impl<P: HedgingBillingRuntimeProviderV1 + ?Sized> QualifiedHedgingBillingRuntimeProviderV1<P> {
     /// Qualify and pin one deployment-owned provider before durable state opens.
     ///
@@ -1990,7 +1894,6 @@ impl<P: HedgingBillingRuntimeProviderV1 + ?Sized> QualifiedHedgingBillingRuntime
             provider,
         })
     }
-
     fn revalidate(&self) -> Result<(), HedgingBillingRuntimeProviderQualificationErrorV1> {
         revalidate_hedging_billing_runtime_provider_v1(
             &self.handle,
@@ -1998,7 +1901,6 @@ impl<P: HedgingBillingRuntimeProviderV1 + ?Sized> QualifiedHedgingBillingRuntime
             self.provider.as_ref(),
         )
     }
-
     fn read<T>(
         &self,
         operation: impl FnOnce(&P) -> Result<T, HedgingBillingExternalError>,
@@ -2010,7 +1912,6 @@ impl<P: HedgingBillingRuntimeProviderV1 + ?Sized> QualifiedHedgingBillingRuntime
             .map_err(|_| HedgingBillingExternalError::Unavailable)?;
         result
     }
-
     fn write<T>(
         &self,
         operation: impl FnOnce(&P) -> Result<T, HedgingBillingExternalError>,
@@ -2023,7 +1924,6 @@ impl<P: HedgingBillingRuntimeProviderV1 + ?Sized> QualifiedHedgingBillingRuntime
         result
     }
 }
-
 impl<P: HedgingBillingRuntimeProviderV1 + ?Sized> fmt::Debug
     for QualifiedHedgingBillingRuntimeProviderV1<P>
 {
@@ -2036,14 +1936,12 @@ impl<P: HedgingBillingRuntimeProviderV1 + ?Sized> fmt::Debug
             .finish()
     }
 }
-
 impl<P: HedgingBillingRuntimeProviderV1 + ?Sized> HedgingBillingRuntimeProviderV1
     for QualifiedHedgingBillingRuntimeProviderV1<P>
 {
     fn handle(&self) -> &str {
         &self.handle
     }
-
     fn qualification(
         &self,
     ) -> Result<
@@ -2059,7 +1957,6 @@ impl<P: HedgingBillingRuntimeProviderV1 + ?Sized> HedgingBillingRuntimeProviderV
         Ok(self.qualification)
     }
 }
-
 impl<P: HedgingBillingFinalizedQuery + ?Sized> HedgingBillingFinalizedQuery
     for QualifiedHedgingBillingRuntimeProviderV1<P>
 {
@@ -2068,11 +1965,9 @@ impl<P: HedgingBillingFinalizedQuery + ?Sized> HedgingBillingFinalizedQuery
     ) -> Result<HedgingBillingRuntimeAdapterIdentityV1, HedgingBillingExternalError> {
         self.read(HedgingBillingFinalizedQuery::identity)
     }
-
     fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
         self.read(HedgingBillingFinalizedQuery::check_readiness)
     }
-
     fn supplies_period_closes(&self) -> bool {
         if self.revalidate().is_err() {
             return false;
@@ -2084,13 +1979,11 @@ impl<P: HedgingBillingFinalizedQuery + ?Sized> HedgingBillingFinalizedQuery
         }
         supplies_period_closes
     }
-
     fn finalized_head(
         &self,
     ) -> Result<HedgingBillingFinalizedCursorV1, HedgingBillingExternalError> {
         self.read(HedgingBillingFinalizedQuery::finalized_head)
     }
-
     fn query_finalized_page(
         &self,
         position: HedgingBillingQueryPositionV1,
@@ -2098,7 +1991,6 @@ impl<P: HedgingBillingFinalizedQuery + ?Sized> HedgingBillingFinalizedQuery
     ) -> Result<Option<HedgingBillingFinalizedEventPageV1>, HedgingBillingExternalError> {
         self.read(|provider| provider.query_finalized_page(position, max_events))
     }
-
     fn query_finalized_period_close(
         &self,
         period_end_unix: u64,
@@ -2107,7 +1999,6 @@ impl<P: HedgingBillingFinalizedQuery + ?Sized> HedgingBillingFinalizedQuery
         self.read(|provider| provider.query_finalized_period_close(period_end_unix, position))
     }
 }
-
 impl<P: HedgingBillingJournalVerifier + ?Sized> HedgingBillingJournalVerifier
     for QualifiedHedgingBillingRuntimeProviderV1<P>
 {
@@ -2116,11 +2007,9 @@ impl<P: HedgingBillingJournalVerifier + ?Sized> HedgingBillingJournalVerifier
     ) -> Result<HedgingBillingRuntimeAdapterIdentityV1, HedgingBillingExternalError> {
         self.read(HedgingBillingJournalVerifier::identity)
     }
-
     fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
         self.read(HedgingBillingJournalVerifier::check_readiness)
     }
-
     fn verify_page(
         &self,
         network_id: &NetworkId,
@@ -2129,7 +2018,6 @@ impl<P: HedgingBillingJournalVerifier + ?Sized> HedgingBillingJournalVerifier
     ) -> Result<(), HedgingBillingExternalError> {
         self.read(|provider| provider.verify_page(network_id, previous, page))
     }
-
     fn verify_period_close(
         &self,
         network_id: &NetworkId,
@@ -2137,7 +2025,6 @@ impl<P: HedgingBillingJournalVerifier + ?Sized> HedgingBillingJournalVerifier
     ) -> Result<(), HedgingBillingExternalError> {
         self.read(|provider| provider.verify_period_close(network_id, close))
     }
-
     fn verify_epoch_transition(
         &self,
         network_id: &NetworkId,
@@ -2146,34 +2033,28 @@ impl<P: HedgingBillingJournalVerifier + ?Sized> HedgingBillingJournalVerifier
         self.read(|provider| provider.verify_epoch_transition(network_id, transition))
     }
 }
-
 impl<P: BillingStatementRuntimeSigner + ?Sized> BillingStatementRuntimeSigner
     for QualifiedHedgingBillingRuntimeProviderV1<P>
 {
     fn identity(&self) -> Result<BillingStatementSignerIdentityV1, HedgingBillingExternalError> {
         self.read(BillingStatementRuntimeSigner::identity)
     }
-
     fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
         self.read(BillingStatementRuntimeSigner::check_readiness)
     }
-
     fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], HedgingBillingExternalError> {
         self.read(|provider| provider.sign_digest(digest))
     }
 }
-
 impl<P: BillingStatementPublisher + ?Sized> BillingStatementPublisher
     for QualifiedHedgingBillingRuntimeProviderV1<P>
 {
     fn identity(&self) -> Result<BillingStatementPublisherIdentityV1, HedgingBillingExternalError> {
         self.read(BillingStatementPublisher::identity)
     }
-
     fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
         self.read(BillingStatementPublisher::check_readiness)
     }
-
     fn publish(
         &self,
         idempotency_key: [u8; 32],
@@ -2182,7 +2063,6 @@ impl<P: BillingStatementPublisher + ?Sized> BillingStatementPublisher
     ) -> Result<BillingStatementPublicationReceiptV1, HedgingBillingExternalError> {
         self.write(|provider| provider.publish(idempotency_key, signed_statement_digest, statement))
     }
-
     fn lookup(
         &self,
         statement_id: [u8; 32],
@@ -2191,7 +2071,6 @@ impl<P: BillingStatementPublisher + ?Sized> BillingStatementPublisher
         self.read(|provider| provider.lookup(statement_id))
     }
 }
-
 impl<P: BillingStatementAcknowledgementAuthority + ?Sized> BillingStatementAcknowledgementAuthority
     for QualifiedHedgingBillingRuntimeProviderV1<P>
 {
@@ -2201,11 +2080,9 @@ impl<P: BillingStatementAcknowledgementAuthority + ?Sized> BillingStatementAckno
     {
         self.read(BillingStatementAcknowledgementAuthority::identity)
     }
-
     fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
         self.read(BillingStatementAcknowledgementAuthority::check_readiness)
     }
-
     fn verify(
         &self,
         statement: &SignedGovernedBillingStatementV1,
@@ -2213,7 +2090,6 @@ impl<P: BillingStatementAcknowledgementAuthority + ?Sized> BillingStatementAckno
     ) -> Result<(), HedgingBillingExternalError> {
         self.read(|provider| provider.verify(statement, acknowledgement))
     }
-
     fn record(
         &self,
         statement: &SignedGovernedBillingStatementV1,
@@ -2221,7 +2097,6 @@ impl<P: BillingStatementAcknowledgementAuthority + ?Sized> BillingStatementAckno
     ) -> Result<BillingStatementAcknowledgementV1, HedgingBillingExternalError> {
         self.write(|provider| provider.record(statement, acknowledgement))
     }
-
     fn lookup(
         &self,
         statement_id: [u8; 32],
@@ -2229,27 +2104,23 @@ impl<P: BillingStatementAcknowledgementAuthority + ?Sized> BillingStatementAckno
         self.read(|provider| provider.lookup(statement_id))
     }
 }
-
 impl<P: HedgingBillingEpochWitnessStore + ?Sized> HedgingBillingEpochWitnessStore
     for QualifiedHedgingBillingRuntimeProviderV1<P>
 {
     fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
         self.read(HedgingBillingEpochWitnessStore::check_readiness)
     }
-
     fn load_latest(
         &self,
     ) -> Result<Option<HedgingBillingEpochWitnessRecordV1>, HedgingBillingExternalError> {
         self.read(HedgingBillingEpochWitnessStore::load_latest)
     }
-
     fn load_epoch(
         &self,
         epoch_sequence: u64,
     ) -> Result<Option<HedgingBillingEpochWitnessRecordV1>, HedgingBillingExternalError> {
         self.read(|provider| provider.load_epoch(epoch_sequence))
     }
-
     fn compare_and_swap_latest(
         &self,
         expected_revision: Option<[u8; 32]>,
@@ -2258,7 +2129,6 @@ impl<P: HedgingBillingEpochWitnessStore + ?Sized> HedgingBillingEpochWitnessStor
         self.write(|provider| provider.compare_and_swap_latest(expected_revision, next))
     }
 }
-
 /// Direction of a generated hedge intent.
 #[derive(
     Debug,
@@ -2275,7 +2145,6 @@ pub enum HedgeIntentDirectionV1 {
     /// Sell XOR exposure against the governed reference quote.
     SellXor,
 }
-
 /// Whether a hedge projection may be submitted to an execution venue.
 #[derive(
     Debug,
@@ -2294,7 +2163,6 @@ pub enum HedgeIntentDispositionV1 {
     /// Exposure exceeds the ceiling and requires a new governed operator plan.
     GovernedOverflow,
 }
-
 /// Deterministic intent for a later, separately governed execution adapter.
 #[derive(
     Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
@@ -2331,7 +2199,6 @@ pub struct HedgeIntentV1 {
     /// Automatic execution is always false for V1.
     pub automatic_execution: bool,
 }
-
 impl HedgeIntentV1 {
     /// Verify exact policy, amount, close, expiry, disposition, and identity binding.
     ///
@@ -2379,7 +2246,6 @@ impl HedgeIntentV1 {
         Ok(())
     }
 }
-
 /// Governed identities and limits for one explicitly authorized hedge venue.
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct GovernedHedgeExecutionPolicyV1 {
@@ -2404,7 +2270,6 @@ pub struct GovernedHedgeExecutionPolicyV1 {
     /// Maximum admitted slippage in basis points.
     pub max_slippage_bps: u16,
 }
-
 impl GovernedHedgeExecutionPolicyV1 {
     /// Validate identities, keys, time bounds, and venue limits.
     ///
@@ -2438,7 +2303,6 @@ impl GovernedHedgeExecutionPolicyV1 {
             .map_err(|_| HedgingBillingServiceError::InvalidExecutionAdapter)?;
         Ok(())
     }
-
     /// Return the canonical governed policy digest.
     ///
     /// # Errors
@@ -2449,7 +2313,6 @@ impl GovernedHedgeExecutionPolicyV1 {
         hash_canonical(HEDGE_EXECUTION_POLICY_DOMAIN_V1, self)
     }
 }
-
 /// Explicit operator authorization binding one executable intent to one venue.
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgeExecutionAuthorizationV1 {
@@ -2482,7 +2345,6 @@ pub struct HedgeExecutionAuthorizationV1 {
     /// Strong Ed25519 signature over the authorization identity.
     pub signature: [u8; 64],
 }
-
 impl HedgeExecutionAuthorizationV1 {
     /// Derive the exact authorization identity/signing digest.
     ///
@@ -2494,7 +2356,6 @@ impl HedgeExecutionAuthorizationV1 {
     pub fn authorization_digest(&self) -> Result<[u8; 32], HedgingBillingServiceError> {
         execution_authorization_digest(self)
     }
-
     /// Verify an explicit operator authorization against exact governed limits.
     ///
     /// # Errors
@@ -2545,7 +2406,6 @@ impl HedgeExecutionAuthorizationV1 {
             .map_err(|_| HedgingBillingServiceError::InvalidHedgeExecutionAuthorization)
     }
 }
-
 /// Runtime identity of one governed hedge venue adapter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GovernedHedgeExecutionVenueIdentityV1 {
@@ -2554,7 +2414,6 @@ pub struct GovernedHedgeExecutionVenueIdentityV1 {
     /// Exact receipt verification key.
     pub public_key: [u8; 32],
 }
-
 /// Immutable venue receipt for one explicitly authorized hedge submission.
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgeExecutionSubmissionReceiptV1 {
@@ -2575,7 +2434,6 @@ pub struct HedgeExecutionSubmissionReceiptV1 {
     /// Venue Ed25519 signature over the receipt identity.
     pub signature: [u8; 64],
 }
-
 impl HedgeExecutionSubmissionReceiptV1 {
     /// Derive the venue receipt identity/signing digest.
     ///
@@ -2587,7 +2445,6 @@ impl HedgeExecutionSubmissionReceiptV1 {
     pub fn receipt_digest(&self) -> Result<[u8; 32], HedgingBillingServiceError> {
         execution_receipt_digest(self)
     }
-
     fn validate(
         &self,
         policy: &GovernedHedgeExecutionPolicyV1,
@@ -2621,7 +2478,6 @@ impl HedgeExecutionSubmissionReceiptV1 {
             .map_err(|_| HedgingBillingServiceError::InvalidHedgeExecutionReceipt)
     }
 }
-
 /// Adapter boundary for an explicitly operator-authorized venue integration.
 ///
 /// No service loop invokes this trait. The only submission helper requires a
@@ -2636,12 +2492,10 @@ pub trait GovernedHedgeExecutionAdapter: Send + Sync + fmt::Debug {
     fn identity(
         &self,
     ) -> Result<GovernedHedgeExecutionVenueIdentityV1, HedgingBillingExternalError>;
-
     /// Whether the adapter would execute automatically.
     ///
     /// Production V1 supervisors must reject adapters returning `true`.
     fn automatic_execution_enabled(&self) -> bool;
-
     /// Submit one exact explicitly authorized intent idempotently.
     ///
     /// # Errors
@@ -2654,7 +2508,6 @@ pub trait GovernedHedgeExecutionAdapter: Send + Sync + fmt::Debug {
         intent: &HedgeIntentV1,
         authorization: &HedgeExecutionAuthorizationV1,
     ) -> Result<HedgeExecutionSubmissionReceiptV1, HedgingBillingExternalError>;
-
     /// Look up an immutable submission by authorization identity.
     ///
     /// # Errors
@@ -2665,13 +2518,11 @@ pub trait GovernedHedgeExecutionAdapter: Send + Sync + fmt::Debug {
         authorization_id: [u8; 32],
     ) -> Result<Option<HedgeExecutionSubmissionReceiptV1>, HedgingBillingExternalError>;
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 struct StoredAccrualV1 {
     event: HedgingBillingFinalizedEventV1,
     source_receipt: [u8; 32],
 }
-
 #[derive(
     Debug,
     Clone,
@@ -2687,14 +2538,12 @@ struct StoredEventReplayReceiptV1 {
     sequence: u64,
     event_digest: [u8; 32],
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 struct StoredAccountStatementHeadV1 {
     account_id: Vec<u8>,
     statement_id: [u8; 32],
     period_end_unix: u64,
 }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 enum StoredStatementDeliveryStateV1 {
     ReadyForSigning,
@@ -2705,7 +2554,6 @@ enum StoredStatementDeliveryStateV1 {
     Acknowledged,
     DeadLetter,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 struct StoredStatementV1 {
     governed_statement: GovernedBillingStatementV1,
@@ -2715,7 +2563,6 @@ struct StoredStatementV1 {
     signed_statement: Option<SignedGovernedBillingStatementV1>,
     publication_receipt: Option<BillingStatementPublicationReceiptV1>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 struct HedgingBillingCheckpointV1 {
     version: u8,
@@ -2741,7 +2588,6 @@ struct HedgingBillingCheckpointV1 {
     acknowledgements: Vec<BillingStatementAcknowledgementV1>,
     hedge_intents: Vec<HedgeIntentV1>,
 }
-
 impl HedgingBillingCheckpointV1 {
     fn empty(policy: &HedgingBillingServicePolicyV1) -> Result<Self, HedgingBillingServiceError> {
         Ok(Self {
@@ -2769,7 +2615,6 @@ impl HedgingBillingCheckpointV1 {
             hedge_intents: Vec::new(),
         })
     }
-
     fn validate(
         &self,
         policy: &HedgingBillingServicePolicyV1,
@@ -2876,7 +2721,6 @@ impl HedgingBillingCheckpointV1 {
                 return Err(HedgingBillingServiceError::InvalidCheckpoint);
             }
         }
-
         let mut source_next_sequence = self
             .compacted_journal_commitment
             .map_or(1, |commitment| commitment.journal_next_sequence);
@@ -2946,7 +2790,6 @@ impl HedgingBillingCheckpointV1 {
         {
             return Err(HedgingBillingServiceError::InvalidCheckpoint);
         }
-
         let mut expected_period_end = self.compacted_through_period_end_unix;
         for close in &self.period_closes {
             close.validate(policy, feed_policy)?;
@@ -2963,7 +2806,6 @@ impl HedgingBillingCheckpointV1 {
         if expected_period_end != self.last_period_end_unix {
             return Err(HedgingBillingServiceError::InvalidCheckpoint);
         }
-
         let derived = derive_billing_domain_state(
             policy,
             feed_policy,
@@ -2983,7 +2825,6 @@ impl HedgingBillingCheckpointV1 {
         {
             return Err(HedgingBillingServiceError::InvalidCheckpoint);
         }
-
         let mut previous_event_sequence = None;
         let mut open_receipts = BTreeSet::new();
         for accrual in &self.open_accruals {
@@ -3028,7 +2869,6 @@ impl HedgingBillingCheckpointV1 {
                 return Err(HedgingBillingServiceError::InvalidCheckpoint);
             }
         }
-
         let mut previous_account: Option<&[u8]> = None;
         for head in &self.account_heads {
             if validate_canonical_account_id_bytes(&head.account_id).is_err()
@@ -3040,7 +2880,6 @@ impl HedgingBillingCheckpointV1 {
             }
             previous_account = Some(&head.account_id);
         }
-
         let mut previous_statement_id = None;
         let mut known_statement_ids = BTreeSet::new();
         let mut statements_by_account: BTreeMap<Vec<u8>, Vec<&GovernedBillingStatementV1>> =
@@ -3173,7 +3012,6 @@ impl HedgingBillingCheckpointV1 {
                 )?;
             }
         }
-
         for statements in statements_by_account.values_mut() {
             statements.sort_by_key(|governed| governed.statement.period_end_unix);
             let mut previous = None;
@@ -3193,7 +3031,6 @@ impl HedgingBillingCheckpointV1 {
                 previous = Some(&governed.statement);
             }
         }
-
         let mut previous_ack = None;
         let mut acknowledged_statements = BTreeSet::new();
         for acknowledgement in &self.acknowledgements {
@@ -3240,7 +3077,6 @@ impl HedgingBillingCheckpointV1 {
                 return Err(HedgingBillingServiceError::InvalidCheckpoint);
             }
         }
-
         let mut previous_intent = None;
         let mut intent_periods = BTreeSet::new();
         for intent in &self.hedge_intents {
@@ -3266,7 +3102,6 @@ impl HedgingBillingCheckpointV1 {
                 return Err(HedgingBillingServiceError::InvalidCheckpoint);
             }
         }
-
         for head in &self.account_heads {
             let latest = statements_by_account
                 .get(&head.account_id)
@@ -3283,7 +3118,6 @@ impl HedgingBillingCheckpointV1 {
         }
         Ok(())
     }
-
     fn verify_authenticated_sources(
         &self,
         policy: &HedgingBillingServicePolicyV1,
@@ -3300,7 +3134,6 @@ impl HedgingBillingCheckpointV1 {
         Ok(())
     }
 }
-
 #[derive(Debug)]
 struct DerivedBillingDomainState {
     open_accruals: Vec<StoredAccrualV1>,
@@ -3308,7 +3141,6 @@ struct DerivedBillingDomainState {
     governed_statements: Vec<GovernedBillingStatementV1>,
     hedge_intents: Vec<HedgeIntentV1>,
 }
-
 fn derive_billing_domain_state(
     policy: &HedgingBillingServicePolicyV1,
     feed_policy: &HedgingFeedTrustPolicyV1,
@@ -3384,12 +3216,10 @@ fn derive_billing_domain_state(
             return Err(HedgingBillingServiceError::InvalidCheckpoint);
         }
     }
-
     for close in closes {
         let by_account = events_by_period
             .remove(&close.period_end_unix)
             .unwrap_or_default();
-
         let due_at_unix = close
             .period_end_unix
             .checked_add(policy.payment_due_after_secs)
@@ -3496,7 +3326,6 @@ fn derive_billing_domain_state(
             hedge_intents.push(intent);
         }
     }
-
     if !events_by_period.is_empty() {
         return Err(HedgingBillingServiceError::InvalidPeriodClose);
     }
@@ -3522,7 +3351,6 @@ fn derive_billing_domain_state(
         hedge_intents,
     })
 }
-
 fn canonical_billing_line_source_id(
     event: &HedgingBillingFinalizedEventV1,
 ) -> Result<String, HedgingBillingServiceError> {
@@ -3544,13 +3372,11 @@ fn canonical_billing_line_source_id(
     )?;
     Ok(identifier)
 }
-
 #[derive(Debug)]
 struct RuntimeState {
     checkpoint: HedgingBillingCheckpointV1,
     fingerprint: Option<[u8; 32]>,
 }
-
 /// Result of ingesting one finalized page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HedgingBillingIngestOutcomeV1 {
@@ -3567,7 +3393,6 @@ pub enum HedgingBillingIngestOutcomeV1 {
         next_sequence: u64,
     },
 }
-
 /// Result of finalizing one billing period.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HedgingBillingPeriodOutcomeV1 {
@@ -3580,7 +3405,6 @@ pub struct HedgingBillingPeriodOutcomeV1 {
     /// Optional generated hedge intent.
     pub hedge_intent: Option<HedgeIntentV1>,
 }
-
 /// Bounded reconciliation scan outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HedgingBillingReconcileOutcomeV1 {
@@ -3593,7 +3417,6 @@ pub struct HedgingBillingReconcileOutcomeV1 {
     /// Latest finalized view observed by the projector.
     pub finalized_cursor: Option<HedgingBillingFinalizedCursorV1>,
 }
-
 /// Result of sealing and atomically installing one new billing epoch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HedgingBillingEpochTransitionOutcomeV1 {
@@ -3604,7 +3427,6 @@ pub struct HedgingBillingEpochTransitionOutcomeV1 {
     /// Sealed witness-store revision.
     pub witness_revision: [u8; 32],
 }
-
 /// Payload-free statement delivery status.
 #[derive(
     Debug,
@@ -3633,7 +3455,6 @@ pub enum BillingStatementDeliveryStatusV1 {
     /// Signing retry budget was exhausted.
     DeadLetter,
 }
-
 impl From<StoredStatementDeliveryStateV1> for BillingStatementDeliveryStatusV1 {
     fn from(value: StoredStatementDeliveryStateV1) -> Self {
         match value {
@@ -3647,7 +3468,6 @@ impl From<StoredStatementDeliveryStateV1> for BillingStatementDeliveryStatusV1 {
         }
     }
 }
-
 /// Payload-free statement delivery projection.
 #[derive(
     Debug,
@@ -3671,7 +3491,6 @@ pub struct BillingStatementDeliveryProjectionV1 {
     /// Signing attempts consumed.
     pub signing_attempts: u32,
 }
-
 /// Payload-free durable service projection for health and telemetry.
 #[derive(
     Debug,
@@ -3707,7 +3526,6 @@ pub struct HedgingBillingServiceStatusV1 {
     /// Retained generated hedge intents. V1 never executes them automatically.
     pub hedge_intents: u32,
 }
-
 /// Retention contract for V1 runtime projections.
 ///
 /// The local checkpoint exposes only the active billing epoch. Older epochs
@@ -3728,7 +3546,6 @@ pub enum HedgingBillingRetentionScopeV1 {
     /// Only records retained in the currently active checkpoint epoch.
     ActiveEpochOnly,
 }
-
 /// Exact immutable anchor for one runtime projection read.
 #[derive(
     Debug,
@@ -3758,7 +3575,6 @@ pub struct HedgingBillingProjectionAnchorV1 {
     /// Explicit V1 retention contract.
     pub retention_scope: HedgingBillingRetentionScopeV1,
 }
-
 /// Owner-scoped bounded statement-list request.
 #[derive(
     Clone,
@@ -3779,7 +3595,6 @@ pub struct BillingStatementListRequestV1 {
     /// Exact checkpoint fingerprint observed by the caller.
     pub expected_checkpoint_fingerprint: [u8; 32],
 }
-
 impl fmt::Debug for BillingStatementListRequestV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -3797,7 +3612,6 @@ impl fmt::Debug for BillingStatementListRequestV1 {
             .finish()
     }
 }
-
 /// Public terminal delivery state visible to a statement owner.
 #[derive(
     Debug,
@@ -3816,7 +3630,6 @@ pub enum BillingStatementOwnerStatusV1 {
     /// The owner acknowledgement is durably reconciled.
     Acknowledged,
 }
-
 /// Compact owner-visible statement list item.
 #[derive(
     Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
@@ -3841,7 +3654,6 @@ pub struct BillingStatementListItemV1 {
     /// Durable acknowledgement identity, when acknowledged.
     pub acknowledgement_id: Option<[u8; 32]>,
 }
-
 /// One bounded owner-scoped statement page.
 #[derive(
     Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
@@ -3856,7 +3668,6 @@ pub struct BillingStatementPageV1 {
     /// Last returned statement id when another page exists.
     pub next_cursor: Option<[u8; 32]>,
 }
-
 impl fmt::Debug for BillingStatementPageV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -3868,7 +3679,6 @@ impl fmt::Debug for BillingStatementPageV1 {
             .finish()
     }
 }
-
 /// Owner-scoped request for one published statement.
 #[derive(
     Clone,
@@ -3887,7 +3697,6 @@ pub struct BillingPublishedStatementRequestV1 {
     /// Exact checkpoint fingerprint observed by the caller.
     pub expected_checkpoint_fingerprint: [u8; 32],
 }
-
 impl fmt::Debug for BillingPublishedStatementRequestV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -3904,7 +3713,6 @@ impl fmt::Debug for BillingPublishedStatementRequestV1 {
             .finish()
     }
 }
-
 /// Payload-free projection of one durable account acknowledgement.
 #[derive(
     Debug,
@@ -3928,7 +3736,6 @@ pub struct BillingStatementAcknowledgementProjectionV1 {
     /// Server-controlled acknowledgement timestamp.
     pub acknowledged_at_unix: u64,
 }
-
 /// Exact published statement plus immutable publication and acknowledgement projections.
 #[derive(
     Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
@@ -3943,7 +3750,6 @@ pub struct BillingPublishedStatementV1 {
     /// Payload-free durable acknowledgement, when present.
     pub acknowledgement: Option<BillingStatementAcknowledgementProjectionV1>,
 }
-
 impl fmt::Debug for BillingPublishedStatementV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -3965,7 +3771,6 @@ impl fmt::Debug for BillingPublishedStatementV1 {
             .finish()
     }
 }
-
 /// Authenticated owner acknowledgement request.
 #[derive(
     Clone,
@@ -3988,7 +3793,6 @@ pub struct BillingStatementAcknowledgementRequestV1 {
     /// Bounded proof consumed only by the acknowledgement authority.
     pub authentication_proof: Vec<u8>,
 }
-
 impl fmt::Debug for BillingStatementAcknowledgementRequestV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -4007,7 +3811,6 @@ impl fmt::Debug for BillingStatementAcknowledgementRequestV1 {
             .finish()
     }
 }
-
 /// Successful acknowledgement response without authentication proof bytes.
 #[derive(
     Debug,
@@ -4025,7 +3828,6 @@ pub struct BillingStatementAcknowledgementResponseV1 {
     /// Payload-free acknowledgement projection.
     pub acknowledgement: BillingStatementAcknowledgementProjectionV1,
 }
-
 /// Common bounded projection page request for finance-owned aggregate reads.
 #[derive(
     Debug,
@@ -4046,7 +3848,6 @@ pub struct HedgingBillingProjectionPageRequestV1 {
     /// Page size in `1..=100`.
     pub limit: u16,
 }
-
 /// Compact finalized exposure for one retained active-epoch period.
 #[derive(
     Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
@@ -4071,7 +3872,6 @@ pub struct HedgingBillingExposureItemV1 {
     /// Automatic execution remains false for every V1 projection.
     pub automatic_execution: bool,
 }
-
 /// One bounded active-epoch exposure page.
 #[derive(
     Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
@@ -4084,7 +3884,6 @@ pub struct HedgingBillingExposurePageV1 {
     /// Last returned opaque exposure cursor when another page exists.
     pub next_cursor: Option<[u8; 32]>,
 }
-
 impl fmt::Debug for HedgingBillingExposurePageV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -4095,7 +3894,6 @@ impl fmt::Debug for HedgingBillingExposurePageV1 {
             .finish()
     }
 }
-
 /// One bounded active-epoch hedge-intent page.
 #[derive(
     Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
@@ -4110,7 +3908,6 @@ pub struct HedgeIntentPageV1 {
     /// Unconditionally false for V1.
     pub automatic_execution_enabled: bool,
 }
-
 impl fmt::Debug for HedgeIntentPageV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -4125,7 +3922,6 @@ impl fmt::Debug for HedgeIntentPageV1 {
             .finish()
     }
 }
-
 /// Payload-free daemon health projection owned by the node API boundary.
 #[derive(
     Debug,
@@ -4162,7 +3958,6 @@ pub struct HedgingBillingDaemonStatusV1 {
     /// Overall supervised readiness.
     pub ready: bool,
 }
-
 /// Payload-free supervised-worker counters owned by the node API boundary.
 #[derive(
     Debug,
@@ -4196,7 +3991,6 @@ pub struct HedgingBillingDaemonMetricsV1 {
     /// Account acknowledgements reconciled.
     pub acknowledgements_reconciled: u64,
 }
-
 /// Payload-free exact reconciliation view for supervision and Torii reads.
 #[derive(
     Debug,
@@ -4220,7 +4014,6 @@ pub struct HedgingBillingReconciliationStatusV1 {
     /// Current bounded count of non-terminal delivery records.
     pub pending_delivery_operations: u32,
 }
-
 /// Oracle-safe failures returned by the runtime API boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum HedgingBillingRuntimeApiErrorV1 {
@@ -4243,7 +4036,6 @@ pub enum HedgingBillingRuntimeApiErrorV1 {
     #[error("hedging/billing runtime is unavailable")]
     Unavailable,
 }
-
 /// Object-safe production API implemented by the supervised `irohad` runtime.
 ///
 /// Torii depends only on this node-owned boundary and never receives the raw
@@ -4257,19 +4049,16 @@ pub trait HedgingBillingRuntimeApiV1: Send + Sync + fmt::Debug {
     fn projection_anchor(
         &self,
     ) -> Result<HedgingBillingProjectionAnchorV1, HedgingBillingRuntimeApiErrorV1>;
-
     /// Return one bounded owner-scoped terminal statement page.
     fn list_statements(
         &self,
         request: &BillingStatementListRequestV1,
     ) -> Result<BillingStatementPageV1, HedgingBillingRuntimeApiErrorV1>;
-
     /// Return one exact terminally published statement to its owner.
     fn published_statement(
         &self,
         request: &BillingPublishedStatementRequestV1,
     ) -> Result<BillingPublishedStatementV1, HedgingBillingRuntimeApiErrorV1>;
-
     /// Authenticate and durably acknowledge one owner statement under a fresh
     /// finalized-head fence that is rechecked immediately before local commit.
     fn acknowledge_statement(
@@ -4277,33 +4066,27 @@ pub trait HedgingBillingRuntimeApiV1: Send + Sync + fmt::Debug {
         request: &BillingStatementAcknowledgementRequestV1,
         server_time_unix: u64,
     ) -> Result<BillingStatementAcknowledgementResponseV1, HedgingBillingRuntimeApiErrorV1>;
-
     /// Return finalized active-epoch exposure, including below-threshold periods.
     fn exposure_page(
         &self,
         request: &HedgingBillingProjectionPageRequestV1,
     ) -> Result<HedgingBillingExposurePageV1, HedgingBillingRuntimeApiErrorV1>;
-
     /// Return generated active-epoch hedge intents without an execution surface.
     fn hedge_intent_page(
         &self,
         request: &HedgingBillingProjectionPageRequestV1,
     ) -> Result<HedgeIntentPageV1, HedgingBillingRuntimeApiErrorV1>;
-
     /// Return payload-free daemon health.
     fn daemon_status(
         &self,
     ) -> Result<HedgingBillingDaemonStatusV1, HedgingBillingRuntimeApiErrorV1>;
-
     /// Return payload-free monotonic daemon counters.
     fn daemon_metrics(&self) -> HedgingBillingDaemonMetricsV1;
-
     /// Return exact payload-free reconciliation status.
     fn reconciliation_status(
         &self,
     ) -> Result<HedgingBillingReconciliationStatusV1, HedgingBillingRuntimeApiErrorV1>;
 }
-
 /// Durable finalized-ledger billing and statement-delivery service.
 pub struct HedgingBillingService {
     policy: HedgingBillingServicePolicyV1,
@@ -4315,7 +4098,6 @@ pub struct HedgingBillingService {
     store: AtomicCheckpointStore,
     state: Mutex<RuntimeState>,
 }
-
 impl fmt::Debug for HedgingBillingService {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
@@ -4326,7 +4108,6 @@ impl fmt::Debug for HedgingBillingService {
             .finish_non_exhaustive()
     }
 }
-
 impl HedgingBillingService {
     /// Open or initialize a durable service checkpoint.
     ///
@@ -4469,7 +4250,6 @@ impl HedgingBillingService {
             }),
         })
     }
-
     /// Ingest one typed, contiguous, finalized billing-journal page.
     ///
     /// # Errors
@@ -4610,7 +4390,6 @@ impl HedgingBillingService {
         {
             return Err(HedgingBillingServiceError::ResourceExhausted);
         }
-
         let mut next = guard.checkpoint.clone();
         let mut receipts: BTreeSet<[u8; 32]> = next.replay_receipts.iter().copied().collect();
         for event in &page.events {
@@ -4646,7 +4425,6 @@ impl HedgingBillingService {
             next_sequence,
         })
     }
-
     /// Return the exact durable position for a finalized native query.
     ///
     /// # Errors
@@ -4664,7 +4442,6 @@ impl HedgingBillingService {
             journal_commitment: guard.checkpoint.journal_commitment,
         })
     }
-
     /// Consume a bounded sequence of authoritative finalized query pages.
     ///
     /// A scan stops on `None`, an exact replay, or a page that advances only
@@ -4729,7 +4506,6 @@ impl HedgingBillingService {
                 .map(|commitment| commitment.finalized_cursor),
         })
     }
-
     /// Finalize the next fixed billing period from committed accruals.
     ///
     /// The governed reference price must be effective exactly at the next
@@ -4780,7 +4556,6 @@ impl HedgingBillingService {
         {
             return Err(HedgingBillingServiceError::ResourceExhausted);
         }
-
         let source_events: Vec<HedgingBillingFinalizedEventV1> = guard
             .checkpoint
             .source_pages
@@ -4805,7 +4580,6 @@ impl HedgingBillingService {
         {
             return Err(HedgingBillingServiceError::ResourceExhausted);
         }
-
         let existing: BTreeMap<[u8; 32], StoredStatementV1> = guard
             .checkpoint
             .statements
@@ -4849,7 +4623,6 @@ impl HedgingBillingService {
             .iter()
             .find(|intent| intent.period_end_unix == close.period_end_unix)
             .cloned();
-
         let mut next = guard.checkpoint.clone();
         next.period_closes = closes;
         next.last_period_end_unix = close.period_end_unix;
@@ -4865,7 +4638,6 @@ impl HedgingBillingService {
             hedge_intent,
         })
     }
-
     /// Compact a fully settled epoch and install an explicitly governed policy successor.
     ///
     /// This consumes the service instance. Every statement in the compacted
@@ -4930,7 +4702,6 @@ impl HedgingBillingService {
         {
             return Err(HedgingBillingServiceError::UnsettledEpochTransition);
         }
-
         let mut account_bases: BTreeMap<Vec<u8>, GovernedBillingStatementV1> = checkpoint
             .compacted_account_bases
             .iter()
@@ -4959,7 +4730,6 @@ impl HedgingBillingService {
         {
             return Err(HedgingBillingServiceError::ResourceExhausted);
         }
-
         let compacted_source_digest = hash_canonical(
             COMPACTED_SOURCE_DOMAIN_V1,
             &CompactedSourceArchiveV1 {
@@ -5010,7 +4780,6 @@ impl HedgingBillingService {
             hedge_intents: u64::try_from(checkpoint.hedge_intents.len())
                 .map_err(|_| HedgingBillingServiceError::ResourceExhausted)?,
         };
-
         let epoch_sequence = checkpoint
             .epoch_sequence
             .checked_add(1)
@@ -5088,7 +4857,6 @@ impl HedgingBillingService {
             checkpoint_bytes.clone(),
         );
         next_witness.validate(next_policy.checkpoint_max_bytes)?;
-
         let previous_witness = self.epoch_witness_store.load_latest()?;
         let expected_revision = match (&previous_witness, checkpoint.epoch_sequence) {
             (None, 0) => None,
@@ -5144,7 +4912,6 @@ impl HedgingBillingService {
             witness_revision: next_witness.revision,
         })
     }
-
     /// Sign the first ready statement with a runtime-only HSM/KMS provider.
     ///
     /// Identity is checked before the durable claim, immediately before the
@@ -5161,7 +4928,6 @@ impl HedgingBillingService {
     ) -> Result<Option<SignedGovernedBillingStatementV1>, HedgingBillingServiceError> {
         self.sign_statement_selected(None, signer)
     }
-
     /// Sign one exact ready statement selected by the supervised fair scanner.
     ///
     /// # Errors
@@ -5177,7 +4943,6 @@ impl HedgingBillingService {
         self.sign_statement_selected(Some(statement_id), signer)?
             .ok_or(HedgingBillingServiceError::InvalidDeliveryState)
     }
-
     fn sign_statement_selected(
         &self,
         requested_statement_id: Option<[u8; 32]>,
@@ -5253,7 +5018,6 @@ impl HedgingBillingService {
             self.commit_locked(guard, next)?;
             (statement_id, candidate, period_close)
         };
-
         self.verify_runtime_signer_identity(signer)?;
         let signature = match signer.sign_digest(candidate.signing_digest()?) {
             Ok(signature) => signature,
@@ -5271,7 +5035,6 @@ impl HedgingBillingService {
             self.release_failed_signing_claim(statement_id)?;
             return Err(error);
         }
-
         let guard = self
             .state
             .lock()
@@ -5290,7 +5053,6 @@ impl HedgingBillingService {
         self.commit_locked(guard, next)?;
         Ok(Some(candidate))
     }
-
     /// Publish the first signed statement through an authenticated immutable sink.
     ///
     /// The checkpoint enters the ambiguous state before bytes leave the
@@ -5306,7 +5068,6 @@ impl HedgingBillingService {
     ) -> Result<Option<BillingStatementPublicationReceiptV1>, HedgingBillingServiceError> {
         self.publish_statement_selected(None)
     }
-
     /// Publish one exact signed statement selected by the supervised fair
     /// scanner.
     ///
@@ -5322,7 +5083,6 @@ impl HedgingBillingService {
         self.publish_statement_selected(Some(statement_id))?
             .ok_or(HedgingBillingServiceError::InvalidDeliveryState)
     }
-
     fn publish_statement_selected(
         &self,
         requested_statement_id: Option<[u8; 32]>,
@@ -5380,7 +5140,6 @@ impl HedgingBillingService {
             return Ok(Some(publication.receipt));
         }
         self.mark_publication_ambiguous(statement_id, &signed)?;
-
         let receipt = match self
             .publisher
             .publish(statement_id, signed_statement_digest, &signed)
@@ -5398,7 +5157,6 @@ impl HedgingBillingService {
         self.store_publication_receipt(statement_id, receipt.clone())?;
         Ok(Some(receipt))
     }
-
     /// Reconcile one ambiguous publication through authoritative sink lookup.
     ///
     /// # Errors
@@ -5439,7 +5197,6 @@ impl HedgingBillingService {
             }
         }
     }
-
     /// Durably acknowledge a published statement under a canonical authenticated
     /// request binding.
     ///
@@ -5464,7 +5221,6 @@ impl HedgingBillingService {
             None,
         )
     }
-
     fn acknowledge_statement_at_fingerprint(
         &self,
         statement_id: [u8; 32],
@@ -5485,7 +5241,6 @@ impl HedgingBillingService {
             &mut allow_commit,
         )
     }
-
     fn acknowledge_statement_at_fingerprint_with_precommit_fence(
         &self,
         statement_id: [u8; 32],
@@ -5620,7 +5375,6 @@ impl HedgingBillingService {
         self.commit_locked_with_precommit_fence(guard, next, pre_commit_fence)?;
         Ok(acknowledgement)
     }
-
     /// Reconcile one statement acknowledgement from its authoritative service.
     ///
     /// # Errors
@@ -5633,7 +5387,6 @@ impl HedgingBillingService {
     ) -> Result<Option<BillingStatementAcknowledgementV1>, HedgingBillingServiceError> {
         self.reconcile_acknowledgement_at_fingerprint(statement_id, None)
     }
-
     fn reconcile_acknowledgement_at_fingerprint(
         &self,
         statement_id: [u8; 32],
@@ -5646,7 +5399,6 @@ impl HedgingBillingService {
             &mut allow_commit,
         )
     }
-
     fn reconcile_acknowledgement_at_fingerprint_with_precommit_fence(
         &self,
         statement_id: [u8; 32],
@@ -5733,7 +5485,6 @@ impl HedgingBillingService {
         self.commit_locked_with_precommit_fence(guard, next, pre_commit_fence)?;
         Ok(Some(acknowledgement))
     }
-
     /// Return the exact active-epoch projection anchor.
     ///
     /// # Errors
@@ -5748,7 +5499,6 @@ impl HedgingBillingService {
             .map_err(|_| HedgingBillingRuntimeApiErrorV1::Unavailable)?;
         projection_anchor(&guard, &self.policy)
     }
-
     /// Return one exact anchor and its payload-free service counters under the
     /// same state-lock snapshot.
     pub fn api_anchored_service_status(
@@ -5769,7 +5519,6 @@ impl HedgingBillingService {
             service_status(&guard.checkpoint, &self.policy).map_err(runtime_api_service_error)?;
         Ok((anchor, status))
     }
-
     /// Return a bounded owner-scoped terminal statement page.
     ///
     /// Records in signing, publication-ambiguous, retry, or dead-letter states
@@ -5792,7 +5541,6 @@ impl HedgingBillingService {
             .map_err(|_| HedgingBillingRuntimeApiErrorV1::Unavailable)?;
         let anchor = projection_anchor(&guard, &self.policy)?;
         require_projection_fingerprint(&anchor, request.expected_checkpoint_fingerprint)?;
-
         let start = if let Some(after) = request.after_statement_id {
             let index = guard
                 .checkpoint
@@ -5908,7 +5656,6 @@ impl HedgingBillingService {
             next_cursor,
         })
     }
-
     /// Return one exact published statement and payload-free delivery evidence
     /// to its canonical owner.
     pub fn api_published_statement(
@@ -5957,7 +5704,6 @@ impl HedgingBillingService {
             acknowledgement,
         })
     }
-
     /// Authenticate and durably acknowledge one owner statement at an exact
     /// checkpoint anchor.
     ///
@@ -5976,7 +5722,6 @@ impl HedgingBillingService {
             &mut allow_commit,
         )
     }
-
     /// Authenticate and durably acknowledge one owner statement while invoking
     /// an external authority fence immediately before every durable local
     /// checkpoint store write.
@@ -6088,7 +5833,6 @@ impl HedgingBillingService {
             acknowledgement: acknowledgement_projection(&acknowledgement),
         })
     }
-
     /// Return a bounded active-epoch exposure page, including finalized periods
     /// whose exposure is zero or below the hedge threshold.
     pub fn api_exposure_page(
@@ -6187,7 +5931,6 @@ impl HedgingBillingService {
             next_cursor,
         })
     }
-
     /// Return a bounded active-epoch hedge-intent page.
     pub fn api_hedge_intent_page(
         &self,
@@ -6239,7 +5982,6 @@ impl HedgingBillingService {
             automatic_execution_enabled: false,
         })
     }
-
     /// Return at most `limit` actionable statement-delivery projections without
     /// cloning the retained statement inventory.
     ///
@@ -6252,7 +5994,6 @@ impl HedgingBillingService {
     ) -> Result<Vec<BillingStatementDeliveryProjectionV1>, HedgingBillingServiceError> {
         self.pending_statement_delivery_projections_rotated(limit, 0)
     }
-
     /// Return at most `limit` actionable statement-delivery projections using
     /// a bounded fair scan rotated by `scan_sequence`.
     ///
@@ -6351,7 +6092,6 @@ impl HedgingBillingService {
         }
         Ok(projections)
     }
-
     /// Return payload-free statement delivery projections.
     ///
     /// # Errors
@@ -6371,7 +6111,6 @@ impl HedgingBillingService {
             .map(statement_delivery_projection)
             .collect())
     }
-
     /// Return bounded payload-free durable state for supervision and metrics.
     ///
     /// # Errors
@@ -6385,7 +6124,6 @@ impl HedgingBillingService {
             .map_err(|_| HedgingBillingServiceError::StateLockPoisoned)?;
         service_status(&guard.checkpoint, &self.policy)
     }
-
     /// Return one exact published signed statement.
     ///
     /// # Errors
@@ -6412,7 +6150,6 @@ impl HedgingBillingService {
             .clone()
             .ok_or(HedgingBillingServiceError::InvalidCheckpoint)
     }
-
     /// Return generated, never-automatically-executed hedge intents.
     ///
     /// # Errors
@@ -6425,7 +6162,6 @@ impl HedgingBillingService {
             .map_err(|_| HedgingBillingServiceError::StateLockPoisoned)?;
         Ok(guard.checkpoint.hedge_intents.clone())
     }
-
     /// Validate that a supervised execution adapter cannot auto-execute.
     ///
     /// # Errors
@@ -6449,7 +6185,6 @@ impl HedgingBillingService {
         }
         Ok(())
     }
-
     /// Explicitly submit one retained executable intent under operator authority.
     ///
     /// This method is never called by a worker or timer. It authenticates the
@@ -6491,7 +6226,6 @@ impl HedgingBillingService {
         receipt.validate(execution_policy, authorization)?;
         Ok(receipt)
     }
-
     fn verify_runtime_signer_identity(
         &self,
         signer: &dyn BillingStatementRuntimeSigner,
@@ -6505,7 +6239,6 @@ impl HedgingBillingService {
         }
         Ok(())
     }
-
     fn release_failed_signing_claim(
         &self,
         statement_id: [u8; 32],
@@ -6529,7 +6262,6 @@ impl HedgingBillingService {
         };
         self.commit_locked(guard, next)
     }
-
     fn mark_publication_ambiguous(
         &self,
         statement_id: [u8; 32],
@@ -6550,7 +6282,6 @@ impl HedgingBillingService {
         record.state = StoredStatementDeliveryStateV1::PublicationAmbiguous;
         self.commit_locked(guard, next)
     }
-
     fn mark_publication_absent(
         &self,
         statement_id: [u8; 32],
@@ -6569,7 +6300,6 @@ impl HedgingBillingService {
         record.state = StoredStatementDeliveryStateV1::ReadyForPublication;
         self.commit_locked(guard, next)
     }
-
     fn store_publication_receipt(
         &self,
         statement_id: [u8; 32],
@@ -6597,7 +6327,6 @@ impl HedgingBillingService {
         record.state = StoredStatementDeliveryStateV1::Published;
         self.commit_locked(guard, next)
     }
-
     fn commit_locked(
         &self,
         guard: std::sync::MutexGuard<'_, RuntimeState>,
@@ -6606,7 +6335,6 @@ impl HedgingBillingService {
         let mut allow_commit = || Ok(());
         self.commit_locked_with_precommit_fence(guard, next, &mut allow_commit)
     }
-
     fn commit_locked_with_precommit_fence(
         &self,
         mut guard: std::sync::MutexGuard<'_, RuntimeState>,
@@ -6622,7 +6350,6 @@ impl HedgingBillingService {
         Ok(())
     }
 }
-
 fn reconcile_authoritative_delivery_state(
     checkpoint: &mut HedgingBillingCheckpointV1,
     policy: &HedgingBillingServicePolicyV1,
@@ -6639,7 +6366,6 @@ fn reconcile_authoritative_delivery_state(
         .collect();
     let mut reconciled_acknowledgements = Vec::new();
     let period_closes = &checkpoint.period_closes;
-
     for record in &mut checkpoint.statements {
         let close = period_closes
             .iter()
@@ -6696,7 +6422,6 @@ fn reconcile_authoritative_delivery_state(
                 }
             }
         }
-
         if record.publication_receipt.is_some() {
             let signed = record
                 .signed_statement
@@ -6740,7 +6465,6 @@ fn reconcile_authoritative_delivery_state(
     checkpoint.acknowledgements = reconciled_acknowledgements;
     Ok(*checkpoint != before)
 }
-
 fn validate_acknowledgement_record(
     record: &StoredStatementV1,
     acknowledgement: &BillingStatementAcknowledgementV1,
@@ -6766,7 +6490,6 @@ fn validate_acknowledgement_record(
     }
     Ok(())
 }
-
 fn decode_and_validate_epoch_witness(
     record: &HedgingBillingEpochWitnessRecordV1,
     policy: &HedgingBillingServicePolicyV1,
@@ -6785,7 +6508,6 @@ fn decode_and_validate_epoch_witness(
     )?;
     Ok(checkpoint)
 }
-
 fn validate_checkpoint_epoch_witness(
     checkpoint: &HedgingBillingCheckpointV1,
     record: &HedgingBillingEpochWitnessRecordV1,
@@ -6861,7 +6583,6 @@ fn validate_checkpoint_epoch_witness(
     }
     Ok(())
 }
-
 fn decode_checkpoint(
     bytes: &[u8],
     policy: &HedgingBillingServicePolicyV1,
@@ -6896,7 +6617,6 @@ fn decode_checkpoint(
     checkpoint.validate(policy, feed_policy)?;
     Ok(checkpoint)
 }
-
 fn encode_checkpoint(
     checkpoint: &HedgingBillingCheckpointV1,
     policy: &HedgingBillingServicePolicyV1,
@@ -6915,7 +6635,6 @@ fn encode_checkpoint(
     }
     Ok(bytes)
 }
-
 fn period_outcome_from_checkpoint(
     checkpoint: &HedgingBillingCheckpointV1,
     period_end_unix: u64,
@@ -6946,7 +6665,6 @@ fn period_outcome_from_checkpoint(
             .cloned(),
     })
 }
-
 fn find_statement(
     checkpoint: &HedgingBillingCheckpointV1,
     statement_id: [u8; 32],
@@ -6960,7 +6678,6 @@ fn find_statement(
         .and_then(|index| checkpoint.statements.get(index))
         .ok_or(HedgingBillingServiceError::StatementNotFound)
 }
-
 fn find_statement_mut(
     checkpoint: &mut HedgingBillingCheckpointV1,
     statement_id: [u8; 32],
@@ -6976,7 +6693,6 @@ fn find_statement_mut(
         .get_mut(index)
         .ok_or(HedgingBillingServiceError::StatementNotFound)
 }
-
 fn validate_canonical_account_id_bytes(
     account_id: &[u8],
 ) -> Result<(), HedgingBillingServiceError> {
@@ -6993,7 +6709,6 @@ fn validate_canonical_account_id_bytes(
     }
     Ok(())
 }
-
 fn projection_anchor(
     state: &RuntimeState,
     policy: &HedgingBillingServicePolicyV1,
@@ -7015,7 +6730,6 @@ fn projection_anchor(
         retention_scope: HedgingBillingRetentionScopeV1::ActiveEpochOnly,
     })
 }
-
 fn service_status(
     checkpoint: &HedgingBillingCheckpointV1,
     policy: &HedgingBillingServicePolicyV1,
@@ -7059,7 +6773,6 @@ fn service_status(
     }
     Ok(status)
 }
-
 fn require_projection_fingerprint(
     anchor: &HedgingBillingProjectionAnchorV1,
     expected: [u8; 32],
@@ -7069,14 +6782,12 @@ fn require_projection_fingerprint(
     }
     Ok(())
 }
-
 fn validate_runtime_page_bound(limit: u16) -> Result<(), HedgingBillingRuntimeApiErrorV1> {
     if limit == 0 || limit > HEDGING_BILLING_RUNTIME_API_MAX_PAGE_ITEMS_V1 {
         return Err(HedgingBillingRuntimeApiErrorV1::InvalidRequest);
     }
     Ok(())
 }
-
 fn validate_projection_page_request(
     request: &HedgingBillingProjectionPageRequestV1,
 ) -> Result<(), HedgingBillingRuntimeApiErrorV1> {
@@ -7086,7 +6797,6 @@ fn validate_projection_page_request(
     }
     Ok(())
 }
-
 fn terminal_owned_statement<'checkpoint>(
     checkpoint: &'checkpoint HedgingBillingCheckpointV1,
     statement_id: [u8; 32],
@@ -7105,7 +6815,6 @@ fn terminal_owned_statement<'checkpoint>(
     }
     Ok(record)
 }
-
 fn acknowledgement_projection(
     acknowledgement: &BillingStatementAcknowledgementV1,
 ) -> BillingStatementAcknowledgementProjectionV1 {
@@ -7117,7 +6826,6 @@ fn acknowledgement_projection(
         acknowledged_at_unix: acknowledgement.acknowledged_at_unix,
     }
 }
-
 /// Derive the canonical proof challenge and idempotency binding for one owner
 /// acknowledgement request.
 ///
@@ -7148,7 +6856,6 @@ pub fn billing_statement_acknowledgement_request_digest_v1(
     hasher.update(&request_nonce);
     Ok(*hasher.finalize().as_bytes())
 }
-
 fn projection_close_start(
     closes: &[HedgingBillingFinalizedPeriodCloseV1],
     after: Option<[u8; 32]>,
@@ -7179,7 +6886,6 @@ fn projection_close_start(
         .checked_add(1)
         .ok_or(HedgingBillingRuntimeApiErrorV1::ResourceExhausted)
 }
-
 fn exposure_cursor(period_end_unix: u64, period_close_digest: [u8; 32]) -> [u8; 32] {
     let mut cursor = [0_u8; 32];
     cursor[..8].copy_from_slice(&period_end_unix.to_le_bytes());
@@ -7190,7 +6896,6 @@ fn exposure_cursor(period_end_unix: u64, period_close_digest: [u8; 32]) -> [u8; 
     cursor[8..].copy_from_slice(&hasher.finalize().as_bytes()[..24]);
     cursor
 }
-
 fn statement_delivery_projection(
     record: &StoredStatementV1,
 ) -> BillingStatementDeliveryProjectionV1 {
@@ -7202,7 +6907,6 @@ fn statement_delivery_projection(
         signing_attempts: record.signing_attempts,
     }
 }
-
 fn runtime_api_acknowledgement_error(
     error: HedgingBillingServiceError,
 ) -> HedgingBillingRuntimeApiErrorV1 {
@@ -7226,7 +6930,6 @@ fn runtime_api_acknowledgement_error(
         other => runtime_api_service_error(other),
     }
 }
-
 fn runtime_api_service_error(error: HedgingBillingServiceError) -> HedgingBillingRuntimeApiErrorV1 {
     match error {
         HedgingBillingServiceError::ResourceExhausted
@@ -7252,20 +6955,17 @@ fn runtime_api_service_error(error: HedgingBillingServiceError) -> HedgingBillin
         _ => HedgingBillingRuntimeApiErrorV1::Unavailable,
     }
 }
-
 #[derive(DeriveNoritoSerialize)]
 struct BillingSourceReceiptPreimageV1 {
     network_id: NetworkId,
     source: BillingAccrualSourceV1,
     source_id: String,
 }
-
 #[derive(DeriveNoritoSerialize)]
 struct BillingEventReplayPreimageV1 {
     network_id: NetworkId,
     event: HedgingBillingFinalizedEventV1,
 }
-
 fn source_receipt(
     network_id: NetworkId,
     event: &HedgingBillingFinalizedEventV1,
@@ -7277,7 +6977,6 @@ fn source_receipt(
     };
     hash_canonical(SOURCE_RECEIPT_DOMAIN_V1, &preimage)
 }
-
 fn event_replay_digest(
     network_id: NetworkId,
     event: &HedgingBillingFinalizedEventV1,
@@ -7288,14 +6987,12 @@ fn event_replay_digest(
     };
     hash_canonical(EVENT_REPLAY_RECEIPT_DOMAIN_V1, &preimage)
 }
-
 fn signed_statement_digest(
     signed: &SignedGovernedBillingStatementV1,
 ) -> Result<[u8; 32], HedgingBillingServiceError> {
     let bytes = norito::to_bytes(signed).map_err(|_| HedgingBillingServiceError::EncodingFailed)?;
     Ok(*blake3::hash(&bytes).as_bytes())
 }
-
 fn verify_publisher_identity(
     policy: &BillingStatementPublisherPolicyV1,
     publisher: &dyn BillingStatementPublisher,
@@ -7311,7 +7008,6 @@ fn verify_publisher_identity(
     }
     Ok(())
 }
-
 fn publication_receipt_digest(
     receipt: &BillingStatementPublicationReceiptV1,
 ) -> Result<[u8; 32], HedgingBillingServiceError> {
@@ -7320,7 +7016,6 @@ fn publication_receipt_digest(
     canonical.signature = [0; 64];
     hash_canonical(PUBLICATION_RECEIPT_DOMAIN_V1, &canonical)
 }
-
 fn acknowledgement_digest(
     acknowledgement: &BillingStatementAcknowledgementV1,
 ) -> Result<[u8; 32], HedgingBillingServiceError> {
@@ -7328,7 +7023,6 @@ fn acknowledgement_digest(
     canonical.acknowledgement_id = [0; 32];
     hash_canonical(ACKNOWLEDGEMENT_DOMAIN_V1, &canonical)
 }
-
 fn execution_authorization_digest(
     authorization: &HedgeExecutionAuthorizationV1,
 ) -> Result<[u8; 32], HedgingBillingServiceError> {
@@ -7337,7 +7031,6 @@ fn execution_authorization_digest(
     canonical.signature = [0; 64];
     hash_canonical(HEDGE_EXECUTION_AUTHORIZATION_DOMAIN_V1, &canonical)
 }
-
 fn execution_receipt_digest(
     receipt: &HedgeExecutionSubmissionReceiptV1,
 ) -> Result<[u8; 32], HedgingBillingServiceError> {
@@ -7346,7 +7039,6 @@ fn execution_receipt_digest(
     canonical.signature = [0; 64];
     hash_canonical(HEDGE_EXECUTION_RECEIPT_DOMAIN_V1, &canonical)
 }
-
 fn retained_epoch_state_digest(
     checkpoint: &HedgingBillingCheckpointV1,
 ) -> Result<[u8; 32], HedgingBillingServiceError> {
@@ -7363,7 +7055,6 @@ fn retained_epoch_state_digest(
         },
     )
 }
-
 fn epoch_witness_record_revision(record: &HedgingBillingEpochWitnessRecordV1) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(EPOCH_WITNESS_RECORD_DOMAIN_V1);
@@ -7380,7 +7071,6 @@ fn epoch_witness_record_revision(record: &HedgingBillingEpochWitnessRecordV1) ->
     hasher.update(&record.checkpoint_bytes);
     *hasher.finalize().as_bytes()
 }
-
 fn epoch_witness_record_max_bytes(
     checkpoint_max_bytes: u64,
 ) -> Result<u64, HedgingBillingServiceError> {
@@ -7391,14 +7081,12 @@ fn epoch_witness_record_max_bytes(
         .checked_add(HEDGING_BILLING_EPOCH_WITNESS_WRAPPER_MAX_BYTES_V1)
         .ok_or(HedgingBillingServiceError::ResourceExhausted)
 }
-
 fn epoch_transition_signature_digest(transition_id: [u8; 32]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(EPOCH_TRANSITION_SIGNATURE_DOMAIN_V1);
     hasher.update(&transition_id);
     *hasher.finalize().as_bytes()
 }
-
 #[derive(DeriveNoritoSerialize)]
 struct RetainedEpochBaseStateV1 {
     checkpoint_version: u8,
@@ -7409,7 +7097,6 @@ struct RetainedEpochBaseStateV1 {
     compacted_through_period_end_unix: u64,
     compacted_account_bases: Vec<GovernedBillingStatementV1>,
 }
-
 #[derive(DeriveNoritoSerialize)]
 struct CompactedSourceArchiveV1 {
     network_id: NetworkId,
@@ -7420,7 +7107,6 @@ struct CompactedSourceArchiveV1 {
     replay_receipts: Vec<[u8; 32]>,
     event_replay_receipts: Vec<StoredEventReplayReceiptV1>,
 }
-
 #[derive(DeriveNoritoSerialize)]
 struct CompactedEconomicArchiveV1 {
     network_id: NetworkId,
@@ -7429,7 +7115,6 @@ struct CompactedEconomicArchiveV1 {
     acknowledgements: Vec<BillingStatementAcknowledgementV1>,
     hedge_intents: Vec<HedgeIntentV1>,
 }
-
 fn checked_verifying_key(bytes: [u8; 32]) -> Result<VerifyingKey, ()> {
     let key = VerifyingKey::from_bytes(&bytes).map_err(|_| ())?;
     if key.to_bytes() != bytes || key.is_weak() {
@@ -7437,7 +7122,6 @@ fn checked_verifying_key(bytes: [u8; 32]) -> Result<VerifyingKey, ()> {
     }
     Ok(key)
 }
-
 fn validate_identifier(
     value: &str,
     max_bytes: usize,
@@ -7455,11 +7139,9 @@ fn validate_identifier(
     }
     Ok(())
 }
-
 fn is_strictly_sorted_unique<T: Ord>(values: &[T]) -> bool {
     values.windows(2).all(|pair| pair[0] < pair[1])
 }
-
 fn finalized_cursor_at_or_before(
     cursor: HedgingBillingFinalizedCursorV1,
     head: HedgingBillingFinalizedCursorV1,
@@ -7467,7 +7149,6 @@ fn finalized_cursor_at_or_before(
     cursor.finalized_at_unix <= head.finalized_at_unix
         && (cursor.height < head.height || cursor == head)
 }
-
 fn hash_canonical<T: NoritoSerialize>(
     domain: &[u8],
     value: &T,
@@ -7481,7 +7162,6 @@ fn hash_canonical<T: NoritoSerialize>(
     hasher.update(&bytes);
     Ok(*hasher.finalize().as_bytes())
 }
-
 /// Durable finalized billing and delivery failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum HedgingBillingServiceError {
@@ -7657,25 +7337,21 @@ pub enum HedgingBillingServiceError {
     #[error(transparent)]
     External(#[from] HedgingBillingExternalError),
 }
-
 impl From<sorafs_manifest::hedging::HedgingValidationError> for HedgingBillingServiceError {
     fn from(_: sorafs_manifest::hedging::HedgingValidationError) -> Self {
         Self::InvalidBillingPayload
     }
 }
-
 impl From<sorafs_manifest::deal::DealAmountError> for HedgingBillingServiceError {
     fn from(_: sorafs_manifest::deal::DealAmountError) -> Self {
         Self::XorAmount
     }
 }
-
 impl From<SignedHedgingError> for HedgingBillingServiceError {
     fn from(_: SignedHedgingError) -> Self {
         Self::InvalidGovernedHedging
     }
 }
-
 impl From<CheckpointStoreError> for HedgingBillingServiceError {
     fn from(error: CheckpointStoreError) -> Self {
         match error {
@@ -7688,7 +7364,6 @@ impl From<CheckpointStoreError> for HedgingBillingServiceError {
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -7718,21 +7393,17 @@ mod tests {
     const FINALIZED_HASH: [u8; 32] = [0xA1; 32];
     const TEST_PROVIDER_QUALIFICATION: HedgingBillingRuntimeProviderQualificationV1 =
         HedgingBillingRuntimeProviderQualificationV1::new(1, [0xA2; 32]);
-
     fn test_network_id(genesis: &[u8]) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
             genesis,
         )))
     }
-
     fn xor(value: &str) -> XorQuantity {
         value.parse().expect("canonical XOR quantity")
     }
-
     fn usd(value: &str) -> Quantity {
         value.parse().expect("canonical USD quantity")
     }
-
     fn account_bytes(seed: u8) -> Vec<u8> {
         AccountId::new(
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -7744,35 +7415,27 @@ mod tests {
         .expect("canonical I105 account")
         .into_bytes()
     }
-
     fn primary_account_bytes() -> Vec<u8> {
         account_bytes(0x91)
     }
-
     fn feed_key() -> SigningKey {
         SigningKey::from_bytes(&[0x11; 32])
     }
-
     fn statement_key() -> SigningKey {
         SigningKey::from_bytes(&[0x22; 32])
     }
-
     fn publisher_key() -> SigningKey {
         SigningKey::from_bytes(&[0x23; 32])
     }
-
     fn transition_key() -> SigningKey {
         SigningKey::from_bytes(&[0x27; 32])
     }
-
     fn rotated_statement_key() -> SigningKey {
         SigningKey::from_bytes(&[0x28; 32])
     }
-
     fn rotated_transition_key() -> SigningKey {
         SigningKey::from_bytes(&[0x29; 32])
     }
-
     fn rotated_policies() -> (HedgingBillingServicePolicyV1, HedgingFeedTrustPolicyV1) {
         let previous = service_policy();
         let mut next_feed = feed_policy();
@@ -7790,15 +7453,12 @@ mod tests {
         next.transition_authority.public_key = rotated_transition_key().verifying_key().to_bytes();
         (next, next_feed)
     }
-
     fn operator_key() -> SigningKey {
         SigningKey::from_bytes(&[0x25; 32])
     }
-
     fn venue_key() -> SigningKey {
         SigningKey::from_bytes(&[0x26; 32])
     }
-
     fn execution_policy() -> GovernedHedgeExecutionPolicyV1 {
         GovernedHedgeExecutionPolicyV1 {
             version: HEDGE_EXECUTION_POLICY_VERSION_V1,
@@ -7813,7 +7473,6 @@ mod tests {
             max_slippage_bps: 100,
         }
     }
-
     fn execution_authorization(intent: &HedgeIntentV1) -> HedgeExecutionAuthorizationV1 {
         let policy = execution_policy();
         let mut authorization = HedgeExecutionAuthorizationV1 {
@@ -7840,7 +7499,6 @@ mod tests {
         authorization.signature = operator_key().sign(&message).to_bytes();
         authorization
     }
-
     fn feed_policy() -> HedgingFeedTrustPolicyV1 {
         HedgingFeedTrustPolicyV1 {
             version: HEDGING_FEED_TRUST_POLICY_VERSION_V1,
@@ -7862,13 +7520,11 @@ mod tests {
             revoked_signer_ids: Vec::new(),
         }
     }
-
     fn governed_reference(
         policy: &HedgingFeedTrustPolicyV1,
     ) -> GovernedHedgingReferencePriceDecisionV1 {
         governed_reference_at(policy, PERIOD_END)
     }
-
     fn governed_reference_at(
         policy: &HedgingFeedTrustPolicyV1,
         period_end_unix: u64,
@@ -7902,7 +7558,6 @@ mod tests {
         )
         .expect("governed reference decision")
     }
-
     fn service_policy() -> HedgingBillingServicePolicyV1 {
         HedgingBillingServicePolicyV1 {
             version: HEDGING_BILLING_POLICY_VERSION_V1,
@@ -7954,7 +7609,6 @@ mod tests {
             checkpoint_max_bytes: 16 * 1024 * 1024,
         }
     }
-
     fn cursor(
         height: u64,
         hash: [u8; 32],
@@ -7966,7 +7620,6 @@ mod tests {
             finalized_at_unix,
         }
     }
-
     fn event(sequence: u64, source_id: &str, amount: &str) -> HedgingBillingFinalizedEventV1 {
         HedgingBillingFinalizedEventV1 {
             version: HEDGING_BILLING_FINALIZED_EVENT_VERSION_V1,
@@ -7984,7 +7637,6 @@ mod tests {
             occurred_at_unix: EPOCH + 100,
         }
     }
-
     fn page(events: Vec<HedgingBillingFinalizedEventV1>) -> HedgingBillingFinalizedEventPageV1 {
         let start_sequence = events.first().map_or(1, |event| event.sequence);
         let next_sequence = start_sequence + u64::try_from(events.len()).expect("small page");
@@ -8015,7 +7667,6 @@ mod tests {
             events,
         }
     }
-
     fn period_close(
         reference: &GovernedHedgingReferencePriceDecisionV1,
         commitment: HedgingBillingJournalCommitmentV1,
@@ -8023,7 +7674,6 @@ mod tests {
         let policy = service_policy();
         period_close_at(&policy, reference, commitment, PERIOD_END)
     }
-
     fn period_close_at(
         policy: &HedgingBillingServicePolicyV1,
         reference: &GovernedHedgingReferencePriceDecisionV1,
@@ -8043,7 +7693,6 @@ mod tests {
             authentication_proof: vec![0xC7],
         }
     }
-
     #[derive(Debug, Default)]
     struct TestJournalVerifier {
         page_calls: AtomicUsize,
@@ -8054,12 +7703,10 @@ mod tests {
         witness_ambiguous_after_write: AtomicBool,
         witness_fork_on_epoch_lookup: AtomicBool,
     }
-
     impl HedgingBillingRuntimeProviderV1 for TestJournalVerifier {
         fn handle(&self) -> &str {
             "billing-epoch-witness-test"
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -8069,7 +7716,6 @@ mod tests {
             Ok(TEST_PROVIDER_QUALIFICATION)
         }
     }
-
     impl HedgingBillingJournalVerifier for TestJournalVerifier {
         fn identity(
             &self,
@@ -8078,11 +7724,9 @@ mod tests {
                 handle: "billing-journal-verifier-test".to_owned(),
             })
         }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn verify_page(
             &self,
             network_id: &NetworkId,
@@ -8099,7 +7743,6 @@ mod tests {
             }
             Ok(())
         }
-
         fn verify_period_close(
             &self,
             network_id: &NetworkId,
@@ -8113,7 +7756,6 @@ mod tests {
             }
             Ok(())
         }
-
         fn verify_epoch_transition(
             &self,
             network_id: &NetworkId,
@@ -8128,12 +7770,10 @@ mod tests {
             Ok(())
         }
     }
-
     impl HedgingBillingEpochWitnessStore for TestJournalVerifier {
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn load_latest(
             &self,
         ) -> Result<Option<HedgingBillingEpochWitnessRecordV1>, HedgingBillingExternalError>
@@ -8145,7 +7785,6 @@ mod tests {
                 .last_key_value()
                 .map(|(_, record)| record.clone()))
         }
-
         fn load_epoch(
             &self,
             epoch_sequence: u64,
@@ -8164,7 +7803,6 @@ mod tests {
             }
             Ok(record)
         }
-
         fn compare_and_swap_latest(
             &self,
             expected_revision: Option<[u8; 32]>,
@@ -8193,7 +7831,6 @@ mod tests {
             Ok(())
         }
     }
-
     #[derive(Debug)]
     struct TestSigner {
         key: SigningKey,
@@ -8201,7 +7838,6 @@ mod tests {
         corrupt: AtomicBool,
         sign_calls: AtomicUsize,
     }
-
     impl TestSigner {
         fn valid() -> Self {
             Self {
@@ -8211,7 +7847,6 @@ mod tests {
                 sign_calls: AtomicUsize::new(0),
             }
         }
-
         fn transition() -> Self {
             Self {
                 key: transition_key(),
@@ -8221,12 +7856,10 @@ mod tests {
             }
         }
     }
-
     impl HedgingBillingRuntimeProviderV1 for TestSigner {
         fn handle(&self) -> &str {
             "billing-statement-hsm-test"
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -8236,7 +7869,6 @@ mod tests {
             Ok(TEST_PROVIDER_QUALIFICATION)
         }
     }
-
     impl BillingStatementRuntimeSigner for TestSigner {
         fn identity(
             &self,
@@ -8247,11 +7879,9 @@ mod tests {
                 public_key: self.key.verifying_key().to_bytes(),
             })
         }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], HedgingBillingExternalError> {
             self.sign_calls.fetch_add(1, Ordering::Relaxed);
             let mut signature = self.key.sign(&digest).to_bytes();
@@ -8261,7 +7891,6 @@ mod tests {
             Ok(signature)
         }
     }
-
     #[derive(Debug)]
     struct TestPublisher {
         key: SigningKey,
@@ -8269,7 +7898,6 @@ mod tests {
         ambiguous_once: AtomicBool,
         publish_calls: AtomicUsize,
     }
-
     impl TestPublisher {
         fn new(ambiguous_once: bool) -> Self {
             Self {
@@ -8279,7 +7907,6 @@ mod tests {
                 publish_calls: AtomicUsize::new(0),
             }
         }
-
         fn receipt(
             &self,
             statement: &SignedGovernedBillingStatementV1,
@@ -8304,12 +7931,10 @@ mod tests {
             receipt
         }
     }
-
     impl HedgingBillingRuntimeProviderV1 for TestPublisher {
         fn handle(&self) -> &str {
             "billing-publisher-test"
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -8319,7 +7944,6 @@ mod tests {
             Ok(TEST_PROVIDER_QUALIFICATION)
         }
     }
-
     impl BillingStatementPublisher for TestPublisher {
         fn identity(
             &self,
@@ -8331,11 +7955,9 @@ mod tests {
                 public_key: self.key.verifying_key().to_bytes(),
             })
         }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn publish(
             &self,
             idempotency_key: [u8; 32],
@@ -8366,7 +7988,6 @@ mod tests {
             }
             Ok(receipt)
         }
-
         fn lookup(
             &self,
             statement_id: [u8; 32],
@@ -8380,17 +8001,14 @@ mod tests {
                 .cloned())
         }
     }
-
     #[derive(Debug, Default)]
     struct TestAcknowledgementAuthority {
         records: Mutex<BTreeMap<[u8; 32], BillingStatementAcknowledgementV1>>,
     }
-
     impl HedgingBillingRuntimeProviderV1 for TestAcknowledgementAuthority {
         fn handle(&self) -> &str {
             "billing-acknowledgement-authority-test"
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -8400,7 +8018,6 @@ mod tests {
             Ok(TEST_PROVIDER_QUALIFICATION)
         }
     }
-
     impl BillingStatementAcknowledgementAuthority for TestAcknowledgementAuthority {
         fn identity(
             &self,
@@ -8410,11 +8027,9 @@ mod tests {
                 provider_handle: "billing-acknowledgement-authority-test".to_owned(),
             })
         }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn verify(
             &self,
             statement: &SignedGovernedBillingStatementV1,
@@ -8427,7 +8042,6 @@ mod tests {
             }
             Ok(())
         }
-
         fn record(
             &self,
             statement: &SignedGovernedBillingStatementV1,
@@ -8444,7 +8058,6 @@ mod tests {
             records.insert(acknowledgement.statement_id, acknowledgement.clone());
             Ok(acknowledgement.clone())
         }
-
         fn lookup(
             &self,
             statement_id: [u8; 32],
@@ -8458,7 +8071,6 @@ mod tests {
                 .cloned())
         }
     }
-
     #[derive(Debug)]
     struct TestFinalizedQuery {
         pages: Mutex<VecDeque<Option<HedgingBillingFinalizedEventPageV1>>>,
@@ -8467,7 +8079,6 @@ mod tests {
         requested_max_events: Mutex<Vec<u32>>,
         positions: Mutex<Vec<HedgingBillingQueryPositionV1>>,
     }
-
     impl TestFinalizedQuery {
         fn new(pages: Vec<Option<HedgingBillingFinalizedEventPageV1>>) -> Self {
             let head = pages
@@ -8485,12 +8096,10 @@ mod tests {
             }
         }
     }
-
     impl HedgingBillingRuntimeProviderV1 for TestFinalizedQuery {
         fn handle(&self) -> &str {
             "billing-finalized-query-test"
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -8500,7 +8109,6 @@ mod tests {
             Ok(TEST_PROVIDER_QUALIFICATION)
         }
     }
-
     impl HedgingBillingFinalizedQuery for TestFinalizedQuery {
         fn identity(
             &self,
@@ -8509,21 +8117,17 @@ mod tests {
                 handle: "billing-finalized-query-test".to_owned(),
             })
         }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn supplies_period_closes(&self) -> bool {
             true
         }
-
         fn finalized_head(
             &self,
         ) -> Result<HedgingBillingFinalizedCursorV1, HedgingBillingExternalError> {
             Ok(self.head)
         }
-
         fn query_finalized_page(
             &self,
             position: HedgingBillingQueryPositionV1,
@@ -8546,7 +8150,6 @@ mod tests {
                 .pop_front()
                 .unwrap_or(None))
         }
-
         fn query_finalized_period_close(
             &self,
             _period_end_unix: u64,
@@ -8556,7 +8159,6 @@ mod tests {
             Ok(None)
         }
     }
-
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     #[repr(u8)]
     enum DriftingProviderOperation {
@@ -8568,7 +8170,6 @@ mod tests {
         AcknowledgementRecord = 5,
         EpochWitnessCas = 6,
     }
-
     #[derive(Debug)]
     struct DriftingRuntimeProvider {
         handle: String,
@@ -8576,7 +8177,6 @@ mod tests {
         drift_on: AtomicU8,
         calls: AtomicUsize,
     }
-
     impl DriftingRuntimeProvider {
         fn new(handle: &str, drift_on: DriftingProviderOperation) -> Self {
             Self {
@@ -8586,11 +8186,9 @@ mod tests {
                 calls: AtomicUsize::new(0),
             }
         }
-
         fn set_qualification(&self, qualification: HedgingBillingRuntimeProviderQualificationV1) {
             *self.qualification.lock().expect("qualification state") = qualification;
         }
-
         fn drift_after(&self, operation: DriftingProviderOperation) {
             self.calls.fetch_add(1, Ordering::Relaxed);
             if self
@@ -8609,12 +8207,10 @@ mod tests {
             }
         }
     }
-
     impl HedgingBillingRuntimeProviderV1 for DriftingRuntimeProvider {
         fn handle(&self) -> &str {
             &self.handle
         }
-
         fn qualification(
             &self,
         ) -> Result<
@@ -8624,7 +8220,6 @@ mod tests {
             Ok(*self.qualification.lock().expect("qualification state"))
         }
     }
-
     impl HedgingBillingFinalizedQuery for DriftingRuntimeProvider {
         fn identity(
             &self,
@@ -8633,22 +8228,18 @@ mod tests {
                 handle: self.handle.clone(),
             })
         }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn supplies_period_closes(&self) -> bool {
             true
         }
-
         fn finalized_head(
             &self,
         ) -> Result<HedgingBillingFinalizedCursorV1, HedgingBillingExternalError> {
             self.drift_after(DriftingProviderOperation::FinalizedQuery);
             Ok(cursor(10, FINALIZED_HASH, PERIOD_END))
         }
-
         fn query_finalized_page(
             &self,
             _position: HedgingBillingQueryPositionV1,
@@ -8657,7 +8248,6 @@ mod tests {
         {
             Ok(None)
         }
-
         fn query_finalized_period_close(
             &self,
             _period_end_unix: u64,
@@ -8667,7 +8257,6 @@ mod tests {
             Ok(None)
         }
     }
-
     impl HedgingBillingJournalVerifier for DriftingRuntimeProvider {
         fn identity(
             &self,
@@ -8676,11 +8265,9 @@ mod tests {
                 handle: self.handle.clone(),
             })
         }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn verify_page(
             &self,
             _network_id: &NetworkId,
@@ -8690,7 +8277,6 @@ mod tests {
             self.drift_after(DriftingProviderOperation::JournalVerification);
             Ok(())
         }
-
         fn verify_period_close(
             &self,
             _network_id: &NetworkId,
@@ -8698,7 +8284,6 @@ mod tests {
         ) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn verify_epoch_transition(
             &self,
             _network_id: &NetworkId,
@@ -8707,7 +8292,6 @@ mod tests {
             Ok(())
         }
     }
-
     impl BillingStatementRuntimeSigner for DriftingRuntimeProvider {
         fn identity(
             &self,
@@ -8718,18 +8302,15 @@ mod tests {
                 public_key: statement_key().verifying_key().to_bytes(),
             })
         }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], HedgingBillingExternalError> {
             let signature = statement_key().sign(&digest).to_bytes();
             self.drift_after(DriftingProviderOperation::StatementSigning);
             Ok(signature)
         }
     }
-
     impl BillingStatementPublisher for DriftingRuntimeProvider {
         fn identity(
             &self,
@@ -8741,11 +8322,9 @@ mod tests {
                 public_key: publisher_key().verifying_key().to_bytes(),
             })
         }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn publish(
             &self,
             _idempotency_key: [u8; 32],
@@ -8755,7 +8334,6 @@ mod tests {
             self.drift_after(DriftingProviderOperation::StatementPublication);
             Err(HedgingBillingExternalError::Rejected)
         }
-
         fn lookup(
             &self,
             _statement_id: [u8; 32],
@@ -8764,7 +8342,6 @@ mod tests {
             Ok(None)
         }
     }
-
     impl BillingStatementAcknowledgementAuthority for DriftingRuntimeProvider {
         fn identity(
             &self,
@@ -8774,11 +8351,9 @@ mod tests {
                 provider_handle: self.handle.clone(),
             })
         }
-
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn verify(
             &self,
             _statement: &SignedGovernedBillingStatementV1,
@@ -8786,7 +8361,6 @@ mod tests {
         ) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn record(
             &self,
             _statement: &SignedGovernedBillingStatementV1,
@@ -8795,7 +8369,6 @@ mod tests {
             self.drift_after(DriftingProviderOperation::AcknowledgementRecord);
             Ok(acknowledgement.clone())
         }
-
         fn lookup(
             &self,
             _statement_id: [u8; 32],
@@ -8804,19 +8377,16 @@ mod tests {
             Ok(None)
         }
     }
-
     impl HedgingBillingEpochWitnessStore for DriftingRuntimeProvider {
         fn check_readiness(&self) -> Result<(), HedgingBillingExternalError> {
             Ok(())
         }
-
         fn load_latest(
             &self,
         ) -> Result<Option<HedgingBillingEpochWitnessRecordV1>, HedgingBillingExternalError>
         {
             Ok(None)
         }
-
         fn load_epoch(
             &self,
             _epoch_sequence: u64,
@@ -8824,7 +8394,6 @@ mod tests {
         {
             Ok(None)
         }
-
         fn compare_and_swap_latest(
             &self,
             _expected_revision: Option<[u8; 32]>,
@@ -8834,7 +8403,6 @@ mod tests {
             Ok(())
         }
     }
-
     fn qualified_drifting_provider(
         operation: DriftingProviderOperation,
     ) -> (
@@ -8853,7 +8421,6 @@ mod tests {
         .expect("initial provider qualification");
         (provider, qualified)
     }
-
     fn ready_service(
         root: &Path,
     ) -> (
@@ -8888,7 +8455,6 @@ mod tests {
             acknowledgement_authority,
         )
     }
-
     fn settle_first_period(
         service: &HedgingBillingService,
         reference: &GovernedHedgingReferencePriceDecisionV1,
@@ -8897,7 +8463,6 @@ mod tests {
         let close = period_close(reference, first.journal_commitment);
         settle_period(service, first, close)
     }
-
     fn settle_period(
         service: &HedgingBillingService,
         page: HedgingBillingFinalizedEventPageV1,
@@ -8928,7 +8493,6 @@ mod tests {
             .expect("authoritative acknowledgement");
         outcome
     }
-
     fn signed_statement_fixture() -> SignedGovernedBillingStatementV1 {
         let root = tempfile::tempdir().expect("state root");
         let (service, _feed_policy, reference, _verifier, _publisher, _ack_authority) =
@@ -8946,7 +8510,6 @@ mod tests {
             .expect("sign statement")
             .expect("signed statement")
     }
-
     #[test]
     fn runtime_provider_handles_use_canonical_production_grammar() {
         for handle in [
@@ -8983,7 +8546,6 @@ mod tests {
             Err(HedgingBillingRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle)
         );
     }
-
     #[test]
     fn provider_qualification_rejects_unsafe_substituted_and_stale_bindings() {
         let unsafe_provider =
@@ -8996,7 +8558,6 @@ mod tests {
             ),
             Err(HedgingBillingRuntimeProviderQualificationErrorV1::TestMarkedProviderHandle)
         );
-
         let provider = DriftingRuntimeProvider::new(
             "billing.external.primary",
             DriftingProviderOperation::None,
@@ -9021,21 +8582,18 @@ mod tests {
             Err(HedgingBillingRuntimeProviderQualificationErrorV1::QualificationMismatch)
         );
     }
-
     #[test]
     fn provider_drift_before_an_operation_suppresses_the_call() {
         let (provider, qualified) = qualified_drifting_provider(DriftingProviderOperation::None);
         provider.set_qualification(HedgingBillingRuntimeProviderQualificationV1::new(
             2, [0xD2; 32],
         ));
-
         assert_eq!(
             HedgingBillingFinalizedQuery::finalized_head(&qualified),
             Err(HedgingBillingExternalError::Unavailable)
         );
         assert_eq!(provider.calls.load(Ordering::Relaxed), 0);
     }
-
     #[test]
     fn read_and_signing_drift_discards_provider_results() {
         let (query, qualified_query) =
@@ -9045,7 +8603,6 @@ mod tests {
             Err(HedgingBillingExternalError::Unavailable)
         );
         assert_eq!(query.calls.load(Ordering::Relaxed), 1);
-
         let (verifier, qualified_verifier) =
             qualified_drifting_provider(DriftingProviderOperation::JournalVerification);
         assert_eq!(
@@ -9058,7 +8615,6 @@ mod tests {
             Err(HedgingBillingExternalError::Unavailable)
         );
         assert_eq!(verifier.calls.load(Ordering::Relaxed), 1);
-
         let (signer, qualified_signer) =
             qualified_drifting_provider(DriftingProviderOperation::StatementSigning);
         assert_eq!(
@@ -9067,11 +8623,9 @@ mod tests {
         );
         assert_eq!(signer.calls.load(Ordering::Relaxed), 1);
     }
-
     #[test]
     fn committing_provider_drift_requires_immutable_reconciliation() {
         let signed = signed_statement_fixture();
-
         let (publisher, qualified_publisher) =
             qualified_drifting_provider(DriftingProviderOperation::StatementPublication);
         assert_eq!(
@@ -9084,7 +8638,6 @@ mod tests {
             Err(HedgingBillingExternalError::Ambiguous)
         );
         assert_eq!(publisher.calls.load(Ordering::Relaxed), 1);
-
         let acknowledgement = BillingStatementAcknowledgementV1 {
             version: BILLING_STATEMENT_ACKNOWLEDGEMENT_VERSION_V1,
             network_id: test_network_id(b"hedging-billing-test-genesis"),
@@ -9106,7 +8659,6 @@ mod tests {
             Err(HedgingBillingExternalError::Ambiguous)
         );
         assert_eq!(authority.calls.load(Ordering::Relaxed), 1);
-
         let witness = HedgingBillingEpochWitnessRecordV1 {
             version: HEDGING_BILLING_EPOCH_WITNESS_RECORD_VERSION_V1,
             network_id: test_network_id(b"hedging-billing-test-genesis"),
@@ -9128,7 +8680,6 @@ mod tests {
         );
         assert_eq!(store.calls.load(Ordering::Relaxed), 1);
     }
-
     #[test]
     fn finalized_query_reconciliation_is_bounded_and_stops_on_empty_progress() {
         let root = tempfile::tempdir().expect("state root");
@@ -9139,7 +8690,6 @@ mod tests {
             Some(page(vec![event(2, "storage:event:2", "2")])),
         ]);
         let first_head = first_query.finalized_head().expect("first query head");
-
         assert!(matches!(
             service.reconcile_finalized_query(&first_query, 0, first_head),
             Err(HedgingBillingServiceError::InvalidQueryBound)
@@ -9153,7 +8703,6 @@ mod tests {
             Err(HedgingBillingServiceError::InvalidQueryBound)
         ));
         assert_eq!(first_query.calls.load(Ordering::Relaxed), 0);
-
         let first = service
             .reconcile_finalized_query(&first_query, 1, first_head)
             .expect("bounded first scan");
@@ -9179,7 +8728,6 @@ mod tests {
                 .as_slice(),
             &[service_policy().max_events_per_page]
         );
-
         let finality_only_cursor = cursor(12, [0xB2; 32], PERIOD_END + 2);
         let first_commitment = page(vec![event(1, "storage:event:1", "10")]).journal_commitment;
         let finality_only_page = HedgingBillingFinalizedEventPageV1 {
@@ -9243,7 +8791,6 @@ mod tests {
             }
         );
         assert_eq!(empty_query.calls.load(Ordering::Relaxed), 2);
-
         let bounded_root = tempfile::tempdir().expect("bounded state root");
         let (bounded_service, ..) = ready_service(bounded_root.path());
         let beyond_head_query =
@@ -9270,7 +8817,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn committed_accrual_to_acknowledgement_survives_restart() {
         let root = tempfile::tempdir().expect("state root");
@@ -9318,7 +8864,6 @@ mod tests {
                 .disposition,
             HedgeIntentDispositionV1::Executable
         );
-
         let signer = TestSigner::valid();
         let signed = service
             .sign_next_statement(&signer)
@@ -9332,7 +8877,6 @@ mod tests {
         signed
             .verify(&service_policy(), &feed_policy, &close)
             .expect("signed statement verifies");
-
         let receipt = service
             .publish_next_statement()
             .expect("publish statement")
@@ -9402,7 +8946,6 @@ mod tests {
             acknowledgement
         );
         drop(service);
-
         let restored = HedgingBillingService::new(
             root.path(),
             service_policy(),
@@ -9427,7 +8970,6 @@ mod tests {
             signed
         );
     }
-
     #[test]
     fn checkpoint_rejects_omitted_intent_and_acknowledgement_substitution() {
         let root = tempfile::tempdir().expect("state root");
@@ -9453,7 +8995,6 @@ mod tests {
                 vec![0xAC],
             )
             .expect("acknowledge");
-
         let checkpoint = service
             .state
             .lock()
@@ -9465,14 +9006,12 @@ mod tests {
             period.hedge_intent,
             checkpoint.hedge_intents.first().cloned()
         );
-
         let mut omitted_intent = checkpoint.clone();
         omitted_intent.hedge_intents.clear();
         assert!(matches!(
             omitted_intent.validate(&service_policy(), &feed_policy),
             Err(HedgingBillingServiceError::InvalidCheckpoint)
         ));
-
         let mut substituted_acknowledgement = checkpoint;
         let acknowledgement = substituted_acknowledgement
             .acknowledgements
@@ -9486,7 +9025,6 @@ mod tests {
             Err(HedgingBillingServiceError::InvalidCheckpoint)
         ));
     }
-
     #[test]
     fn finalized_forks_gaps_semantic_replay_and_late_events_fail_closed() {
         let root = tempfile::tempdir().expect("state root");
@@ -9496,7 +9034,6 @@ mod tests {
         service
             .ingest_finalized_page(&first_page)
             .expect("ingest first");
-
         let mut gap = page(vec![event(3, "storage:event:3", "1")]);
         gap.start_sequence = 3;
         gap.next_sequence = 4;
@@ -9504,7 +9041,6 @@ mod tests {
             service.ingest_finalized_page(&gap),
             Err(HedgingBillingServiceError::FinalizedSequenceGap)
         ));
-
         let mut fork = HedgingBillingFinalizedEventPageV1 {
             version: HEDGING_BILLING_FINALIZED_PAGE_VERSION_V1,
             network_id: service_policy().network_id,
@@ -9520,7 +9056,6 @@ mod tests {
             service.ingest_finalized_page(&fork),
             Err(HedgingBillingServiceError::FinalizedForkOrRollback)
         ));
-
         let mut duplicate_event = event(2, "storage:event:1", "10");
         duplicate_event.account_id = account_bytes(0x92);
         let duplicate = page(vec![duplicate_event]);
@@ -9538,7 +9073,6 @@ mod tests {
             Err(HedgingBillingServiceError::LateFinalizedEvent)
         ));
     }
-
     #[test]
     fn incomplete_consensus_tail_cannot_close_or_sign() {
         let root = tempfile::tempdir().expect("state root");
@@ -9568,7 +9102,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn governed_overflow_projection_never_blocks_billing_close() {
         let root = tempfile::tempdir().expect("state root");
@@ -9602,7 +9135,6 @@ mod tests {
         ));
         assert_eq!(adapter.submit_calls.load(Ordering::Relaxed), 0);
     }
-
     #[test]
     fn policy_reserves_acknowledgement_capacity_for_every_statement() {
         let mut policy = service_policy();
@@ -9612,7 +9144,6 @@ mod tests {
             Err(HedgingBillingServiceError::InvalidPolicy)
         ));
     }
-
     #[test]
     fn retained_history_bound_requires_an_authenticated_epoch_transition() {
         let root = tempfile::tempdir().expect("state root");
@@ -9638,7 +9169,6 @@ mod tests {
             Err(HedgingBillingServiceError::ResourceExhausted)
         ));
     }
-
     #[test]
     fn policy_rotation_is_fail_closed_without_a_governed_checkpoint_transition() {
         let root = tempfile::tempdir().expect("state root");
@@ -9661,7 +9191,6 @@ mod tests {
             checkpoint.validate(&rotated, &feed_policy),
             Err(HedgingBillingServiceError::InvalidCheckpoint)
         ));
-
         let mut rotated_feed_policy = feed_policy;
         rotated_feed_policy.policy_id = [0x32; 32];
         let mut feed_rotated_service_policy = service_policy();
@@ -9673,7 +9202,6 @@ mod tests {
             Err(HedgingBillingServiceError::InvalidCheckpoint)
         ));
     }
-
     #[test]
     fn non_genesis_policy_cannot_bootstrap_without_a_sealed_predecessor() {
         let root = tempfile::tempdir().expect("state root");
@@ -9692,7 +9220,6 @@ mod tests {
             Err(HedgingBillingServiceError::InvalidCheckpoint)
         ));
     }
-
     #[test]
     fn authenticated_epoch_transition_compacts_rotates_and_reopens_after_local_rename() {
         let root = tempfile::tempdir().expect("state root");
@@ -9719,7 +9246,6 @@ mod tests {
                 .transition_id,
             outcome.transition.transition_id
         );
-
         let restored = HedgingBillingService::new(
             root.path(),
             next_policy,
@@ -9747,7 +9273,6 @@ mod tests {
         assert_eq!(checkpoint.compacted_account_bases.len(), 1);
         assert!(checkpoint.source_pages.is_empty());
         assert!(checkpoint.period_closes.is_empty());
-
         let mut next_event = event(2, "storage:event:2", "2");
         next_event.occurred_at_unix = PERIOD_END + 1;
         next_event.block_height = 12;
@@ -9756,14 +9281,12 @@ mod tests {
             .ingest_finalized_page(&page(vec![next_event]))
             .expect("new epoch reuses released source-page capacity");
     }
-
     #[test]
     fn epoch_transition_retains_latest_chronological_account_base() {
         let root = tempfile::tempdir().expect("state root");
         let (service, feed_policy, first_reference, verifier, publisher, acknowledgement_authority) =
             ready_service(root.path());
         settle_first_period(&service, &first_reference);
-
         let second_period_end = PERIOD_END + PERIOD_SECS;
         let mut second_event = event(2, "storage:event:2", "2");
         second_event.occurred_at_unix = PERIOD_END + 100;
@@ -9782,7 +9305,6 @@ mod tests {
             second_period_end,
         );
         let second_outcome = settle_period(&service, second_page, second_close);
-
         let (next_policy, next_feed_policy) = rotated_policies();
         service
             .transition_epoch(
@@ -9820,7 +9342,6 @@ mod tests {
             second_outcome.statement_ids[0]
         );
     }
-
     #[test]
     fn epoch_transition_releases_capacity_at_the_configured_hard_limit() {
         let root = tempfile::tempdir().expect("state root");
@@ -9845,7 +9366,6 @@ mod tests {
         let first_close =
             period_close_at(&policy, &reference, first.journal_commitment, PERIOD_END);
         settle_period(&service, first, first_close);
-
         let (mut next_policy, next_feed_policy) = rotated_policies();
         next_policy.max_retained_source_pages = 1;
         next_policy.predecessor_policy_digest =
@@ -9876,7 +9396,6 @@ mod tests {
             .ingest_finalized_page(&page(vec![next_event]))
             .expect("released capacity accepts the next authenticated page");
     }
-
     #[test]
     fn epoch_transition_rejects_unsettled_state_before_witness_write() {
         let root = tempfile::tempdir().expect("state root");
@@ -9901,7 +9420,6 @@ mod tests {
         ));
         assert!(verifier.load_latest().expect("witness lookup").is_none());
     }
-
     #[test]
     fn epoch_transition_rejects_oversized_proof_before_signing_or_witness_write() {
         let root = tempfile::tempdir().expect("state root");
@@ -9923,7 +9441,6 @@ mod tests {
         assert_eq!(verifier.transition_calls.load(Ordering::Relaxed), 0);
         assert!(verifier.load_latest().expect("witness lookup").is_none());
     }
-
     #[test]
     fn sealed_epoch_witness_recovers_crash_before_local_checkpoint_rename() {
         let root = tempfile::tempdir().expect("state root");
@@ -9945,7 +9462,6 @@ mod tests {
                 &TestSigner::transition(),
             )
             .expect("seal and install transition");
-
         let raw_store = AtomicCheckpointStore::new(
             root.path(),
             HEDGING_BILLING_CHECKPOINT_FILE_NAME_V1,
@@ -9961,7 +9477,6 @@ mod tests {
             .commit_bytes(&old_checkpoint_bytes, current_fingerprint)
             .expect("simulate crash before local rename");
         drop(raw_store);
-
         let restored = HedgingBillingService::new(
             root.path(),
             next_policy,
@@ -9982,7 +9497,6 @@ mod tests {
             1
         );
     }
-
     #[test]
     fn epoch_witness_tamper_and_rollback_fail_closed() {
         let root = tempfile::tempdir().expect("state root");
@@ -10035,7 +9549,6 @@ mod tests {
             Err(HedgingBillingServiceError::EpochWitnessRollback)
         ));
     }
-
     #[test]
     fn epoch_witness_has_one_bounded_canonical_persistence_format() {
         let root = tempfile::tempdir().expect("state root");
@@ -10069,7 +9582,6 @@ mod tests {
             .expect("decode canonical witness"),
             record
         );
-
         let mut substituted = record;
         substituted.revision[0] ^= 0x80;
         let substituted_bytes = norito::to_bytes(&substituted).expect("substituted bytes");
@@ -10081,7 +9593,6 @@ mod tests {
             Err(HedgingBillingServiceError::InvalidEpochWitness)
         ));
     }
-
     #[test]
     fn epoch_witness_rejects_valid_same_epoch_non_base_checkpoint_substitution() {
         let root = tempfile::tempdir().expect("state root");
@@ -10133,7 +9644,6 @@ mod tests {
                 ),
             );
         drop(restored);
-
         assert!(matches!(
             HedgingBillingService::new(
                 root.path(),
@@ -10147,7 +9657,6 @@ mod tests {
             Err(HedgingBillingServiceError::InvalidEpochWitness)
         ));
     }
-
     #[test]
     fn skipped_epoch_and_immutable_archive_fork_fail_closed() {
         let root = tempfile::tempdir().expect("state root");
@@ -10163,7 +9672,6 @@ mod tests {
                 &TestSigner::transition(),
             )
             .expect("transition");
-
         {
             let mut records = verifier
                 .witness_records
@@ -10186,7 +9694,6 @@ mod tests {
             ),
             Err(HedgingBillingServiceError::InvalidEpochWitness)
         ));
-
         verifier
             .witness_records
             .lock()
@@ -10208,7 +9715,6 @@ mod tests {
             Err(HedgingBillingServiceError::EpochWitnessFork)
         ));
     }
-
     #[test]
     fn rejected_journal_proof_does_not_advance_durable_state() {
         let root = tempfile::tempdir().expect("state root");
@@ -10229,7 +9735,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn cross_page_position_rollback_is_rejected_atomically() {
         let root = tempfile::tempdir().expect("state root");
@@ -10255,7 +9760,6 @@ mod tests {
             }
         );
     }
-
     #[test]
     fn checkpoint_cannot_inject_a_ready_for_signing_statement() {
         let root = tempfile::tempdir().expect("state root");
@@ -10287,7 +9791,6 @@ mod tests {
             Err(HedgingBillingServiceError::InvalidCheckpoint)
         ));
     }
-
     #[test]
     fn cross_peer_old_page_replay_is_exact_and_equivocation_safe() {
         let root = tempfile::tempdir().expect("state root");
@@ -10307,14 +9810,12 @@ mod tests {
                 .expect("old exact cross-peer replay"),
             HedgingBillingIngestOutcomeV1::Replay { next_sequence: 3 }
         );
-
         let forged = page(vec![event(1, "storage:event:1", "11")]);
         assert!(matches!(
             service.ingest_finalized_page(&forged),
             Err(HedgingBillingServiceError::FinalizedEventEquivocation)
         ));
     }
-
     #[test]
     fn invalid_hsm_output_is_not_persisted_or_published() {
         let root = tempfile::tempdir().expect("state root");
@@ -10345,7 +9846,6 @@ mod tests {
                 .is_none()
         );
     }
-
     #[test]
     fn ambiguous_publication_requires_authoritative_lookup() {
         let root = tempfile::tempdir().expect("state root");
@@ -10379,7 +9879,6 @@ mod tests {
             .expect("sink receipt");
         assert_eq!(receipt.statement_id, outcome.statement_ids[0]);
     }
-
     #[test]
     fn publisher_lookup_prevents_duplicate_write_after_local_rollback() {
         let root = tempfile::tempdir().expect("state root");
@@ -10401,7 +9900,6 @@ mod tests {
             .expect("publish")
             .expect("publication receipt");
         assert_eq!(publisher.publish_calls.load(Ordering::Relaxed), 1);
-
         {
             let mut guard = service.state.lock().expect("service state");
             let record = find_statement_mut(&mut guard.checkpoint, outcome.statement_ids[0])
@@ -10422,7 +9920,6 @@ mod tests {
             "authoritative lookup must prevent a second external write"
         );
     }
-
     #[test]
     fn startup_reconciliation_repairs_publisher_and_acknowledgement_rollback() {
         let root = tempfile::tempdir().expect("state root");
@@ -10452,7 +9949,6 @@ mod tests {
                 vec![0xAC],
             )
             .expect("authenticated acknowledgement");
-
         let (rolled_back_bytes, fingerprint) = {
             let guard = service.state.lock().expect("service state");
             let mut rolled_back = guard.checkpoint.clone();
@@ -10475,7 +9971,6 @@ mod tests {
             .commit_bytes(&rolled_back_bytes, fingerprint)
             .expect("replace checkpoint with stale but structurally valid delivery state");
         drop(service);
-
         let restored = HedgingBillingService::new(
             root.path(),
             service_policy(),
@@ -10500,14 +9995,12 @@ mod tests {
             signed
         );
     }
-
     #[derive(Debug)]
     struct TestExecutionAdapter {
         key: SigningKey,
         receipts: Mutex<BTreeMap<[u8; 32], HedgeExecutionSubmissionReceiptV1>>,
         submit_calls: AtomicUsize,
     }
-
     impl TestExecutionAdapter {
         fn new() -> Self {
             Self {
@@ -10516,7 +10009,6 @@ mod tests {
                 submit_calls: AtomicUsize::new(0),
             }
         }
-
         fn receipt(
             &self,
             intent: &HedgeIntentV1,
@@ -10541,7 +10033,6 @@ mod tests {
             receipt
         }
     }
-
     impl GovernedHedgeExecutionAdapter for TestExecutionAdapter {
         fn identity(
             &self,
@@ -10551,11 +10042,9 @@ mod tests {
                 public_key: self.key.verifying_key().to_bytes(),
             })
         }
-
         fn automatic_execution_enabled(&self) -> bool {
             false
         }
-
         fn submit_authorized(
             &self,
             idempotency_key: [u8; 32],
@@ -10579,7 +10068,6 @@ mod tests {
             receipts.insert(idempotency_key, receipt.clone());
             Ok(receipt)
         }
-
         fn lookup_authorization(
             &self,
             authorization_id: [u8; 32],
@@ -10593,10 +10081,8 @@ mod tests {
                 .cloned())
         }
     }
-
     #[derive(Debug)]
     struct AutoExecutionAdapter;
-
     impl GovernedHedgeExecutionAdapter for AutoExecutionAdapter {
         fn identity(
             &self,
@@ -10606,11 +10092,9 @@ mod tests {
                 public_key: venue_key().verifying_key().to_bytes(),
             })
         }
-
         fn automatic_execution_enabled(&self) -> bool {
             true
         }
-
         fn submit_authorized(
             &self,
             _idempotency_key: [u8; 32],
@@ -10619,7 +10103,6 @@ mod tests {
         ) -> Result<HedgeExecutionSubmissionReceiptV1, HedgingBillingExternalError> {
             Err(HedgingBillingExternalError::Rejected)
         }
-
         fn lookup_authorization(
             &self,
             _authorization_id: [u8; 32],
@@ -10628,7 +10111,6 @@ mod tests {
             Ok(None)
         }
     }
-
     #[test]
     fn operator_authorized_execution_is_policy_bound_and_idempotent() {
         let root = tempfile::tempdir().expect("state root");
@@ -10658,9 +10140,7 @@ mod tests {
         );
         assert_eq!(adapter.submit_calls.load(Ordering::Relaxed), 1);
     }
-
     include!("hedging_billing_service/finalized_account_validation_tests.rs");
-
     #[test]
     fn owner_api_is_anchor_bound_terminal_only_and_oracle_safe() {
         let root = tempfile::tempdir().expect("state root");
@@ -10681,7 +10161,6 @@ mod tests {
             intermediate_anchor.retention_scope,
             HedgingBillingRetentionScopeV1::ActiveEpochOnly
         );
-
         let intermediate_page = service
             .api_list_statements(&BillingStatementListRequestV1 {
                 owner_account_id: owner.clone(),
@@ -10705,7 +10184,6 @@ mod tests {
             intermediate_get,
             HedgingBillingRuntimeApiErrorV1::StatementUnavailableToOwner
         );
-
         service
             .sign_next_statement(&TestSigner::valid())
             .expect("sign")
@@ -10760,7 +10238,6 @@ mod tests {
             })
             .expect("exclusive statement cursor");
         assert!(after_page.items.is_empty());
-
         assert_eq!(
             service
                 .api_list_statements(&BillingStatementListRequestV1 {
@@ -10797,7 +10274,6 @@ mod tests {
                 .expect_err("stale checkpoint anchor"),
             HedgingBillingRuntimeApiErrorV1::ProjectionChanged
         );
-
         let wrong_owner_error = service
             .api_published_statement(&BillingPublishedStatementRequestV1 {
                 owner_account_id: other_owner,
@@ -10817,7 +10293,6 @@ mod tests {
             unknown_error,
             HedgingBillingRuntimeApiErrorV1::StatementUnavailableToOwner
         );
-
         let mut acknowledgement_request = BillingStatementAcknowledgementRequestV1 {
             expected_checkpoint_fingerprint: published_anchor.checkpoint_fingerprint,
             statement_id,
@@ -10864,7 +10339,6 @@ mod tests {
             !durable_debug.contains("[172]"),
             "durable acknowledgement Debug must not expose proof bytes"
         );
-
         assert_eq!(
             service
                 .api_acknowledge_statement(&acknowledgement_request, receipt.published_at_unix + 2,)
@@ -10909,9 +10383,7 @@ mod tests {
             HedgingBillingRuntimeApiErrorV1::InvalidRequest
         );
     }
-
     include!("hedging_billing_service/freshness_api_tests.rs");
-
     #[test]
     fn automatic_hedge_execution_is_unconditionally_rejected() {
         assert!(matches!(

@@ -936,13 +936,6 @@ fn read_revocation_publication_with_current(
     Ok(Some(record))
 }
 
-fn read_revocation_record(
-    world: &impl WorldReadOnly,
-    nonce_commitment: [u8; 32],
-) -> Result<Option<PopRevocationRecordV1>, InstructionExecutionError> {
-    read_revocation_record_with_current(world, nonce_commitment, None)
-}
-
 fn read_revocation_record_with_current(
     world: &impl WorldReadOnly,
     nonce_commitment: [u8; 32],
@@ -1457,13 +1450,6 @@ fn pop_i105_symbol(digit: u8) -> Result<&'static str, InstructionExecutionError>
         .ok_or_else(|| corrupt_state("PoP audit authority has an invalid I105 digit"))
 }
 
-fn read_audit_record(
-    world: &impl WorldReadOnly,
-    sequence: u64,
-) -> Result<Option<PopRegistryAuditDigestRecordV1>, InstructionExecutionError> {
-    read_audit_record_with_current(world, sequence, None)
-}
-
 fn read_audit_record_with_current(
     world: &impl WorldReadOnly,
     sequence: u64,
@@ -1574,27 +1560,6 @@ fn read_audit_with_current(
         ));
     }
     Ok(Some(record))
-}
-
-fn validate_audit_binding(
-    world: &impl WorldReadOnly,
-    sequence: u64,
-    digest: [u8; 32],
-    allowed_kinds: &[PopRegistryAuditEventKindV1],
-    authority: &AccountId,
-    recorded_at_epoch: u64,
-    expected_payload_digest: Option<[u8; 32]>,
-) -> Result<(), InstructionExecutionError> {
-    validate_audit_binding_with_current(
-        world,
-        sequence,
-        digest,
-        allowed_kinds,
-        authority,
-        recorded_at_epoch,
-        expected_payload_digest,
-        None,
-    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2765,7 +2730,7 @@ mod tests {
             )
             .expect("valid multisig policy"),
         );
-        let sequence = 7;
+        let sequence = 7_u64;
         let kind = PopRegistryAuditEventKindV1::CredentialBatchCommitted;
         let payload_digest = [0x31; 32];
         let previous = Some([0x32; 32]);

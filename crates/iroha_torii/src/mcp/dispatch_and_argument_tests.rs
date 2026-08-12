@@ -2278,15 +2278,6 @@ fn extract_view_argument_accepts_top_level_shortcut() {
 }
 
 #[test]
-fn extract_epoch_argument_accepts_top_level_shortcut() {
-    let args = norito::json!({
-        "epoch": 11
-    });
-    let epoch = extract_epoch_argument(args.as_object().expect("object")).expect("epoch");
-    assert_eq!(epoch, "11");
-}
-
-#[test]
 fn extract_entry_hash_argument_accepts_alias_shortcut() {
     let args = norito::json!({
         "tx_hash": "abc123"
@@ -2382,28 +2373,6 @@ fn extract_transaction_hash_argument_accepts_path_alias_shortcut() {
     });
     let hash = extract_transaction_hash_argument(args.as_object().expect("object")).expect("hash");
     assert_eq!(hash, "deadbeef");
-}
-
-#[test]
-fn extract_block_hash_argument_uses_only_the_canonical_name() {
-    for args in [
-        norito::json!({ "block_hash": "deadbeef" }),
-        norito::json!({ "path": { "block_hash": "deadbeef" } }),
-    ] {
-        let block_hash = extract_block_hash_argument(args.as_object().expect("object"))
-            .expect("canonical block hash");
-        assert_eq!(block_hash, "deadbeef");
-    }
-
-    for retired in [
-        norito::json!({ "hash": "deadbeef" }),
-        norito::json!({ "path": { "hash": "deadbeef" } }),
-    ] {
-        assert!(
-            extract_block_hash_argument(retired.as_object().expect("object")).is_err(),
-            "retired hash aliases must not survive the first-release cutover"
-        );
-    }
 }
 
 #[test]

@@ -1436,7 +1436,7 @@ PROOF
                        node, clockValue, sourceRank, packet, known, budget,
                        dependencyRank, actionKind, actionSource)
     <2> DEFINE Recipient == packet.item.envelope.recipient
-    <2> DEFINE Source == packet.item.source
+    <2> DEFINE Source == packet.authenticatedSource
     <2> DEFINE Item == OldestDueSourcePacket(Recipient, Source).item
     <2>1. /\ AsyncStrongTypeInvariant
            /\ gst
@@ -1455,8 +1455,7 @@ PROOF
            /\ DueSourcePackets(Recipient, Source) # {}
            /\ ResponsivePacketPairAt(
                 initialContext, Recipient, Source)
-           /\ Recipient \in AsyncCurrentResponsiveVoters
-                           \cup asyncHistoricalRecoveryTargets
+           /\ Recipient \in AsyncTimedServiceNodes
       BY <2>1, <2>2,
          OverdueResponsivePacketUsesFairIngressPair, Isa
          DEF Recipient, Source, ResponsivePacketPairAt,
@@ -1468,7 +1467,8 @@ PROOF
              AsyncResponsiveArchiveServers
     <2>4. /\ AsyncItemTyped(Item)
            /\ Item.envelope.recipient = Recipient
-           /\ Item.source = Source
+           /\ (OldestDueSourcePacket(Recipient, Source))
+                .authenticatedSource = Source
       BY <2>2, <2>3, OldestDueSourcePacketFacts
          DEF Item, AsyncPacketTyped
     <2>5. HistoricalDiscoveryPacketDependencyRank(packet)
@@ -1500,7 +1500,11 @@ PROOF
                    Recipient
         <4>2. CASE Recipient \notin asyncHistoricalRecoveryTargets
           <5>1. Recipient \in AsyncCurrentResponsiveVoters
-            BY <2>3, <4>2
+            BY <2>1, <2>3, <3>1, <4>2, Isa
+               DEF AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
+                   AsyncResponsiveAppliedArchiveServers,
+                   AsyncResponsiveOnlineArchiveServers,
+                   AsyncResponsiveArchiveServers
           <5>2. ENABLED PostGstRunNode(Recipient)
             BY <2>1, <3>1, <5>1,
                GstResponsiveUnappliedRunNodeIsEnabled
@@ -1511,10 +1515,17 @@ PROOF
                    Recipient
         <4> QED BY <4>1, <4>2
       <3>2. CASE NodeHasApplication(Recipient)
-        <4>1. Recipient \in AsyncCurrentResponsiveVoters
-          BY <2>2, <2>3, <3>2, Isa
+        <4>1. Recipient \in AsyncArchiveIoServiceNodes
+          BY <2>1, <2>2, <2>3, <3>2, Isa
              DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
-                 AsyncHistoricalRecoveryTypeInvariant
+                 AsyncHistoricalRecoveryTypeInvariant,
+                 OverdueResponsivePackets,
+                 AsyncPacketOwnsClockDeadline,
+                 AsyncTimedServiceNodes,
+                 AsyncArchiveIoServiceNodes,
+                 AsyncResponsiveAppliedArchiveServers,
+                 AsyncResponsiveOnlineArchiveServers,
+                 AsyncResponsiveArchiveServers
         <4>2. CASE IngressDepth(Recipient) = 0
           <5>1. OldestDueSourcePacket(Recipient, Source)
                    \in OverdueResponsivePackets

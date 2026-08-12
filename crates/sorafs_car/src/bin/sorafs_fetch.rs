@@ -59,7 +59,6 @@ use sorafs_manifest::{
     },
     provider_advert::{PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1, ProviderCapabilitySoranetPqV1},
 };
-
 const KNOWN_CAPABILITIES: &[CapabilityType; 5] = &[
     CapabilityType::ToriiGateway,
     CapabilityType::QuicNoise,
@@ -97,19 +96,16 @@ enum JsonSource {
     File(PathBuf),
     Stdin,
 }
-
 #[derive(Clone)]
 enum BinarySource {
     File(PathBuf),
     Stdin,
 }
-
 fn run() -> Result<(), String> {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.is_empty() {
         return Err(usage().to_string());
     }
-
     let mut plan_source: Option<JsonSource> = None;
     let mut manifest_source: Option<JsonSource> = None;
     let mut manifest_bytes_source: Option<BinarySource> = None;
@@ -150,7 +146,6 @@ fn run() -> Result<(), String> {
     let mut transport_policy_override: Option<TransportPolicy> = None;
     let mut anonymity_policy: Option<AnonymityPolicy> = None;
     let mut anonymity_policy_override: Option<AnonymityPolicy> = None;
-
     for arg in &args {
         if arg == "--help" {
             return Err(usage().to_string());
@@ -371,20 +366,17 @@ fn run() -> Result<(), String> {
             return Err(format!("unknown option: {arg}"));
         }
     }
-
     if provider_specs.is_empty() && gateway_specs.is_empty() {
         return Err(
             "specify at least one --provider=name=/path/to/payload[#concurrency] or --gateway-provider=name=...,provider-id=...,gateway-key=...,base-url=...,stream-token=..."
                 .into(),
         );
     }
-
     let manifest_report: Option<Value> = if let Some(source) = &manifest_source {
         Some(load_json(source)?)
     } else {
         None
     };
-
     let (plan_json, mut chunk_specs, plan_payload_digest) = if let Some(source) = plan_source {
         let plan_json = load_json(&source)?;
         let parsed = chunk_fetch_plan_from_json(&plan_json)
@@ -437,7 +429,6 @@ fn run() -> Result<(), String> {
                 .to_string(),
         );
     };
-
     if let Some(expected) = expect_payload_digest {
         if expected != plan_payload_digest {
             return Err(
@@ -447,7 +438,6 @@ fn run() -> Result<(), String> {
         }
     }
     expect_payload_digest = Some(plan_payload_digest);
-
     if expect_payload_len.is_none() {
         expect_payload_len = expected_payload_len_from_json(&plan_json)
             .map_err(|err| format!("failed to parse expected payload length: {err}"))?;
@@ -458,11 +448,9 @@ fn run() -> Result<(), String> {
                 .map_err(|err| format!("failed to parse expected payload length: {err}"))?;
         }
     }
-
     if chunk_specs.is_empty() {
         return Err("chunk fetch plan contained no entries".into());
     }
-
     chunk_specs.sort_by_key(|spec| spec.chunk_index);
     for (idx, spec) in chunk_specs.iter().enumerate() {
         if spec.chunk_index != idx {
@@ -472,20 +460,17 @@ fn run() -> Result<(), String> {
             ));
         }
     }
-
     let content_length = chunk_specs
         .iter()
         .map(|spec| spec.offset + u64::from(spec.length))
         .max()
         .ok_or_else(|| "failed to derive content length from chunk fetch specs".to_string())?;
-
     let file_entry = FilePlan {
         path: Vec::new(),
         first_chunk: 0,
         chunk_count: chunk_specs.len(),
         size: content_length,
     };
-
     let manifest = if let Some(source) = &manifest_bytes_source {
         Some(load_manifest_from_source(source)?)
     } else if let Some(report) = manifest_report.as_ref() {
@@ -493,7 +478,6 @@ fn run() -> Result<(), String> {
     } else {
         None
     };
-
     if let Some(manifest_ref) = manifest.as_ref() {
         if manifest_ref.content_length != content_length {
             return Err(format!(
@@ -505,7 +489,6 @@ fn run() -> Result<(), String> {
             expect_payload_len = Some(manifest_ref.content_length);
         }
     }
-
     let chunk_profile = manifest
         .as_ref()
         .and_then(|manifest| {
@@ -513,7 +496,6 @@ fn run() -> Result<(), String> {
                 .map(|descriptor| descriptor.profile)
         })
         .unwrap_or(ChunkProfile::DEFAULT);
-
     let plan = CarBuildPlan {
         chunk_profile,
         payload_digest: blake3::Hash::from_bytes(plan_payload_digest),
@@ -529,7 +511,6 @@ fn run() -> Result<(), String> {
             .collect(),
         files: vec![file_entry],
     };
-
     let plan_profile_handle = chunker_registry::lookup_by_profile(
         plan.chunk_profile,
         chunker_registry::DEFAULT_MULTIHASH_CODE,
@@ -540,7 +521,6 @@ fn run() -> Result<(), String> {
             descriptor.namespace, descriptor.name, descriptor.semver
         )
     });
-
     let mut gateway_fetcher_opt = None;
     let mut gateway_fetch_providers = Vec::new();
     if !gateway_specs.is_empty() {
@@ -596,7 +576,6 @@ fn run() -> Result<(), String> {
         gateway_fetch_providers = context.providers();
         gateway_fetcher_opt = Some(context.fetcher());
     }
-
     let admission_registry = match admission_dir.as_ref() {
         Some(dir) => {
             let threshold = admission_signature_threshold.ok_or_else(|| {
@@ -617,7 +596,6 @@ fn run() -> Result<(), String> {
             None
         }
     };
-
     let mut advert_data: HashMap<String, AdvertMetadata> = HashMap::new();
     for (name, path) in provider_advert_paths {
         if !provider_specs.iter().any(|spec| spec.name == name) {
@@ -633,7 +611,6 @@ fn run() -> Result<(), String> {
         )?;
         advert_data.insert(name, metadata);
     }
-
     for spec in &mut provider_specs {
         if let Some(metadata) = advert_data.remove(&spec.name) {
             if !metadata.supports_chunk_range {
@@ -658,27 +635,22 @@ fn run() -> Result<(), String> {
             spec.weight = Some(NonZeroU32::MIN);
         }
     }
-
     for spec in &provider_specs {
         if let Some(metadata) = spec.metadata.as_ref() {
             ensure_range_capability_satisfies_plan(&plan, &spec.name, metadata)?;
         }
     }
-
     let scoreboard_mode = use_scoreboard || scoreboard_out.is_some() || telemetry_source.is_some();
     let telemetry_snapshot = load_telemetry(telemetry_source.clone())
         .map_err(|err| format!("failed to load telemetry: {err}"))?;
-
     let mut scoreboard_metadata = Vec::new();
     let mut scoreboard_aliases = Vec::new();
-
     for spec in &provider_specs {
         let metadata =
             metadata_for_provider_spec(spec, &plan, scoreboard_mode && !allow_implicit_metadata)?;
         scoreboard_aliases.push(spec.name.clone());
         scoreboard_metadata.push(metadata);
     }
-
     for provider in &gateway_fetch_providers {
         let alias = provider.id().as_str().to_string();
         let mut metadata = provider
@@ -702,7 +674,6 @@ fn run() -> Result<(), String> {
         scoreboard_aliases.push(alias);
         scoreboard_metadata.push(metadata);
     }
-
     let gateway_manifest_provided = gateway_manifest_present(
         &gateway_manifest_envelope,
         !gateway_fetch_providers.is_empty(),
@@ -741,18 +712,15 @@ fn run() -> Result<(), String> {
                 .map_or(limit, |existing| existing.min(limit)),
         );
     }
-
     let provider_sources = build_provider_sources(&provider_specs)?;
     let mut provider_source_map: HashMap<String, ProviderSource> = provider_sources
         .into_iter()
         .map(|source| (source.name.clone(), source))
         .collect();
-
     if !deny_providers.is_empty() || !boost_providers.is_empty() {
         let policy = CliScorePolicy::new(deny_providers, boost_providers);
         fetch_options.score_policy = Some(Arc::new(policy));
     }
-
     let scoreboard = scoreboard::build_scoreboard(
         &plan,
         &scoreboard_metadata,
@@ -760,13 +728,11 @@ fn run() -> Result<(), String> {
         &scoreboard_config,
     )
     .map_err(|err| format!("failed to build provider scoreboard: {err}"))?;
-
     let (mut eligible_aliases, provider_lookup, ineligible_entries) =
         classify_scoreboard_aliases(scoreboard.entries(), &scoreboard_aliases);
     for (alias, reason) in ineligible_entries {
         eprintln!("[scoreboard] excluding provider '{alias}': {reason}");
     }
-
     let mut eligible_alias_order = Vec::new();
     for (entry, alias) in scoreboard.entries().iter().zip(scoreboard_aliases.iter()) {
         if matches!(entry.eligibility, scoreboard::Eligibility::Eligible)
@@ -779,11 +745,9 @@ fn run() -> Result<(), String> {
         let allowed: HashSet<String> = eligible_alias_order.into_iter().take(limit).collect();
         eligible_aliases.retain(|alias| allowed.contains(alias));
     }
-
     if eligible_aliases.is_empty() {
         return Err("scoreboard produced no eligible providers".into());
     }
-
     let mut runtime_registry: HashMap<String, ProviderRuntime> = HashMap::new();
     for alias in eligible_aliases.iter() {
         if let Some(source) = provider_source_map.remove(alias) {
@@ -796,13 +760,11 @@ fn run() -> Result<(), String> {
             runtime_registry.insert(alias.clone(), ProviderRuntime::Gateway);
         }
     }
-
     if runtime_registry.len() != eligible_aliases.len() {
         return Err(
             "scoreboard selected providers that are not available locally or via gateway".into(),
         );
     }
-
     let (provider_count_value, gateway_provider_count_value) =
         runtime_provider_counts(&runtime_registry);
     let provider_mix_label = provider_mix_label(provider_count_value, gateway_provider_count_value);
@@ -832,7 +794,6 @@ fn run() -> Result<(), String> {
             .persist_to_path(path, Some(scoreboard_metadata_value.clone()))
             .map_err(|err| format!("failed to persist scoreboard: {err}"))?;
     }
-
     let mut fetch_providers = Vec::new();
     for (entry, alias) in scoreboard.entries().iter().zip(scoreboard_aliases.iter()) {
         if !eligible_aliases.contains(alias) {
@@ -847,7 +808,6 @@ fn run() -> Result<(), String> {
             }
         }
     }
-
     let provider_registry = Arc::new(runtime_registry);
     let provider_lookup = Arc::new(provider_lookup);
     let gateway_fetcher = gateway_fetcher_opt.clone();
@@ -873,13 +833,11 @@ fn run() -> Result<(), String> {
             }
         }
     };
-
     let streaming_writer = if let Some(path) = &output_path {
         Some(Arc::new(Mutex::new(StreamingWriter::create(path)?)))
     } else {
         None
     };
-
     let outcome = if let Some(writer) = streaming_writer.as_ref() {
         let observer = StreamingObserver::new(Arc::clone(writer));
         match futures::executor::block_on(multi_fetch::fetch_plan_parallel_with_observer(
@@ -903,7 +861,6 @@ fn run() -> Result<(), String> {
             Err(err) => return Err(format_multi_source_error(err)?),
         }
     };
-
     let streamed_stats = if let Some(writer) = streaming_writer.as_ref() {
         let mut guard = writer
             .lock()
@@ -917,7 +874,6 @@ fn run() -> Result<(), String> {
     } else {
         None
     };
-
     let mut payload_vec = None;
     let (payload_len, payload_digest_bytes) = if let Some((written, digest)) = streamed_stats {
         if written != plan.content_length {
@@ -936,7 +892,6 @@ fn run() -> Result<(), String> {
         payload_vec = Some(payload);
         (payload_len, bytes)
     };
-
     if let Some((_, digest)) = streamed_stats {
         if digest != payload_digest_bytes {
             return Err("streamed payload digest mismatch".into());
@@ -946,7 +901,6 @@ fn run() -> Result<(), String> {
     {
         write_binary(path, payload)?;
     }
-
     let mut car_stats = if let Some(path) = &car_out {
         Some(
             write_car_archive(&plan, &outcome.chunks, path)
@@ -955,7 +909,6 @@ fn run() -> Result<(), String> {
     } else {
         None
     };
-
     let mut car_verification: Option<CarVerificationReport> = None;
     if let Some(manifest_ref) = manifest.as_ref() {
         let car_bytes = if let Some(path) = &car_out {
@@ -963,7 +916,6 @@ fn run() -> Result<(), String> {
         } else {
             build_car_bytes(&plan, &outcome.chunks)?
         };
-
         let verification = CarVerifier::verify_full_car_with_plan(manifest_ref, &plan, &car_bytes)
             .map_err(|err| format!("CAR verification failed: {err}"))?;
         eprintln!(
@@ -975,7 +927,6 @@ fn run() -> Result<(), String> {
         }
         car_verification = Some(verification);
     }
-
     if let Some(expected_len) = expect_payload_len
         && payload_len != expected_len
     {
@@ -983,7 +934,6 @@ fn run() -> Result<(), String> {
             "assembled payload length {payload_len} does not match expected {expected_len}"
         ));
     }
-
     if let Some(expected_digest) = expect_payload_digest
         && payload_digest_bytes != expected_digest
     {
@@ -993,11 +943,9 @@ fn run() -> Result<(), String> {
             to_hex(&expected_digest)
         ));
     }
-
     let car_stats_ref: Option<&CarWriteStats> = car_stats
         .as_ref()
         .or_else(|| car_verification.as_ref().map(|report| &report.stats));
-
     let transport_labels = transport_policy_labels(transport_policy, transport_policy_override);
     let report = build_report(ReportContext {
         outcome: &outcome,
@@ -1018,7 +966,6 @@ fn run() -> Result<(), String> {
     let mut report_str = to_string_pretty(&report)
         .map_err(|err| format!("failed to serialise orchestrator report: {err}"))?;
     report_str.push('\n');
-
     let mut report_written_to_stdout = false;
     if let Some(path) = &json_out {
         if path == Path::new("-") {
@@ -1026,7 +973,6 @@ fn run() -> Result<(), String> {
         }
         write_text(path, &report_str)?;
     }
-
     if let Some(path) = &provider_metrics_out {
         let providers = report
             .get("provider_reports")
@@ -1036,7 +982,6 @@ fn run() -> Result<(), String> {
         providers_str.push('\n');
         write_text(path, &providers_str)?;
     }
-
     if let Some(path) = &chunk_receipts_out {
         let receipts = report
             .get("chunk_receipts")
@@ -1046,13 +991,11 @@ fn run() -> Result<(), String> {
         receipts_str.push('\n');
         write_text(path, &receipts_str)?;
     }
-
     if !report_written_to_stdout {
         print!("{report_str}");
     }
     Ok(())
 }
-
 const USAGE: &str = concat!(
     "usage: sorafs-fetch \
      --plan=chunk_fetch_plan.v1.json|- \
@@ -1102,17 +1045,14 @@ checks are enabled by default; provide `--provider-advert=name=PATH` for every \
 fixtures that rely on baked-in capability hints.\n\n",
     include_str!("../../../../specs/sorafs/snippets/multi_source_flag_notes.txt")
 );
-
 fn usage() -> &'static str {
     USAGE
 }
-
 #[derive(Clone)]
 enum ProviderRuntime {
     Local(ProviderSource),
     Gateway,
 }
-
 fn runtime_provider_counts(runtime_registry: &HashMap<String, ProviderRuntime>) -> (u64, u64) {
     let mut provider_count: u64 = 0;
     let mut gateway_count: u64 = 0;
@@ -1124,7 +1064,6 @@ fn runtime_provider_counts(runtime_registry: &HashMap<String, ProviderRuntime>) 
     }
     (provider_count, gateway_count)
 }
-
 fn provider_mix_label(provider_count: u64, gateway_count: u64) -> &'static str {
     match (provider_count > 0, gateway_count > 0) {
         (true, true) => "mixed",
@@ -1133,7 +1072,6 @@ fn provider_mix_label(provider_count: u64, gateway_count: u64) -> &'static str {
         (false, false) => "none",
     }
 }
-
 #[derive(Clone, Copy)]
 struct ScoreboardMetadataOptions<'a> {
     scoreboard_mode: bool,
@@ -1156,7 +1094,6 @@ struct ScoreboardMetadataOptions<'a> {
     anonymity_policy: Option<AnonymityPolicy>,
     anonymity_policy_override: Option<AnonymityPolicy>,
 }
-
 fn build_scoreboard_metadata(options: ScoreboardMetadataOptions<'_>) -> Value {
     let mut metadata = Map::new();
     metadata.insert(
@@ -1277,7 +1214,6 @@ fn build_scoreboard_metadata(options: ScoreboardMetadataOptions<'_>) -> Value {
     );
     Value::Object(metadata)
 }
-
 fn gateway_manifest_present(
     manifest_envelope: &Option<String>,
     has_gateway_providers: bool,
@@ -1311,7 +1247,6 @@ fn gateway_manifest_present(
         _ => false,
     }
 }
-
 fn parse_provider_spec(value: &str) -> Result<ProviderSpec, String> {
     let (name, rest) = value
         .split_once('=')
@@ -1319,7 +1254,6 @@ fn parse_provider_spec(value: &str) -> Result<ProviderSpec, String> {
     if name.is_empty() {
         return Err("provider name cannot be empty".to_string());
     }
-
     let mut path_segment = rest;
     let mut weight: Option<NonZeroU32> = None;
     if let Some(at_idx) = path_segment.rfind('@') {
@@ -1330,7 +1264,6 @@ fn parse_provider_spec(value: &str) -> Result<ProviderSpec, String> {
         weight = Some(parse_nonzero_u32_decimal(&suffix[1..], "provider weight")?);
         path_segment = prefix;
     }
-
     let (path_str, concurrency) = if let Some(hash_idx) = path_segment.rfind('#') {
         let (path_part, conc_part) = path_segment.split_at(hash_idx);
         if conc_part.len() <= 1 {
@@ -1341,17 +1274,13 @@ fn parse_provider_spec(value: &str) -> Result<ProviderSpec, String> {
     } else {
         (path_segment, None)
     };
-
     if path_str.is_empty() {
         return Err("provider path cannot be empty".to_string());
     }
-
     let concurrency_explicit = concurrency.is_some();
     let max_concurrent = concurrency.unwrap_or_else(|| NonZeroUsize::MIN.saturating_add(1));
-
     let weight_explicit = weight.is_some();
     let weight = weight.unwrap_or(NonZeroU32::MIN);
-
     Ok(ProviderSpec {
         name: name.to_string(),
         path: PathBuf::from(path_str),
@@ -1369,7 +1298,6 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
     let mut base_url: Option<String> = None;
     let mut stream_token: Option<String> = None;
     let mut privacy_events_url: Option<String> = None;
-
     for pair in value.split(',') {
         let pair = pair.trim();
         if pair.is_empty() {
@@ -1423,7 +1351,6 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
             }
         }
     }
-
     let name = name.ok_or_else(|| "--gateway-provider requires name=<alias>".to_string())?;
     let provider_id_hex =
         provider_id.ok_or_else(|| "--gateway-provider requires provider-id=<hex>".to_string())?;
@@ -1433,7 +1360,6 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
         base_url.ok_or_else(|| "--gateway-provider requires base-url=<https://...>".to_string())?;
     let stream_token_b64 = stream_token
         .ok_or_else(|| "--gateway-provider requires stream-token=<base64>".to_string())?;
-
     Ok(GatewayProviderSpec {
         name,
         provider_id_hex,
@@ -1443,7 +1369,6 @@ fn parse_gateway_provider_spec(value: &str) -> Result<GatewayProviderSpec, Strin
         privacy_events_url,
     })
 }
-
 fn parse_usize(input: &str, flag: &str) -> Result<usize, String> {
     let value = parse_canonical_usize(input, flag)?;
     if value == 0 {
@@ -1452,7 +1377,6 @@ fn parse_usize(input: &str, flag: &str) -> Result<usize, String> {
         Ok(value)
     }
 }
-
 fn parse_boost_provider(input: &str) -> Result<(String, i64), String> {
     let (name, delta_str) = input
         .split_once(':')
@@ -1463,38 +1387,32 @@ fn parse_boost_provider(input: &str) -> Result<(String, i64), String> {
     let delta = parse_canonical_i64(delta_str, "boost delta")?;
     Ok((name.to_string(), delta))
 }
-
 fn parse_nonzero_usize_decimal(input: &str, label: &str) -> Result<NonZeroUsize, String> {
     let value = parse_canonical_usize(input, label)?;
     NonZeroUsize::new(value).ok_or_else(|| format!("{label} must be greater than zero"))
 }
-
 fn parse_nonzero_u32_decimal(input: &str, label: &str) -> Result<NonZeroU32, String> {
     let value = parse_canonical_u32(input, label)?;
     NonZeroU32::new(value).ok_or_else(|| format!("{label} must be greater than zero"))
 }
-
 fn parse_canonical_usize(input: &str, label: &str) -> Result<usize, String> {
     require_canonical_unsigned_decimal(input, label)?;
     input
         .parse::<usize>()
         .map_err(|err| format!("invalid {label} '{input}': {err}"))
 }
-
 fn parse_canonical_u32(input: &str, label: &str) -> Result<u32, String> {
     require_canonical_unsigned_decimal(input, label)?;
     input
         .parse::<u32>()
         .map_err(|err| format!("invalid {label} '{input}': {err}"))
 }
-
 fn parse_canonical_u64(input: &str, label: &str) -> Result<u64, String> {
     require_canonical_unsigned_decimal(input, label)?;
     input
         .parse::<u64>()
         .map_err(|err| format!("invalid {label} '{input}': {err}"))
 }
-
 fn parse_canonical_i64(input: &str, label: &str) -> Result<i64, String> {
     if !is_canonical_signed_decimal(input) {
         return Err(format!(
@@ -1505,7 +1423,6 @@ fn parse_canonical_i64(input: &str, label: &str) -> Result<i64, String> {
         .parse::<i64>()
         .map_err(|err| format!("invalid {label} '{input}': {err}"))
 }
-
 fn require_canonical_unsigned_decimal(input: &str, label: &str) -> Result<(), String> {
     if is_canonical_unsigned_decimal(input) {
         Ok(())
@@ -1515,32 +1432,27 @@ fn require_canonical_unsigned_decimal(input: &str, label: &str) -> Result<(), St
         ))
     }
 }
-
 fn is_canonical_unsigned_decimal(input: &str) -> bool {
     let bytes = input.as_bytes();
     !bytes.is_empty()
         && bytes.iter().all(u8::is_ascii_digit)
         && (bytes.len() == 1 || bytes[0] != b'0')
 }
-
 fn is_canonical_signed_decimal(input: &str) -> bool {
     let Some(digits) = input.strip_prefix('-') else {
         return is_canonical_unsigned_decimal(input);
     };
     is_canonical_unsigned_decimal(digits) && digits != "0"
 }
-
 fn parse_u64_value(input: &str, flag: &str) -> Result<u64, String> {
     parse_canonical_u64(input, flag)
 }
-
 fn build_provider_sources(specs: &[ProviderSpec]) -> Result<Vec<ProviderSource>, String> {
     specs
         .iter()
         .map(|spec| ProviderSource::new(&spec.name, &spec.path))
         .collect()
 }
-
 fn ensure_range_capability_satisfies_plan(
     plan: &CarBuildPlan,
     provider_name: &str,
@@ -1574,7 +1486,6 @@ fn ensure_range_capability_satisfies_plan(
     }
     Ok(())
 }
-
 fn load_json(source: &JsonSource) -> Result<Value, String> {
     match source {
         JsonSource::File(path) => load_json_file(path),
@@ -1587,12 +1498,10 @@ fn load_json(source: &JsonSource) -> Result<Value, String> {
         }
     }
 }
-
 fn load_json_file(path: &Path) -> Result<Value, String> {
     let bytes = fs::read(path).map_err(|err| format!("failed to read {path:?}: {err}"))?;
     from_slice(&bytes).map_err(|err| format!("failed to parse JSON from {path:?}: {err}"))
 }
-
 fn write_binary(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if path == Path::new("-") {
         io::stdout()
@@ -1604,7 +1513,6 @@ fn write_binary(path: &Path, bytes: &[u8]) -> Result<(), String> {
     file.write_all(bytes)
         .map_err(|err| format!("failed to write {path:?}: {err}"))
 }
-
 fn open_output_file(path: &Path, label: &str) -> Result<File, String> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -1625,7 +1533,6 @@ fn open_output_file(path: &Path, label: &str) -> Result<File, String> {
     }
     Ok(file)
 }
-
 fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -1635,7 +1542,6 @@ fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 fn validate_output_path(path: &Path) -> Result<(), String> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -1649,7 +1555,6 @@ fn validate_output_path(path: &Path) -> Result<(), String> {
         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
         Err(err) => return Err(format!("failed to inspect output {path:?}: {err}")),
     }
-
     if let Some(parent) = path.parent() {
         for ancestor in std::iter::once(parent).chain(parent.ancestors().skip(1)) {
             if ancestor.as_os_str().is_empty() {
@@ -1675,20 +1580,16 @@ fn validate_output_path(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-
 #[cfg(unix)]
 fn set_no_follow_flag(options: &mut fs::OpenOptions) {
     options.custom_flags(platform_no_follow_flag());
 }
-
 #[cfg(not(unix))]
 fn set_no_follow_flag(_options: &mut fs::OpenOptions) {}
-
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
     0o400000
 }
-
 #[cfg(all(
     unix,
     not(any(target_os = "linux", target_os = "android")),
@@ -1704,7 +1605,6 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0x100
 }
-
 #[cfg(all(
     unix,
     not(any(
@@ -1721,13 +1621,11 @@ fn platform_no_follow_flag() -> i32 {
 fn platform_no_follow_flag() -> i32 {
     0
 }
-
 struct StreamingWriter {
     writer: BufWriter<File>,
     hasher: Hasher,
     total: u64,
 }
-
 impl StreamingWriter {
     fn create(path: &Path) -> Result<Self, String> {
         let file = open_output_file(path, "output file")?;
@@ -1737,7 +1635,6 @@ impl StreamingWriter {
             total: 0,
         })
     }
-
     fn write_chunk(&mut self, chunk_index: usize, bytes: &[u8]) -> Result<(), ObserverError> {
         self.writer.write_all(bytes).map_err(|err| {
             ObserverError::new(format!("failed to write chunk {chunk_index}: {err}"))
@@ -1746,15 +1643,12 @@ impl StreamingWriter {
         self.total += bytes.len() as u64;
         Ok(())
     }
-
     fn flush(&mut self) -> Result<(), std::io::Error> {
         self.writer.flush()
     }
-
     fn total_written(&self) -> u64 {
         self.total
     }
-
     fn current_digest(&self) -> [u8; 32] {
         let clone = self.hasher.clone();
         let hash = clone.finalize();
@@ -1763,17 +1657,14 @@ impl StreamingWriter {
         out
     }
 }
-
 struct StreamingObserver {
     writer: Arc<Mutex<StreamingWriter>>,
 }
-
 impl StreamingObserver {
     fn new(writer: Arc<Mutex<StreamingWriter>>) -> Self {
         Self { writer }
     }
 }
-
 impl ChunkObserver for StreamingObserver {
     fn on_chunk(&mut self, delivery: ChunkDelivery<'_>) -> Result<(), ObserverError> {
         let mut guard = self
@@ -1783,7 +1674,6 @@ impl ChunkObserver for StreamingObserver {
         guard.write_chunk(delivery.chunk_index, delivery.bytes)
     }
 }
-
 const fn availability_label(tier: AvailabilityTier) -> &'static str {
     match tier {
         AvailabilityTier::Hot => "hot",
@@ -1791,7 +1681,6 @@ const fn availability_label(tier: AvailabilityTier) -> &'static str {
         AvailabilityTier::Cold => "cold",
     }
 }
-
 const fn availability_weight_hint(tier: AvailabilityTier) -> NonZeroU32 {
     match tier {
         AvailabilityTier::Hot => NonZeroU32::MIN.saturating_add(2),
@@ -1799,7 +1688,6 @@ const fn availability_weight_hint(tier: AvailabilityTier) -> NonZeroU32 {
         AvailabilityTier::Cold => NonZeroU32::MIN,
     }
 }
-
 fn capability_name(capability: CapabilityType) -> &'static str {
     match capability {
         CapabilityType::ToriiGateway => "torii_gateway",
@@ -1810,13 +1698,11 @@ fn capability_name(capability: CapabilityType) -> &'static str {
         CapabilityType::VendorReserved => "vendor_reserved",
     }
 }
-
 fn ensure_capability_label(labels: &mut Vec<String>, label: &str) {
     if !labels.iter().any(|existing| existing == label) {
         labels.push(label.to_string());
     }
 }
-
 fn transport_protocol_label(protocol: TransportProtocol) -> &'static str {
     match protocol {
         TransportProtocol::ToriiHttpRange => "torii_http_range",
@@ -1825,7 +1711,6 @@ fn transport_protocol_label(protocol: TransportProtocol) -> &'static str {
         TransportProtocol::VendorReserved => "vendor_reserved",
     }
 }
-
 fn provider_advert_to_metadata(advert: ProviderAdvertV1) -> Result<AdvertMetadata, String> {
     let qos_concurrency = NonZeroUsize::new(advert.body.qos.max_concurrent_streams as usize)
         .ok_or_else(|| "provider advert advertised max_concurrent_streams=0".to_string())?;
@@ -1869,7 +1754,6 @@ fn provider_advert_to_metadata(advert: ProviderAdvertV1) -> Result<AdvertMetadat
         .iter()
         .map(|topic| format!("{}:{}", topic.topic, topic.region))
         .collect();
-
     for capability in &advert.body.capabilities {
         if capability.cap_type == CapabilityType::ChunkRangeFetch {
             supports_chunk_range = true;
@@ -1915,7 +1799,6 @@ fn provider_advert_to_metadata(advert: ProviderAdvertV1) -> Result<AdvertMetadat
             }
         }
     }
-
     let transport_hints = advert
         .body
         .transport_hints
@@ -1934,7 +1817,6 @@ fn provider_advert_to_metadata(advert: ProviderAdvertV1) -> Result<AdvertMetadat
             priority: hint.priority,
         })
         .collect();
-
     if supports_chunk_range {
         let budget = advert.body.stream_budget.as_ref().ok_or_else(|| {
             format!(
@@ -1954,7 +1836,6 @@ fn provider_advert_to_metadata(advert: ProviderAdvertV1) -> Result<AdvertMetadat
         concurrency = NonZeroUsize::new(clamped)
             .ok_or_else(|| "stream budget advertised max_in_flight=0".to_string())?;
     }
-
     Ok(AdvertMetadata {
         concurrency: Some(concurrency),
         weight: Some(availability_weight_hint(advert.body.qos.availability)),
@@ -1962,7 +1843,6 @@ fn provider_advert_to_metadata(advert: ProviderAdvertV1) -> Result<AdvertMetadat
         provider_metadata,
     })
 }
-
 fn load_admission_registry(
     dir: &Path,
     policy: &ProviderAdmissionCouncilPolicy,
@@ -2004,7 +1884,6 @@ fn load_admission_registry(
     }
     Ok(registry)
 }
-
 fn decode_admission_envelope(
     bytes: &[u8],
     path: &Path,
@@ -2012,11 +1891,9 @@ fn decode_admission_envelope(
     decode_from_bytes(bytes)
         .map_err(|err| format!("failed to decode admission envelope {path:?} as Norito: {err}"))
 }
-
 fn verify_provider_advert_signature(advert: &ProviderAdvertV1) -> Result<(), String> {
     advert.verify_signature().map_err(|err| err.to_string())
 }
-
 fn write_car_archive(
     plan: &CarBuildPlan,
     chunks: &[Vec<u8>],
@@ -2038,7 +1915,6 @@ fn write_car_archive(
     writer.flush().map_err(|err| err.to_string())?;
     Ok(stats)
 }
-
 fn build_car_bytes(plan: &CarBuildPlan, chunks: &[Vec<u8>]) -> Result<Vec<u8>, String> {
     if chunks.len() != plan.chunks.len() {
         return Err(format!(
@@ -2054,7 +1930,6 @@ fn build_car_bytes(plan: &CarBuildPlan, chunks: &[Vec<u8>]) -> Result<Vec<u8>, S
         .map_err(|err| err.to_string())?;
     Ok(cursor.into_inner())
 }
-
 fn manifest_from_report(report: &Value) -> Result<Option<ManifestV1>, String> {
     if let Some(manifest_obj) = report.get("manifest")
         && let Some(hex) = manifest_obj.get("manifest_hex").and_then(Value::as_str)
@@ -2066,18 +1941,15 @@ fn manifest_from_report(report: &Value) -> Result<Option<ManifestV1>, String> {
     }
     Ok(None)
 }
-
 fn decode_manifest_hex(hex_str: &str) -> Result<ManifestV1, String> {
     let bytes =
         hex::decode(hex_str).map_err(|err| format!("failed to decode manifest_hex: {err}"))?;
     decode_manifest_bytes(&bytes)
 }
-
 fn decode_manifest_bytes(bytes: &[u8]) -> Result<ManifestV1, String> {
     decode_manifest_v1_canonical(bytes)
         .map_err(|err| format!("failed to decode manifest payload as Norito: {err}"))
 }
-
 fn load_manifest_from_source(source: &BinarySource) -> Result<ManifestV1, String> {
     let bytes = match source {
         BinarySource::File(path) => {
@@ -2093,13 +1965,11 @@ fn load_manifest_from_source(source: &BinarySource) -> Result<ManifestV1, String
     };
     decode_manifest_bytes(&bytes)
 }
-
 struct ChunkCursor<'a> {
     chunks: &'a [Vec<u8>],
     chunk_index: usize,
     offset: usize,
 }
-
 impl<'a> ChunkCursor<'a> {
     fn new(chunks: &'a [Vec<u8>]) -> Self {
         Self {
@@ -2109,7 +1979,6 @@ impl<'a> ChunkCursor<'a> {
         }
     }
 }
-
 impl Read for ChunkCursor<'_> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if buf.is_empty() {
@@ -2136,7 +2005,6 @@ impl Read for ChunkCursor<'_> {
         if written == 0 { Ok(0) } else { Ok(written) }
     }
 }
-
 fn write_text(path: &Path, text: &str) -> Result<(), String> {
     if path == Path::new("-") {
         io::stdout()
@@ -2148,7 +2016,6 @@ fn write_text(path: &Path, text: &str) -> Result<(), String> {
     file.write_all(text.as_bytes())
         .map_err(|err| format!("failed to write {path:?}: {err}"))
 }
-
 fn load_provider_advert(
     path: &Path,
     expected_profile: Option<&str>,
@@ -2219,7 +2086,6 @@ fn load_provider_advert(
     }
     provider_advert_to_metadata(advert)
 }
-
 fn read_provider_advert_bytes(path: &Path) -> Result<Vec<u8>, String> {
     let maximum_u64 = u64::try_from(PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)
         .map_err(|_| "provider advert byte ceiling exceeds u64".to_owned())?;
@@ -2260,7 +2126,6 @@ fn read_provider_advert_bytes(path: &Path) -> Result<Vec<u8>, String> {
     }
     Ok(bytes)
 }
-
 fn metadata_for_provider_spec(
     spec: &ProviderSpec,
     plan: &CarBuildPlan,
@@ -2283,14 +2148,12 @@ fn metadata_for_provider_spec(
         }
         return Ok(meta);
     }
-
     if enforce_advert {
         return Err(format!(
             "multi-source fetch requires a --provider-advert for provider '{}' (or pass --allow-implicit-provider-metadata to reuse baked-in hints)",
             spec.name
         ));
     }
-
     let mut meta = ProviderMetadata::new();
     meta.provider_id = Some(spec.name.clone());
     meta.profile_aliases.push(spec.name.clone());
@@ -2299,7 +2162,6 @@ fn metadata_for_provider_spec(
     meta.max_streams = Some(spec.max_concurrent.get().min(u16::MAX as usize) as u16);
     Ok(meta)
 }
-
 fn default_range_capability(plan: &CarBuildPlan) -> RangeCapability {
     let max_span = plan.chunk_profile.max_size.min(u32::MAX as usize) as u32;
     let min_granularity = plan.chunk_profile.min_size.min(u32::MAX as usize) as u32;
@@ -2311,7 +2173,6 @@ fn default_range_capability(plan: &CarBuildPlan) -> RangeCapability {
         supports_merkle_proof: true,
     }
 }
-
 fn stream_budget_from_plan(plan: &CarBuildPlan, concurrency: NonZeroUsize) -> StreamBudget {
     let max_chunk = plan
         .chunks
@@ -2329,13 +2190,11 @@ fn stream_budget_from_plan(plan: &CarBuildPlan, concurrency: NonZeroUsize) -> St
         burst_bytes,
     }
 }
-
 type ScoreboardClassification = (
     HashSet<String>,
     HashMap<String, String>,
     Vec<(String, scoreboard::IneligibilityReason)>,
 );
-
 fn classify_scoreboard_aliases(
     entries: &[scoreboard::ScoreboardEntry],
     aliases: &[String],
@@ -2343,7 +2202,6 @@ fn classify_scoreboard_aliases(
     let mut eligible = HashSet::new();
     let mut lookup = HashMap::new();
     let mut ineligible = Vec::new();
-
     for (entry, alias) in entries.iter().zip(aliases.iter()) {
         match entry.eligibility {
             scoreboard::Eligibility::Eligible => {
@@ -2362,17 +2220,14 @@ fn classify_scoreboard_aliases(
             }
         }
     }
-
     (eligible, lookup, ineligible)
 }
-
 fn unix_time_now() -> Option<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
         .map(|duration| duration.as_secs())
 }
-
 struct ReportContext<'a> {
     outcome: &'a FetchOutcome,
     payload_len: u64,
@@ -2389,7 +2244,6 @@ struct ReportContext<'a> {
     telemetry_region: Option<&'a str>,
     transport_labels: PolicyLabelSummary,
 }
-
 fn build_report(context: ReportContext<'_>) -> Value {
     let ReportContext {
         outcome,
@@ -2434,7 +2288,6 @@ fn build_report(context: ReportContext<'_>) -> Value {
         .iter()
         .map(|report| report.successes as u64)
         .sum();
-
     root.insert("chunk_count".into(), Value::from(chunk_count));
     root.insert("provider_count".into(), Value::from(provider_count));
     root.insert(
@@ -2514,14 +2367,12 @@ fn build_report(context: ReportContext<'_>) -> Value {
         "provider_disabled_total".into(),
         Value::from(provider_disabled_total),
     );
-
     let provider_reports: Vec<Value> = outcome
         .provider_reports
         .iter()
         .map(provider_report_to_value)
         .collect();
     root.insert("provider_reports".into(), Value::Array(provider_reports));
-
     let chunk_receipts: Vec<Value> = outcome
         .chunk_receipts
         .iter()
@@ -2539,13 +2390,11 @@ fn build_report(context: ReportContext<'_>) -> Value {
         })
         .collect();
     root.insert("chunk_receipts".into(), Value::Array(chunk_receipts));
-
     let (car_stats_to_use, verification_opt) = match (car_stats, car_verification) {
         (Some(stats), verification) => (Some(stats), verification),
         (None, Some(verification)) => (Some(&verification.stats), Some(verification)),
         (None, None) => (None, None),
     };
-
     if let Some(stats) = car_stats_to_use {
         let mut car_obj = Map::new();
         car_obj.insert("size".into(), Value::from(stats.car_size));
@@ -2577,10 +2426,8 @@ fn build_report(context: ReportContext<'_>) -> Value {
         }
         root.insert("car_archive".into(), Value::Object(car_obj));
     }
-
     Value::Object(root)
 }
-
 fn provider_report_to_value(report: &ProviderReport) -> Value {
     let mut obj = Map::new();
     obj.insert(
@@ -2678,7 +2525,6 @@ fn provider_report_to_value(report: &ProviderReport) -> Value {
     }
     Value::Object(obj)
 }
-
 fn range_capability_metadata_to_value(range: &RangeCapability) -> Value {
     let mut obj = Map::new();
     obj.insert(
@@ -2703,7 +2549,6 @@ fn range_capability_metadata_to_value(range: &RangeCapability) -> Value {
     );
     Value::Object(obj)
 }
-
 fn stream_budget_metadata_to_value(budget: &StreamBudget) -> Value {
     let mut obj = Map::new();
     obj.insert(
@@ -2720,7 +2565,6 @@ fn stream_budget_metadata_to_value(budget: &StreamBudget) -> Value {
     );
     Value::Object(obj)
 }
-
 fn transport_hint_metadata_to_value(hint: &TransportHint) -> Value {
     let mut obj = Map::new();
     obj.insert("protocol".into(), Value::from(hint.protocol.clone()));
@@ -2728,7 +2572,6 @@ fn transport_hint_metadata_to_value(hint: &TransportHint) -> Value {
     obj.insert("priority".into(), Value::from(hint.priority as u64));
     Value::Object(obj)
 }
-
 fn to_hex(bytes: &[u8]) -> String {
     const TABLE: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -2791,7 +2634,6 @@ struct GatewayProviderSpec {
     stream_token_b64: String,
     privacy_events_url: Option<String>,
 }
-
 #[derive(Debug)]
 struct ProviderSpec {
     name: String,
@@ -2802,20 +2644,17 @@ struct ProviderSpec {
     weight_explicit: bool,
     metadata: Option<ProviderMetadata>,
 }
-
 struct AdvertMetadata {
     concurrency: Option<NonZeroUsize>,
     weight: Option<NonZeroU32>,
     supports_chunk_range: bool,
     provider_metadata: ProviderMetadata,
 }
-
 #[derive(Clone)]
 struct ProviderSource {
     name: String,
     path: PathBuf,
 }
-
 impl ProviderSource {
     fn new(name: &str, path: &Path) -> Result<Self, String> {
         if !path.exists() {
@@ -2831,7 +2670,6 @@ impl ProviderSource {
             path: path.to_path_buf(),
         })
     }
-
     fn fetch_chunk(&self, spec: &ChunkFetchSpec) -> Result<ChunkResponse, FetchIoError> {
         let mut file = fs::File::open(&self.path).map_err(FetchIoError::from)?;
         use std::io::{Read, Seek, SeekFrom};
@@ -2842,48 +2680,39 @@ impl ProviderSource {
         Ok(ChunkResponse::new(buf))
     }
 }
-
 #[derive(Debug)]
 struct FetchIoError(String);
-
 impl FetchIoError {
     fn new(msg: &str) -> Self {
         Self(msg.to_string())
     }
 }
-
 impl From<std::io::Error> for FetchIoError {
     fn from(err: std::io::Error) -> Self {
         Self(err.to_string())
     }
 }
-
 impl From<GatewayFetchError> for FetchIoError {
     fn from(err: GatewayFetchError) -> Self {
         Self(err.to_string())
     }
 }
-
 impl std::fmt::Display for FetchIoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.0)
     }
 }
-
 impl std::error::Error for FetchIoError {}
-
 #[derive(Debug)]
 struct CliScorePolicy {
     deny: HashSet<String>,
     boosts: HashMap<String, i64>,
 }
-
 impl CliScorePolicy {
     fn new(deny: HashSet<String>, boosts: HashMap<String, i64>) -> Self {
         Self { deny, boosts }
     }
 }
-
 impl ScorePolicy for CliScorePolicy {
     fn score(&self, ctx: ProviderScoreContext<'_>) -> ProviderScoreDecision {
         let provider_id = ctx.provider.id().as_str();
@@ -2900,7 +2729,6 @@ impl ScorePolicy for CliScorePolicy {
         }
     }
 }
-
 fn load_telemetry(source: Option<JsonSource>) -> Result<TelemetrySnapshot, String> {
     let Some(source) = source else {
         return Ok(TelemetrySnapshot::default());
@@ -2923,7 +2751,6 @@ fn load_telemetry(source: Option<JsonSource>) -> Result<TelemetrySnapshot, Strin
         from_slice(&bytes).map_err(|err| format!("failed to parse telemetry JSON: {err}"))?;
     telemetry_from_value(value)
 }
-
 fn telemetry_from_value(value: Value) -> Result<TelemetrySnapshot, String> {
     match value {
         Value::Null => Ok(TelemetrySnapshot::default()),
@@ -2945,7 +2772,6 @@ fn telemetry_from_value(value: Value) -> Result<TelemetrySnapshot, String> {
         )),
     }
 }
-
 fn telemetry_from_entries(entries: Vec<Value>) -> Result<TelemetrySnapshot, String> {
     let mut records = Vec::with_capacity(entries.len());
     for (idx, entry) in entries.into_iter().enumerate() {
@@ -2994,7 +2820,6 @@ fn telemetry_from_entries(entries: Vec<Value>) -> Result<TelemetrySnapshot, Stri
     }
     Ok(TelemetrySnapshot::from_records(records))
 }
-
 fn parse_f64(value: &Value, field: &str, idx: usize) -> Result<f64, String> {
     let parsed = match value {
         Value::Number(num) => num
@@ -3015,7 +2840,6 @@ fn parse_f64(value: &Value, field: &str, idx: usize) -> Result<f64, String> {
         ))
     }
 }
-
 fn parse_bool(value: &Value, field: &str, idx: usize) -> Result<bool, String> {
     match value {
         Value::Bool(flag) => Ok(*flag),
@@ -3024,7 +2848,6 @@ fn parse_bool(value: &Value, field: &str, idx: usize) -> Result<bool, String> {
         )),
     }
 }
-
 fn parse_u64(value: &Value, field: &str, idx: usize) -> Result<u64, String> {
     match value {
         Value::Number(num) => num.as_u64().ok_or_else(|| {
@@ -3040,7 +2863,6 @@ fn parse_u64(value: &Value, field: &str, idx: usize) -> Result<u64, String> {
         )),
     }
 }
-
 fn parse_bps(value: &Value, field: &'static str, idx: usize) -> Result<u16, String> {
     let parsed = parse_u64(value, field, idx)?;
     if parsed > 10_000 {
@@ -3085,7 +2907,6 @@ mod tests {
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
     }
-
     fn write_canonical_plan(path: &Path, plan: &CarBuildPlan) {
         fs::write(
             path,
@@ -3093,11 +2914,9 @@ mod tests {
         )
         .expect("write canonical plan");
     }
-
     fn xor_micro(value: u128) -> XorQuantity {
         XorQuantity::try_from_micro(value).expect("test micro-XOR amount is representable")
     }
-
     fn plan_chunks(payload: &[u8], plan: &CarBuildPlan) -> Vec<Vec<u8>> {
         plan.chunks
             .iter()
@@ -3108,20 +2927,16 @@ mod tests {
             })
             .collect()
     }
-
     #[test]
     fn write_binary_creates_parent_and_writes_all_bytes() {
         let (_temp, temp_path) = canonical_tempdir();
         let output_path = temp_path.join("nested").join("payload.bin");
-
         write_binary(&output_path, b"sorafs-fetch-output").expect("write binary output");
-
         assert_eq!(
             fs::read(&output_path).expect("read output"),
             b"sorafs-fetch-output"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn write_text_rejects_symlink_output() {
@@ -3130,16 +2945,13 @@ mod tests {
         fs::write(&target_path, b"unchanged\n").expect("write target");
         let output_path = temp_path.join("report.json");
         std::os::unix::fs::symlink(&target_path, &output_path).expect("create symlink");
-
         let err = write_text(&output_path, "changed\n").expect_err("reject symlink output");
-
         assert!(
             err.contains("must not be a symlink"),
             "unexpected error: {err}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged\n");
     }
-
     #[cfg(unix)]
     #[test]
     fn streaming_writer_rejects_symlink_parent() {
@@ -3149,12 +2961,10 @@ mod tests {
         let linked_dir = temp_path.join("linked");
         std::os::unix::fs::symlink(&real_dir, &linked_dir).expect("create symlink");
         let output_path = linked_dir.join("assembled.bin");
-
         let err = match StreamingWriter::create(&output_path) {
             Ok(_) => panic!("symlink parent should be rejected"),
             Err(err) => err,
         };
-
         assert!(
             err.contains("parent") && err.contains("must not be a symlink"),
             "unexpected error: {err}"
@@ -3164,7 +2974,6 @@ mod tests {
             "symlink parent should not receive output"
         );
     }
-
     #[cfg(unix)]
     #[test]
     fn write_car_archive_rejects_symlink_output() {
@@ -3176,19 +2985,16 @@ mod tests {
         fs::write(&target_path, b"unchanged").expect("write target");
         let car_path = temp_path.join("payload.car");
         std::os::unix::fs::symlink(&target_path, &car_path).expect("create symlink");
-
         let err = match write_car_archive(&plan, &chunks, &car_path) {
             Ok(_) => panic!("symlink output should be rejected"),
             Err(err) => err,
         };
-
         assert!(
             err.contains("must not be a symlink"),
             "unexpected error: {err}"
         );
         assert_eq!(fs::read(&target_path).expect("read target"), b"unchanged");
     }
-
     fn cargo_bin_path(bin_name: &str) -> PathBuf {
         let env_var = format!("CARGO_BIN_EXE_{bin_name}");
         if let Some(path) = env::var_os(env_var) {
@@ -3201,11 +3007,9 @@ mod tests {
         }
         path.join(format!("{bin_name}{}", env::consts::EXE_SUFFIX))
     }
-
     fn sorafs_fetch_cmd() -> AssertCommand {
         AssertCommand::new(cargo_bin_path("sorafs_fetch"))
     }
-
     fn range_capability_payload() -> Vec<u8> {
         let profile = ChunkProfile::DEFAULT;
         ProviderCapabilityRangeV1 {
@@ -3218,7 +3022,6 @@ mod tests {
         .to_bytes()
         .expect("encode range capability")
     }
-
     fn sample_stream_budget() -> StreamBudgetV1 {
         StreamBudgetV1 {
             max_in_flight: 4,
@@ -3226,7 +3029,6 @@ mod tests {
             burst_bytes: Some(2_500_000),
         }
     }
-
     fn signed_provider_advert(
         body: ProviderAdvertBodyV1,
         signing_key: &SigningKey,
@@ -3253,7 +3055,6 @@ mod tests {
         advert.signature.signature = signing_key.sign(&payload).to_bytes().to_vec();
         advert
     }
-
     fn default_profile_aliases() -> Vec<String> {
         chunker_registry::default_descriptor()
             .aliases
@@ -3261,7 +3062,6 @@ mod tests {
             .map(|alias| alias.to_string())
             .collect()
     }
-
     fn sample_endpoint() -> AdvertEndpoint {
         AdvertEndpoint {
             kind: EndpointKind::Torii,
@@ -3272,21 +3072,18 @@ mod tests {
             }],
         }
     }
-
     fn sample_rendezvous_topics(label: &str) -> Vec<RendezvousTopic> {
         vec![RendezvousTopic {
             topic: format!("sorafs.{label}.primary"),
             region: "global".into(),
         }]
     }
-
     fn sample_transport_hints() -> Vec<TransportHintV1> {
         vec![TransportHintV1 {
             protocol: TransportProtocol::ToriiHttpRange,
             priority: 0,
         }]
     }
-
     fn sample_gateway_manifest_envelope() -> HybridPayloadEnvelopeV1 {
         HybridPayloadEnvelopeV1 {
             version: HYBRID_PAYLOAD_ENVELOPE_VERSION_V1,
@@ -3299,12 +3096,10 @@ mod tests {
             ciphertext: vec![42; 16],
         }
     }
-
     fn encode_gateway_manifest_envelope(envelope: &HybridPayloadEnvelopeV1) -> String {
         let bytes = to_bytes(envelope).expect("encode envelope");
         base64::engine::general_purpose::STANDARD.encode(bytes)
     }
-
     #[test]
     fn provider_advert_reader_accepts_boundary_and_rejects_one_over() {
         let (_directory, root) = canonical_tempdir();
@@ -3317,7 +3112,6 @@ mod tests {
                 .len(),
             PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1
         );
-
         fs::write(
             &path,
             vec![0xA5; PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1 + 1],
@@ -3325,7 +3119,6 @@ mod tests {
         .expect("write one-over provider advert");
         assert!(read_provider_advert_bytes(&path).is_err());
     }
-
     #[test]
     fn verify_provider_advert_signature_rejects_all_zero_signature_material() {
         let descriptor = chunker_registry::default_descriptor();
@@ -3370,17 +3163,13 @@ mod tests {
             false,
         );
         advert.signature.signature.fill(0);
-
         let err = verify_provider_advert_signature(&advert)
             .expect_err("all-zero signature material must be rejected");
-
         assert!(err.contains("all zero"), "unexpected error: {err}");
     }
-
     fn sample_gateway_manifest_envelope_b64() -> String {
         encode_gateway_manifest_envelope(&sample_gateway_manifest_envelope())
     }
-
     #[test]
     fn runtime_provider_counts_reports_direct_and_gateway_lengths() {
         let mut registry = HashMap::new();
@@ -3393,34 +3182,26 @@ mod tests {
             ),
         );
         registry.insert("gw-beta".to_string(), ProviderRuntime::Gateway);
-
         let (provider_count, gateway_count) = runtime_provider_counts(&registry);
-
         assert_eq!(provider_count, 1);
         assert_eq!(gateway_count, 1);
     }
-
     #[test]
     fn runtime_provider_counts_handles_gateway_only_runs() {
         let mut registry = HashMap::new();
         registry.insert("gw-alpha".to_string(), ProviderRuntime::Gateway);
-
         let (provider_count, gateway_count) = runtime_provider_counts(&registry);
-
         assert_eq!(provider_count, 0);
         assert_eq!(gateway_count, 1);
     }
-
     #[test]
     fn provider_mix_labels_gateway_only_runs() {
         assert_eq!(provider_mix_label(0, 2), "gateway-only");
     }
-
     #[test]
     fn provider_mix_labels_mixed_runs() {
         assert_eq!(provider_mix_label(2, 2), "mixed");
     }
-
     #[test]
     fn report_records_manifest_identifiers_when_present() {
         let provider = Arc::new(FetchProvider::new("did:sora:test"));
@@ -3490,7 +3271,6 @@ mod tests {
             Some("direct-only")
         );
     }
-
     #[test]
     fn report_omits_manifest_identifiers_when_absent() {
         let provider = Arc::new(FetchProvider::new("did:sora:test"));
@@ -3551,7 +3331,6 @@ mod tests {
                 .is_none_or(Value::is_null)
         );
     }
-
     #[test]
     fn report_records_telemetry_label_when_present() {
         let provider = Arc::new(FetchProvider::new("did:sora:test"));
@@ -3596,7 +3375,6 @@ mod tests {
             Some("otel::ci")
         );
     }
-
     #[test]
     fn report_records_telemetry_region_when_present() {
         let provider = Arc::new(FetchProvider::new("did:sora:test"));
@@ -3641,7 +3419,6 @@ mod tests {
             Some("regulated-eu")
         );
     }
-
     #[test]
     fn scoreboard_metadata_records_manifest_envelope_presence() {
         let provider_count = 0;
@@ -3690,7 +3467,6 @@ mod tests {
             Some("c0ffee")
         );
     }
-
     #[test]
     fn scoreboard_metadata_marks_missing_manifest_envelope() {
         let provider_count = 0;
@@ -3725,7 +3501,6 @@ mod tests {
         assert!(map.get("gateway_manifest_id").is_none_or(Value::is_null));
         assert!(map.get("gateway_manifest_cid").is_none_or(Value::is_null));
     }
-
     #[test]
     fn scoreboard_metadata_records_transport_policy_labels() {
         let metadata = build_scoreboard_metadata(ScoreboardMetadataOptions {
@@ -3763,7 +3538,6 @@ mod tests {
             map.get("transport_policy_override_label")
                 .is_none_or(Value::is_null)
         );
-
         let metadata = build_scoreboard_metadata(ScoreboardMetadataOptions {
             scoreboard_mode: true,
             allow_implicit_metadata: false,
@@ -3801,7 +3575,6 @@ mod tests {
             Some("direct-only")
         );
     }
-
     #[test]
     fn scoreboard_metadata_records_anonymity_policy_labels() {
         let metadata = build_scoreboard_metadata(ScoreboardMetadataOptions {
@@ -3839,7 +3612,6 @@ mod tests {
             map.get("anonymity_policy_override_label")
                 .is_none_or(Value::is_null)
         );
-
         let metadata = build_scoreboard_metadata(ScoreboardMetadataOptions {
             scoreboard_mode: true,
             allow_implicit_metadata: false,
@@ -3877,7 +3649,6 @@ mod tests {
             Some("anon-strict-pq")
         );
     }
-
     #[test]
     fn gateway_manifest_flag_requires_gateway_providers() {
         let envelope = sample_gateway_manifest_envelope_b64();
@@ -3887,7 +3658,6 @@ mod tests {
         );
         assert!(gateway_manifest_present(&Some(envelope), true));
     }
-
     #[test]
     fn gateway_manifest_flag_rejects_unknown_suite() {
         let mut envelope = sample_gateway_manifest_envelope();
@@ -3895,19 +3665,16 @@ mod tests {
         let encoded = encode_gateway_manifest_envelope(&envelope);
         assert!(!gateway_manifest_present(&Some(encoded), true));
     }
-
     #[test]
     fn gateway_manifest_flag_ignores_blank_values() {
         assert!(!gateway_manifest_present(&Some("   ".to_string()), true));
         assert!(!gateway_manifest_present(&None, true));
     }
-
     #[test]
     fn gateway_manifest_flag_rejects_non_norito_payloads() {
         let bogus = base64::engine::general_purpose::STANDARD.encode(b"not-an-envelope");
         assert!(!gateway_manifest_present(&Some(bogus), true));
     }
-
     #[test]
     fn gateway_manifest_flag_rejects_invalid_base64() {
         assert!(!gateway_manifest_present(
@@ -3915,7 +3682,6 @@ mod tests {
             true
         ));
     }
-
     #[test]
     fn classify_scoreboard_aliases_maps_provider_ids() {
         let eligible_entry = scoreboard::ScoreboardEntry {
@@ -3933,10 +3699,8 @@ mod tests {
             ),
         };
         let aliases = vec!["alpha".to_string(), "beta".to_string()];
-
         let (eligible, lookup, ineligible) =
             classify_scoreboard_aliases(&[eligible_entry, ineligible_entry], &aliases);
-
         assert!(eligible.contains("alpha"));
         assert!(!eligible.contains("beta"));
         assert_eq!(lookup.get("alpha").map(String::as_str), Some("alpha"));
@@ -3952,7 +3716,6 @@ mod tests {
             scoreboard::IneligibilityReason::TelemetryPenalty
         );
     }
-
     fn write_payload(path: &Path, size: usize) -> Vec<u8> {
         let mut buf = vec![0u8; size];
         for (idx, byte) in buf.iter_mut().enumerate() {
@@ -3961,7 +3724,6 @@ mod tests {
         fs::write(path, &buf).expect("write payload");
         buf
     }
-
     #[test]
     fn parse_provider_with_concurrency_and_weight() {
         let spec = parse_provider_spec("alpha=/tmp/payload#4@3").expect("parse");
@@ -3972,7 +3734,6 @@ mod tests {
         assert!(spec.concurrency_explicit);
         assert!(spec.weight_explicit);
     }
-
     #[test]
     fn parse_provider_with_weight_only() {
         let spec = parse_provider_spec("beta=/data/payload@5").expect("parse");
@@ -3981,7 +3742,6 @@ mod tests {
         assert!(!spec.concurrency_explicit);
         assert!(spec.weight_explicit);
     }
-
     #[test]
     fn parse_provider_with_concurrency_only() {
         let spec = parse_provider_spec("gamma=/srv/payload#6").expect("parse");
@@ -3990,7 +3750,6 @@ mod tests {
         assert!(spec.concurrency_explicit);
         assert!(!spec.weight_explicit);
     }
-
     #[test]
     fn parse_provider_defaults_when_flags_omitted() {
         let spec = parse_provider_spec("delta=/srv/payload").expect("parse");
@@ -3999,7 +3758,6 @@ mod tests {
         assert!(!spec.concurrency_explicit);
         assert!(!spec.weight_explicit);
     }
-
     #[test]
     fn parse_provider_rejects_noncanonical_concurrency() {
         for value in [
@@ -4017,7 +3775,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_provider_rejects_noncanonical_weight() {
         for value in [
@@ -4035,7 +3792,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_usize_rejects_noncanonical_limit_tokens() {
         assert_eq!(parse_usize("1", "--max-peers").expect("canonical one"), 1);
@@ -4043,7 +3799,6 @@ mod tests {
             parse_usize("42", "--max-parallel").expect("canonical value"),
             42
         );
-
         for value in [
             "0",
             "00",
@@ -4060,7 +3815,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_u64_value_rejects_noncanonical_unsigned_tokens() {
         assert_eq!(
@@ -4071,7 +3825,6 @@ mod tests {
             parse_u64_value("42", "--expect-payload-len").expect("canonical length"),
             42
         );
-
         for value in ["", "00", "01", "+1", "1 ", " 1", "18446744073709551616"] {
             let err =
                 parse_u64_value(value, "--assume-now").expect_err("invalid u64 token must fail");
@@ -4081,7 +3834,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn parse_boost_provider_rejects_noncanonical_delta() {
         assert_eq!(
@@ -4096,7 +3848,6 @@ mod tests {
             parse_boost_provider("alpha:7").expect("canonical positive"),
             ("alpha".to_string(), 7)
         );
-
         for value in [
             "alpha",
             ":1",
@@ -4113,7 +3864,6 @@ mod tests {
             parse_boost_provider(value).expect_err("invalid boost provider must fail");
         }
     }
-
     #[test]
     fn telemetry_json_rejects_noncanonical_unsigned_string_fields() {
         let mut last_updated = Map::new();
@@ -4125,7 +3875,6 @@ mod tests {
             err.contains("last_updated_unix") && err.contains("canonical unsigned"),
             "unexpected timestamp error: {err}"
         );
-
         let mut reputation = Map::new();
         reputation.insert("provider_id".into(), Value::String("provider-a".into()));
         reputation.insert("reputation_score_bps".into(), Value::String("+9200".into()));
@@ -4136,7 +3885,6 @@ mod tests {
             "unexpected reputation error: {err}"
         );
     }
-
     #[test]
     fn telemetry_json_rejects_nonfinite_metric_strings() {
         for field in [
@@ -4159,18 +3907,15 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn fetch_cli_applies_provider_advert() {
         let (_tempdir, temp_path) = canonical_tempdir();
         let payload_path = temp_path.join("payload.bin");
         let payload = write_payload(&payload_path, 8 * 1024);
-
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_path = temp_path.join("plan.json");
         write_canonical_plan(&plan_path, &plan);
-
         let advert_path = temp_path.join("provider.advert");
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(
@@ -4226,9 +3971,7 @@ mod tests {
         let advert = signed_provider_advert(advert_body, &signing_key, now, now + 3_600, false);
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
-
         let output_path = temp_path.join("assembled.bin");
-
         let assert = sorafs_fetch_cmd()
             .arg(format!("--plan={}", plan_path.display()))
             .arg(format!("--provider=alpha={}", payload_path.display()))
@@ -4236,7 +3979,6 @@ mod tests {
             .arg(format!("--output={}", output_path.display()))
             .assert()
             .success();
-
         let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8 stdout");
         let report: Value = norito::json::from_str(&stdout).expect("parse report");
         let provider_reports = report
@@ -4337,22 +4079,18 @@ mod tests {
             Some("torii_http_range")
         );
         assert_eq!(hint.get("priority").and_then(Value::as_u64), Some(0));
-
         let assembled = fs::read(&output_path).expect("read payload");
         assert_eq!(assembled, payload);
     }
-
     #[test]
     fn fetch_cli_persists_scoreboard() {
         let (_tempdir, temp_path) = canonical_tempdir();
         let payload_path = temp_path.join("payload.bin");
         let payload = write_payload(&payload_path, 8 * 1024);
-
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_path = temp_path.join("plan.json");
         write_canonical_plan(&plan_path, &plan);
-
         let advert_path = temp_path.join("provider.advert");
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(
@@ -4400,7 +4138,6 @@ mod tests {
         let advert = signed_provider_advert(advert_body, &signing_key, now, now + 3_600, false);
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
-
         let telemetry_path = temp_path.join("telemetry.json");
         let mut telemetry_entry = Map::new();
         telemetry_entry.insert("provider_id".into(), Value::String(to_hex(&provider_id)));
@@ -4417,10 +4154,8 @@ mod tests {
             (norito::json::to_string_pretty(&telemetry).expect("telemetry json") + "\n").as_bytes(),
         )
         .expect("write telemetry");
-
         let scoreboard_path = temp_path.join("scoreboard.json");
         let output_path = temp_path.join("assembled.bin");
-
         sorafs_fetch_cmd()
             .arg(format!("--plan={}", plan_path.display()))
             .arg(format!("--provider=alpha={}", payload_path.display()))
@@ -4431,7 +4166,6 @@ mod tests {
             .arg("--use-scoreboard")
             .assert()
             .success();
-
         let scoreboard_contents = fs::read_to_string(&scoreboard_path).expect("read scoreboard");
         let scoreboard_value: Value =
             norito::json::from_str(&scoreboard_contents).expect("parse scoreboard");
@@ -4448,11 +4182,9 @@ mod tests {
                 .expect("provider id"),
             "alpha"
         );
-
         let assembled = fs::read(&output_path).expect("read assembled payload");
         assert_eq!(assembled, payload);
     }
-
     #[test]
     fn telemetry_json_rejects_out_of_range_reputation_score() {
         let mut telemetry_entry = Map::new();
@@ -4460,13 +4192,11 @@ mod tests {
         telemetry_entry.insert("reputation_score_bps".into(), Value::from(10_001_u64));
         let err = telemetry_from_value(Value::Array(vec![Value::Object(telemetry_entry)]))
             .expect_err("out-of-range reputation score should fail");
-
         assert!(
             err.contains("reputation_score_bps"),
             "error should name the rejected field: {err}"
         );
     }
-
     #[test]
     fn fetch_cli_score_policy_filters_providers() {
         let (_tempdir, temp_path) = canonical_tempdir();
@@ -4474,12 +4204,10 @@ mod tests {
         let payload = write_payload(&payload_path_alpha, 8 * 1024);
         let payload_path_beta = temp_path.join("beta.bin");
         fs::write(&payload_path_beta, &payload).expect("write beta payload");
-
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_path = temp_path.join("plan.json");
         write_canonical_plan(&plan_path, &plan);
-
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(
             "{}.{}@{}",
@@ -4487,7 +4215,6 @@ mod tests {
         );
         let profile_aliases = default_profile_aliases();
         let now = unix_time_now().unwrap_or(1_700_000_000);
-
         let advert_alpha = ProviderAdvertBodyV1 {
             provider_id: [0x66; 32],
             profile_id: profile_handle.clone(),
@@ -4556,7 +4283,6 @@ mod tests {
             stream_budget: Some(sample_stream_budget()),
             transport_hints: Some(sample_transport_hints()),
         };
-
         let advert_path_alpha = temp_path.join("alpha.advert");
         let advert_path_beta = temp_path.join("beta.advert");
         for (body, path, key_byte) in [
@@ -4568,10 +4294,8 @@ mod tests {
             let advert_bytes = to_bytes(&advert).expect("serialize advert");
             fs::write(path, advert_bytes).expect("write advert");
         }
-
         let metrics_path = temp_path.join("providers.json");
         let output_path = temp_path.join("assembled.bin");
-
         sorafs_fetch_cmd()
             .arg(format!("--plan={}", plan_path.display()))
             .arg(format!("--provider=alpha={}", payload_path_alpha.display()))
@@ -4589,7 +4313,6 @@ mod tests {
             .arg("--deny-provider=alpha")
             .assert()
             .success();
-
         let metrics = fs::read_to_string(&metrics_path).expect("read provider metrics");
         let metrics_value: Value = norito::json::from_str(&metrics).expect("parse metrics");
         let entries = metrics_value.as_array().expect("provider metrics array");
@@ -4612,7 +4335,6 @@ mod tests {
             alpha_entry.get("disabled").and_then(Value::as_bool),
             Some(false)
         );
-
         let beta_entry = entries
             .iter()
             .find(|entry| {
@@ -4628,11 +4350,9 @@ mod tests {
             .and_then(Value::as_u64)
             .expect("beta successes");
         assert!(beta_successes > 0);
-
         let assembled = fs::read(&output_path).expect("read assembled payload");
         assert_eq!(assembled, payload);
     }
-
     #[test]
     fn fetch_cli_rejects_provider_without_range_capability() {
         let (_tempdir, temp_path) = canonical_tempdir();
@@ -4642,7 +4362,6 @@ mod tests {
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_path = temp_path.join("plan.json");
         write_canonical_plan(&plan_path, &plan);
-
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(
             "{}.{}@{}",
@@ -4689,24 +4408,20 @@ mod tests {
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         let advert_path = temp_path.join("provider.advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
-
         let assert = sorafs_fetch_cmd()
             .arg(format!("--plan={}", plan_path.display()))
             .arg(format!("--provider=alpha={}", payload_path.display()))
             .arg(format!("--provider-advert=alpha={}", advert_path.display()))
             .assert()
             .failure();
-
         let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8 stderr");
         assert!(stderr.contains("chunk_range_fetch capability"));
     }
-
     #[test]
     fn fetch_cli_verifies_car_when_manifest_available() {
         let (_tempdir, temp_path) = canonical_tempdir();
         let payload_path = temp_path.join("payload.bin");
         let payload = write_payload(&payload_path, 8 * 1024);
-
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let mut car_bytes = Vec::new();
@@ -4714,7 +4429,6 @@ mod tests {
             .expect("writer")
             .write_to(&mut car_bytes)
             .expect("write car");
-
         let fetch_specs = plan.try_chunk_fetch_specs().expect("valid CAR plan");
         let fetch_array: Vec<Value> = fetch_specs
             .iter()
@@ -4727,7 +4441,6 @@ mod tests {
                 Value::Object(obj)
             })
             .collect();
-
         let mut car_digest = [0u8; 32];
         car_digest.copy_from_slice(stats.car_archive_digest.as_bytes());
         let manifest = ManifestBuilder::new()
@@ -4747,10 +4460,8 @@ mod tests {
             .governance(GovernanceProofs::default())
             .build()
             .expect("manifest");
-
         let manifest_bytes = to_bytes(&manifest).expect("manifest bytes");
         let manifest_hex = to_hex(&manifest_bytes);
-
         let mut manifest_obj = Map::new();
         manifest_obj.insert("version".into(), Value::from(1_u64));
         manifest_obj.insert("manifest_hex".into(), Value::from(manifest_hex));
@@ -4759,7 +4470,6 @@ mod tests {
             Value::from(to_hex(stats.car_archive_digest.as_bytes())),
         );
         manifest_obj.insert("car_size".into(), Value::from(stats.car_size));
-
         let mut report_obj = Map::new();
         report_obj.insert(
             "schema".into(),
@@ -4772,16 +4482,13 @@ mod tests {
         );
         report_obj.insert("payload_len".into(), Value::from(payload.len() as u64));
         report_obj.insert("manifest".into(), Value::Object(manifest_obj));
-
         let manifest_path = temp_path.join("report.json");
         fs::write(
             &manifest_path,
             (to_string_pretty(&Value::Object(report_obj)).expect("json") + "\n").as_bytes(),
         )
         .expect("write manifest report");
-
         let car_path = temp_path.join("payload.car");
-
         let assert = sorafs_fetch_cmd()
             .arg(format!("--manifest-report={}", manifest_path.display()))
             .arg(format!("--provider=alpha={}", payload_path.display()))
@@ -4789,7 +4496,6 @@ mod tests {
             .arg(format!("--car-out={}", car_path.display()))
             .assert()
             .success();
-
         let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8 stdout");
         let report: Value = norito::json::from_str(&stdout).expect("parse report");
         let car_archive = report
@@ -4808,13 +4514,11 @@ mod tests {
                 > 0
         );
     }
-
     #[test]
     fn fetch_cli_rejects_corrupted_payload_when_manifest_provided() {
         let (_tempdir, temp_path) = canonical_tempdir();
         let payload_path = temp_path.join("payload.bin");
         let payload = write_payload(&payload_path, 4 * 1024);
-
         let plan =
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let mut car_bytes = Vec::new();
@@ -4822,7 +4526,6 @@ mod tests {
             .expect("writer")
             .write_to(&mut car_bytes)
             .expect("write car");
-
         let fetch_specs = plan.try_chunk_fetch_specs().expect("valid CAR plan");
         let fetch_array: Vec<Value> = fetch_specs
             .iter()
@@ -4835,7 +4538,6 @@ mod tests {
                 Value::Object(obj)
             })
             .collect();
-
         let mut car_digest = [0u8; 32];
         car_digest.copy_from_slice(stats.car_archive_digest.as_bytes());
         let manifest = ManifestBuilder::new()
@@ -4855,7 +4557,6 @@ mod tests {
             .governance(GovernanceProofs::default())
             .build()
             .expect("manifest");
-
         let manifest_bytes = to_bytes(&manifest).expect("manifest bytes");
         let mut manifest_obj = Map::new();
         manifest_obj.insert("version".into(), Value::from(1_u64));
@@ -4865,7 +4566,6 @@ mod tests {
             Value::from(to_hex(stats.car_archive_digest.as_bytes())),
         );
         manifest_obj.insert("car_size".into(), Value::from(stats.car_size));
-
         let mut report_obj = Map::new();
         report_obj.insert(
             "schema".into(),
@@ -4878,26 +4578,22 @@ mod tests {
         );
         report_obj.insert("payload_len".into(), Value::from(payload.len() as u64));
         report_obj.insert("manifest".into(), Value::Object(manifest_obj));
-
         let manifest_path = temp_path.join("report.json");
         fs::write(
             &manifest_path,
             (to_string_pretty(&Value::Object(report_obj)).expect("json") + "\n").as_bytes(),
         )
         .expect("write manifest report");
-
         // Corrupt the provider payload after the plan/manifest have been generated.
         let mut corrupted = fs::read(&payload_path).expect("read payload");
         corrupted[0] ^= 0xFF;
         fs::write(&payload_path, &corrupted).expect("rewrite payload");
-
         let assert = sorafs_fetch_cmd()
             .arg(format!("--manifest-report={}", manifest_path.display()))
             .arg(format!("--provider=alpha={}", payload_path.display()))
             .arg("--allow-implicit-provider-metadata")
             .assert()
             .failure();
-
         let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8 stderr");
         let verification_failed = stderr.contains("CAR verification failed")
             || stderr.contains("chunk digest mismatch")
@@ -4908,7 +4604,6 @@ mod tests {
             "stderr did not include expected verification failure, got: {stderr}"
         );
     }
-
     #[test]
     fn provider_advert_concurrency_respects_stream_budget() {
         let descriptor = chunker_registry::default_descriptor();
@@ -4970,7 +4665,6 @@ mod tests {
             signature_strict: true,
             allow_unknown_capabilities: false,
         };
-
         let metadata = provider_advert_to_metadata(advert).expect("metadata");
         assert!(metadata.supports_chunk_range);
         let concurrency = metadata.concurrency.expect("concurrency").get();
@@ -4982,7 +4676,6 @@ mod tests {
         assert_eq!(budget.max_in_flight, sample_stream_budget().max_in_flight);
         assert_eq!(metadata.provider_metadata.transport_hints.len(), 1);
     }
-
     #[test]
     fn fetch_cli_rejects_unknown_capabilities_without_allow_flag() {
         let (_tempdir, temp_path) = canonical_tempdir();
@@ -4992,7 +4685,6 @@ mod tests {
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_path = temp_path.join("plan.json");
         write_canonical_plan(&plan_path, &plan);
-
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(
             "{}.{}@{}",
@@ -5049,18 +4741,15 @@ mod tests {
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         let advert_path = temp_path.join("provider.advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
-
         let assert = sorafs_fetch_cmd()
             .arg(format!("--plan={}", plan_path.display()))
             .arg(format!("--provider=alpha={}", payload_path.display()))
             .arg(format!("--provider-advert=alpha={}", advert_path.display()))
             .assert()
             .failure();
-
         let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8 stderr");
         assert!(stderr.contains("unsupported capabilities"));
     }
-
     #[test]
     fn fetch_cli_ignores_unknown_capabilities_when_allowed() {
         let (_tempdir, temp_path) = canonical_tempdir();
@@ -5070,7 +4759,6 @@ mod tests {
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_path = temp_path.join("plan.json");
         write_canonical_plan(&plan_path, &plan);
-
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(
             "{}.{}@{}",
@@ -5127,17 +4815,14 @@ mod tests {
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         let advert_path = temp_path.join("provider.advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
-
         let assert = sorafs_fetch_cmd()
             .arg(format!("--plan={}", plan_path.display()))
             .arg(format!("--provider=alpha={}", payload_path.display()))
             .arg(format!("--provider-advert=alpha={}", advert_path.display()))
             .assert()
             .success();
-
         let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8 stderr");
         assert!(stderr.contains("advertised unknown capabilities"));
-
         let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8 stdout");
         let report: Value = norito::json::from_str(&stdout).expect("parse report");
         let provider_reports = report
@@ -5158,7 +4843,6 @@ mod tests {
         assert!(capability_names.contains(&"torii_gateway"));
         assert!(!capability_names.contains(&"vendor_reserved"));
     }
-
     #[test]
     fn fetch_cli_exposes_soranet_pq_labels() {
         let (_tempdir, temp_path) = canonical_tempdir();
@@ -5168,7 +4852,6 @@ mod tests {
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_path = temp_path.join("plan.json");
         write_canonical_plan(&plan_path, &plan);
-
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(
             "{}.{}@{}",
@@ -5233,14 +4916,12 @@ mod tests {
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         let advert_path = temp_path.join("provider.advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
-
         let assert = sorafs_fetch_cmd()
             .arg(format!("--plan={}", plan_path.display()))
             .arg(format!("--provider=alpha={}", payload_path.display()))
             .arg(format!("--provider-advert=alpha={}", advert_path.display()))
             .assert()
             .success();
-
         let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("utf8 stdout");
         let report: Value = norito::json::from_str(&stdout).expect("parse report");
         let provider_reports = report
@@ -5275,7 +4956,6 @@ mod tests {
             "strict label should be absent, got {labels:?}"
         );
     }
-
     #[test]
     fn fetch_cli_rejects_stale_provider_advert() {
         let (_tempdir, temp_path) = canonical_tempdir();
@@ -5285,7 +4965,6 @@ mod tests {
             CarBuildPlan::single_file_with_profile(&payload, ChunkProfile::DEFAULT).expect("plan");
         let plan_path = temp_path.join("plan.json");
         write_canonical_plan(&plan_path, &plan);
-
         let descriptor = chunker_registry::default_descriptor();
         let profile_handle = format!(
             "{}.{}@{}",
@@ -5345,18 +5024,15 @@ mod tests {
         let advert_bytes = to_bytes(&advert).expect("serialize advert");
         let advert_path = temp_path.join("provider.advert");
         fs::write(&advert_path, advert_bytes).expect("write advert");
-
         let assert = sorafs_fetch_cmd()
             .arg(format!("--plan={}", plan_path.display()))
             .arg(format!("--provider=alpha={}", payload_path.display()))
             .arg(format!("--provider-advert=alpha={}", advert_path.display()))
             .assert()
             .failure();
-
         let stderr = String::from_utf8(assert.get_output().stderr.clone()).expect("utf8 stderr");
         assert!(stderr.contains("is stale"));
     }
-
     #[test]
     fn ensure_range_capability_detects_max_span_violation() {
         let payload: Vec<u8> = (0..=255u8).cycle().take(16 * 1024).collect();
@@ -5368,7 +5044,6 @@ mod tests {
             .map(|chunk| chunk.length)
             .expect("chunk length present");
         assert!(chunk_len > 1);
-
         let mut metadata = ProviderMetadata::new();
         metadata.range_capability = Some(RangeCapability {
             max_chunk_span: chunk_len - 1,
@@ -5377,7 +5052,6 @@ mod tests {
             requires_alignment: false,
             supports_merkle_proof: false,
         });
-
         let err = ensure_range_capability_satisfies_plan(&plan, "alpha", &metadata)
             .expect_err("should fail");
         assert!(
@@ -5385,7 +5059,6 @@ mod tests {
             "error should mention max_chunk_span, got {err}"
         );
     }
-
     #[test]
     fn ensure_range_capability_detects_alignment_violation() {
         let payload: Vec<u8> = (0..=255u8).cycle().take(32 * 1024).collect();
@@ -5396,7 +5069,6 @@ mod tests {
             .first()
             .map(|chunk| chunk.length)
             .expect("chunk length present");
-
         let mut metadata = ProviderMetadata::new();
         metadata.range_capability = Some(RangeCapability {
             max_chunk_span: chunk_len.saturating_mul(4),
@@ -5405,7 +5077,6 @@ mod tests {
             requires_alignment: true,
             supports_merkle_proof: false,
         });
-
         let err = ensure_range_capability_satisfies_plan(&plan, "beta", &metadata)
             .expect_err("should fail");
         assert!(

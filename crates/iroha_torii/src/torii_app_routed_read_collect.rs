@@ -1,6 +1,22 @@
 // Bounded collection and decode helpers for application routed reads.
 
 #[cfg(feature = "app_api")]
+#[derive(Debug)]
+struct ToriiFanoutJsonPayloads {
+    payloads: Vec<Value>,
+    diagnostics: ToriiFanoutDiagnostics,
+    budget: ToriiRoutedReadMemoryBudget,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug)]
+struct ToriiFanoutRoutedJsonPayloads {
+    payloads: Vec<(RoutingDecision, Value)>,
+    diagnostics: ToriiFanoutDiagnostics,
+    budget: ToriiRoutedReadMemoryBudget,
+}
+
+#[cfg(feature = "app_api")]
 async fn collect_torii_singleton_json_payloads<F, Fut>(
     routes: &[RoutingDecision],
     working_set_bytes: usize,

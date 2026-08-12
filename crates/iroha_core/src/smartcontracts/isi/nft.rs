@@ -758,7 +758,7 @@ pub mod query {
 
     fn nft_json_value<'a>(cache: &'a mut Option<Value>, nft: &Nft) -> Option<&'a Value> {
         if cache.is_none() {
-            *cache = super::query::ordinary_predicate_json_value(nft);
+            *cache = crate::smartcontracts::isi::query::ordinary_predicate_json_value(nft);
         }
         cache.as_ref()
     }
@@ -837,9 +837,9 @@ pub mod query {
         ) -> Result<impl Iterator<Item = Nft>, Error> {
             let world = state_ro.world();
             let predicate_view = NftPredicateView::from_predicate(&filter);
-            let predicate_json = filter
-                .json_payload()
-                .and_then(iroha_data_model::query::json::predicate_json_candidate_plan_for_execution);
+            let predicate_json = filter.json_payload().and_then(
+                iroha_data_model::query::json::predicate_json_candidate_plan_for_execution,
+            );
 
             let iter: Box<dyn Iterator<Item = Nft> + '_> = match predicate_view.plan() {
                 NftQueryPlan::Ids(ids) => {

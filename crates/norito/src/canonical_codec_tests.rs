@@ -113,7 +113,7 @@ mod canonical_codec_tests {
         let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
 
         assert_eq!(LEGACY_ALLOCATION_BUDGET, 1_501_730);
-        assert!(LEGACY_ALLOCATION_BUDGET < FIRST_REJECTED_ALLOCATION_BYTES);
+        const { assert!(LEGACY_ALLOCATION_BUDGET < FIRST_REJECTED_ALLOCATION_BYTES) };
         assert_eq!(allocation_budget, PAYLOAD_BYTES * 64 + 64 * 1024);
         assert!(allocation_budget >= FIRST_REJECTED_ALLOCATION_BYTES);
     }
@@ -131,7 +131,7 @@ mod canonical_codec_tests {
         let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
 
         assert_eq!(LEGACY_ALLOCATION_BUDGET, 1_543_971);
-        assert!(LEGACY_ALLOCATION_BUDGET < FIRST_REJECTED_ALLOCATION_BYTES);
+        const { assert!(LEGACY_ALLOCATION_BUDGET < FIRST_REJECTED_ALLOCATION_BYTES) };
         assert_eq!(allocation_budget, PAYLOAD_BYTES * 64 + 64 * 1024);
         assert_eq!(allocation_budget, 2_768_960);
         assert!(allocation_budget >= FIRST_REJECTED_ALLOCATION_BYTES);
@@ -150,7 +150,7 @@ mod canonical_codec_tests {
         let allocation_budget = canonical_decode_limits(PAYLOAD_BYTES).max_total_allocated_bytes();
 
         assert_eq!(LEGACY_ALLOCATION_BUDGET, 1_573_126);
-        assert!(LEGACY_ALLOCATION_BUDGET < FIRST_REJECTED_ALLOCATION_BYTES);
+        const { assert!(LEGACY_ALLOCATION_BUDGET < FIRST_REJECTED_ALLOCATION_BYTES) };
         assert_eq!(allocation_budget, PAYLOAD_BYTES * 64 + 64 * 1024);
         assert_eq!(allocation_budget, 2_822_272);
         assert!(allocation_budget >= FIRST_REJECTED_ALLOCATION_BYTES);

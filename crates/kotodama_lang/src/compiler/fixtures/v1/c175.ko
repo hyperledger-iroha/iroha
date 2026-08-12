@@ -1,0 +1,9 @@
+
+seiyaku CompilerFixture {
+
+        fn helper() {}
+
+        #[test]
+        fn smoke() {}
+
+}

@@ -1,0 +1,26 @@
+
+seiyaku BoundedHints {
+  state StateMap<Name, int> Names;
+  state StateMap<quantity, int> Quantities;
+  state StateMap<int, int> Empty;
+
+  view fn scan() -> int {
+    var int total = 0;
+    for (name1, value1) in Names.take(2) {
+      total = total + value1;
+    }
+    for (name2, value2) in Names.take(5) {
+      total = total + value2;
+    }
+    for (name3, value3) in Names.range(3, 7) {
+      total = total + value3;
+    }
+    for (quantity_key, quantity_value) in Quantities.range(0, 1) {
+      total = total + quantity_value;
+    }
+    for (empty_key, empty_value) in Empty.take(0) {
+      total = total + empty_value;
+    }
+    return total;
+  }
+}

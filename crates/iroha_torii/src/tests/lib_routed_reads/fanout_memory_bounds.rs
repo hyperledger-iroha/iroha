@@ -46,10 +46,11 @@ fn fanout_route_scan_rejects_window_above_fetch_budget() {
         crate::routing::app_query_limits().max_fetch_size,
     );
 
-    assert_invalid_fanout_pagination(
-        fanout_route_scan_query_request(&request)
-            .expect_err("offset plus limit above the fetch budget must fail closed"),
-    );
+    let response = match fanout_route_scan_query_request(&request) {
+        Ok(_) => panic!("offset plus limit above the fetch budget must fail closed"),
+        Err(response) => response,
+    };
+    assert_invalid_fanout_pagination(response);
 }
 
 #[test]
@@ -63,10 +64,11 @@ fn fanout_route_scan_without_limit_rejects_offset_above_fetch_budget() {
         crate::routing::app_query_limits().max_fetch_size + 1,
     );
 
-    assert_invalid_fanout_pagination(
-        fanout_route_scan_query_request(&request)
-            .expect_err("an offset beyond the fetch budget must fail closed"),
-    );
+    let response = match fanout_route_scan_query_request(&request) {
+        Ok(_) => panic!("an offset beyond the fetch budget must fail closed"),
+        Err(response) => response,
+    };
+    assert_invalid_fanout_pagination(response);
 }
 
 #[test]
@@ -80,10 +82,11 @@ fn fanout_route_scan_rejects_overflowing_window() {
         u64::MAX,
     );
 
-    assert_invalid_fanout_pagination(
-        fanout_route_scan_query_request(&request)
-            .expect_err("overflowing pagination must fail closed"),
-    );
+    let response = match fanout_route_scan_query_request(&request) {
+        Ok(_) => panic!("overflowing pagination must fail closed"),
+        Err(response) => response,
+    };
+    assert_invalid_fanout_pagination(response);
 }
 
 #[test]
@@ -119,7 +122,7 @@ fn fast_dsl_identity_query_fails_before_nested_component_decode() {
         panic!("expected iterable role-id request")
     };
     assert!(
-        query.query_box().is_none(),
+        legacy_iterable_query_box(query).is_none(),
         "the shipping runtime uses opaque fast-DSL components"
     );
     let response = ensure_bounded_fanout_query(&request)
@@ -947,11 +950,18 @@ async fn non_norito_signed_query_is_rejected_before_body_memory_admission() {
 
 #[tokio::test]
 async fn bounded_json_signed_query_remains_supported() {
-    let key_pair = checked_torii_test_ed25519_keypair(0xe7, "derive JSON signed-query fixture key");
+    let key_pair = crate::tests_runtime_handlers::checked_torii_test_ed25519_keypair(
+        0xe7,
+        "derive JSON signed-query fixture key",
+    );
     let authority = AccountId::new(key_pair.public_key().clone());
     let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
-    let signed_query = signed_find_triggers_query_for_test(authority, &key_pair);
-    let body = norito::json::to_json(&signed_query).expect("encode signed query as JSON");
+    let signed_query =
+        crate::tests_runtime_handlers::signed_find_triggers_query_for_test(authority, &key_pair);
+    let body = norito::json::to_json(
+        &iroha_data_model::query::json_wrappers::SignedQueryJson::from(&signed_query),
+    )
+    .expect("encode signed query as JSON");
     let mut request = axum::extract::Request::builder()
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(Body::from(body))
@@ -966,7 +976,10 @@ async fn bounded_json_signed_query_remains_supported() {
         )
         .await
         .expect("bounded JSON signed-query ingress remains supported");
-    assert_eq!(admitted.query, signed_query);
+    assert_eq!(
+        norito::codec::Encode::encode(&admitted.query),
+        norito::codec::Encode::encode(&signed_query)
+    );
 }
 
 #[tokio::test]
@@ -1080,15 +1093,18 @@ async fn stalled_signed_query_body_releases_ingress_at_signature_window() {
         .extensions_mut()
         .insert(crate::loopback_connect_info());
 
-    let response = tokio::time::timeout(
+    let admission = tokio::time::timeout(
         Duration::from_millis(100),
         <AdmittedSignedQuery as axum::extract::FromRequest<SharedAppState>>::from_request(
             request, &app,
         ),
     )
     .await
-    .expect("signature-derived body timeout must complete")
-    .expect_err("a stalled signed-query body must time out");
+    .expect("signature-derived body timeout must complete");
+    let response = match admission {
+        Ok(_) => panic!("a stalled signed-query body must time out"),
+        Err(response) => response,
+    };
 
     assert_eq!(response.status(), StatusCode::REQUEST_TIMEOUT);
     assert_eq!(
@@ -1109,8 +1125,10 @@ async fn ingress_to_fanout_promotion_fails_fast_without_starving_other_bodies() 
         .await
         .expect("one body owns an ingress slot");
 
-    let rejection = try_acquire_query_fanout_memory(&app)
-        .expect_err("promotion must not wait while it owns ingress memory");
+    let rejection = match try_acquire_query_fanout_memory(&app) {
+        Ok(_) => panic!("promotion must not wait while it owns ingress memory"),
+        Err(response) => response,
+    };
     assert_eq!(rejection.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(
         app.query_ingress_inflight.available_permits(),

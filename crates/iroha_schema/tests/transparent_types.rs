@@ -1,6 +1,8 @@
 //! Transparent types schema tests.
-use std::any::TypeId;
 
+mod common;
+
+use common::{assert_schema_map, entry, named_entry};
 use iroha_schema::prelude::*;
 use norito::{Decode, Encode};
 
@@ -35,72 +37,6 @@ enum TransparentEnum {
 
 #[test]
 fn transparent_types() {
-    use std::collections::BTreeMap;
-
-    use IntMode::*;
-    use Metadata::*;
-
-    let expected = [
-        (
-            TypeId::of::<::std::string::String>(),
-            MetaMapEntry {
-                type_id: "String".to_owned(),
-                type_name: "String".to_owned(),
-                metadata: String,
-            },
-        ),
-        (
-            TypeId::of::<u32>(),
-            MetaMapEntry {
-                type_id: "u32".to_owned(),
-                type_name: "u32".to_owned(),
-                metadata: Int(FixedWidth),
-            },
-        ),
-        (
-            TypeId::of::<TransparentStruct>(),
-            MetaMapEntry {
-                type_id: "TransparentStruct".to_owned(),
-                type_name: "u32".to_owned(),
-                metadata: Int(FixedWidth),
-            },
-        ),
-        (
-            TypeId::of::<TransparentStructExplicitInt>(),
-            MetaMapEntry {
-                type_id: "TransparentStructExplicitInt".to_owned(),
-                type_name: "u32".to_owned(),
-                metadata: Int(FixedWidth),
-            },
-        ),
-        (
-            TypeId::of::<TransparentStructExplicitString>(),
-            MetaMapEntry {
-                type_id: "TransparentStructExplicitString".to_owned(),
-                type_name: "String".to_owned(),
-                metadata: String,
-            },
-        ),
-        (
-            TypeId::of::<TransparentEnum>(),
-            MetaMapEntry {
-                type_id: "TransparentEnum".to_owned(),
-                type_name: "String".to_owned(),
-                metadata: String,
-            },
-        ),
-        (
-            TypeId::of::<Box<u32>>(),
-            MetaMapEntry {
-                type_id: "Box<u32>".to_owned(),
-                type_name: "u32".to_owned(),
-                metadata: Int(FixedWidth),
-            },
-        ),
-    ]
-    .into_iter()
-    .collect::<BTreeMap<_, _>>();
-
     let mut schema = MetaMap::new();
     TransparentStruct::update_schema_map(&mut schema);
     TransparentStructExplicitInt::update_schema_map(&mut schema);
@@ -108,5 +44,20 @@ fn transparent_types() {
     TransparentEnum::update_schema_map(&mut schema);
     <Box<u32>>::update_schema_map(&mut schema);
 
-    assert_eq!(schema, expected);
+    assert_schema_map(
+        "transparent.transparent_types",
+        &schema,
+        &[
+            entry::<String>("String"),
+            entry::<u32>("u32"),
+            named_entry::<TransparentStruct>("TransparentStruct", "u32"),
+            named_entry::<TransparentStructExplicitInt>("TransparentStructExplicitInt", "u32"),
+            named_entry::<TransparentStructExplicitString>(
+                "TransparentStructExplicitString",
+                "String",
+            ),
+            named_entry::<TransparentEnum>("TransparentEnum", "String"),
+            named_entry::<Box<u32>>("Box<u32>", "u32"),
+        ],
+    );
 }

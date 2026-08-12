@@ -1,0 +1,14 @@
+
+            seiyaku AggregateReturn {
+                struct Pair { int count, bool ready }
+
+                fn make() -> Result<Option<Pair>, (string, bool)> {
+                    return Result::ok(Option::some(Pair { count: 7, ready: true }));
+                }
+
+                view fn inspect(int seed) -> Result<Option<Pair>, (string, bool)> {
+                    let _ = seed;
+                    return make();
+                }
+            }
+        

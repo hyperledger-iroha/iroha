@@ -2,6 +2,119 @@
 EXTENDS SumeragiV2AsyncRecoveryVoteEpochBoundaryContinuationProofs
 
 (***************************************************************************
+The reviewed recovery-vote shard boundary also carries dependency-safe
+induction leaves and the retained-body tail.  They are moved byte-for-byte
+after every provider they consume, keeping the aggregate theorem/operator
+inventory unchanged while both physical shards remain independently bounded.
+***************************************************************************)
+THEOREM AsyncServeProducerEpisodeTransitionPreservesTypeInvariant ==
+  /\ AsyncServeProducerEpisodeTypeInvariant
+  /\ AsyncServeProducerEpisodeTransition
+  => AsyncServeProducerEpisodeTypeInvariant'
+BY Zenon
+   DEF AsyncServeProducerEpisodeTypeInvariant,
+       AsyncServeProducerEpisodeTransition
+
+THEOREM AsyncStrongTypeProjectsControlServiceStateType ==
+  AsyncStrongTypeInvariant => AsyncControlServiceStateTypeInvariant
+BY DEF AsyncStrongTypeInvariant
+
+THEOREM FreshReplayCandidateIsDisjointFromScheduled ==
+  \A candidate:
+    SequenceSet(FreshCandidateSequence(candidate)) \cap
+      (QueuedCandidates \cup DeferredCandidates \cup CausalCandidates
+        \cup TrackedWorkCandidates) = {}
+BY Isa
+   DEF FreshCandidateSequence, CandidateScheduled, SequenceSet
+
+THEOREM ReplayingOrdinaryStepPreservesRecoveryCorridor ==
+  /\ StrongInductiveInvariant
+  /\ AsyncTypeInvariant
+  /\ AsyncRecoveryTypeInvariant
+  /\ AsyncRecoveryExecutionInvariant
+  /\ asyncRecoveryPhase = "Replaying"
+  /\ (AsyncRunnerStep \/ AsyncNonRunnerStep)
+  /\ UNCHANGED <<up, AsyncRecoveryVars>>
+  => /\ (~NodeHasApplication(asyncRecoveryNode))'
+     /\ (RestartDecisions(asyncRecoveryNode) = {})'
+     /\ \A request \in asyncActiveRequests':
+          \/ request.source # asyncRecoveryNode'
+          \/ (RestartLockedCertifiedRequest(
+                asyncRecoveryNode, request))'
+     /\ \A candidate \in
+          ResponsiveReplayScheduledCandidates(asyncRecoveryNode)':
+          /\ (CandidateConsumerCurrent(candidate))'
+          /\ \/ candidate \in
+                   (SequenceSet(
+                      RestartSignatureReplay(asyncRecoveryNode)))'
+             \/ (RestartLockedBodyPipelineCandidate(
+                   asyncRecoveryNode, candidate))'
+BY RestartSignatureReplayCommandsAreSignatures,
+   RestartLockedBodyReplayCandidateShape,
+   RestartReplayReplayingCandidateShape,
+   SMTT(180), Isa
+   DEF AsyncRunnerStep, RunNode, RunHistoricalRecoveryNode,
+       RunNodeWork,
+       ResolveRunNodeCandidateProducerContinuation,
+       ReplayRunNodeCandidateProducerContinuation,
+       AsyncCandidateProducerContinuationExactLocalReplayStep,
+       AsyncCandidateProducerContinuationReplayTargetOnlyTurn,
+       AsyncCandidateProducerContinuationExactRuntimeReplayStep,
+       AsyncCandidateProducerContinuationExactReplayIdentity,
+       AsyncCandidateProducerContinuationSelectedLocalCandidate,
+       AsyncCandidateProducerContinuationSelectedReplayRecord,
+       AsyncCandidateProducerContinuationSelectedResolutionRecord,
+       AsyncCandidateProducerContinuationResolutionRequired,
+       AsyncCandidateProducerContinuationResolutionRecordsForNode,
+       ResponsiveReplayQuarantined,
+       AsyncSchedulerExceptCausalControlAndNodeService,
+       AsyncSchedulerExceptCausalControlCommandRunnerAndNodeService,
+       AsyncSchedulerExceptCausalControlRunnerAndNodeService,
+       LocalAdmissionStep, AdmitProducerCompletion,
+       AdmitCausalHead, IngressDrainStep, DrainFairIngressSelected,
+       SerializedRuntimeStep,
+       SerializedRuntimePrecedesServeIngressStep,
+       SerializedLocalPrecedesServeIngressStep,
+       SelectedLocalAdmissionAdvance,
+       AsyncServeIngressTargetOnlyTurn,
+       RuntimeStep, DeferredDrainStep,
+       FifoRuntimeStep, DeferredTagStep, DeferredTimeoutStep,
+       DeferredRetransmitStep, DirectTimeoutStep,
+       DirectRetransmitStep, IdleRuntimeStep,
+       RemoveNextDeferredCommand, RemoveNextNodeCommand,
+       DeferCommand, DiscardCommand, AdvanceNextDeferredClass,
+       ExecuteCommand, ExecuteRegularCommand, ExecuteDecisionFetch,
+       ExecuteSignProposal, ExecuteSignVote, ExecuteFormPrepareQC,
+       ExecuteSignTimeout, ExecutePersistInstall,
+       ExecutePersistDecision, ExecuteRequestCertifiedBody,
+       ExecuteApply, ExecuteCoreDelivery, ExecuteChunkDelivery,
+       ExecuteRejectAuthenticatedJunk,
+       PublishCertifiedRequests, CertifiedRequestOutbox,
+       CertifiedRecoveryFetchFrontier, LockedPrepareFetchFrontier,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       CommandSuccessors, FreshCandidateSequence,
+       CausalCandidate, AsyncCandidateFrom,
+       AsyncNonRunnerStep, AsyncNetworkStep, AdmitIngressPacket,
+       AdmitHiddenPacket, CoalesceHiddenPacket,
+       ServiceIoWorker, ServiceHistoricalRecoveryIoWorker,
+       EnqueueIoLocalControl, EnqueueHistoricalRecoveryIoLocalControl,
+       OpenHistoricalRecovery,
+       DirectCommitCertificateDiscoveryStep,
+       DirectHistoricalCommitCertificateDiscoveryStep,
+       CommitCertificateDiscoveryStepWork,
+       ResponsiveReplayQuarantined, ResponsiveReplayDraining,
+       RestartLockedCertifiedRequest,
+       RestartLockedBodyPipelineCandidate,
+       RestartLockedPrepareQCs, LockedPrepareRecoverySource,
+       ResponsiveReplayScheduledCandidates,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, CandidateScheduled,
+       CandidateConsumerCurrent, NodeHasApplication, RestartDecisions,
+       AsyncRecoveryTypeInvariant,
+       AsyncRecoveryExecutionInvariant, AsyncRecoveryVars,
+       SequenceSet, vars
+
+(***************************************************************************
 Historical locked-Commit continuations moved intact from the preceding shard
 so that its local theorem inventory remains within the aggregate release cap.
 These statements depend only on the imported epoch proof surface; no theorem

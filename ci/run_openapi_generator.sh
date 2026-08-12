@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate Torii OpenAPI bytes from one exact, sealed candidate mirror.
+# Validate and emit Torii's static OpenAPI authority from one exact, sealed candidate mirror.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,9 +22,10 @@ The output directory and its dedicated artifacts parent must already exist,
 be owner-private, resolve below /private/tmp, and remain outside the source
 repository. By default the output is <run>/artifacts/<stage>, the artifacts
 parent is the authenticated artifact root, and cancellation is
-<run>/cancel-request.json. Cargo always runs from a fresh, hard-link-free,
-sealed clone at the caller's exact clean HEAD through the shared
-+1.93.1/--locked/--offline/-j1 process policy.
+<run>/cancel-request.json. Cargo loads the package-local authority through a
+live Torii router from a fresh, hard-link-free, sealed clone at the caller's
+exact clean HEAD through the authenticated Cargo 1.93.1/--locked/--offline/-j1 process
+policy.
 EOF
   exit 2
 }
@@ -200,7 +201,7 @@ if [[ -n "${SIGNATURE_ENVELOPE}" ]]; then
 fi
 
 if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=all)" ]]; then
-  echo "error: OpenAPI generation requires an exact clean candidate checkout." >&2
+  echo "error: OpenAPI authority replay requires an exact clean candidate checkout." >&2
   exit 1
 fi
 CANDIDATE_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --verify "HEAD^{commit}")"
@@ -319,11 +320,11 @@ fi
       "${XTASK_ARGS[@]}"
 )
 
-for generated_artifact in torii.json manifest.json; do
-  if [[ ! -f "${OUTPUT_DIR}/${generated_artifact}" || \
-        -L "${OUTPUT_DIR}/${generated_artifact}" ]]; then
-    printf 'error: OpenAPI generator omitted regular staged %s.\n' \
-      "${generated_artifact}" >&2
+for emitted_artifact in torii.json manifest.json; do
+  if [[ ! -f "${OUTPUT_DIR}/${emitted_artifact}" || \
+        -L "${OUTPUT_DIR}/${emitted_artifact}" ]]; then
+    printf 'error: OpenAPI authority replay omitted regular staged %s.\n' \
+      "${emitted_artifact}" >&2
     exit 1
   fi
 done

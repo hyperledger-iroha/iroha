@@ -79,10 +79,11 @@ pub mod error {
 
     impl From<norito::Error> for Error {
         fn from(x: norito::Error) -> Self {
+            use std::string::ToString as _;
+
             if x.is_decode_resource_limit() {
                 return Self::NoritoResourceLimit;
             }
-            use std::string::ToString as _;
             Self::NoritoCodec(x.to_string())
         }
     }

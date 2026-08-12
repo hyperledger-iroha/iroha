@@ -25,7 +25,6 @@ use crate::{account::AccountId, error::ParseError, name::Name, nexus::UniversalA
 pub type OracleId = AccountId;
 /// Slot index used by oracle feeds.
 pub type FeedSlot = u64;
-
 /// `DeFi` oracle domain for perps market payloads.
 pub const DEFI_ORACLE_DOMAIN_PERPS_MARKET: u32 = 1;
 /// `DeFi` oracle domain for options series settlement payloads.
@@ -34,7 +33,6 @@ pub const DEFI_ORACLE_DOMAIN_OPTIONS_SERIES: u32 = 2;
 pub const DEFI_ORACLE_DOMAIN_OPTIONS_SHOUT: u32 = 3;
 /// `DeFi` oracle domain for cover policy observation payloads.
 pub const DEFI_ORACLE_DOMAIN_COVER_POLICY: u32 = 4;
-
 /// Key used to store `DeFi` oracle attestations by contract ABI domain and subject id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -56,14 +54,12 @@ pub struct DefiOracleAttestationKey {
     /// Subject id inside the domain (`market_id`, `series_id`, `position_id`, or `policy_id`).
     pub subject_id: u64,
 }
-
 impl DefiOracleAttestationKey {
     /// Construct an attestation key.
     #[must_use]
     pub const fn new(domain: u32, subject_id: u64) -> Self {
         Self { domain, subject_id }
     }
-
     /// Return `true` when the domain is one of the `DeFi` oracle ABI domains.
     #[must_use]
     pub const fn has_supported_domain(&self) -> bool {
@@ -75,7 +71,6 @@ impl DefiOracleAttestationKey {
                 | DEFI_ORACLE_DOMAIN_COVER_POLICY
         )
     }
-
     /// Payload subject field expected for the key domain.
     #[must_use]
     pub const fn subject_field(&self) -> Option<&'static str> {
@@ -88,7 +83,6 @@ impl DefiOracleAttestationKey {
         }
     }
 }
-
 /// Reference to a native oracle feed event that supports a `DeFi` attestation field.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -113,7 +107,6 @@ pub struct DefiOracleAttestationSource {
     /// Payload field whose integer value must match the retained feed event value.
     pub field: String,
 }
-
 /// Native Soracles attestation carrying ABI-compatible `DeFi` oracle bytes.
 ///
 /// `source_events` can link the attestation back to retained native feed
@@ -156,7 +149,6 @@ pub struct DefiOracleAttestation {
     #[cfg_attr(feature = "json", norito(default))]
     pub source_events: Vec<DefiOracleAttestationSource>,
 }
-
 /// Identifier for an oracle feed.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -172,7 +164,6 @@ pub struct DefiOracleAttestation {
     ffi_type(opaque)
 )]
 pub struct FeedId(pub Name);
-
 impl FeedId {
     /// Borrow the feed identifier as a string slice.
     #[must_use]
@@ -180,21 +171,17 @@ impl FeedId {
         self.0.as_ref()
     }
 }
-
 impl fmt::Display for FeedId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
-
 impl FromStr for FeedId {
     type Err = ParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(Name::from_str(s)?))
     }
 }
-
 /// Version number for a feed configuration (monotonic per feed).
 #[derive(
     Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
@@ -212,13 +199,11 @@ impl FromStr for FeedId {
     ffi_type(opaque)
 )]
 pub struct FeedConfigVersion(pub u32);
-
 impl From<u32> for FeedConfigVersion {
     fn from(value: u32) -> Self {
         Self(value)
     }
 }
-
 /// Risk classification attached to a feed; drives quorum/dispute policy.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
@@ -237,7 +222,6 @@ pub enum RiskClass {
     /// High-risk feeds (elevated quorum, extended dispute windows).
     High,
 }
-
 /// Change classification for oracle governance proposals.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Default, Encode, Decode, IntoSchema,
@@ -256,7 +240,6 @@ pub enum OracleChangeClass {
     /// High-impact change (risk policy shifts, schema/signature changes).
     High,
 }
-
 impl OracleChangeClass {
     /// Minimum approvals required for the class using the provided thresholds.
     #[must_use]
@@ -273,7 +256,6 @@ impl OracleChangeClass {
         }
     }
 }
-
 /// Pipeline stage for oracle change governance.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
 #[cfg_attr(
@@ -298,7 +280,6 @@ pub enum OracleChangeStage {
     /// Enactment stage that applies the change.
     Enactment,
 }
-
 impl OracleChangeStage {
     /// Deterministic ordering index.
     #[must_use]
@@ -312,7 +293,6 @@ impl OracleChangeStage {
             Self::Enactment => 5,
         }
     }
-
     /// Next stage in the pipeline, or `None` when this is the terminal stage.
     #[must_use]
     pub const fn next(self) -> Option<Self> {
@@ -326,7 +306,6 @@ impl OracleChangeStage {
         }
     }
 }
-
 /// Failure modes for a stage.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -347,7 +326,6 @@ pub enum OracleChangeStageFailure {
     /// Explicit rollback with a human-readable reason.
     Rollback(String),
 }
-
 /// Failure details captured when a proposal cannot complete.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -362,7 +340,6 @@ pub struct OracleChangeFailure {
     /// Block height when the failure was recorded.
     pub at: u64,
 }
-
 /// Lifecycle status for an oracle change proposal.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -381,7 +358,6 @@ pub enum OracleChangeStatus {
     /// Proposal rolled back or failed at a specific stage.
     Failed(OracleChangeFailure),
 }
-
 impl OracleChangeStatus {
     /// Returns `true` when the change reached a terminal state.
     #[must_use]
@@ -389,7 +365,6 @@ impl OracleChangeStatus {
         !matches!(self, Self::Pending)
     }
 }
-
 /// Identifier for oracle change proposals (hash).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -405,7 +380,6 @@ impl OracleChangeStatus {
     ffi_type(opaque)
 )]
 pub struct OracleChangeId(pub Hash);
-
 impl OracleChangeId {
     /// Borrow the underlying hash bytes.
     #[must_use]
@@ -413,13 +387,11 @@ impl OracleChangeId {
         &self.0
     }
 }
-
 impl From<Hash> for OracleChangeId {
     fn from(value: Hash) -> Self {
         Self(value)
     }
 }
-
 /// Evidence pointer attached to a pipeline stage (e.g., `SoraFS` bundle hash).
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -435,7 +407,6 @@ pub struct OracleChangeEvidence {
     #[norito(default)]
     pub note: Option<String>,
 }
-
 /// Per-stage record for oracle change governance.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -463,7 +434,6 @@ pub struct OracleChangeStageRecord {
     /// Failure reason when the stage rolled back or was rejected.
     pub failure: Option<OracleChangeStageFailure>,
 }
-
 impl OracleChangeStageRecord {
     /// Returns `true` when the stage has not completed or failed.
     #[must_use]
@@ -471,7 +441,6 @@ impl OracleChangeStageRecord {
         self.completed_at.is_none() && self.failure.is_none()
     }
 }
-
 /// Governance proposal for an oracle feed change.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -500,7 +469,6 @@ pub struct OracleChangeProposal {
     /// Current lifecycle status for the proposal.
     pub status: OracleChangeStatus,
 }
-
 impl OracleChangeProposal {
     /// Returns the current active stage (pending or failed) if present.
     #[must_use]
@@ -509,7 +477,6 @@ impl OracleChangeProposal {
             .iter()
             .find(|stage| stage.is_pending() || stage.failure.is_some())
     }
-
     /// Returns the mutable current active stage (pending or failed) if present.
     pub fn current_stage_mut(&mut self) -> Option<&mut OracleChangeStageRecord> {
         self.stages
@@ -517,7 +484,6 @@ impl OracleChangeProposal {
             .find(|stage| stage.is_pending() || stage.failure.is_some())
     }
 }
-
 /// Deterministic aggregation rule used to combine observations into a report.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -531,13 +497,11 @@ pub enum AggregationRule {
     /// Percentile aggregation (basis points: `10_000` = 100%).
     Percentile(u16),
 }
-
 impl Default for AggregationRule {
     fn default() -> Self {
         Self::MedianMad(300)
     }
 }
-
 /// Outlier detection policy applied to observations before aggregation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -552,7 +516,6 @@ pub enum OutlierPolicy {
     /// Absolute deviation measured against the median (scaled fixed-point value).
     Absolute(AbsoluteOutlier),
 }
-
 /// Absolute delta bound used by outlier detection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -570,13 +533,11 @@ pub struct AbsoluteOutlier {
     )]
     pub max_delta: i128,
 }
-
 impl Default for OutlierPolicy {
     fn default() -> Self {
         Self::Mad(350)
     }
 }
-
 /// Feed configuration registered on-chain.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -617,14 +578,12 @@ pub struct FeedConfig {
     /// Replay window length expressed in slots.
     pub replay_window_slots: NonZeroU64,
 }
-
 impl FeedConfig {
     /// Returns `true` when the feed is active for the given slot (`slot % cadence == 0`).
     #[must_use]
     pub fn is_active_slot(&self, slot: FeedSlot) -> bool {
         slot.is_multiple_of(self.cadence_slots.get())
     }
-
     /// Enforce the cadence guard, returning an error when the slot is inactive.
     ///
     /// # Errors
@@ -639,7 +598,6 @@ impl FeedConfig {
             })
         }
     }
-
     /// Validate that an observation references the pinned connector id/version.
     ///
     /// # Errors
@@ -658,10 +616,8 @@ impl FeedConfig {
                 provided_version: observation.connector_version,
             });
         }
-
         Ok(())
     }
-
     /// Validate feed id/version, cadence, and connector pinning for an observation.
     ///
     /// # Errors
@@ -676,19 +632,16 @@ impl FeedConfig {
                 provided: observation.feed_id.clone(),
             });
         }
-
         if observation.feed_config_version != self.feed_config_version {
             return Err(OracleModelError::FeedVersionMismatch {
                 expected: self.feed_config_version,
                 provided: observation.feed_config_version,
             });
         }
-
         self.ensure_active_slot(observation.slot)?;
         self.validate_connector_pin(observation)
     }
 }
-
 /// HTTP-style method used by connector requests.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
@@ -709,7 +662,6 @@ pub enum ConnectorRequestMethod {
     /// HTTP DELETE.
     Delete,
 }
-
 /// Redacted header value; secrets are hashed to keep them off-chain.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -723,7 +675,6 @@ pub enum RedactedHeaderValue {
     /// Hashed header value (secret redacted).
     Hashed(Hash),
 }
-
 impl RedactedHeaderValue {
     /// Create a hashed header value from a sensitive secret without exposing it.
     #[must_use]
@@ -731,7 +682,6 @@ impl RedactedHeaderValue {
         Self::Hashed(Hash::new(secret))
     }
 }
-
 /// Canonical connector request; hashed to derive `request_hash`.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -763,20 +713,17 @@ pub struct ConnectorRequest {
     /// Hash of the request body (keeps secrets off-chain).
     pub body_hash: Hash,
 }
-
 impl ConnectorRequest {
     /// Compute the canonical hash for this connector request.
     #[must_use]
     pub fn hash(&self) -> HashOf<Self> {
         HashOf::new(self)
     }
-
     /// Convenience helper that returns the untyped request hash.
     #[must_use]
     pub fn request_hash(&self) -> Hash {
         self.hash().into()
     }
-
     /// Validate that sensitive headers have been redacted (hashed).
     ///
     /// # Errors
@@ -793,7 +740,6 @@ impl ConnectorRequest {
         Ok(())
     }
 }
-
 fn is_sensitive_header(name: &str) -> bool {
     const SENSITIVE_PREFIXES: &[&str] = &["authorization", "proxy-authorization", "x-api", "api-"];
     const SENSITIVE_EXACT: &[&str] = &[
@@ -805,13 +751,11 @@ fn is_sensitive_header(name: &str) -> bool {
         "token",
         "secret",
     ];
-
     SENSITIVE_EXACT.contains(&name)
         || SENSITIVE_PREFIXES
             .iter()
             .any(|prefix| name.starts_with(prefix))
 }
-
 /// Connector response envelope with payload hash for audit.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -828,7 +772,6 @@ pub struct ConnectorResponse {
     #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
     pub error_code: Option<ObservationErrorCode>,
 }
-
 impl ConnectorResponse {
     /// Canonical hash of the connector response.
     #[must_use]
@@ -836,7 +779,6 @@ impl ConnectorResponse {
         HashOf::new(self)
     }
 }
-
 /// Keyed hash/HMAC used for PII-safe identifiers (e.g., social IDs).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -857,7 +799,6 @@ pub struct KeyedHash {
     /// Hashed identifier (HMAC-like).
     pub digest: Hash,
 }
-
 impl KeyedHash {
     /// Compute a keyed hash using the provided pepper and payload.
     #[must_use]
@@ -874,7 +815,6 @@ impl KeyedHash {
             digest: Hash::new(data),
         }
     }
-
     /// Verify that `candidate` matches this keyed hash under the supplied pepper.
     #[must_use]
     pub fn verify(&self, pepper: impl AsRef<[u8]>, candidate: impl AsRef<[u8]>) -> bool {
@@ -882,10 +822,8 @@ impl KeyedHash {
         expected.digest == self.digest
     }
 }
-
 /// Identifier of the canonical Twitter follow binding feed.
 pub const TWITTER_FOLLOW_FEED_ID: &str = "twitter_follow_binding";
-
 /// Status recorded for a Twitter follow binding attestation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -901,7 +839,6 @@ pub enum TwitterBindingStatus {
     /// Connector explicitly denied or rejected the follow binding.
     Denied,
 }
-
 /// Attestation produced by the twitter follow oracle feed.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -932,21 +869,18 @@ pub struct TwitterBindingAttestation {
     /// Feed configuration version used by the committee.
     pub feed_config_version: FeedConfigVersion,
 }
-
 impl TwitterBindingAttestation {
     /// Observation value derived from the keyed hash (used to match aggregated feed outputs).
     #[must_use]
     pub fn observation_value(&self) -> ObservationValue {
         ObservationValue::from_keyed_hash(&self.binding_hash)
     }
-
     /// Whether the attestation has expired at the given timestamp.
     #[must_use]
     pub fn is_expired(&self, now_ms: u64) -> bool {
         now_ms >= self.expires_at_ms
     }
 }
-
 /// Persisted record for a twitter follow binding attestation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -963,7 +897,6 @@ pub struct TwitterBindingRecord {
     /// Timestamp (milliseconds) when the record was persisted.
     pub recorded_at_ms: u64,
 }
-
 impl TwitterBindingRecord {
     /// Digest used as the binding map key.
     #[must_use]
@@ -971,7 +904,6 @@ impl TwitterBindingRecord {
         self.attestation.binding_hash.digest
     }
 }
-
 /// Signed observation outcome.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -986,7 +918,6 @@ pub enum ObservationOutcome {
     /// Error reported by the connector.
     Error(ObservationErrorCode),
 }
-
 impl ObservationOutcome {
     /// Returns `true` when this outcome represents a successful value.
     #[must_use]
@@ -994,7 +925,6 @@ impl ObservationOutcome {
         matches!(self, Self::Value(_))
     }
 }
-
 /// Fixed-point observation value (mantissa + scale).
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
@@ -1016,14 +946,12 @@ pub struct ObservationValue {
     /// Decimal scale (number of fractional digits).
     pub scale: u32,
 }
-
 impl ObservationValue {
     /// Construct a new fixed-point observation value.
     #[must_use]
     pub fn new(mantissa: i128, scale: u32) -> Self {
         Self { mantissa, scale }
     }
-
     /// Derive a deterministic fixed-point value from a hash digest (scale = 0).
     ///
     /// This helper is intended for hashed identifiers such as UAIDs or keyed
@@ -1037,20 +965,17 @@ impl ObservationValue {
         mantissa_bytes[15] &= 0x7F;
         Self::new(i128::from_le_bytes(mantissa_bytes), 0)
     }
-
     /// Derive a deterministic fixed-point value from a keyed hash digest.
     #[must_use]
     pub fn from_keyed_hash(keyed_hash: &KeyedHash) -> Self {
         Self::from_hash(&keyed_hash.digest)
     }
-
     /// Derive a deterministic fixed-point value from a UAID hash.
     #[must_use]
     pub fn from_uaid(uaid: &UniversalAccountId) -> Self {
         Self::from_hash(uaid.as_hash())
     }
 }
-
 /// Connector error codes surfaced by observations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1070,7 +995,6 @@ pub enum ObservationErrorCode {
     /// Custom error code (allows vendor-specific mapping).
     Other(u16),
 }
-
 /// Classification of connector errors for slashing/reward semantics.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1086,7 +1010,6 @@ pub enum ObservationErrorClass {
     /// Connector returned no data.
     Missing,
 }
-
 impl ObservationErrorCode {
     /// Map error codes into fault classes for slashing/reward policy.
     #[must_use]
@@ -1100,7 +1023,6 @@ impl ObservationErrorCode {
         }
     }
 }
-
 /// Observation payload signed by an oracle.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1129,7 +1051,6 @@ pub struct ObservationBody {
     #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
     pub timestamp_ms: Option<u64>,
 }
-
 impl ObservationBody {
     /// Compute the canonical digest of this observation body.
     #[must_use]
@@ -1137,7 +1058,6 @@ impl ObservationBody {
         HashOf::new(self)
     }
 }
-
 /// Signed observation wrapper.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1150,14 +1070,12 @@ pub struct Observation {
     /// Oracle signature over the payload.
     pub signature: SignatureOf<ObservationBody>,
 }
-
 impl Observation {
     /// Typed digest of the observation payload.
     #[must_use]
     pub fn hash(&self) -> HashOf<ObservationBody> {
         self.body.hash()
     }
-
     /// Gossip key scoped to `(feed_id, feed_config_version, slot)`.
     #[must_use]
     pub fn gossip_key(&self) -> GossipKey {
@@ -1167,7 +1085,6 @@ impl Observation {
             self.body.slot,
         )
     }
-
     /// Replay key scoped to `(feed_id, feed_config_version, slot, request_hash)`.
     #[must_use]
     pub fn replay_key(&self) -> ReplayKey {
@@ -1179,7 +1096,6 @@ impl Observation {
         )
     }
 }
-
 /// Aggregated entry inside a report.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1196,7 +1112,6 @@ pub struct ReportEntry {
     /// Whether the observation was classified as an outlier.
     pub outlier: bool,
 }
-
 /// Report payload signed by the submitter.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1217,7 +1132,6 @@ pub struct ReportBody {
     /// Submitter (committee member) that built the report.
     pub submitter: OracleId,
 }
-
 impl ReportBody {
     /// Compute the canonical digest of this report body.
     #[must_use]
@@ -1225,7 +1139,6 @@ impl ReportBody {
         HashOf::new(self)
     }
 }
-
 /// Signed oracle report.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1238,14 +1151,12 @@ pub struct Report {
     /// Signature over the report payload by the submitter.
     pub signature: SignatureOf<ReportBody>,
 }
-
 impl Report {
     /// Typed digest of the report payload.
     #[must_use]
     pub fn hash(&self) -> HashOf<ReportBody> {
         self.body.hash()
     }
-
     /// Gossip key scoped to `(feed_id, feed_config_version, slot)`.
     #[must_use]
     pub fn gossip_key(&self) -> GossipKey {
@@ -1255,7 +1166,6 @@ impl Report {
             self.body.slot,
         )
     }
-
     /// Replay key scoped to `(feed_id, feed_config_version, slot, request_hash)`.
     #[must_use]
     pub fn replay_key(&self) -> ReplayKey {
@@ -1267,7 +1177,6 @@ impl Report {
         )
     }
 }
-
 /// Aggregation success payload.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1280,7 +1189,6 @@ pub struct FeedSuccess {
     /// Entries that contributed to the final value.
     pub entries: Vec<ReportEntry>,
 }
-
 /// Aggregation error payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1291,7 +1199,6 @@ pub struct FeedError {
     /// Error code shared by observations.
     pub code: ObservationErrorCode,
 }
-
 /// Outcome persisted in the ledger after aggregation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1307,7 +1214,6 @@ pub enum FeedEventOutcome {
     /// No valid observations were received within the slot window.
     Missing,
 }
-
 /// Event emitted after processing a feed slot.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1326,7 +1232,6 @@ pub struct FeedEvent {
     /// Aggregation outcome.
     pub outcome: FeedEventOutcome,
 }
-
 /// Classification for oracle penalties.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1346,7 +1251,6 @@ pub enum OraclePenaltyKind {
     /// Penalty applied as part of a dispute resolution.
     Dispute,
 }
-
 /// Penalty record emitted when a provider is slashed.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1369,7 +1273,6 @@ pub struct OraclePenalty {
     /// Amount slashed from the provider.
     pub amount: Quantity,
 }
-
 /// Reward record emitted when a provider is paid for an inlier observation.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1390,7 +1293,6 @@ pub struct OracleReward {
     /// Amount paid to the provider.
     pub amount: Quantity,
 }
-
 /// Key identifying per-provider aggregation statistics for a feed.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1411,7 +1313,6 @@ pub struct OracleProviderKey {
     /// Provider account identifier.
     pub provider_id: AccountId,
 }
-
 impl OracleProviderKey {
     /// Construct a new provider key.
     #[must_use]
@@ -1422,7 +1323,6 @@ impl OracleProviderKey {
         }
     }
 }
-
 /// Aggregate counters for a provider across feed slots.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1443,27 +1343,22 @@ pub struct OracleProviderStats {
     /// Number of slashes applied.
     pub slashes: u64,
 }
-
 impl OracleProviderStats {
     /// Maximum reputation score in basis points.
     pub const MAX_REPUTATION_SCORE_BPS: u16 = 10_000;
-
     /// Increment the reward counter.
     pub fn record_reward(&mut self) {
         self.rewards = self.rewards.saturating_add(1);
     }
-
     /// Increment the slash counter.
     pub fn record_slash(&mut self) {
         self.slashes = self.slashes.saturating_add(1);
     }
-
     /// Total provider outcomes observed by aggregation economics.
     #[must_use]
     pub fn total_outcomes(&self) -> u64 {
         u64::try_from(self.total_outcomes_u128()).unwrap_or(u64::MAX)
     }
-
     /// Deterministic inlier-share reputation score in basis points.
     ///
     /// Providers with no observed outcomes keep a neutral full score; callers
@@ -1474,13 +1369,11 @@ impl OracleProviderStats {
         if total == 0 {
             return Self::MAX_REPUTATION_SCORE_BPS;
         }
-
         let score = u128::from(self.inliers)
             .saturating_mul(u128::from(Self::MAX_REPUTATION_SCORE_BPS))
             / total;
         u16::try_from(score).expect("inlier-share score is capped at 10_000 bps")
     }
-
     /// Reputation score after a signed governance adjustment, clamped to `0..=10000`.
     #[must_use]
     pub fn adjusted_reputation_score_bps(&self, adjustment_bps: i16) -> u16 {
@@ -1489,7 +1382,6 @@ impl OracleProviderStats {
         u16::try_from(adjusted.clamp(0, i32::from(Self::MAX_REPUTATION_SCORE_BPS)))
             .expect("adjusted reputation score is clamped to u16")
     }
-
     fn total_outcomes_u128(&self) -> u128 {
         u128::from(self.inliers)
             + u128::from(self.outliers)
@@ -1497,7 +1389,6 @@ impl OracleProviderStats {
             + u128::from(self.no_shows)
     }
 }
-
 /// Query record carrying a provider key together with its aggregate counters.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1510,7 +1401,6 @@ pub struct OracleProviderStatsRecord {
     /// Aggregate counters for the provider.
     pub stats: OracleProviderStats,
 }
-
 /// Identifier for an oracle dispute.
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
@@ -1528,7 +1418,6 @@ pub struct OracleProviderStatsRecord {
     ffi_type(opaque)
 )]
 pub struct OracleDisputeId(pub u64);
-
 /// Resolution status for a dispute.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1544,7 +1433,6 @@ pub enum OracleDisputeOutcome {
     /// Dispute deemed frivolous; challenger is penalised.
     Frivolous,
 }
-
 /// Persisted record for a dispute.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1574,7 +1462,6 @@ pub struct OracleDispute {
     /// Current outcome for the dispute.
     pub status: OracleDisputeStatus,
 }
-
 /// Lifecycle status for an oracle dispute.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1590,7 +1477,6 @@ pub enum OracleDisputeStatus {
     /// Dispute was dismissed without penalties.
     Dismissed,
 }
-
 /// Gossip key identifying observation/report messages for replay protection.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1605,7 +1491,6 @@ pub struct GossipKey {
     /// Slot index.
     pub slot: FeedSlot,
 }
-
 impl GossipKey {
     /// Construct a new gossip key.
     #[must_use]
@@ -1617,7 +1502,6 @@ impl GossipKey {
         }
     }
 }
-
 /// Replay key extending [`GossipKey`] with the canonical request hash.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1630,7 +1514,6 @@ pub struct ReplayKey {
     /// Canonical request hash.
     pub request_hash: Hash,
 }
-
 impl ReplayKey {
     /// Build a replay key from its components.
     #[must_use]
@@ -1650,7 +1533,6 @@ impl ReplayKey {
         }
     }
 }
-
 /// Replay outcomes emitted by [`ReplayProtection`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReplayStatus {
@@ -1661,14 +1543,12 @@ pub enum ReplayStatus {
     /// Replay key is too old for the configured window.
     Expired,
 }
-
 /// Sliding-window replay protection keyed by `(feed, version, slot, request_hash)`.
 #[derive(Debug)]
 pub struct ReplayProtection {
     window_slots: NonZeroU64,
     seen: BTreeMap<ReplayKey, FeedSlot>,
 }
-
 impl ReplayProtection {
     /// Create a new replay guard with the given slot window.
     #[must_use]
@@ -1678,7 +1558,6 @@ impl ReplayProtection {
             seen: BTreeMap::new(),
         }
     }
-
     /// Record a replay key and return whether it is new, duplicate, or expired.
     #[must_use]
     pub fn record(&mut self, key: ReplayKey, current_slot: FeedSlot) -> ReplayStatus {
@@ -1686,20 +1565,16 @@ impl ReplayProtection {
         if key.gossip.slot < earliest_slot {
             return ReplayStatus::Expired;
         }
-
         self.seen.retain(|_, slot| *slot >= earliest_slot);
-
         if let Some(last_seen) = self.seen.get(&key)
             && *last_seen >= earliest_slot
         {
             return ReplayStatus::Duplicate;
         }
-
         self.seen.insert(key, current_slot);
         ReplayStatus::Fresh
     }
 }
-
 /// Deterministic committee draw for a feed and epoch.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1712,7 +1587,6 @@ pub struct CommitteeDraw {
     /// Selected committee members in deterministic order.
     pub members: Vec<OracleId>,
 }
-
 impl CommitteeDraw {
     /// Deterministically select the slot leader from the committee.
     #[must_use]
@@ -1720,7 +1594,6 @@ impl CommitteeDraw {
         if self.members.is_empty() {
             return None;
         }
-
         let mut seed_bytes = Vec::with_capacity(Hash::LENGTH + std::mem::size_of::<FeedSlot>());
         seed_bytes.extend_from_slice(self.seed.as_ref());
         seed_bytes.extend_from_slice(&slot.to_le_bytes());
@@ -1735,7 +1608,6 @@ impl CommitteeDraw {
         self.members.get(idx).cloned()
     }
 }
-
 /// Compute the deterministic committee draw for a feed/epoch using the validator set root.
 #[must_use]
 pub fn derive_committee(
@@ -1752,7 +1624,6 @@ pub fn derive_committee(
     seed_bytes.extend_from_slice(&feed_config_version.encode());
     seed_bytes.extend_from_slice(&epoch.to_le_bytes());
     let seed = Hash::new(seed_bytes);
-
     let mut scored: Vec<(OracleId, [u8; Hash::LENGTH])> = providers
         .iter()
         .cloned()
@@ -1764,26 +1635,21 @@ pub fn derive_committee(
             (oracle_id, *digest.as_ref())
         })
         .collect();
-
     // Deduplicate providers while preserving the lowest hash score.
     scored.sort_by(|left, right| match left.0.cmp(&right.0) {
         Ordering::Equal => left.1.cmp(&right.1),
         other => other,
     });
     scored.dedup_by(|left, right| left.0 == right.0);
-
     // Re-sort by score to pick the top committee_size providers.
     scored.sort_by(|left, right| left.1.cmp(&right.1));
-
     let members: Vec<OracleId> = scored
         .into_iter()
         .map(|(oracle_id, _)| oracle_id)
         .take(committee_size.get())
         .collect();
-
     CommitteeDraw { seed, members }
 }
-
 /// Oracle ABI manifest used to pin the schema for on-chain validation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1806,11 +1672,9 @@ pub struct OracleAbiManifest {
     /// Replay key type name.
     pub replay_key: String,
 }
-
 impl OracleAbiManifest {
     /// Current ABI version for the oracle schema.
     pub const VERSION: u32 = 1;
-
     /// Build the canonical manifest for the current version.
     #[must_use]
     pub fn v1() -> Self {
@@ -1825,13 +1689,11 @@ impl OracleAbiManifest {
         }
     }
 }
-
 /// Canonical ABI hash for the oracle message schema (blake2b-256 over the manifest).
 #[must_use]
 pub fn oracle_abi_hash() -> HashOf<OracleAbiManifest> {
     HashOf::new(&OracleAbiManifest::v1())
 }
-
 /// Backoff policy used by connectors to retry within the active slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FetchDiscipline {
@@ -1842,7 +1704,6 @@ pub struct FetchDiscipline {
     /// Maximum jitter applied to each retry (0 = no jitter).
     pub jitter_max_slots: u64,
 }
-
 impl Default for FetchDiscipline {
     fn default() -> Self {
         Self {
@@ -1852,7 +1713,6 @@ impl Default for FetchDiscipline {
         }
     }
 }
-
 /// Deterministic fetch schedule for a provider.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FetchPlan {
@@ -1861,7 +1721,6 @@ pub struct FetchPlan {
     /// Slots when the provider should attempt fetches (sorted, unique).
     pub attempts: Vec<FeedSlot>,
 }
-
 impl FetchPlan {
     /// Returns `true` when fetches are allowed for this plan.
     #[must_use]
@@ -1869,7 +1728,6 @@ impl FetchPlan {
         self.allowed
     }
 }
-
 /// Build a deterministic fetch plan for a provider using the committee draw.
 #[must_use]
 pub fn plan_committee_fetches(
@@ -1885,10 +1743,8 @@ pub fn plan_committee_fetches(
             attempts: Vec::new(),
         };
     }
-
     let mut attempts = Vec::with_capacity(policy.max_attempts.get());
     attempts.push(slot);
-
     for attempt_idx in 1..policy.max_attempts.get() {
         let jitter = if policy.jitter_max_slots == 0 {
             0
@@ -1904,22 +1760,18 @@ pub fn plan_committee_fetches(
                     .expect("8 bytes available for jitter"),
             ) % (policy.jitter_max_slots + 1)
         };
-
         let next = slot
             .saturating_add(policy.base_backoff_slots.get() * attempt_idx as u64)
             .saturating_add(jitter);
         attempts.push(next);
     }
-
     attempts.sort_unstable();
     attempts.dedup();
-
     FetchPlan {
         allowed: true,
         attempts,
     }
 }
-
 /// Aggregated report and outcome for a feed slot.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AggregationOutput {
@@ -1928,7 +1780,6 @@ pub struct AggregationOutput {
     /// Aggregation outcome persisted on-chain.
     pub outcome: FeedEventOutcome,
 }
-
 impl AggregationOutput {
     /// Convert aggregation output into a feed event.
     #[must_use]
@@ -1942,7 +1793,6 @@ impl AggregationOutput {
         }
     }
 }
-
 /// Errors surfaced while aggregating observations into a report.
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum OracleAggregationError {
@@ -2059,7 +1909,6 @@ pub enum OracleAggregationError {
         max_error_rate_bps: u16,
     },
 }
-
 /// Stable rejection codes for oracle aggregation failures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OracleRejectionCode {
@@ -2102,7 +1951,6 @@ pub enum OracleRejectionCode {
     /// Error observations exceeded the configured error-rate budget.
     AggregationErrorRateExceeded,
 }
-
 impl OracleRejectionCode {
     /// Stable string identifier for the rejection code.
     #[must_use]
@@ -2129,7 +1977,6 @@ impl OracleRejectionCode {
             Self::AggregationErrorRateExceeded => "oracle_agg_error_rate_exceeded",
         }
     }
-
     /// Human-readable description of the rejection.
     #[must_use]
     pub const fn description(self) -> &'static str {
@@ -2183,7 +2030,6 @@ impl OracleRejectionCode {
             }
         }
     }
-
     /// Category of the rejection (model vs aggregation).
     #[must_use]
     pub const fn category(self) -> &'static str {
@@ -2209,7 +2055,6 @@ impl OracleRejectionCode {
             | Self::AggregationErrorRateExceeded => "aggregation",
         }
     }
-
     /// Ordered list of all rejection codes.
     #[must_use]
     pub const fn all() -> &'static [Self] {
@@ -2236,7 +2081,6 @@ impl OracleRejectionCode {
         ]
     }
 }
-
 impl From<&OracleAggregationError> for OracleRejectionCode {
     fn from(err: &OracleAggregationError) -> Self {
         match err {
@@ -2264,7 +2108,6 @@ impl From<&OracleAggregationError> for OracleRejectionCode {
         }
     }
 }
-
 impl From<&OracleModelError> for OracleRejectionCode {
     fn from(err: &OracleModelError) -> Self {
         match err {
@@ -2280,7 +2123,6 @@ impl From<&OracleModelError> for OracleRejectionCode {
         }
     }
 }
-
 fn abs_i128(value: i128) -> i128 {
     if value >= 0 {
         value
@@ -2289,7 +2131,6 @@ fn abs_i128(value: i128) -> i128 {
         value.saturating_mul(-1)
     }
 }
-
 fn median(sorted: &[i128]) -> i128 {
     let mid = sorted.len() / 2;
     if sorted.len().is_multiple_of(2) {
@@ -2301,7 +2142,6 @@ fn median(sorted: &[i128]) -> i128 {
         sorted[mid]
     }
 }
-
 fn percentile(sorted: &[i128], percentile_bps: u16) -> i128 {
     if sorted.is_empty() {
         return 0;
@@ -2310,7 +2150,6 @@ fn percentile(sorted: &[i128], percentile_bps: u16) -> i128 {
     let idx = usize::try_from(idx).unwrap_or_else(|_| sorted.len().saturating_sub(1));
     sorted[idx]
 }
-
 /// Aggregate observations into a report and feed event outcome.
 ///
 /// # Errors
@@ -2324,19 +2163,16 @@ pub fn aggregate_observations(
     observations: &[Observation],
 ) -> Result<AggregationOutput, OracleAggregationError> {
     config.ensure_active_slot(slot)?;
-
     if observations.len() > usize::from(config.max_observers) {
         return Err(OracleAggregationError::TooManyObservations {
             provided: observations.len(),
             max: config.max_observers,
         });
     }
-
     let provider_set: BTreeSet<_> = config.providers.iter().cloned().collect();
     let mut seen = BTreeSet::new();
     let mut values = Vec::new();
     let mut errors = Vec::new();
-
     for obs in observations {
         config.validate_observation_meta(&obs.body)?;
         if obs.body.slot != slot {
@@ -2361,7 +2197,6 @@ pub fn aggregate_observations(
                 oracle_id: obs.body.provider_id.clone(),
             });
         }
-
         match obs.body.outcome {
             ObservationOutcome::Value(value) => {
                 let len = value.encode().len();
@@ -2376,7 +2211,6 @@ pub fn aggregate_observations(
             ObservationOutcome::Error(code) => errors.push(code),
         }
     }
-
     let observation_count = values.len().saturating_add(errors.len());
     if observation_count > 0
         && u128::from(errors.len() as u64) * 10_000
@@ -2388,7 +2222,6 @@ pub fn aggregate_observations(
             max_error_rate_bps: config.max_error_rate_bps,
         });
     }
-
     if values.len() < usize::from(config.min_signers) {
         if let Some(code) = errors.first().copied()
             && errors.len() >= usize::from(config.min_signers)
@@ -2407,14 +2240,12 @@ pub fn aggregate_observations(
                 outcome: FeedEventOutcome::Error(FeedError { code }),
             });
         }
-
         let provided = values.len().max(errors.len());
         return Err(OracleAggregationError::InsufficientQuorum {
             required: config.min_signers,
             provided,
         });
     }
-
     let expected_scale = values[0].1.scale;
     let mut numeric: Vec<(OracleId, i128, HashOf<ObservationBody>)> = Vec::new();
     for (oracle_id, value, observation_hash) in &values {
@@ -2426,11 +2257,9 @@ pub fn aggregate_observations(
         }
         numeric.push((oracle_id.clone(), value.mantissa, *observation_hash));
     }
-
     let mut sorted_mantissas: Vec<i128> = numeric.iter().map(|(_, value, _)| *value).collect();
     sorted_mantissas.sort_unstable();
     let median_value = median(&sorted_mantissas);
-
     let inlier_mask: Vec<bool> = match config.outlier_policy {
         OutlierPolicy::Mad(k_times_1e2) => {
             let mut deviations: Vec<i128> = sorted_mantissas
@@ -2451,7 +2280,6 @@ pub fn aggregate_observations(
             .map(|(_, value, _)| abs_i128(*value - median_value) <= policy.max_delta)
             .collect(),
     };
-
     let mut entries: Vec<ReportEntry> = numeric
         .iter()
         .zip(inlier_mask.iter())
@@ -2464,26 +2292,22 @@ pub fn aggregate_observations(
             },
         )
         .collect();
-
     let mut inlier_values: Vec<i128> = numeric
         .iter()
         .zip(inlier_mask.iter())
         .filter_map(|((_, mantissa, _), inlier)| inlier.then_some(*mantissa))
         .collect();
-
     if inlier_values.len() < usize::from(config.min_signers) {
         return Err(OracleAggregationError::InsufficientQuorum {
             required: config.min_signers,
             provided: inlier_values.len(),
         });
     }
-
     inlier_values.sort_unstable();
     let aggregated_mantissa = match config.aggregation {
         AggregationRule::MedianMad(_) => median(&inlier_values),
         AggregationRule::Percentile(percentile_bps) => percentile(&inlier_values, percentile_bps),
     };
-
     entries.sort_by(|left, right| left.oracle_id.cmp(&right.oracle_id));
     let report = ReportBody {
         feed_id: config.feed_id.clone(),
@@ -2494,7 +2318,6 @@ pub fn aggregate_observations(
         submitter,
     };
     validate_report_caps(config, &report)?;
-
     Ok(AggregationOutput {
         report: report.clone(),
         outcome: FeedEventOutcome::Success(FeedSuccess {
@@ -2503,7 +2326,6 @@ pub fn aggregate_observations(
         }),
     })
 }
-
 /// Validate that a report respects the feed configuration caps.
 ///
 /// # Errors
@@ -2518,7 +2340,6 @@ pub fn validate_report_caps(
             max: config.max_observers,
         });
     }
-
     let mut seen = BTreeSet::new();
     for entry in &report.entries {
         if !seen.insert(&entry.oracle_id) {
@@ -2527,10 +2348,8 @@ pub fn validate_report_caps(
             });
         }
     }
-
     Ok(())
 }
-
 /// Validation errors for oracle model helpers.
 #[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum OracleModelError {
@@ -2593,7 +2412,6 @@ pub enum OracleModelError {
         header: String,
     },
 }
-
 /// Reference oracle kits used by SDK/CLI examples and fixtures.
 pub mod kits {
     use norito::json;
@@ -2618,7 +2436,6 @@ pub mod kits {
         /// Sample feed event outcome.
         pub feed_event: FeedEvent,
     }
-
     /// Canonical XOR/USD price feed kit (Median + MAD).
     #[must_use]
     pub fn price_xor_usd() -> OracleKit {
@@ -2635,7 +2452,6 @@ pub mod kits {
             feed_event,
         }
     }
-
     /// Canonical twitter follow binding feed kit (`twitter_user_id` → UAID).
     #[must_use]
     pub fn twitter_follow_binding() -> OracleKit {
@@ -2652,82 +2468,69 @@ pub mod kits {
             feed_event,
         }
     }
-
     /// Hash used to derive the reference social UAID.
     pub const SOCIAL_UAID_HASH_HEX: &str =
         "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
-
     fn price_feed_config() -> FeedConfig {
         json::from_str(include_str!(
             "../../../../fixtures/oracle/feed_config_price_xor_usd.json"
         ))
         .expect("price feed config fixture")
     }
-
     fn social_feed_config() -> FeedConfig {
         json::from_str(include_str!(
             "../../../../fixtures/oracle/feed_config_social_follow.json"
         ))
         .expect("social feed config fixture")
     }
-
     fn price_connector_request() -> ConnectorRequest {
         json::from_str(include_str!(
             "../../../../fixtures/oracle/connector_request_price_xor_usd.json"
         ))
         .expect("price connector request fixture")
     }
-
     fn social_connector_request() -> ConnectorRequest {
         json::from_str(include_str!(
             "../../../../fixtures/oracle/connector_request_social_follow.json"
         ))
         .expect("social connector request fixture")
     }
-
     fn price_observation() -> Observation {
         json::from_str(include_str!(
             "../../../../fixtures/oracle/observation_price_xor_usd.json"
         ))
         .expect("price observation fixture")
     }
-
     fn social_observation() -> Observation {
         json::from_str(include_str!(
             "../../../../fixtures/oracle/observation_social_follow.json"
         ))
         .expect("social observation fixture")
     }
-
     fn price_observations() -> Vec<Observation> {
         vec![price_observation()]
     }
-
     fn social_observations() -> Vec<Observation> {
         vec![social_observation()]
     }
-
     fn price_report() -> Report {
         json::from_str(include_str!(
             "../../../../fixtures/oracle/report_price_xor_usd.json"
         ))
         .expect("price report fixture")
     }
-
     fn social_report() -> Report {
         json::from_str(include_str!(
             "../../../../fixtures/oracle/report_social_follow.json"
         ))
         .expect("social report fixture")
     }
-
     fn price_feed_event() -> FeedEvent {
         json::from_str(include_str!(
             "../../../../fixtures/oracle/feed_event_price_xor_usd.json"
         ))
         .expect("price feed event fixture")
     }
-
     fn social_feed_event() -> FeedEvent {
         json::from_str(include_str!(
             "../../../../fixtures/oracle/feed_event_social_follow.json"
@@ -2735,7 +2538,6 @@ pub mod kits {
         .expect("social feed event fixture")
     }
 }
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -2749,7 +2551,6 @@ mod tests {
     fn feed_id(name: &str) -> FeedId {
         FeedId(Name::from_str(name).expect("feed name"))
     }
-
     fn oracle(name: &str, domain: &str) -> OracleId {
         let _domain_id = DomainId::try_new(domain, "universal").expect("domain id");
         let seed = format!("{name}:{domain}");
@@ -2757,64 +2558,51 @@ mod tests {
             .expect("derive checked oracle fixture keypair");
         AccountId::new(keypair.public_key().clone())
     }
-
     fn observation_value(mantissa: i128, scale: u32) -> ObservationValue {
         ObservationValue::new(mantissa, scale)
     }
-
     fn sample_social_uaid() -> UniversalAccountId {
         let uaid_hash = Hash::from_str(kits::SOCIAL_UAID_HASH_HEX).expect("uaid hash");
         UniversalAccountId::from_hash(uaid_hash)
     }
-
     fn observation_with_value(provider: &OracleId, mantissa: i128, scale: u32) -> Observation {
         let mut obs = sample_observation();
         obs.body.provider_id = provider.clone();
         obs.body.outcome = ObservationOutcome::Value(observation_value(mantissa, scale));
         obs
     }
-
     fn observation_with_error(provider: &OracleId, code: ObservationErrorCode) -> Observation {
         let mut obs = sample_observation();
         obs.body.provider_id = provider.clone();
         obs.body.outcome = ObservationOutcome::Error(code);
         obs
     }
-
     #[cfg(feature = "json")]
     fn pretty_json<T: json::JsonSerialize>(value: &T) -> String {
         let value = json::to_value(value).expect("serialize to JSON value");
         json::to_string_pretty(&value).expect("render JSON")
     }
-
     fn sample_connector_request() -> ConnectorRequest {
         kits::price_xor_usd().connector_request
     }
-
     fn sample_social_connector_request() -> ConnectorRequest {
         kits::twitter_follow_binding().connector_request
     }
-
     fn sample_providers() -> Vec<OracleId> {
         kits::price_xor_usd().feed_config.providers.clone()
     }
-
     fn sample_request_hash() -> Hash {
         sample_connector_request().request_hash()
     }
-
     fn sample_social_request_hash() -> Hash {
         sample_social_connector_request().request_hash()
     }
-
     fn sample_feed_config() -> FeedConfig {
         kits::price_xor_usd().feed_config
     }
-
     fn sample_social_feed_config() -> FeedConfig {
         kits::twitter_follow_binding().feed_config
     }
-
     fn sample_observation() -> Observation {
         kits::price_xor_usd()
             .observations
@@ -2822,7 +2610,6 @@ mod tests {
             .expect("at least one observation")
             .clone()
     }
-
     fn sample_social_observation() -> Observation {
         kits::twitter_follow_binding()
             .observations
@@ -2830,23 +2617,18 @@ mod tests {
             .expect("at least one observation")
             .clone()
     }
-
     fn sample_report() -> Report {
         kits::price_xor_usd().report
     }
-
     fn sample_social_report() -> Report {
         kits::twitter_follow_binding().report
     }
-
     fn sample_feed_event() -> FeedEvent {
         kits::price_xor_usd().feed_event
     }
-
     fn sample_social_feed_event() -> FeedEvent {
         kits::twitter_follow_binding().feed_event
     }
-
     #[test]
     fn committee_draw_is_deterministic_and_stable() {
         let feed_id = feed_id("price_xor_usd");
@@ -2857,7 +2639,6 @@ mod tests {
             oracle("diana", "validators"),
         ];
         let validator_root = Hash::new(b"validator-set-root");
-
         let draw_one = derive_committee(
             &feed_id,
             FeedConfigVersion(1),
@@ -2866,7 +2647,6 @@ mod tests {
             &providers,
             NonZeroUsize::new(3).unwrap(),
         );
-
         // Shuffling providers should not affect membership ordering.
         let mut reversed = providers.clone();
         reversed.reverse();
@@ -2878,12 +2658,10 @@ mod tests {
             &reversed,
             NonZeroUsize::new(3).unwrap(),
         );
-
         assert_eq!(draw_one.seed, draw_two.seed);
         assert_eq!(draw_one.members, draw_two.members);
         assert_eq!(draw_one.members.len(), 3);
     }
-
     #[test]
     fn leader_changes_per_slot() {
         let feed_id = feed_id("price_xor_usd");
@@ -2901,16 +2679,13 @@ mod tests {
             &providers,
             NonZeroUsize::new(3).unwrap(),
         );
-
         let leader_slot_10 = draw.leader_for_slot(10).expect("leader");
         let leader_slot_11 = draw.leader_for_slot(11).expect("leader");
-
         // Leaders should be deterministic but not constant across slots.
         assert_ne!(leader_slot_10, leader_slot_11);
         assert!(providers.contains(&leader_slot_10));
         assert!(providers.contains(&leader_slot_11));
     }
-
     #[test]
     fn replay_guard_detects_duplicates_and_expires() {
         let mut guard = ReplayProtection::new(NonZeroU64::new(3).unwrap());
@@ -2920,14 +2695,11 @@ mod tests {
             10,
             Hash::new(b"request"),
         );
-
         assert_eq!(ReplayStatus::Fresh, guard.record(key.clone(), 10));
         assert_eq!(ReplayStatus::Duplicate, guard.record(key.clone(), 11));
-
         // Once outside the replay window, stale keys are rejected.
         assert_eq!(ReplayStatus::Expired, guard.record(key, 15));
     }
-
     #[test]
     fn report_caps_enforce_entry_limits_and_duplicates() {
         let config = FeedConfig {
@@ -2948,7 +2720,6 @@ mod tests {
             dispute_window_slots: NonZeroU64::new(10).unwrap(),
             replay_window_slots: NonZeroU64::new(4).unwrap(),
         };
-
         let observation_hash = ObservationBody {
             feed_id: config.feed_id.clone(),
             feed_config_version: config.feed_config_version,
@@ -2961,7 +2732,6 @@ mod tests {
             timestamp_ms: None,
         }
         .hash();
-
         let ok_report = ReportBody {
             feed_id: config.feed_id.clone(),
             feed_config_version: config.feed_config_version,
@@ -2975,9 +2745,7 @@ mod tests {
             }],
             submitter: oracle("alice", "validators"),
         };
-
         assert_eq!(Ok(()), validate_report_caps(&config, &ok_report));
-
         let too_many_entries = ReportBody {
             entries: vec![
                 ok_report.entries[0].clone(),
@@ -2996,12 +2764,10 @@ mod tests {
             ],
             ..ok_report.clone()
         };
-
         assert!(matches!(
             validate_report_caps(&config, &too_many_entries),
             Err(OracleModelError::TooManyEntries { .. })
         ));
-
         let duplicate = ReportBody {
             entries: vec![
                 ok_report.entries[0].clone(),
@@ -3014,13 +2780,11 @@ mod tests {
             ],
             ..ok_report
         };
-
         assert!(matches!(
             validate_report_caps(&config, &duplicate),
             Err(OracleModelError::DuplicateOracle { .. })
         ));
     }
-
     #[test]
     fn observation_fixture_decodes() {
         let expected = sample_observation();
@@ -3028,10 +2792,8 @@ mod tests {
             "../../../../fixtures/oracle/observation_price_xor_usd.json"
         ))
         .expect("decode observation");
-
         assert_eq!(expected, observation);
     }
-
     #[test]
     fn report_fixture_decodes_and_validates() {
         let expected = sample_report();
@@ -3040,11 +2802,9 @@ mod tests {
         ))
         .expect("decode report");
         let feed = sample_feed_config();
-
         assert_eq!(expected, report);
         assert_eq!(Ok(()), validate_report_caps(&feed, &report.body));
     }
-
     #[test]
     fn feed_event_fixture_decodes() {
         let expected = sample_feed_event();
@@ -3052,10 +2812,8 @@ mod tests {
             "../../../../fixtures/oracle/feed_event_price_xor_usd.json"
         ))
         .expect("decode feed event");
-
         assert_eq!(expected, event);
     }
-
     #[test]
     fn feed_config_activity_matches_cadence() {
         let config = FeedConfig {
@@ -3076,11 +2834,9 @@ mod tests {
             dispute_window_slots: NonZeroU64::new(5).unwrap(),
             replay_window_slots: NonZeroU64::new(5).unwrap(),
         };
-
         assert!(config.is_active_slot(10));
         assert!(!config.is_active_slot(12));
     }
-
     #[test]
     fn gossip_and_replay_keys_match_helpers() {
         let request_hash = Hash::new(b"request");
@@ -3099,7 +2855,6 @@ mod tests {
             },
             signature: SignatureOf::from_signature(signature.clone()),
         };
-
         let report = Report {
             body: ReportBody {
                 feed_id: observation.body.feed_id.clone(),
@@ -3111,7 +2866,6 @@ mod tests {
             },
             signature: SignatureOf::from_signature(signature),
         };
-
         let expected_gossip =
             GossipKey::new(observation.body.feed_id.clone(), FeedConfigVersion(3), 12);
         let expected_replay = ReplayKey::new(
@@ -3120,12 +2874,10 @@ mod tests {
             12,
             request_hash,
         );
-
         assert_eq!(expected_gossip, observation.gossip_key());
         assert_eq!(expected_gossip, report.gossip_key());
         assert_eq!(expected_replay, observation.replay_key());
         assert_eq!(expected_replay, report.replay_key());
-
         let mut guard = ReplayProtection::new(NonZeroU64::new(4).unwrap());
         assert_eq!(
             ReplayStatus::Fresh,
@@ -3136,7 +2888,6 @@ mod tests {
             guard.record(report.replay_key(), observation.body.slot + 1)
         );
     }
-
     #[test]
     fn connector_request_fixture_round_trip() {
         let expected = sample_connector_request();
@@ -3144,14 +2895,12 @@ mod tests {
             "../../../../fixtures/oracle/connector_request_price_xor_usd.json"
         ))
         .expect("decode connector request");
-
         assert_eq!(expected, request);
         let hash_literal: HashOf<ConnectorRequest> =
             json::from_value(json::to_value(&request.hash()).expect("hash json"))
                 .expect("hash literal parses");
         assert_eq!(hash_literal, request.hash());
     }
-
     #[test]
     #[ignore = "fixture printer for manual inspection"]
     fn print_connector_request_fixture() {
@@ -3163,23 +2912,19 @@ mod tests {
         let hash_literal = json::to_string(&json::to_value(&request.hash()).expect("hash value"))
             .expect("stringify hash");
         println!("request_hash_literal={hash_literal}");
-
         let observation_json =
             json::to_string_pretty(&json::to_value(&sample_observation()).expect("obs json"))
                 .expect("stringify observation");
         println!("observation_json={observation_json}");
-
         let report_json =
             json::to_string_pretty(&json::to_value(&sample_report()).expect("report json"))
                 .expect("stringify report");
         println!("report_json={report_json}");
-
         let event_json =
             json::to_string_pretty(&json::to_value(&sample_feed_event()).expect("event json"))
                 .expect("stringify event");
         println!("event_json={event_json}");
     }
-
     #[test]
     fn connector_request_hash_is_stable() {
         let request = sample_connector_request();
@@ -3190,19 +2935,16 @@ mod tests {
             "update the connector request fixture if this hash intentionally changes"
         );
     }
-
     #[test]
     fn feed_config_meta_validation_detects_mismatches() {
         let config = sample_feed_config();
         let mut observation = sample_observation().body;
-
         // Slot not aligned with cadence.
         observation.slot = 11;
         assert!(matches!(
             config.validate_observation_meta(&observation),
             Err(OracleModelError::InactiveSlot { .. })
         ));
-
         // Connector mismatch.
         observation.slot = 10;
         observation.connector_id = "other".to_string();
@@ -3210,7 +2952,6 @@ mod tests {
             config.validate_observation_meta(&observation),
             Err(OracleModelError::ConnectorMismatch { .. })
         ));
-
         // Feed mismatch.
         observation.connector_id = config.connector_id.clone();
         observation.feed_id = feed_id("other");
@@ -3218,7 +2959,6 @@ mod tests {
             config.validate_observation_meta(&observation),
             Err(OracleModelError::FeedMismatch { .. })
         ));
-
         // Version mismatch.
         observation.feed_id = config.feed_id.clone();
         observation.feed_config_version = FeedConfigVersion(99);
@@ -3226,13 +2966,11 @@ mod tests {
             config.validate_observation_meta(&observation),
             Err(OracleModelError::FeedVersionMismatch { .. })
         ));
-
         // Happy path.
         observation.feed_config_version = config.feed_config_version;
         observation.connector_id = config.connector_id.clone();
         assert_eq!(Ok(()), config.validate_observation_meta(&observation));
     }
-
     #[test]
     fn observation_error_codes_classify() {
         assert_eq!(
@@ -3252,7 +2990,6 @@ mod tests {
             ObservationErrorCode::Other(7).classification()
         );
     }
-
     #[test]
     fn committee_fetch_plan_respects_membership_and_backoff() {
         let feed_id = feed_id("price_xor_usd");
@@ -3276,20 +3013,17 @@ mod tests {
             base_backoff_slots: NonZeroU64::new(2).unwrap(),
             jitter_max_slots: 1,
         };
-
         // Member plan has deterministic attempts.
         let member = committee.members.first().expect("committee member");
         let member_plan = plan_committee_fetches(&committee, member, 10, policy, &request_hash);
         assert!(member_plan.is_allowed());
         assert_eq!(vec![10, 13, 14], member_plan.attempts);
-
         // Non-member gets a denied plan.
         let dave = oracle("dave", "validators");
         let dave_plan = plan_committee_fetches(&committee, &dave, 10, policy, &request_hash);
         assert!(!dave_plan.is_allowed());
         assert!(dave_plan.attempts.is_empty());
     }
-
     #[test]
     fn aggregation_produces_success_and_outlier_flags() {
         let config = sample_feed_config();
@@ -3299,7 +3033,6 @@ mod tests {
             observation_with_value(&providers[0], 1_002_500, 5),
             observation_with_value(&providers[1], 1_001_500, 5),
         ];
-
         let output = aggregate_observations(
             &config,
             10,
@@ -3308,7 +3041,6 @@ mod tests {
             &observations,
         )
         .expect("aggregation succeeds");
-
         assert_eq!(config.feed_id, output.report.feed_id);
         assert_eq!(
             FeedEventOutcome::Success(FeedSuccess {
@@ -3318,13 +3050,11 @@ mod tests {
             output.outcome
         );
         assert!(output.report.entries.iter().all(|entry| !entry.outlier));
-
         let event = output.clone().into_feed_event();
         assert_eq!(event.feed_id, config.feed_id);
         assert_eq!(event.slot, 10);
         assert!(matches!(event.outcome, FeedEventOutcome::Success(_)));
     }
-
     #[test]
     fn aggregation_marks_outliers_and_rejects_when_all_filtered() {
         let mut config = sample_feed_config();
@@ -3338,7 +3068,6 @@ mod tests {
             observation_with_value(&providers[1], 1_000_100, 5),
             observation_with_value(&carol, 1_200_000, 5),
         ];
-
         let output = aggregate_observations(
             &config,
             10,
@@ -3347,9 +3076,7 @@ mod tests {
             &observations,
         )
         .expect("aggregation succeeds");
-
         assert!(output.report.entries.iter().any(|entry| entry.outlier));
-
         let mut strict = config.clone();
         strict.outlier_policy = OutlierPolicy::Absolute(AbsoluteOutlier { max_delta: 0 });
         let all_outliers = aggregate_observations(
@@ -3367,7 +3094,6 @@ mod tests {
             Err(OracleAggregationError::InsufficientQuorum { .. })
         ));
     }
-
     #[test]
     fn aggregation_handles_errors_and_missing() {
         let mut config = sample_feed_config();
@@ -3385,7 +3111,6 @@ mod tests {
             ],
         )
         .expect("errors aggregate");
-
         assert_eq!(
             FeedEventOutcome::Error(FeedError {
                 code: ObservationErrorCode::Timeout
@@ -3393,7 +3118,6 @@ mod tests {
             errors_only.outcome
         );
         assert!(errors_only.report.entries.is_empty());
-
         let missing = aggregate_observations(&config, 10, request_hash, providers[0].clone(), &[])
             .expect_err("empty observations cannot satisfy quorum");
         assert!(matches!(
@@ -3401,7 +3125,6 @@ mod tests {
             OracleAggregationError::InsufficientQuorum { .. }
         ));
     }
-
     #[test]
     fn social_follow_feed_requires_matching_hashed_values() {
         let strict_config = sample_social_feed_config();
@@ -3410,11 +3133,9 @@ mod tests {
             max_delta: i128::MAX,
         });
         let uaid_value = ObservationValue::from_uaid(&sample_social_uaid());
-
         let mut first = sample_social_observation();
         first.body.outcome = ObservationOutcome::Value(uaid_value);
         first.body.request_hash = sample_social_request_hash();
-
         let mut second = first.clone();
         second.body.provider_id = strict_config
             .providers
@@ -3422,7 +3143,6 @@ mod tests {
             .cloned()
             .expect("config must list a second provider");
         second.body.timestamp_ms = Some(1_700_000_111_001);
-
         let output = aggregate_observations(
             &tolerant_config,
             15,
@@ -3431,7 +3151,6 @@ mod tests {
             &[first.clone(), second.clone()],
         )
         .expect("matching UAID hashes aggregate");
-
         assert_eq!(
             FeedEventOutcome::Success(FeedSuccess {
                 value: ObservationValue::from_uaid(&sample_social_uaid()),
@@ -3440,12 +3159,10 @@ mod tests {
             output.outcome
         );
         assert!(output.report.entries.iter().all(|entry| !entry.outlier));
-
         let submitter = second.body.provider_id.clone();
         let mut mismatched = second;
         let alt_uaid = UniversalAccountId::from_hash(Hash::new(b"other-uaid"));
         mismatched.body.outcome = ObservationOutcome::Value(ObservationValue::from_uaid(&alt_uaid));
-
         let err = aggregate_observations(
             &strict_config,
             15,
@@ -3459,7 +3176,6 @@ mod tests {
             OracleAggregationError::InsufficientQuorum { .. }
         ));
     }
-
     #[test]
     fn aggregation_rejects_mismatched_request_hash_and_scale() {
         let config = sample_feed_config();
@@ -3477,7 +3193,6 @@ mod tests {
             err,
             OracleAggregationError::RequestHashMismatch { .. }
         ));
-
         observation.body.request_hash = sample_request_hash();
         observation.body.outcome = ObservationOutcome::Value(ObservationValue::new(1_000, 4));
         let second_provider = config
@@ -3499,7 +3214,6 @@ mod tests {
             OracleAggregationError::MismatchedScale { .. }
         ));
     }
-
     #[test]
     fn aggregation_rejects_value_length_overflow() {
         let mut config = sample_feed_config();
@@ -3511,14 +3225,12 @@ mod tests {
                 .expect_err("value too long");
         assert!(matches!(err, OracleAggregationError::ValueTooLong { .. }));
     }
-
     #[test]
     fn provider_stats_reputation_score_is_deterministic_and_clamped() {
         let empty = OracleProviderStats::default();
         assert_eq!(0, empty.total_outcomes());
         assert_eq!(10_000, empty.reputation_score_bps());
         assert_eq!(10_000, empty.adjusted_reputation_score_bps(1));
-
         let stats = OracleProviderStats {
             inliers: 7,
             outliers: 1,
@@ -3531,7 +3243,6 @@ mod tests {
         assert_eq!(7_000, stats.reputation_score_bps());
         assert_eq!(9_500, stats.adjusted_reputation_score_bps(2_500));
         assert_eq!(0, stats.adjusted_reputation_score_bps(-8_000));
-
         let adversarial = OracleProviderStats {
             inliers: u64::MAX,
             outliers: u64::MAX,
@@ -3545,7 +3256,6 @@ mod tests {
         assert_eq!(10_000, adversarial.adjusted_reputation_score_bps(10_000));
         assert_eq!(0, adversarial.adjusted_reputation_score_bps(-10_000));
     }
-
     #[test]
     fn connector_request_rejects_unredacted_sensitive_headers() {
         let mut request = sample_connector_request();
@@ -3557,14 +3267,12 @@ mod tests {
             request.validate_redaction(),
             Err(OracleModelError::UnredactedSensitiveHeader { .. })
         ));
-
         request.headers.insert(
             "Authorization".to_string(),
             RedactedHeaderValue::Hashed(Hash::new(b"Bearer abc")),
         );
         assert_eq!(Ok(()), request.validate_redaction());
     }
-
     #[test]
     fn keyed_hash_verifies_payloads() {
         let keyed = KeyedHash::new("pepper-1", b"pepper", b"twitter_user_123");
@@ -3572,7 +3280,6 @@ mod tests {
         assert!(!keyed.verify(b"pepper", b"other"));
         assert!(!keyed.verify(b"wrong-pepper", b"twitter_user_123"));
     }
-
     #[test]
     fn hashed_identifiers_map_to_stable_values() {
         let uaid_value = ObservationValue::from_uaid(&sample_social_uaid());
@@ -3581,13 +3288,11 @@ mod tests {
             uaid_value.mantissa,
             170_052_220_750_163_104_028_821_061_988_450_963_712_i128
         );
-
         let keyed = KeyedHash::new("pepper-1", b"pepper", b"twitter_user_123");
         let keyed_value = ObservationValue::from_keyed_hash(&keyed);
         assert_eq!(keyed_value.scale, 0);
         assert!(keyed_value.mantissa >= 0);
     }
-
     #[test]
     #[cfg(feature = "json")]
     #[allow(clippy::too_many_lines)]
@@ -3602,7 +3307,6 @@ mod tests {
         let expected_social_report = sample_social_report();
         let expected_event = sample_feed_event();
         let expected_social_event = sample_social_feed_event();
-
         let feed_config: FeedConfig = json::from_str(include_str!(
             "../../../../fixtures/oracle/feed_config_price_xor_usd.json"
         ))
@@ -3643,7 +3347,6 @@ mod tests {
             "../../../../fixtures/oracle/feed_event_social_follow.json"
         ))
         .expect("social feed event fixture");
-
         if std::env::var_os("PRINT_SORACLES_FIXTURES").is_some() {
             println!("price_feed_config={}", pretty_json(&expected_feed_config));
             println!(
@@ -3668,7 +3371,6 @@ mod tests {
             println!("social_report={}", pretty_json(&expected_social_report));
             println!("social_event={}", pretty_json(&expected_social_event));
         }
-
         assert_eq!(expected_feed_config, feed_config);
         assert_eq!(expected_social_feed_config, social_feed_config);
         assert_eq!(expected_connector_request, connector_request);
@@ -3679,55 +3381,46 @@ mod tests {
         assert_eq!(expected_social_report, social_report);
         assert_eq!(expected_event, event);
         assert_eq!(expected_social_event, social_event);
-
         let encoded_feed_config =
             json::to_value(&feed_config).expect("feed config encodes to JSON");
         let decoded_feed_config: FeedConfig =
             json::from_value(encoded_feed_config.clone()).expect("feed config decodes from JSON");
         assert_eq!(decoded_feed_config, feed_config);
-
         let encoded_observation =
             json::to_value(&observation).expect("observation encodes to JSON");
         let decoded_observation: Observation =
             json::from_value(encoded_observation.clone()).expect("observation decodes from JSON");
         assert_eq!(decoded_observation, observation);
-
         let encoded_report = json::to_value(&report).expect("report encodes to JSON");
         let decoded_report: Report =
             json::from_value(encoded_report.clone()).expect("report decodes from JSON");
         assert_eq!(decoded_report, report);
-
         let encoded_event = json::to_value(&event).expect("event encodes to JSON");
         let decoded_event: FeedEvent =
             json::from_value(encoded_event.clone()).expect("event decodes from JSON");
         assert_eq!(decoded_event, event);
-
         let encoded_social_feed_config =
             json::to_value(&social_feed_config).expect("social feed config encodes to JSON");
         let decoded_social_feed_config: FeedConfig =
             json::from_value(encoded_social_feed_config.clone())
                 .expect("social feed config decodes from JSON");
         assert_eq!(decoded_social_feed_config, social_feed_config);
-
         let encoded_social_observation =
             json::to_value(&social_observation).expect("social observation encodes to JSON");
         let decoded_social_observation: Observation =
             json::from_value(encoded_social_observation.clone())
                 .expect("social observation decodes from JSON");
         assert_eq!(decoded_social_observation, social_observation);
-
         let encoded_social_report =
             json::to_value(&social_report).expect("social report encodes to JSON");
         let decoded_social_report: Report =
             json::from_value(encoded_social_report.clone()).expect("social report decodes");
         assert_eq!(decoded_social_report, social_report);
-
         let encoded_social_event =
             json::to_value(&social_event).expect("social event encodes to JSON");
         let decoded_social_event: FeedEvent =
             json::from_value(encoded_social_event.clone()).expect("social event decodes");
         assert_eq!(decoded_social_event, social_event);
-
         let encoded_social_connector =
             json::to_value(&social_connector_request).expect("social connector encodes to JSON");
         let decoded_social_connector: ConnectorRequest =
@@ -3735,7 +3428,6 @@ mod tests {
                 .expect("social connector decodes from JSON");
         assert_eq!(decoded_social_connector, social_connector_request);
     }
-
     #[test]
     #[cfg(feature = "json")]
     fn social_oracle_fixtures_preserve_observation_links() {
@@ -3749,9 +3441,7 @@ mod tests {
             .iter()
             .find(|entry| entry.oracle_id == observation.body.provider_id)
             .expect("social report must reference the fixture observation provider");
-
         assert_eq!(report_entry.observation_hash, observation_hash);
-
         let FeedEventOutcome::Success(success) = &event.outcome else {
             panic!("social feed event must contain a successful aggregation");
         };
@@ -3762,7 +3452,6 @@ mod tests {
             .expect("social feed event must reference the fixture observation provider");
         assert_eq!(event_entry, report_entry);
     }
-
     #[test]
     fn rejection_code_catalog_is_unique_and_descriptive() {
         use std::collections::BTreeSet;
@@ -3785,7 +3474,6 @@ mod tests {
                 code.as_code()
             );
         }
-
         let model_err = OracleModelError::FeedVersionMismatch {
             expected: FeedConfigVersion(1),
             provided: FeedConfigVersion(2),
@@ -3794,7 +3482,6 @@ mod tests {
             expected: 10,
             provided: 11,
         };
-
         assert_eq!(
             OracleRejectionCode::from(&model_err).as_code(),
             "oracle_model_feed_version_mismatch"
@@ -3804,7 +3491,6 @@ mod tests {
             "oracle_agg_slot_mismatch"
         );
     }
-
     #[test]
     fn oracle_abi_hash_is_stable() {
         // The hash guards schema changes for the oracle message surface.
@@ -3815,7 +3501,6 @@ mod tests {
             "update the golden value if the schema intentionally changes"
         );
     }
-
     #[test]
     fn oracle_change_stage_order_and_next_are_stable() {
         let stages = [
@@ -3838,7 +3523,6 @@ mod tests {
         );
         assert!(OracleChangeStage::Enactment.next().is_none());
     }
-
     #[test]
     fn oracle_change_required_votes_follow_class() {
         use nonzero_ext::nonzero;
@@ -3846,7 +3530,6 @@ mod tests {
         let low = nonzero!(1_usize);
         let medium = nonzero!(2_usize);
         let high = nonzero!(3_usize);
-
         assert_eq!(
             OracleChangeClass::Low.required_votes(low, medium, high),
             low
@@ -3860,7 +3543,6 @@ mod tests {
             high
         );
     }
-
     #[test]
     fn oracle_change_current_stage_tracks_progression() {
         let mut proposal = OracleChangeProposal {
@@ -3895,23 +3577,18 @@ mod tests {
             ],
             status: OracleChangeStatus::Pending,
         };
-
         assert_eq!(
             proposal.current_stage().map(|stage| stage.stage),
             Some(OracleChangeStage::Intake)
         );
-
         proposal.stages[0].completed_at = Some(6);
         proposal.stages[1].started_at = Some(6);
         proposal.stages[1].deadline = Some(9);
-
         assert_eq!(
             proposal.current_stage().map(|stage| stage.stage),
             Some(OracleChangeStage::RulesCommittee)
         );
-
         proposal.stages[1].failure = Some(OracleChangeStageFailure::Rejected);
-
         assert_eq!(
             proposal.current_stage().map(|stage| stage.stage),
             Some(OracleChangeStage::RulesCommittee)

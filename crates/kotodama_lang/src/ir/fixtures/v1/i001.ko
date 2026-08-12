@@ -1,0 +1,6 @@
+
+            fn first() -> int { 1 }
+            fn second() -> int { 2 }
+            fn combine(int left, int right) -> int { left * 10 + right }
+            fn run() -> int { combine(right: second(), left: first()) }
+        

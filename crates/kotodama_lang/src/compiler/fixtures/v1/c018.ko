@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  ledger::escrow::open_dispute(Name::parse("deal"), 1);
+}
+
+}

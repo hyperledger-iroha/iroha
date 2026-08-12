@@ -225,7 +225,12 @@ impl ValidQueryRequest {
                 ) -> Result<Option<QueryResponse>, Error>
                 where
                     T: Send + Sync + 'static,
-                    Q: super::super::ValidQuery<Item = T> + Send + Sync + 'static,
+                    Q: super::super::ValidQuery<Item = T>
+                        + NoritoSerialize
+                        + for<'de> norito::core::NoritoDeserialize<'de>
+                        + Send
+                        + Sync
+                        + 'static,
                     T: HasProjection<SelectorMarker, AtomType = ()>
                         + HasProjection<PredicateMarker>
                         + crate::smartcontracts::isi::query::SortableQueryOutput
@@ -243,10 +248,8 @@ impl ValidQueryRequest {
                     F: Fn(&query::ErasedIterQuery<T>) -> Option<Q>,
                 {
                     if let Some(erased) = query::iter_query_inner::<T>(qbox) {
-                        let mut decoder = FastIterComponentDecoder::new(
-                            limits,
-                            [erased.payload(), &[], &[]],
-                        )?;
+                        let mut decoder =
+                            FastIterComponentDecoder::new(limits, [erased.payload(), &[], &[]])?;
                         let Some(concrete) = decoder.try_decode::<Q>(erased.payload())? else {
                             return Ok(None);
                         };
@@ -285,7 +288,7 @@ impl ValidQueryRequest {
                 };
                 // Fast-DSL path: when the boxed query payload is not present, reconstruct
                 // from item kind and encoded predicate/selector.
-                if iter_query.query_box().is_none() {
+                if legacy_query_box(&iter_query).is_none() {
                     {
                         use iroha_data_model::query::QueryItemKind;
                         let mut decoder = FastIterComponentDecoder::new(
@@ -305,8 +308,7 @@ impl ValidQueryRequest {
                                     decoder.decode(&iter_query.predicate_bytes)?;
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                     decoder.decode(&iter_query.selector_bytes)?;
-                                let concrete: $find =
-                                    decoder.decode(&iter_query.query_payload)?;
+                                let concrete: $find = decoder.decode(&iter_query.query_payload)?;
                                 let iter = execute_iterable_source(
                                     concrete,
                                     pred,
@@ -333,8 +335,7 @@ impl ValidQueryRequest {
                                     decoder.decode(&iter_query.predicate_bytes)?;
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                     decoder.decode(&iter_query.selector_bytes)?;
-                                let concrete: $find =
-                                    decoder.decode(&iter_query.query_payload)?;
+                                let concrete: $find = decoder.decode(&iter_query.query_payload)?;
                                 let iter = execute_iterable_source(
                                     concrete,
                                     pred,
@@ -362,8 +363,7 @@ impl ValidQueryRequest {
                                     decoder.decode(&iter_query.predicate_bytes)?;
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                     decoder.decode(&iter_query.selector_bytes)?;
-                                let concrete: $find =
-                                    decoder.decode(&iter_query.query_payload)?;
+                                let concrete: $find = decoder.decode(&iter_query.query_payload)?;
                                 let iter = execute_iterable_source(
                                     concrete,
                                     pred,
@@ -479,9 +479,10 @@ impl ValidQueryRequest {
                                     iroha_data_model::query::transaction::prelude::FindTransactions,
                                 >(&iter_query.query_payload)
                                 ?;
-                                let pred = decoder.decode::<CompoundPredicate<CommittedTransaction>>(
-                                    &iter_query.predicate_bytes,
-                                )?;
+                                let pred = decoder
+                                    .decode::<CompoundPredicate<CommittedTransaction>>(
+                                        &iter_query.predicate_bytes,
+                                    )?;
                                 let sel = decoder.decode::<SelectorTuple<CommittedTransaction>>(
                                     &iter_query.selector_bytes,
                                 )?;
@@ -513,20 +514,18 @@ impl ValidQueryRequest {
                                             .to_owned(),
                                     ));
                                 }
-                                let pred = decoder.decode::<
-                                    iroha_data_model::query::dsl::CompoundPredicate<
-                                        iroha_data_model::proof::ProofRecord,
-                                    >,
-                                >(
+                                let pred = decoder
+                                    .decode::<iroha_data_model::query::dsl::CompoundPredicate<
+                                    iroha_data_model::proof::ProofRecord,
+                                >>(
                                     &iter_query.predicate_bytes
                                 )?;
-                                let sel = decoder.decode::<
-                                    iroha_data_model::query::dsl::SelectorTuple<
+                                let sel = decoder
+                                    .decode::<iroha_data_model::query::dsl::SelectorTuple<
                                         iroha_data_model::proof::ProofRecord,
-                                    >,
-                                >(
-                                    &iter_query.selector_bytes
-                                )?;
+                                    >>(
+                                        &iter_query.selector_bytes
+                                    )?;
                                 macro_rules! try_proof_query {
                                     ($find:ty) => {{
                                         if let Some(concrete) = decoder
@@ -592,6 +591,18 @@ impl ValidQueryRequest {
                                 iroha_data_model::escrow::AssetEscrowRecord,
                                 iroha_data_model::query::escrow::prelude::FindAssetEscrows
                             ),
+                            QueryItemKind::AssetEscrowsBySeller => run_payload_or_default!(
+                                require_payload iroha_data_model::escrow::AssetEscrowRecord,
+                                iroha_data_model::query::escrow::prelude::FindAssetEscrowsBySeller
+                            ),
+                            QueryItemKind::AssetEscrowsByBuyer => run_payload_or_default!(
+                                require_payload iroha_data_model::escrow::AssetEscrowRecord,
+                                iroha_data_model::query::escrow::prelude::FindAssetEscrowsByBuyer
+                            ),
+                            QueryItemKind::AssetEscrowsByStatus => run_payload_or_default!(
+                                require_payload iroha_data_model::escrow::AssetEscrowRecord,
+                                iroha_data_model::query::escrow::prelude::FindAssetEscrowsByStatus
+                            ),
                             QueryItemKind::OracleFeedConfig => run_payload_or_default!(
                                 iroha_data_model::oracle::FeedConfig,
                                 iroha_data_model::query::oracle::prelude::FindOracleFeeds
@@ -652,7 +663,7 @@ impl ValidQueryRequest {
                 }
                 // Fallback for fast_dsl-enabled callers: if the boxed query is absent,
                 // reconstruct a default iterable query from the item kind.
-                if iter_query.query_box().is_none() {
+                if legacy_query_box(&iter_query).is_none() {
                     use iroha_data_model::query::QueryItemKind;
                     let mut decoder = FastIterComponentDecoder::new(
                         limits,
@@ -763,6 +774,13 @@ impl ValidQueryRequest {
                             iroha_data_model::escrow::AssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAssetEscrows
                         ),
+                        QueryItemKind::AssetEscrowsBySeller
+                        | QueryItemKind::AssetEscrowsByBuyer
+                        | QueryItemKind::AssetEscrowsByStatus => {
+                            return Err(Error::Conversion(
+                                "missing or malformed query payload".into(),
+                            ));
+                        }
                         QueryItemKind::OracleFeedConfig => run_unit!(
                             iroha_data_model::oracle::FeedConfig,
                             iroha_data_model::query::oracle::prelude::FindOracleFeeds
@@ -798,7 +816,7 @@ impl ValidQueryRequest {
                         ),
                     }
                 }
-                if iter_query.query_box().is_none() {
+                if legacy_query_box(&iter_query).is_none() {
                     use iroha_data_model::query::QueryItemKind;
                     let mut decoder = FastIterComponentDecoder::new(
                         limits,
@@ -903,6 +921,13 @@ impl ValidQueryRequest {
                             iroha_data_model::escrow::AssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAssetEscrows
                         ),
+                        QueryItemKind::AssetEscrowsBySeller
+                        | QueryItemKind::AssetEscrowsByBuyer
+                        | QueryItemKind::AssetEscrowsByStatus => {
+                            return Err(Error::Conversion(
+                                "missing or malformed query payload".into(),
+                            ));
+                        }
                         QueryItemKind::OracleFeedConfig => run_unit!(
                             iroha_data_model::oracle::FeedConfig,
                             iroha_data_model::query::oracle::prelude::FindOracleFeeds
@@ -938,7 +963,7 @@ impl ValidQueryRequest {
                         ),
                     }
                 }
-                let Some(qbox) = iter_query.query_box() else {
+                let Some(qbox) = legacy_query_box(&iter_query) else {
                     // Final fallback: default unit iterable by item kind
                     use iroha_data_model::query::QueryItemKind;
                     let mut decoder = FastIterComponentDecoder::new(
@@ -1050,6 +1075,13 @@ impl ValidQueryRequest {
                             iroha_data_model::escrow::AssetEscrowRecord,
                             iroha_data_model::query::escrow::prelude::FindAssetEscrows
                         ),
+                        QueryItemKind::AssetEscrowsBySeller
+                        | QueryItemKind::AssetEscrowsByBuyer
+                        | QueryItemKind::AssetEscrowsByStatus => {
+                            return Err(Error::Conversion(
+                                "missing or malformed query payload".into(),
+                            ));
+                        }
                         QueryItemKind::OracleFeedConfig => run_unit!(
                             iroha_data_model::oracle::FeedConfig,
                             iroha_data_model::query::oracle::prelude::FindOracleFeeds
@@ -1891,7 +1923,10 @@ impl ValidQueryRequest {
                 ) -> Result<Option<(QueryResponse, QueryExecutionStats)>, Error>
                 where
                     T: Send + Sync + 'static,
-                    Q: super::super::ValidQuery<Item = T> + 'static,
+                    Q: super::super::ValidQuery<Item = T>
+                        + NoritoSerialize
+                        + for<'de> norito::core::NoritoDeserialize<'de>
+                        + 'static,
                     T: HasProjection<SelectorMarker, AtomType = ()>
                         + HasProjection<PredicateMarker>
                         + crate::smartcontracts::isi::query::SortableQueryOutput
@@ -1909,10 +1944,8 @@ impl ValidQueryRequest {
                     F: Fn(&query::ErasedIterQuery<T>) -> Option<Q>,
                 {
                     if let Some(erased) = query::iter_query_inner::<T>(qbox) {
-                        let mut decoder = FastIterComponentDecoder::new(
-                            limits,
-                            [erased.payload(), &[], &[]],
-                        )?;
+                        let mut decoder =
+                            FastIterComponentDecoder::new(limits, [erased.payload(), &[], &[]])?;
                         if let Some(output_limits) = limits.canonical_output_limits {
                             canonical_topk::ensure_canonical_query_source_admitted::<T, Q>(
                                 erased.predicate(),
@@ -1965,7 +1998,7 @@ impl ValidQueryRequest {
                 let params = &iter_query.params;
                 // Fast-DSL path: when the boxed query payload is not present, reconstruct
                 // from item kind and encoded predicate/selector.
-                if iter_query.query_box().is_none() {
+                if legacy_query_box(&iter_query).is_none() {
                     if limits.canonical_output_limits.is_some() {
                         return Err(Error::Conversion(
                             "canonical fanout rejects opaque fast-DSL starts before nested payload, predicate, or selector decoding"
@@ -1988,8 +2021,7 @@ impl ValidQueryRequest {
                             // Unit queries have an empty canonical payload. Reject any other bytes so
                             // parameterized or malformed payloads cannot become global queries.
                             ($itemty:ty, $find:ty) => {{
-                                let concrete: $find =
-                                    decoder.decode(&iter_query.query_payload)?;
+                                let concrete: $find = decoder.decode(&iter_query.query_payload)?;
                                 let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
                                     decoder.decode(&iter_query.predicate_bytes)?;
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
@@ -2014,8 +2046,7 @@ impl ValidQueryRequest {
                             }};
                             // For queries that always require a payload (e.g., FindPermissionsByAccountId)
                             (require_payload $itemty:ty, $find:ty) => {{
-                                let concrete: $find =
-                                    decoder.decode(&iter_query.query_payload)?;
+                                let concrete: $find = decoder.decode(&iter_query.query_payload)?;
                                 let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
                                     decoder.decode(&iter_query.predicate_bytes)?;
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
@@ -2131,9 +2162,10 @@ impl ValidQueryRequest {
                                     iroha_data_model::query::transaction::prelude::FindTransactions,
                                 >(&iter_query.query_payload)
                                 ?;
-                                let pred = decoder.decode::<CompoundPredicate<CommittedTransaction>>(
-                                    &iter_query.predicate_bytes,
-                                )?;
+                                let pred = decoder
+                                    .decode::<CompoundPredicate<CommittedTransaction>>(
+                                        &iter_query.predicate_bytes,
+                                    )?;
                                 let sel = decoder.decode::<SelectorTuple<CommittedTransaction>>(
                                     &iter_query.selector_bytes,
                                 )?;
@@ -2156,20 +2188,18 @@ impl ValidQueryRequest {
                                 iroha_data_model::query::block::prelude::FindBlockHeaders
                             ),
                             QueryItemKind::ProofRecord => {
-                                let pred = decoder.decode::<
-                                    iroha_data_model::query::dsl::CompoundPredicate<
-                                        iroha_data_model::proof::ProofRecord,
-                                    >,
-                                >(
+                                let pred = decoder
+                                    .decode::<iroha_data_model::query::dsl::CompoundPredicate<
+                                    iroha_data_model::proof::ProofRecord,
+                                >>(
                                     &iter_query.predicate_bytes
                                 )?;
-                                let sel = decoder.decode::<
-                                    iroha_data_model::query::dsl::SelectorTuple<
+                                let sel = decoder
+                                    .decode::<iroha_data_model::query::dsl::SelectorTuple<
                                         iroha_data_model::proof::ProofRecord,
-                                    >,
-                                >(
-                                    &iter_query.selector_bytes
-                                )?;
+                                    >>(
+                                        &iter_query.selector_bytes
+                                    )?;
                                 macro_rules! try_proof_query {
                                     ($find:ty) => {{
                                         if let Some(concrete) = decoder
@@ -2234,6 +2264,18 @@ impl ValidQueryRequest {
                                 iroha_data_model::escrow::AssetEscrowRecord,
                                 iroha_data_model::query::escrow::prelude::FindAssetEscrows
                             ),
+                            QueryItemKind::AssetEscrowsBySeller => run_payload_or_default!(
+                                require_payload iroha_data_model::escrow::AssetEscrowRecord,
+                                iroha_data_model::query::escrow::prelude::FindAssetEscrowsBySeller
+                            ),
+                            QueryItemKind::AssetEscrowsByBuyer => run_payload_or_default!(
+                                require_payload iroha_data_model::escrow::AssetEscrowRecord,
+                                iroha_data_model::query::escrow::prelude::FindAssetEscrowsByBuyer
+                            ),
+                            QueryItemKind::AssetEscrowsByStatus => run_payload_or_default!(
+                                require_payload iroha_data_model::escrow::AssetEscrowRecord,
+                                iroha_data_model::query::escrow::prelude::FindAssetEscrowsByStatus
+                            ),
                             QueryItemKind::OracleFeedConfig => run_payload_or_default!(
                                 iroha_data_model::oracle::FeedConfig,
                                 iroha_data_model::query::oracle::prelude::FindOracleFeeds
@@ -2289,7 +2331,7 @@ impl ValidQueryRequest {
                         return Err(Error::Conversion("missing iterator payload".into()));
                     }
                 }
-                let Some(qbox) = iter_query.query_box() else {
+                let Some(qbox) = legacy_query_box(&iter_query) else {
                     return Err(Error::Conversion("missing iterator payload".into()));
                 };
 

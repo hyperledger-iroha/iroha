@@ -247,10 +247,9 @@ impl OrdinaryQueryExecutionLimits {
             .ensure(source_items, probe_source_bytes)
             .map_err(|_| OrdinaryQueryExecutionLimitError::ExecutionBudgetTooSmall)?;
 
-        let revalidation_graph_bytes = u64::try_from(
-            revalidation_decode_limits.max_total_allocated_bytes(),
-        )
-        .map_err(|_| OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
+        let revalidation_graph_bytes =
+            u64::try_from(revalidation_decode_limits.max_total_allocated_bytes())
+                .map_err(|_| OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
         if max_request_graph_bytes > revalidation_graph_bytes {
             return Err(OrdinaryQueryExecutionLimitError::RequestGraphExceedsDecodeLimit);
         }
@@ -308,10 +307,9 @@ impl OrdinaryQueryExecutionLimits {
         max_revalidation_archive_bytes: u64,
         revalidation_decode_limits: norito::DecodeLimits,
     ) -> Result<u64, OrdinaryQueryExecutionLimitError> {
-        let replay_graph_limit = u64::try_from(
-            revalidation_decode_limits.max_total_allocated_bytes(),
-        )
-        .map_err(|_| OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
+        let replay_graph_limit =
+            u64::try_from(revalidation_decode_limits.max_total_allocated_bytes())
+                .map_err(|_| OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
         if max_request_graph_bytes > replay_graph_limit {
             return Err(OrdinaryQueryExecutionLimitError::RequestGraphExceedsDecodeLimit);
         }
@@ -339,7 +337,7 @@ impl OrdinaryQueryExecutionLimits {
         // is encoded only after that request and the source iterator are gone.
         let source_phase = request_graph
             .checked_add(source_work)
-            .checked_add(owned_page_values)
+            .and_then(|bytes| bytes.checked_add(owned_page_values))
             .and_then(|bytes| bytes.checked_add(page_container))
             .ok_or(OrdinaryQueryExecutionLimitError::GeometryOverflow)?;
         // Selector projection begins only after the immutable source iterator
@@ -705,7 +703,7 @@ fn ensure_world_state_start_shape(
 ) -> Result<(), Error> {
     ensure_source_bound(limits, ORDINARY_NAME_ID_SOURCE_BYTES)?;
 
-    let peer_source = if let Some(query_box) = start.query_box() {
+    let peer_source = if let Some(query_box) = super::legacy_query_box(start) {
         non_fast_peer_source_shape(query_box)
     } else {
         fast_peer_source_shape(start, query_limits)?
@@ -735,14 +733,14 @@ fn ensure_world_state_start_shape(
 fn non_fast_peer_source_shape(
     query_box: &iroha_data_model::query::QueryBox<iroha_data_model::query::QueryOutputBatchBox>,
 ) -> bool {
-    let Some(erased) = iroha_data_model::query::iter_query_inner::<
-        iroha_data_model::peer::PeerId,
-    >(query_box) else {
+    let Some(erased) =
+        iroha_data_model::query::iter_query_inner::<iroha_data_model::peer::PeerId>(query_box)
+    else {
         return false;
     };
-    super::decode_iter_query_payload_exact::<
-        iroha_data_model::query::peer::prelude::FindPeers,
-    >(erased.payload())
+    super::decode_iter_query_payload_exact::<iroha_data_model::query::peer::prelude::FindPeers>(
+        erased.payload(),
+    )
     .is_some()
         && erased.predicate().is_pass()
         && erased.selector().iter().next().is_none()
@@ -768,8 +766,7 @@ fn fast_peer_source_shape(
     let mut decoder =
         super::FastIterComponentDecoder::new(query_limits, [payload, predicate, selector])?;
     let _: FindPeers = decoder.decode(payload)?;
-    let predicate: CompoundPredicate<iroha_data_model::peer::PeerId> =
-        decoder.decode(predicate)?;
+    let predicate: CompoundPredicate<iroha_data_model::peer::PeerId> = decoder.decode(predicate)?;
     let selector: SelectorTuple<iroha_data_model::peer::PeerId> = decoder.decode(selector)?;
     Ok(predicate.is_pass() && selector.iter().next().is_none())
 }
@@ -1642,7 +1639,7 @@ mod tests {
         #[cfg(feature = "fast_dsl")]
         let query = QueryWithParams::new(&query, params);
         #[cfg(not(feature = "fast_dsl"))]
-        let query = QueryWithParams::new(query, params);
+        let query = QueryWithParams::new(&query, params);
         QueryRequest::Start(query)
     }
 

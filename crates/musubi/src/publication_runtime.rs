@@ -11,7 +11,8 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fmt, io,
+    fmt,
+    io::{self, Read},
     path::{Path, PathBuf},
     time::Duration,
 };

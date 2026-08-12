@@ -948,6 +948,32 @@ def test_local_package_closure_follows_workspace_build_and_patch_dependencies(
     }
 
 
+@pytest.mark.parametrize(
+    "packages",
+    [
+        (Path("crates/outer"), Path("crates/outer/nested")),
+        (Path("crates/outer/nested"), Path("crates/outer")),
+    ],
+)
+def test_build_package_paths_use_the_deepest_nested_owner(
+    packages: tuple[Path, Path],
+) -> None:
+    paths = {
+        Path("crates/outer/src/lib.rs"),
+        Path("crates/outer/tests/outer.rs"),
+        Path("crates/outer/nested/src/lib.rs"),
+        Path("crates/outer/nested/tests/nested.rs"),
+        Path("crates/unrelated/src/lib.rs"),
+    }
+
+    assert MODULE._build_package_paths(paths, packages) == frozenset(
+        {
+            Path("crates/outer/src/lib.rs"),
+            Path("crates/outer/nested/src/lib.rs"),
+        }
+    )
+
+
 def test_check_rejects_duplicates_before_reporting_staleness(tmp_path: Path) -> None:
     fixture = tmp_path / "fixture.json"
     fixture.write_text('{"old":true,"old":false}\n', encoding="utf-8")

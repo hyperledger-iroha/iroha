@@ -24,6 +24,8 @@ mod check_genesis_sig;
 mod confidential_params_registry;
 #[path = "../confidential_policy_gates.rs"]
 mod confidential_policy_gates;
+#[path = "../confidential_tree_defaults.rs"]
+mod confidential_tree_defaults;
 #[path = "../contract_code_bytes.rs"]
 mod contract_code_bytes;
 #[path = "../contract_execution_header_binding.rs"]

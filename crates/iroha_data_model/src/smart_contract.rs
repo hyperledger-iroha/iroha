@@ -38,9 +38,8 @@ pub mod payloads {
     }
 
     /// Context for trigger entrypoint
-    #[derive(Encode, Decode)]
+    #[derive(Debug, Clone, Encode, Decode)]
     #[norito(decode_from_slice)]
-    #[cfg_attr(not(feature = "fast_dsl"), derive(Debug, Clone))]
     pub struct TriggerContext {
         /// Id of this trigger
         pub id: TriggerId,

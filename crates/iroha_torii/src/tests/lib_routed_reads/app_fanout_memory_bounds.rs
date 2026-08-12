@@ -286,7 +286,7 @@ fn app_fanout_budget_borrows_the_existing_shared_reservation() {
     assert_eq!(budget.remaining_bytes().expect("valid ledger"), 8 * 1024);
     assert_eq!(semaphore.available_permits(), 0);
 
-    drop(budget);
+    let _ = budget;
     assert_eq!(
         semaphore.available_permits(),
         0,

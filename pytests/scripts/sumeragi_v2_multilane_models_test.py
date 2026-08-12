@@ -1834,7 +1834,7 @@ def test_inflight_layout_contract_rejects_queue_cleanup_before_evidence_repair(
     path = tmp_path / "crates/iroha_core/src/sumeragi/v2_apply.rs"
     source = path.read_text(encoding="utf-8")
     start = source.index("    pub(crate) fn execute(")
-    end = source.index("\n    #[cfg(test)]\n    fn finish_durable_apply_completion(", start)
+    end = source.index("\n    fn finish_durable_apply_completion_against(", start)
     method = source[start:end]
     promote = "promote_kagemusha_topup_finality_sidecar"
     finalize = "finalize_committed_block_merge_reservations"

@@ -3,6 +3,7 @@
 use std::net::SocketAddr;
 
 use axum::{
+    body::Bytes,
     extract::{FromRequestParts, Path, State, connect_info::ConnectInfo},
     http::{HeaderMap, HeaderValue, Method, Request, StatusCode, Uri, header},
     response::{IntoResponse, Response},
@@ -468,6 +469,18 @@ where
         .map(|crate::NoritoQuery(value)| value)
 }
 
+fn decode_json_body<T>(body: &Bytes) -> Result<T, Response>
+where
+    T: norito::json::JsonDeserializeOwned,
+{
+    json::from_slice::<T>(body.as_ref()).map_err(|err| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid app API JSON body: {err}"),
+        )
+    })
+}
+
 fn attach_dispatch_headers(
     response: &mut Response,
     source: &AppApiRouteSource,
@@ -503,14 +516,27 @@ async fn dispatch_app_api_route(
     uri: Uri,
     route: &ToriiAppApiRouteV1,
     source: AppApiRouteSource,
+    body: Option<Bytes>,
 ) -> Response {
     let mut response = match route.adapter.as_str() {
         ADAPTER_CONTRACT_VIEW_BATCH_V1 => {
             if method != Method::POST {
                 return StatusCode::METHOD_NOT_ALLOWED.into_response();
             }
-            match super::handler_post_contract_view_batch(State(app), headers, ConnectInfo(remote))
-                .await
+            let Some(body) = body else {
+                return json_error(StatusCode::BAD_REQUEST, "app API POST body is required");
+            };
+            let request = match decode_json_body::<crate::routing::ContractViewBatchDto>(&body) {
+                Ok(value) => crate::NoritoJson(value),
+                Err(response) => return response,
+            };
+            match super::handler_post_contract_view_batch(
+                State(app),
+                headers,
+                ConnectInfo(remote),
+                request,
+            )
+            .await
             {
                 Ok(response) => response,
                 Err(err) => err.into_response(),
@@ -742,6 +768,7 @@ async fn dispatch_manifest_path(
     raw_path: String,
     manifest: ToriiAppApiManifestV1,
     source: AppApiRouteSource,
+    body: Option<Bytes>,
 ) -> Response {
     let Some(path) = normalize_dispatch_path(&raw_path) else {
         return json_error(StatusCode::BAD_REQUEST, "invalid app API route path");
@@ -755,7 +782,7 @@ async fn dispatch_manifest_path(
             ),
         );
     };
-    dispatch_app_api_route(app, headers, remote, method, uri, route, source).await
+    dispatch_app_api_route(app, headers, remote, method, uri, route, source, body).await
 }
 
 pub(crate) async fn handle_get_app_api_bindings(State(app): State<SharedAppState>) -> Response {
@@ -812,7 +839,7 @@ pub(crate) async fn handle_get_app_api_cid_path(
         service_id: None,
     };
     dispatch_manifest_path(
-        app, headers, remote, method, uri, raw_path, manifest, source,
+        app, headers, remote, method, uri, raw_path, manifest, source, None,
     )
     .await
 }
@@ -824,6 +851,7 @@ pub(crate) async fn handle_post_app_api_cid_path(
     headers: HeaderMap,
     ConnectInfo(remote): ConnectInfo<SocketAddr>,
     Path((cid, raw_path)): Path<(String, String)>,
+    body: Bytes,
 ) -> Response {
     let manifest = match load_api_manifest_by_cid(&app, &cid).await {
         Ok(value) => value,
@@ -835,7 +863,15 @@ pub(crate) async fn handle_post_app_api_cid_path(
         service_id: None,
     };
     dispatch_manifest_path(
-        app, headers, remote, method, uri, raw_path, manifest, source,
+        app,
+        headers,
+        remote,
+        method,
+        uri,
+        raw_path,
+        manifest,
+        source,
+        Some(body),
     )
     .await
 }
@@ -875,7 +911,7 @@ pub(crate) async fn handle_get_app_api_active_path(
         service_id: Some(candidate.service_id.clone()),
     };
     dispatch_manifest_path(
-        app, headers, remote, method, uri, raw_path, manifest, source,
+        app, headers, remote, method, uri, raw_path, manifest, source, None,
     )
     .await
 }
@@ -887,6 +923,7 @@ pub(crate) async fn handle_post_app_api_active_path(
     headers: HeaderMap,
     ConnectInfo(remote): ConnectInfo<SocketAddr>,
     Path(raw_path): Path<String>,
+    body: Bytes,
 ) -> Response {
     let candidates = match resolve_binding_candidates(&app) {
         Ok(value) => value,
@@ -915,7 +952,15 @@ pub(crate) async fn handle_post_app_api_active_path(
         service_id: Some(candidate.service_id.clone()),
     };
     dispatch_manifest_path(
-        app, headers, remote, method, uri, raw_path, manifest, source,
+        app,
+        headers,
+        remote,
+        method,
+        uri,
+        raw_path,
+        manifest,
+        source,
+        Some(body),
     )
     .await
 }

@@ -34,7 +34,6 @@ use crate::{
     secrecy::{ExposeSecret, Secret},
     signature::sm,
 };
-
 const SM2_DISTID_INITIAL: &str = "1234567812345678";
 const SM2_EQUATION_A_BYTES: [u8; 32] =
     hex!("FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFC");
@@ -48,7 +47,6 @@ const SM2_DISTID_LEN_BYTES: usize = 2;
 const SM2_PRIVATE_KEY_LEN: usize = 32;
 const SM2_PUBLIC_KEY_UNCOMPRESSED_LEN: usize = 65;
 const SM2_RANDOM_KEY_ATTEMPTS: usize = 1024;
-
 fn validate_distid(distid: &str) -> Result<(), ParseError> {
     let bit_len = distid
         .len()
@@ -58,14 +56,12 @@ fn validate_distid(distid: &str) -> Result<(), ParseError> {
         .map_err(|_| ParseError("SM2 distinguishing identifier exceeds 65535 bits".into()))?;
     Ok(())
 }
-
 fn distid_len_prefix(distid: &str) -> Result<[u8; SM2_DISTID_LEN_BYTES], ParseError> {
     validate_distid(distid)?;
     let len = u16::try_from(distid.len())
         .map_err(|_| ParseError("SM2 distinguishing identifier length exceeds u16".into()))?;
     Ok(len.to_be_bytes())
 }
-
 fn split_sm2_payload(payload: &[u8]) -> Result<(String, &[u8]), ParseError> {
     if payload.len() < SM2_DISTID_LEN_BYTES {
         return Err(ParseError(
@@ -88,7 +84,6 @@ fn split_sm2_payload(payload: &[u8]) -> Result<(String, &[u8]), ParseError> {
     validate_distid(distid)?;
     Ok((distid.to_owned(), &payload[expected..]))
 }
-
 #[cfg(feature = "sm-ffi-openssl")]
 fn map_openssl_sm_error(context: &str, err: OpenSslSmError) -> Error {
     match err {
@@ -125,7 +120,6 @@ fn map_openssl_sm_error(context: &str, err: OpenSslSmError) -> Error {
         )),
     }
 }
-
 fn encode_pem(label: &str, der: &[u8]) -> String {
     const PEM_WRAP: usize = 64;
     let encoded = base64_encode(der);
@@ -143,9 +137,7 @@ fn encode_pem(label: &str, der: &[u8]) -> String {
     pem.push_str("-----\n");
     pem
 }
-
 const BASE64_TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
 fn base64_encode(data: &[u8]) -> String {
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     let mut chunks = data.chunks_exact(3);
@@ -174,23 +166,19 @@ fn base64_encode(data: &[u8]) -> String {
     }
     out
 }
-
 fn distid_lock() -> &'static RwLock<String> {
     static LOCK: OnceLock<RwLock<String>> = OnceLock::new();
     LOCK.get_or_init(|| RwLock::new(SM2_DISTID_INITIAL.to_owned()))
 }
-
 /// SM2 private key wrapper retaining the distinguishing ID (`distid`) used during signing.
 #[derive(Clone)]
 pub struct Sm2PrivateKey {
     distid: String,
     secret: Secret<Zeroizing<[u8; 32]>>,
 }
-
 /// Wrapper around an SM2 verifying key (public key).
 #[derive(Clone, TypeId)]
 pub struct Sm2PublicKey(VerifyingKey);
-
 impl fmt::Debug for Sm2PublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Sm2PublicKey")
@@ -198,18 +186,15 @@ impl fmt::Debug for Sm2PublicKey {
             .finish()
     }
 }
-
 impl Sm2PublicKey {
     /// Default distinguishing ID used when none is supplied by higher layers.
     pub const DEFAULT_DISTID: &'static str = SM2_DISTID_INITIAL;
-
     fn read_default_distid() -> String {
         match distid_lock().read() {
             Ok(guard) => guard.clone(),
             Err(poisoned) => poisoned.into_inner().clone(),
         }
     }
-
     fn write_default_distid(distid: impl Into<String>) {
         let mut guard = match distid_lock().write() {
             Ok(guard) => guard,
@@ -217,12 +202,10 @@ impl Sm2PublicKey {
         };
         *guard = distid.into();
     }
-
     /// Return the currently configured default distinguishing identifier.
     pub fn default_distid() -> String {
         Self::read_default_distid()
     }
-
     /// Override the global default distinguishing identifier used when callers omit one.
     ///
     /// # Errors
@@ -233,11 +216,9 @@ impl Sm2PublicKey {
         Self::write_default_distid(distid);
         Ok(())
     }
-
     pub(crate) fn from_verifying_key(key: VerifyingKey) -> Self {
         Self(key)
     }
-
     /// Construct a public key from SEC1-encoded bytes.
     ///
     /// # Errors
@@ -259,7 +240,6 @@ impl Sm2PublicKey {
             .map(Self)
             .map_err(|_| ParseError("invalid SM2 public key".to_owned()))
     }
-
     /// Construct a public key from a hex-encoded SEC1 byte string.
     ///
     /// # Errors
@@ -269,17 +249,14 @@ impl Sm2PublicKey {
             hex::decode(bytes.as_ref()).map_err(|err| ParseError(format!("invalid hex: {err}")))?;
         Self::from_sec1_bytes(distid, &raw)
     }
-
     /// Export the public key as SEC1 bytes.
     pub fn to_sec1_bytes(&self, compressed: bool) -> Vec<u8> {
         self.0.to_encoded_point(compressed).as_bytes().to_vec()
     }
-
     /// Return the distinguishing identifier embedded in this verifying key.
     pub fn distid(&self) -> &str {
         self.0.distid()
     }
-
     /// Construct a public key from a PEM-encoded `SubjectPublicKeyInfo` document.
     ///
     /// # Errors
@@ -292,7 +269,6 @@ impl Sm2PublicKey {
             .to_encoded_point(false);
         Self::from_sec1_bytes(distid, encoded_point.as_bytes())
     }
-
     /// Export the public key as a `SubjectPublicKeyInfo` DER document.
     ///
     /// # Errors
@@ -306,7 +282,6 @@ impl Sm2PublicKey {
             .map(|doc| doc.as_bytes().to_vec())
             .map_err(|err| ParseError(format!("failed to encode SM2 public key to DER: {err}")))
     }
-
     /// Export the public key as a PEM-encoded `SubjectPublicKeyInfo` string.
     ///
     /// # Errors
@@ -315,7 +290,6 @@ impl Sm2PublicKey {
         self.to_public_key_der()
             .map(|der| encode_pem("PUBLIC KEY", &der))
     }
-
     /// Fallibly format as an algorithm-prefixed multihash string (e.g., `sm2:...`),
     /// embedding the distinguishing identifier alongside the SEC1 payload.
     ///
@@ -329,7 +303,6 @@ impl Sm2PublicKey {
         crate::multihash::encode_public_key_prefixed(Algorithm::Sm2, &payload)
             .map_err(|err| ParseError(err.to_string()))
     }
-
     /// Format as an algorithm-prefixed multihash string (e.g., `sm2:...`),
     /// embedding the distinguishing identifier alongside the SEC1 payload.
     #[cfg(not(feature = "ffi_import"))]
@@ -342,7 +315,6 @@ impl Sm2PublicKey {
             )
         })
     }
-
     /// Verify a message against the provided signature.
     ///
     /// # Errors
@@ -364,18 +336,15 @@ impl Sm2PublicKey {
                 Err(err) => return Err(map_openssl_sm_error("OpenSSL SM2 verify", err)),
             }
         }
-
         let sig = signature.as_sm2().map_err(|_| Error::BadSignature)?;
         self.0
             .verify(message, &sig)
             .map_err(|_| Error::BadSignature)
     }
-
     /// Borrow the inner SM2 verifying key.
     pub fn as_inner(&self) -> &VerifyingKey {
         &self.0
     }
-
     /// Compute the SM2 user information hash (`Z`) for the provided distinguishing identifier.
     ///
     /// The output follows GM/T 0003-2012 Annex D (`ZA = H256(ENTLA || IDA || a || b || xG || yG || xA || yA)`).
@@ -390,7 +359,6 @@ impl Sm2PublicKey {
             .ok_or_else(|| ParseError("SM2 distinguishing identifier length overflowed".into()))?;
         let entla = u16::try_from(entla_bits)
             .map_err(|_| ParseError("SM2 distinguishing identifier exceeds 65535 bits".into()))?;
-
         let mut hasher = sm3::Sm3::new();
         hasher.update(entla.to_be_bytes());
         hasher.update(distid.as_bytes());
@@ -398,7 +366,6 @@ impl Sm2PublicKey {
         hasher.update(SM2_EQUATION_B_BYTES);
         hasher.update(SM2_GENERATOR_X_BYTES);
         hasher.update(SM2_GENERATOR_Y_BYTES);
-
         let encoded = self.0.as_affine().to_encoded_point(false);
         match encoded.coordinates() {
             Coordinates::Uncompressed { x, y } => {
@@ -415,21 +382,17 @@ impl Sm2PublicKey {
         }
     }
 }
-
 fn sec1_uncompressed_public_key_has_zero_coordinate_material(bytes: &[u8]) -> bool {
     bytes.len() == SM2_PUBLIC_KEY_UNCOMPRESSED_LEN
         && bytes.first() == Some(&0x04)
         && bytes[1..].iter().all(|byte| *byte == 0)
 }
-
 impl PartialEq for Sm2PublicKey {
     fn eq(&self, other: &Self) -> bool {
         self.distid() == other.distid() && self.to_sec1_bytes(false) == other.to_sec1_bytes(false)
     }
 }
-
 impl Eq for Sm2PublicKey {}
-
 impl Sm2PrivateKey {
     /// Construct an SM2 private key from raw 32-byte secret material.
     ///
@@ -440,7 +403,6 @@ impl Sm2PrivateKey {
         secret.zeroize();
         key
     }
-
     /// Parse an SM2 private key from a byte slice.
     ///
     /// # Errors
@@ -465,7 +427,6 @@ impl Sm2PrivateKey {
             secret: Secret::new(buf),
         })
     }
-
     /// Parse an SM2 private key from a PKCS#8 PEM document.
     ///
     /// # Errors
@@ -476,7 +437,6 @@ impl Sm2PrivateKey {
             .map_err(|err| ParseError(format!("failed to decode SM2 PKCS#8 private key: {err}")))?;
         Self::from_secret_key(distid, &secret)
     }
-
     /// Generate a random SM2 private key using the provided RNG.
     ///
     /// # Errors
@@ -506,7 +466,6 @@ impl Sm2PrivateKey {
             "SM2 RNG did not produce a valid private key".into(),
         ))
     }
-
     /// Generate a random SM2 private key using checked operating-system entropy.
     ///
     /// # Errors
@@ -517,7 +476,6 @@ impl Sm2PrivateKey {
         let mut rng = rand::rngs::OsRng;
         Self::try_random(distid, &mut rng)
     }
-
     /// Generate a random SM2 private key using an infallible compatibility RNG.
     ///
     /// # Errors
@@ -530,7 +488,6 @@ impl Sm2PrivateKey {
         let secret = SecretKey::random(rng);
         Self::from_secret_key(distid, &secret)
     }
-
     /// Deterministically derive an SM2 private key from an arbitrary seed.
     ///
     /// # Errors
@@ -560,25 +517,21 @@ impl Sm2PrivateKey {
             }
         }
     }
-
     /// Return the canonical 32-byte representation of the private scalar.
     pub fn secret_bytes(&self) -> [u8; 32] {
         let mut out = [0u8; 32];
         out.copy_from_slice(self.secret.expose_secret().as_ref());
         out
     }
-
     /// Borrow the distinguishing identifier used for signing operations.
     pub fn distid(&self) -> &str {
         &self.distid
     }
-
     /// Derive the SM2 public key corresponding to this private key.
     pub fn public_key(&self) -> Sm2PublicKey {
         self.try_public_key()
             .expect("validated SM2 private key should derive a public key")
     }
-
     /// Derive the SM2 public key corresponding to this private key.
     ///
     /// # Errors
@@ -589,13 +542,11 @@ impl Sm2PrivateKey {
             self.try_signing_key()?.verifying_key().clone(),
         ))
     }
-
     /// Sign a message with this private key using SM2 DSA.
     pub fn sign(&self, message: &[u8]) -> Sm2Signature {
         self.try_sign(message)
             .expect("validated SM2 private key should sign messages")
     }
-
     /// Sign a message with this private key using SM2 DSA.
     ///
     /// # Errors
@@ -608,7 +559,6 @@ impl Sm2PrivateKey {
             .sign(message);
         Ok(Sm2Signature::from_raw(signature))
     }
-
     /// Export the private key as a PKCS#8 DER document.
     ///
     /// # Errors
@@ -623,7 +573,6 @@ impl Sm2PrivateKey {
                 ))
             })
     }
-
     /// Export the private key as a PEM-encoded PKCS#8 document.
     ///
     /// # Errors
@@ -632,18 +581,15 @@ impl Sm2PrivateKey {
         self.to_pkcs8_der()
             .map(|der| encode_pem("PRIVATE KEY", &der))
     }
-
     fn secret_key(&self) -> Result<SecretKey, ParseError> {
         SecretKey::from_slice(self.secret.expose_secret().as_ref())
             .map_err(|_| ParseError("invalid SM2 private key".into()))
     }
-
     fn try_signing_key(&self) -> Result<SigningKey, ParseError> {
         let secret = self.secret_key()?;
         SigningKey::new(&self.distid, &secret)
             .map_err(|_| ParseError("invalid SM2 private key or distinguishing identifier".into()))
     }
-
     pub(crate) fn from_secret_key(distid: String, secret: &SecretKey) -> Result<Self, ParseError> {
         let mut bytes = secret.to_bytes();
         let mut buf = Zeroizing::new([0u8; 32]);
@@ -652,7 +598,6 @@ impl Sm2PrivateKey {
         Self::from_bytes(distid, buf.as_ref())
     }
 }
-
 fn validate_seed_material_not_all_zero(seed: &[u8]) -> Result<(), ParseError> {
     if !seed.is_empty() && seed.iter().all(|&byte| byte == 0) {
         return Err(ParseError(
@@ -661,7 +606,6 @@ fn validate_seed_material_not_all_zero(seed: &[u8]) -> Result<(), ParseError> {
     }
     Ok(())
 }
-
 /// Encode an SM2 public key payload with an explicit distinguishing identifier.
 ///
 /// Layout: `distid_len (u16 BE)` || `distid bytes` || `SEC1 uncompressed (65 bytes)`.
@@ -682,7 +626,6 @@ pub fn encode_sm2_public_key_payload(distid: &str, sec1: &[u8]) -> Result<Vec<u8
     out.extend_from_slice(sec1);
     Ok(out)
 }
-
 /// Encode an SM2 private key payload with an explicit distinguishing identifier.
 ///
 /// Layout: `distid_len (u16 BE)` || `distid bytes` || `secret (32 bytes)`.
@@ -702,7 +645,6 @@ pub fn encode_sm2_private_key_payload(distid: &str, secret: &[u8]) -> Result<Vec
     out.extend_from_slice(secret);
     Ok(out)
 }
-
 /// Decode an SM2 public key payload that embeds the distinguishing identifier.
 ///
 /// # Errors
@@ -721,7 +663,6 @@ pub fn decode_sm2_public_key_payload(payload: &[u8]) -> Result<Sm2PublicKey, Par
     }
     Ok(key)
 }
-
 /// Decode an SM2 private key payload that embeds the distinguishing identifier.
 ///
 /// # Errors
@@ -735,29 +676,23 @@ pub fn decode_sm2_private_key_payload(payload: &[u8]) -> Result<Sm2PrivateKey, P
     }
     Sm2PrivateKey::from_bytes(distid, rest)
 }
-
 impl PartialEq for Sm2PrivateKey {
     fn eq(&self, other: &Self) -> bool {
         self.distid == other.distid
             && self.secret.expose_secret().as_ref() == other.secret.expose_secret().as_ref()
     }
 }
-
 impl Eq for Sm2PrivateKey {}
-
 impl Zeroize for Sm2PrivateKey {
     fn zeroize(&mut self) {
         self.secret = Secret::new(Zeroizing::new([0u8; 32]));
     }
 }
-
 impl ZeroizeOnDrop for Sm2PrivateKey {}
-
 impl IntoSchema for Sm2PublicKey {
     fn type_name() -> String {
         "Sm2PublicKey".into()
     }
-
     fn update_schema_map(map: &mut iroha_schema::MetaMap) {
         map.insert::<Self>(iroha_schema::Metadata::Tuple(
             iroha_schema::UnnamedFieldsMeta {
@@ -766,12 +701,10 @@ impl IntoSchema for Sm2PublicKey {
         ));
     }
 }
-
 impl IntoSchema for Sm2Signature {
     fn type_name() -> String {
         "Sm2Signature".into()
     }
-
     fn update_schema_map(map: &mut iroha_schema::MetaMap) {
         map.insert::<Self>(iroha_schema::Metadata::Tuple(
             iroha_schema::UnnamedFieldsMeta {
@@ -783,7 +716,6 @@ impl IntoSchema for Sm2Signature {
         ));
     }
 }
-
 /// Fixed-width SM2 signature helper exposing canonical `r` and `s` components.
 #[derive(Clone, Copy, PartialEq, Eq, TypeId)]
 pub struct Sm2Signature {
@@ -792,7 +724,6 @@ pub struct Sm2Signature {
     /// Canonical `s` component (big-endian, width = 32 bytes).
     pub s: [u8; 32],
 }
-
 impl fmt::Debug for Sm2Signature {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Sm2Signature")
@@ -801,11 +732,9 @@ impl fmt::Debug for Sm2Signature {
             .finish()
     }
 }
-
 impl Sm2Signature {
     /// Canonical byte length of an SM2 signature (r∥s).
     pub const LENGTH: usize = 64;
-
     /// Construct a signature from canonical 64-byte encoding.
     ///
     /// # Errors
@@ -824,7 +753,6 @@ impl Sm2Signature {
         s.copy_from_slice(&bytes[32..]);
         Ok(Self { r, s })
     }
-
     /// Construct a signature from a hex string (canonical r∥s).
     ///
     /// # Errors
@@ -837,7 +765,6 @@ impl Sm2Signature {
         })?;
         Self::from_bytes(&bytes)
     }
-
     /// Construct from an existing `sm2::Signature`.
     pub fn from_raw(signature: Sm2RawSignature) -> Self {
         let bytes = signature.to_bytes();
@@ -847,7 +774,6 @@ impl Sm2Signature {
         s.copy_from_slice(&bytes[32..]);
         Self { r, s }
     }
-
     /// Return the canonical byte representation (r∥s).
     pub fn as_bytes(&self) -> [u8; Self::LENGTH] {
         let mut out = [0u8; Self::LENGTH];
@@ -855,13 +781,11 @@ impl Sm2Signature {
         out[32..].copy_from_slice(&self.s);
         out
     }
-
     /// Return the canonical byte representation (r∥s).
     #[must_use]
     pub fn to_bytes(self) -> [u8; Self::LENGTH] {
         self.as_bytes()
     }
-
     /// Fallibly export the signature as a DER-encoded `SEQUENCE` of two INTEGERs.
     ///
     /// # Errors
@@ -878,7 +802,6 @@ impl Sm2Signature {
             }
             bytes
         }
-
         let r = encode_integer(&self.r);
         let s = encode_integer(&self.s);
         let len = 2 + r.len() + 2 + s.len();
@@ -893,7 +816,6 @@ impl Sm2Signature {
         der.extend_from_slice(&s);
         Ok(der)
     }
-
     /// Export the signature as a DER-encoded `SEQUENCE` of two INTEGERs.
     ///
     /// Prefer [`Self::try_as_der`] on production error-propagating paths.
@@ -903,7 +825,6 @@ impl Sm2Signature {
             .expect("SM2 DER export should fit short-form lengths for 32-byte integers")
     }
 }
-
 fn push_der_short_len(output: &mut Vec<u8>, len: usize, context: &str) -> Result<(), ParseError> {
     let len = u8::try_from(len).map_err(|_| {
         ParseError(format!(
@@ -913,7 +834,6 @@ fn push_der_short_len(output: &mut Vec<u8>, len: usize, context: &str) -> Result
     output.push(len);
     Ok(())
 }
-
 impl Sm2Signature {
     /// Parse a DER-encoded SM2 signature (`SEQUENCE { INTEGER r, INTEGER s }`).
     ///
@@ -928,31 +848,26 @@ impl Sm2Signature {
         if len + 2 != bytes.len() {
             return Err(ParseError("SM2 DER signature length mismatch".into()));
         }
-
         let mut cursor = 2;
         let r = parse_der_integer(bytes, &mut cursor)?;
         let s = parse_der_integer(bytes, &mut cursor)?;
         if cursor != bytes.len() {
             return Err(ParseError("SM2 DER signature has trailing data".into()));
         }
-
         let mut raw = [0u8; Self::LENGTH];
         raw[..32].copy_from_slice(&r);
         raw[32..].copy_from_slice(&s);
         Self::from_bytes(&raw)
     }
-
     fn as_sm2(&self) -> Result<Sm2RawSignature, signature::Error> {
         Sm2RawSignature::from_bytes(&self.as_bytes())
     }
 }
-
 impl From<Sm2RawSignature> for Sm2Signature {
     fn from(value: Sm2RawSignature) -> Self {
         Self::from_raw(value)
     }
 }
-
 fn parse_der_integer(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 32], ParseError> {
     if *cursor >= bytes.len() || bytes[*cursor] != 0x02 {
         return Err(ParseError("expected INTEGER in SM2 DER signature".into()));
@@ -977,7 +892,6 @@ fn parse_der_integer(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 32], Parse
     }
     let slice = &bytes[*cursor..*cursor + len];
     *cursor += len;
-
     if slice[0] & 0x80 != 0 {
         return Err(ParseError(
             "SM2 DER signature INTEGER must be non-negative".into(),
@@ -988,7 +902,6 @@ fn parse_der_integer(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 32], Parse
             "SM2 DER signature INTEGER has non-canonical leading zero".into(),
         ));
     }
-
     let value = if slice[0] == 0 { &slice[1..] } else { slice };
     if value.len() > 32 {
         return Err(ParseError(
@@ -1000,7 +913,6 @@ fn parse_der_integer(bytes: &[u8], cursor: &mut usize) -> Result<[u8; 32], Parse
     out[offset..].copy_from_slice(value);
     Ok(out)
 }
-
 #[inline]
 fn sm3_digest_scalar(message: &[u8]) -> [u8; 32] {
     let mut hasher = sm3::Sm3::new();
@@ -1010,12 +922,10 @@ fn sm3_digest_scalar(message: &[u8]) -> [u8; 32] {
     bytes.copy_from_slice(&result);
     bytes
 }
-
 #[inline]
 fn sm4_block_cipher(key: &[u8; 16]) -> sm4::Sm4 {
     sm4::Sm4::new(key.into())
 }
-
 #[inline]
 fn sm4_encrypt_block_scalar(key: &[u8; 16], block: &[u8; 16]) -> [u8; 16] {
     let cipher = sm4_block_cipher(key);
@@ -1026,7 +936,6 @@ fn sm4_encrypt_block_scalar(key: &[u8; 16], block: &[u8; 16]) -> [u8; 16] {
     out.copy_from_slice(buf.as_ref());
     out
 }
-
 #[inline]
 fn sm4_decrypt_block_scalar(key: &[u8; 16], block: &[u8; 16]) -> [u8; 16] {
     let cipher = sm4_block_cipher(key);
@@ -1059,7 +968,6 @@ mod sm_accel {
         let _ = message;
         None
     }
-
     #[inline]
     pub fn sm4_encrypt_block(key: &[u8; 16], block: &[u8; 16]) -> Option<[u8; 16]> {
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
@@ -1077,7 +985,6 @@ mod sm_accel {
         let _ = (key, block);
         None
     }
-
     #[inline]
     pub fn sm4_decrypt_block(key: &[u8; 16], block: &[u8; 16]) -> Option<[u8; 16]> {
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
@@ -1095,16 +1002,13 @@ mod sm_accel {
         let _ = (key, block);
         None
     }
-
     #[derive(Clone, Copy, PartialEq, Eq)]
     enum IntrinsicOverride {
         Auto = 0,
         ForceEnable = 1,
         ForceDisable = 2,
     }
-
     static INTRINSIC_OVERRIDE: AtomicU8 = AtomicU8::new(IntrinsicOverride::Auto as u8);
-
     pub(super) fn set_intrinsic_policy(policy: super::SmIntrinsicPolicy) {
         let override_value = match policy {
             super::SmIntrinsicPolicy::ForceEnable => IntrinsicOverride::ForceEnable,
@@ -1115,7 +1019,6 @@ mod sm_accel {
         };
         INTRINSIC_OVERRIDE.store(override_value as u8, Ordering::SeqCst);
     }
-
     pub(super) fn configured_policy() -> super::SmIntrinsicPolicy {
         match current_override() {
             IntrinsicOverride::ForceEnable => super::SmIntrinsicPolicy::ForceEnable,
@@ -1123,7 +1026,6 @@ mod sm_accel {
             IntrinsicOverride::Auto => super::SmIntrinsicPolicy::Auto,
         }
     }
-
     fn current_override() -> IntrinsicOverride {
         match INTRINSIC_OVERRIDE.load(Ordering::Relaxed) {
             x if x == IntrinsicOverride::ForceEnable as u8 => IntrinsicOverride::ForceEnable,
@@ -1131,7 +1033,6 @@ mod sm_accel {
             _ => IntrinsicOverride::Auto,
         }
     }
-
     fn forced_override() -> Option<bool> {
         match current_override() {
             IntrinsicOverride::ForceEnable => Some(true),
@@ -1147,9 +1048,7 @@ mod sm_accel {
             super::{sm4_decrypt_block_scalar, sm4_encrypt_block_scalar},
             AtomicBool, Ordering,
         };
-
         static FORCE_DISABLED: AtomicBool = AtomicBool::new(false);
-
         pub fn encrypt_block(key: &[u8; 16], block: &[u8; 16]) -> Option<[u8; 16]> {
             if !is_enabled() {
                 return None;
@@ -1157,7 +1056,6 @@ mod sm_accel {
             sm4_neon::encrypt_block(key, block)
                 .or_else(|| Some(sm4_encrypt_block_scalar(key, block)))
         }
-
         pub fn decrypt_block(key: &[u8; 16], block: &[u8; 16]) -> Option<[u8; 16]> {
             if !is_enabled() {
                 return None;
@@ -1165,7 +1063,6 @@ mod sm_accel {
             sm4_neon::decrypt_block(key, block)
                 .or_else(|| Some(sm4_decrypt_block_scalar(key, block)))
         }
-
         pub(super) fn is_sm3_enabled() -> bool {
             if FORCE_DISABLED.load(Ordering::Relaxed) {
                 return false;
@@ -1175,7 +1072,6 @@ mod sm_accel {
             }
             sm3_neon::is_supported()
         }
-
         pub(super) fn is_enabled() -> bool {
             if FORCE_DISABLED.load(Ordering::Relaxed) {
                 return false;
@@ -1185,27 +1081,22 @@ mod sm_accel {
             }
             sm4_neon::is_supported()
         }
-
         pub(super) fn forced_override() -> Option<bool> {
             super::forced_override()
         }
-
         #[cfg(test)]
         pub fn force_disable_all_for_tests() -> SmAccelDisableGuard {
             let previous = FORCE_DISABLED.swap(true, Ordering::SeqCst);
             SmAccelDisableGuard { previous }
         }
-
         #[cfg(all(test, feature = "sm-neon-force"))]
         pub fn is_enabled_for_tests() -> bool {
             is_enabled()
         }
-
         #[cfg(test)]
         pub struct SmAccelDisableGuard {
             previous: bool,
         }
-
         #[cfg(test)]
         impl Drop for SmAccelDisableGuard {
             fn drop(&mut self) {
@@ -1218,7 +1109,6 @@ mod sm_accel {
     mod neon {
         #[cfg(test)]
         pub struct SmAccelDisableGuard;
-
         #[cfg(test)]
         pub fn force_disable_all_for_tests() -> SmAccelDisableGuard {
             SmAccelDisableGuard
@@ -1231,30 +1121,25 @@ mod sm_accel {
             super::{sm3_digest_scalar, sm4_decrypt_block_scalar, sm4_encrypt_block_scalar},
             AtomicBool, Ordering, forced_override,
         };
-
         static FORCE_DISABLED: AtomicBool = AtomicBool::new(false);
-
         pub fn sm3_digest(message: &[u8]) -> Option<[u8; 32]> {
             if !is_enabled() {
                 return None;
             }
             Some(sm3_digest_scalar(message))
         }
-
         pub fn encrypt_block(key: &[u8; 16], block: &[u8; 16]) -> Option<[u8; 16]> {
             if !is_enabled() {
                 return None;
             }
             Some(sm4_encrypt_block_scalar(key, block))
         }
-
         pub fn decrypt_block(key: &[u8; 16], block: &[u8; 16]) -> Option<[u8; 16]> {
             if !is_enabled() {
                 return None;
             }
             Some(sm4_decrypt_block_scalar(key, block))
         }
-
         fn is_enabled() -> bool {
             if FORCE_DISABLED.load(Ordering::Relaxed) {
                 return false;
@@ -1264,18 +1149,15 @@ mod sm_accel {
             }
             true
         }
-
         #[cfg(test)]
         pub struct SmAccelDisableGuard {
             previous: bool,
         }
-
         #[cfg(test)]
         pub fn force_disable_all_for_tests() -> SmAccelDisableGuard {
             let previous = FORCE_DISABLED.swap(true, Ordering::SeqCst);
             SmAccelDisableGuard { previous }
         }
-
         #[cfg(test)]
         impl Drop for SmAccelDisableGuard {
             fn drop(&mut self) {
@@ -1283,7 +1165,6 @@ mod sm_accel {
             }
         }
     }
-
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum NeonPolicy {
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
@@ -1293,7 +1174,6 @@ mod sm_accel {
         #[cfg(not(all(feature = "sm-neon", target_arch = "aarch64")))]
         Unsupported,
     }
-
     pub fn neon_enabled() -> bool {
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         {
@@ -1304,7 +1184,6 @@ mod sm_accel {
             false
         }
     }
-
     pub fn neon_policy() -> NeonPolicy {
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         {
@@ -1337,7 +1216,6 @@ mod sm_accel {
                 0x00, 0x01, 0x02, 0x10, 0x22, 0x45, 0x7F, 0x80, 0xA5, 0xC3, 0xEE, 0xFF,
             ]
         }
-
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         fn parity_case(seed: u8) -> ([u8; 16], [u8; 16]) {
             let mut key = [0u8; 16];
@@ -1356,7 +1234,6 @@ mod sm_accel {
             }
             (key, block)
         }
-
         #[cfg(all(feature = "sm-neon-force", target_arch = "aarch64"))]
         const SM4_BLOCK_FIXTURES: [([u8; 16], [u8; 16]); 4] = [
             (
@@ -1382,7 +1259,6 @@ mod sm_accel {
             ),
             ([0xA5; 16], [0x5A; 16]),
         ];
-
         #[cfg(all(feature = "sm-neon-force", target_arch = "aarch64"))]
         const SM4_KEY_FIXTURES: [([u8; 16], [u8; 16]); 3] = [
             (
@@ -1398,14 +1274,12 @@ mod sm_accel {
             ([0xFF; 16], [0x00; 16]),
             ([0xA5; 16], [0x5A; 16]),
         ];
-
         /// Guard that disables every SM acceleration path available to this build.
         pub struct SmAccelDisableGuard {
             _neon: super::neon::SmAccelDisableGuard,
             #[cfg(any(target_arch = "x86_64", target_arch = "riscv64"))]
             _portable: super::portable::SmAccelDisableGuard,
         }
-
         /// Disable every SM acceleration path available to this build for the guard lifetime.
         pub fn force_disable_all_for_tests() -> SmAccelDisableGuard {
             SmAccelDisableGuard {
@@ -1414,10 +1288,8 @@ mod sm_accel {
                 _portable: super::portable::force_disable_all_for_tests(),
             }
         }
-
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         struct IntrinsicPolicyGuard(super::super::SmIntrinsicPolicy);
-
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         impl IntrinsicPolicyGuard {
             fn set(policy: super::super::SmIntrinsicPolicy) -> Self {
@@ -1426,14 +1298,12 @@ mod sm_accel {
                 Self(previous)
             }
         }
-
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         impl Drop for IntrinsicPolicyGuard {
             fn drop(&mut self) {
                 super::super::set_intrinsic_policy(self.0);
             }
         }
-
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         #[test]
         fn neon_force_disable_disables_accel() {
@@ -1441,21 +1311,18 @@ mod sm_accel {
                 eprintln!("skipping NEON disable test: NEON not available");
                 return;
             }
-
             let _accel_lock = super::super::test_support::lock_accel_state();
             let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
             let key = [0x11u8; 16];
             let block = [0x22u8; 16];
             let baseline = sm4_neon::encrypt_block(&key, &block)
                 .expect("baseline NEON encryption should succeed");
-
             let guard = force_disable_all_for_tests();
             assert!(
                 super::neon::encrypt_block(&key, &block).is_none(),
                 "runtime disable must bypass NEON acceleration"
             );
             drop(guard);
-
             let resumed = super::neon::encrypt_block(&key, &block)
                 .expect("acceleration should resume after guard drop");
             assert_eq!(
@@ -1463,18 +1330,15 @@ mod sm_accel {
                 "re-enabled NEON should produce identical ciphertext"
             );
         }
-
         #[cfg(all(feature = "sm-neon-force", target_arch = "aarch64"))]
         #[test]
         fn neon_force_feature_enables_accel() {
             let _accel_lock = super::super::test_support::lock_accel_state();
             let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
-
             assert!(
                 super::neon::is_enabled_for_tests(),
                 "sm-neon-force feature must report acceleration as enabled"
             );
-
             let key = [0x55u8; 16];
             let block = [0xAAu8; 16];
             let accel = super::neon::encrypt_block(&key, &block)
@@ -1485,18 +1349,15 @@ mod sm_accel {
                 "forced NEON path must remain deterministic vs scalar reference"
             );
         }
-
         #[cfg(all(feature = "sm-neon-force", target_arch = "aarch64"))]
         #[test]
         fn neon_force_feature_parity() {
             let _accel_lock = super::super::test_support::lock_accel_state();
             let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
-
             assert!(
                 super::neon::is_enabled_for_tests(),
                 "sm-neon-force feature must report acceleration as enabled"
             );
-
             for seed in parity_seeds() {
                 let (key, block) = parity_case(seed);
                 let accel_enc = crate::sm::sm_accel::sm4_encrypt_block(&key, &block)
@@ -1506,7 +1367,6 @@ mod sm_accel {
                     accel_enc, scalar_enc,
                     "SM4 forced NEON encrypt mismatch for seed {seed:#04x}"
                 );
-
                 let accel_dec = crate::sm::sm_accel::sm4_decrypt_block(&key, &scalar_enc)
                     .expect("forced feature must return accelerated decrypt result");
                 assert_eq!(
@@ -1515,13 +1375,11 @@ mod sm_accel {
                 );
             }
         }
-
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         #[test]
         fn neon_runtime_parity_when_available() {
             let _accel_lock = super::super::test_support::lock_accel_state();
             let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
-
             for seed in parity_seeds() {
                 let (key, block) = parity_case(seed);
                 let Some(accel_enc) = crate::sm::sm_accel::sm4_encrypt_block(&key, &block) else {
@@ -1533,7 +1391,6 @@ mod sm_accel {
                     accel_enc, scalar_enc,
                     "SM4 NEON encrypt mismatch for seed {seed:#04x}"
                 );
-
                 let Some(accel_dec) = crate::sm::sm_accel::sm4_decrypt_block(&key, &scalar_enc)
                 else {
                     panic!("SM4 NEON decrypt unexpectedly disabled for seed {seed:#04x}");
@@ -1544,18 +1401,15 @@ mod sm_accel {
                 );
             }
         }
-
         #[cfg(all(feature = "sm-neon-force", target_arch = "aarch64"))]
         #[test]
         fn neon_sm3_digest_matches_scalar_under_force() {
             let _accel_lock = super::super::test_support::lock_accel_state();
             let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
-
             assert!(
                 super::neon::is_enabled_for_tests(),
                 "sm-neon-force feature must report acceleration as enabled"
             );
-
             let message = b"neon sm3 force smoke";
             let accel = crate::sm::sm_accel::sm3_digest(message)
                 .expect("forced feature should enable SM3 digest acceleration");
@@ -1565,7 +1419,6 @@ mod sm_accel {
                 "SM3 accelerated digest must match scalar output"
             );
         }
-
         #[cfg(all(feature = "sm-neon", target_arch = "aarch64"))]
         #[test]
         fn neon_sm3_digest_respects_runtime_disable() {
@@ -1573,7 +1426,6 @@ mod sm_accel {
                 eprintln!("skipping SM3 NEON disable test: NEON not available");
                 return;
             }
-
             let _accel_lock = super::super::test_support::lock_accel_state();
             let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
             let guard = force_disable_all_for_tests();
@@ -1582,13 +1434,11 @@ mod sm_accel {
                 "runtime disable must bypass SM3 NEON acceleration"
             );
             drop(guard);
-
             assert!(
                 crate::sm::sm_accel::sm3_digest(b"disable-check").is_some(),
                 "SM3 NEON digest should resume once the guard is dropped"
             );
         }
-
         #[cfg(all(feature = "sm-neon-force", target_arch = "aarch64"))]
         #[test]
         fn neon_sm4_block_cipher_matches_scalar_fixtures() {
@@ -1596,12 +1446,10 @@ mod sm_accel {
 
             let _accel_lock = super::super::test_support::lock_accel_state();
             let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
-
             assert!(
                 super::neon::is_enabled_for_tests(),
                 "sm-neon-force feature must report acceleration as enabled"
             );
-
             for (index, &(key_bytes, block_bytes)) in SM4_BLOCK_FIXTURES.iter().enumerate() {
                 let neon_cipher = super::neon::encrypt_block(&key_bytes, &block_bytes)
                     .expect("forced feature should route to NEON encrypt");
@@ -1610,7 +1458,6 @@ mod sm_accel {
                     neon_cipher, scalar_cipher,
                     "SM4 NEON encrypt mismatch for fixture #{index}"
                 );
-
                 let neon_plain = super::neon::decrypt_block(&key_bytes, &neon_cipher)
                     .expect("forced feature should route to NEON decrypt");
                 let scalar_plain = sm4_decrypt_block_scalar(&key_bytes, &neon_cipher);
@@ -1624,7 +1471,6 @@ mod sm_accel {
                 );
             }
         }
-
         #[cfg(all(feature = "sm-neon-force", target_arch = "aarch64"))]
         #[test]
         fn neon_sm4_key_round_trip_matches_scalar() {
@@ -1632,15 +1478,12 @@ mod sm_accel {
 
             let _accel_lock = super::super::test_support::lock_accel_state();
             let _policy_guard = IntrinsicPolicyGuard::set(super::super::SmIntrinsicPolicy::Auto);
-
             assert!(
                 super::neon::is_enabled_for_tests(),
                 "sm-neon-force feature must report acceleration as enabled"
             );
-
             for (index, &(key_bytes, block_bytes)) in SM4_KEY_FIXTURES.iter().enumerate() {
                 let key = Sm4Key::new(key_bytes);
-
                 let guard = force_disable_all_for_tests();
                 let scalar_cipher = key.encrypt_block(&block_bytes);
                 let scalar_plain = key.decrypt_block(&scalar_cipher);
@@ -1649,13 +1492,11 @@ mod sm_accel {
                     scalar_plain, block_bytes,
                     "SM4 scalar decrypt must recover original block for fixture #{index}"
                 );
-
                 let neon_cipher = key.encrypt_block(&block_bytes);
                 assert_eq!(
                     neon_cipher, scalar_cipher,
                     "SM4 NEON encrypt via Sm4Key mismatch for fixture #{index}"
                 );
-
                 let neon_plain = key.decrypt_block(&scalar_cipher);
                 assert_eq!(
                     neon_plain, block_bytes,
@@ -1665,36 +1506,29 @@ mod sm_accel {
         }
     }
 }
-
 /// Digest helper for SM3 hashes.
 #[derive(Clone, Copy, PartialEq, Eq, Deref, DerefMut, TypeId)]
 #[repr(transparent)]
 pub struct Sm3Digest([u8; 32]);
-
 impl Sm3Digest {
     /// Length of an SM3 digest in bytes.
     pub const LENGTH: usize = 32;
-
     /// Hash the provided message using SM3.
     pub fn hash(message: impl AsRef<[u8]>) -> Self {
         #[cfg(feature = "sm-ffi-openssl")]
         if let Ok(bytes) = OpenSslSmBackend::sm3_digest(message.as_ref()) {
             return Self(bytes);
         }
-
         if let Some(bytes) = sm_accel::sm3_digest(message.as_ref()) {
             return Self(bytes);
         }
-
         Self(sm3_digest_scalar(message.as_ref()))
     }
-
     /// Borrow the underlying digest bytes.
     pub fn as_bytes(&self) -> &[u8; Self::LENGTH] {
         &self.0
     }
 }
-
 impl fmt::Debug for Sm3Digest {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_tuple("Sm3Digest")
@@ -1702,12 +1536,10 @@ impl fmt::Debug for Sm3Digest {
             .finish()
     }
 }
-
 impl IntoSchema for Sm3Digest {
     fn type_name() -> String {
         "Sm3Digest".into()
     }
-
     fn update_schema_map(map: &mut iroha_schema::MetaMap) {
         map.insert::<Self>(iroha_schema::Metadata::Tuple(
             iroha_schema::UnnamedFieldsMeta {
@@ -1716,13 +1548,11 @@ impl IntoSchema for Sm3Digest {
         ));
     }
 }
-
 #[cfg(feature = "json")]
 impl FastJsonWrite for Sm3Digest {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&hex::encode_upper(self.0), out);
     }
-
     fn write_json_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -1730,7 +1560,6 @@ impl FastJsonWrite for Sm3Digest {
         json::write_upper_hex_json_string_to(&self.0, out)
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for Sm3Digest {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -1743,22 +1572,18 @@ impl JsonDeserialize for Sm3Digest {
         Ok(Self(bytes))
     }
 }
-
 impl norito::core::NoritoSerialize for Sm3Digest {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(&self.0)?;
         Ok(())
     }
-
     fn encoded_len_hint(&self) -> Option<usize> {
         Some(Self::LENGTH)
     }
-
     fn encoded_len_exact(&self) -> Option<usize> {
         Some(Self::LENGTH)
     }
 }
-
 impl<'de> norito::core::NoritoDeserialize<'de> for Sm3Digest {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         let archived_bytes: &norito::core::Archived<[u8; Sm3Digest::LENGTH]> = archived.cast();
@@ -1768,7 +1593,6 @@ impl<'de> norito::core::NoritoDeserialize<'de> for Sm3Digest {
         Sm3Digest(bytes)
     }
 }
-
 impl<'a> norito::core::DecodeFromSlice<'a> for Sm3Digest {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         if bytes.len() < Sm3Digest::LENGTH {
@@ -1792,15 +1616,12 @@ mod sm4_ccm_compat {
     use super::Error;
 
     const BLOCK_SIZE: usize = 16;
-
     fn is_valid_tag_len(len: usize) -> bool {
         (4..=16).contains(&len) && len.is_multiple_of(2)
     }
-
     fn is_valid_nonce_len(len: usize) -> bool {
         (7..=13).contains(&len)
     }
-
     fn m_tick(tag_len: usize) -> Result<u8, Error> {
         if !is_valid_tag_len(tag_len) {
             return Err(Error::Other("invalid SM4-CCM tag length".into()));
@@ -1809,7 +1630,6 @@ mod sm4_ccm_compat {
             .map_err(|_| Error::Other("SM4-CCM tag length exceeds u8".into()))?;
         Ok(tag_len.saturating_sub(2) / 2)
     }
-
     fn l_parameter(nonce_len: usize) -> Result<u8, Error> {
         if !is_valid_nonce_len(nonce_len) {
             return Err(Error::Other("invalid SM4-CCM nonce length".into()));
@@ -1818,18 +1638,15 @@ mod sm4_ccm_compat {
             .map_err(|_| Error::Other("SM4-CCM nonce length exceeds u8".into()))?;
         Ok(15u8.saturating_sub(nonce_len))
     }
-
     fn max_payload(nonce_len: usize) -> Result<usize, Error> {
         let l = u128::from(l_parameter(nonce_len)?);
         let max = (1u128 << (8 * l)) - 1;
         Ok(usize::try_from(max).unwrap_or(usize::MAX))
     }
-
     struct CbcMac<'a> {
         cipher: &'a Sm4,
         state: [u8; BLOCK_SIZE],
     }
-
     impl<'a> CbcMac<'a> {
         fn new(cipher: &'a Sm4) -> Self {
             Self {
@@ -1837,7 +1654,6 @@ mod sm4_ccm_compat {
                 state: [0u8; BLOCK_SIZE],
             }
         }
-
         fn update(&mut self, data: &[u8]) {
             for chunk in data.chunks(BLOCK_SIZE) {
                 let mut block = [0u8; BLOCK_SIZE];
@@ -1846,36 +1662,30 @@ mod sm4_ccm_compat {
                 self.block_update(&block);
             }
         }
-
         fn block_update(&mut self, block: &[u8; BLOCK_SIZE]) {
             xor_full(&mut self.state, block);
             encrypt_block_raw(self.cipher, &mut self.state);
         }
-
         fn finalize(self) -> [u8; BLOCK_SIZE] {
             self.state
         }
     }
-
     fn encrypt_block_raw(cipher: &Sm4, block: &mut [u8; BLOCK_SIZE]) {
         let mut buf = Block::<Sm4>::default();
         buf.copy_from_slice(block);
         cipher.encrypt_block(&mut buf);
         block.copy_from_slice(buf.as_ref());
     }
-
     fn xor_full(target: &mut [u8; BLOCK_SIZE], other: &[u8; BLOCK_SIZE]) {
         for (dst, src) in target.iter_mut().zip(other.iter()) {
             *dst ^= *src;
         }
     }
-
     fn xor_partial(target: &mut [u8], stream: &[u8]) {
         for (dst, src) in target.iter_mut().zip(stream.iter()) {
             *dst ^= *src;
         }
     }
-
     fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         if a.len() != b.len() {
             return false;
@@ -1886,7 +1696,6 @@ mod sm4_ccm_compat {
         }
         diff == 0
     }
-
     fn fill_aad_header(len: usize) -> Result<(usize, [u8; BLOCK_SIZE]), Error> {
         let mut header = [0u8; BLOCK_SIZE];
         let used = if len < 0xFF00 {
@@ -1909,7 +1718,6 @@ mod sm4_ccm_compat {
         };
         Ok((used, header))
     }
-
     fn gen_ctr_block<const NONCE_LEN: usize>(
         block: &mut [u8; BLOCK_SIZE],
         nonce: &[u8],
@@ -1925,7 +1733,6 @@ mod sm4_ccm_compat {
         block[1 + n..].copy_from_slice(&ctr_bytes[start..]);
         Ok(())
     }
-
     fn calc_mac<const TAG_LEN: usize, const NONCE_LEN: usize>(
         cipher: &Sm4,
         nonce: &[u8],
@@ -1934,18 +1741,15 @@ mod sm4_ccm_compat {
     ) -> Result<[u8; BLOCK_SIZE], Error> {
         debug_assert!(is_valid_tag_len(TAG_LEN));
         debug_assert!(is_valid_nonce_len(NONCE_LEN));
-
         if buffer.len() > max_payload(NONCE_LEN)? {
             return Err(Error::Other(
                 "SM4-CCM payload length exceeds supported range".into(),
             ));
         }
-
         let mut b0 = [0u8; BLOCK_SIZE];
         let l = l_parameter(NONCE_LEN)?;
         let flags = 64 * u8::from(!aad.is_empty()) + 8 * m_tick(TAG_LEN)? + (l - 1);
         b0[0] = flags;
-
         let n = nonce.len();
         b0[1..=n].copy_from_slice(nonce);
         let cb = BLOCK_SIZE - 1 - n;
@@ -1962,25 +1766,20 @@ mod sm4_ccm_compat {
             let start = bytes.len() - cb;
             b0[1 + n..].copy_from_slice(&bytes[start..]);
         }
-
         let mut mac = CbcMac::new(cipher);
         mac.block_update(&b0);
-
         if !aad.is_empty() {
             let (prefix_len, mut header) = fill_aad_header(aad.len())?;
             let head_copy = core::cmp::min(aad.len(), BLOCK_SIZE - prefix_len);
             header[prefix_len..prefix_len + head_copy].copy_from_slice(&aad[..head_copy]);
             mac.block_update(&header);
-
             if head_copy < aad.len() {
                 mac.update(&aad[head_copy..]);
             }
         }
-
         mac.update(buffer);
         Ok(mac.finalize())
     }
-
     pub(super) fn encrypt<const TAG_LEN: usize, const NONCE_LEN: usize>(
         key_bytes: &[u8],
         nonce: &[u8],
@@ -1991,21 +1790,17 @@ mod sm4_ccm_compat {
         debug_assert!(is_valid_nonce_len(NONCE_LEN));
         let cipher = Sm4::new_from_slice(key_bytes)
             .map_err(|err| Error::Other(format!("invalid SM4 key length: {err}")))?;
-
         if nonce.len() != NONCE_LEN {
             return Err(Error::Other(
                 "SM4-CCM nonce length does not match selected variant".into(),
             ));
         }
-
         let mut buffer = plaintext.to_vec();
         let mut tag_block = calc_mac::<TAG_LEN, NONCE_LEN>(&cipher, nonce, aad, &buffer)?;
-
         let mut ctr = [0u8; BLOCK_SIZE];
         gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, 0)?;
         encrypt_block_raw(&cipher, &mut ctr);
         xor_full(&mut tag_block, &ctr);
-
         let mut counter = 1usize;
         {
             let mut chunks = buffer.chunks_exact_mut(BLOCK_SIZE);
@@ -2015,7 +1810,6 @@ mod sm4_ccm_compat {
                 xor_partial(chunk, &ctr);
                 counter += 1;
             }
-
             let rem = chunks.into_remainder();
             if !rem.is_empty() {
                 gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, counter)?;
@@ -2023,11 +1817,9 @@ mod sm4_ccm_compat {
                 xor_partial(rem, &ctr[..rem.len()]);
             }
         }
-
         let tag = tag_block[..TAG_LEN].to_vec();
         Ok((buffer, tag))
     }
-
     pub(super) fn decrypt<const TAG_LEN: usize, const NONCE_LEN: usize>(
         key_bytes: &[u8],
         nonce: &[u8],
@@ -2037,7 +1829,6 @@ mod sm4_ccm_compat {
     ) -> Result<Vec<u8>, Error> {
         debug_assert!(is_valid_tag_len(TAG_LEN));
         debug_assert!(is_valid_nonce_len(NONCE_LEN));
-
         if nonce.len() != NONCE_LEN {
             return Err(Error::Other(
                 "SM4-CCM nonce length does not match selected variant".into(),
@@ -2048,17 +1839,13 @@ mod sm4_ccm_compat {
                 "SM4-CCM tag length does not match selected variant".into(),
             ));
         }
-
         let cipher = Sm4::new_from_slice(key_bytes)
             .map_err(|err| Error::Other(format!("invalid SM4 key length: {err}")))?;
-
         let mut buffer = ciphertext.to_vec();
-
         let mut ctr = [0u8; BLOCK_SIZE];
         gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, 0)?;
         encrypt_block_raw(&cipher, &mut ctr);
         let s0 = ctr;
-
         let mut counter = 1usize;
         {
             let mut chunks = buffer.chunks_exact_mut(BLOCK_SIZE);
@@ -2068,7 +1855,6 @@ mod sm4_ccm_compat {
                 xor_partial(chunk, &ctr);
                 counter += 1;
             }
-
             let rem = chunks.into_remainder();
             if !rem.is_empty() {
                 gen_ctr_block::<NONCE_LEN>(&mut ctr, nonce, counter)?;
@@ -2076,10 +1862,8 @@ mod sm4_ccm_compat {
                 xor_partial(rem, &ctr[..rem.len()]);
             }
         }
-
         let mut tag_block = calc_mac::<TAG_LEN, NONCE_LEN>(&cipher, nonce, aad, &buffer)?;
         xor_full(&mut tag_block, &s0);
-
         if constant_time_eq(&tag_block[..tag.len()], tag) {
             Ok(buffer)
         } else {
@@ -2088,17 +1872,14 @@ mod sm4_ccm_compat {
         }
     }
 }
-
 /// Zeroizing SM4 key wrapper for block operations.
 #[derive(Clone, TypeId)]
 pub struct Sm4Key(Secret<Zeroizing<[u8; 16]>>);
-
 impl Sm4Key {
     /// Construct a new SM4 key.
     pub fn new(bytes: [u8; 16]) -> Self {
         Self(Secret::new(Zeroizing::new(bytes)))
     }
-
     /// Encrypt a single 16-byte block.
     pub fn encrypt_block(&self, block: &[u8; 16]) -> [u8; 16] {
         if let Some(bytes) = sm_accel::sm4_encrypt_block(self.0.expose_secret(), block) {
@@ -2106,7 +1887,6 @@ impl Sm4Key {
         }
         sm4_encrypt_block_scalar(self.0.expose_secret(), block)
     }
-
     /// Decrypt a single 16-byte block.
     pub fn decrypt_block(&self, block: &[u8; 16]) -> [u8; 16] {
         if let Some(bytes) = sm_accel::sm4_decrypt_block(self.0.expose_secret(), block) {
@@ -2114,7 +1894,6 @@ impl Sm4Key {
         }
         sm4_decrypt_block_scalar(self.0.expose_secret(), block)
     }
-
     /// Encrypt a message with SM4-GCM.
     ///
     /// Returns the ciphertext and 16-byte authentication tag.
@@ -2142,7 +1921,6 @@ impl Sm4Key {
             ) => {}
             Err(err) => return Err(map_openssl_sm_error("OpenSSL SM4-GCM encrypt", err)),
         }
-
         let sm4_key = Sm4AeadKey::from_slice(self.0.expose_secret().as_ref())
             .map_err(|err| Error::Other(format!("invalid SM4 key length: {err}")))?;
         let mut output = sm4_gcm_aad_encrypt(&sm4_key, nonce, aad, plaintext);
@@ -2154,7 +1932,6 @@ impl Sm4Key {
         tag.copy_from_slice(&tag_vec);
         Ok((output, tag))
     }
-
     /// Decrypt a message with SM4-GCM, returning the plaintext.
     ///
     /// # Errors
@@ -2182,7 +1959,6 @@ impl Sm4Key {
             ) => {}
             Err(err) => return Err(map_openssl_sm_error("OpenSSL SM4-GCM decrypt", err)),
         }
-
         let sm4_key = Sm4AeadKey::from_slice(self.0.expose_secret().as_ref())
             .map_err(|err| Error::Other(format!("invalid SM4 key length: {err}")))?;
         let mut combined = Vec::with_capacity(ciphertext.len() + tag.len());
@@ -2191,7 +1967,6 @@ impl Sm4Key {
         sm4_gcm_aad_decrypt(&sm4_key, nonce, aad, &combined)
             .map_err(|err| Error::Other(format!("SM4-GCM decryption failed: {err}")))
     }
-
     #[cfg(feature = "sm-ccm")]
     fn encrypt_ccm_for_tag<const TAG_LEN: usize>(
         &self,
@@ -2212,7 +1987,6 @@ impl Sm4Key {
             )),
         }
     }
-
     #[cfg(feature = "sm-ccm")]
     fn encrypt_ccm_with<const TAG_LEN: usize, const NONCE_LEN: usize>(
         &self,
@@ -2232,7 +2006,6 @@ impl Sm4Key {
             Err(OpenSslSmError::Sm4CcmNotImplemented | OpenSslSmError::PreviewDisabled) => {}
             Err(err) => return Err(map_openssl_sm_error("OpenSSL SM4-CCM encrypt", err)),
         }
-
         sm4_ccm_compat::encrypt::<TAG_LEN, NONCE_LEN>(
             self.0.expose_secret().as_ref(),
             nonce,
@@ -2240,7 +2013,6 @@ impl Sm4Key {
             plaintext,
         )
     }
-
     #[cfg(feature = "sm-ccm")]
     fn decrypt_ccm_for_tag<const TAG_LEN: usize>(
         &self,
@@ -2262,7 +2034,6 @@ impl Sm4Key {
             )),
         }
     }
-
     #[cfg(feature = "sm-ccm")]
     fn decrypt_ccm_with<const TAG_LEN: usize, const NONCE_LEN: usize>(
         &self,
@@ -2283,7 +2054,6 @@ impl Sm4Key {
             Err(OpenSslSmError::Sm4CcmNotImplemented | OpenSslSmError::PreviewDisabled) => {}
             Err(err) => return Err(map_openssl_sm_error("OpenSSL SM4-CCM decrypt", err)),
         }
-
         sm4_ccm_compat::decrypt::<TAG_LEN, NONCE_LEN>(
             self.0.expose_secret().as_ref(),
             nonce,
@@ -2292,7 +2062,6 @@ impl Sm4Key {
             tag,
         )
     }
-
     /// Encrypt a message with SM4-CCM.
     ///
     /// Returns the ciphertext and authentication tag (length determined by `tag_len`).
@@ -2321,7 +2090,6 @@ impl Sm4Key {
             )),
         }
     }
-
     /// Decrypt a message with SM4-CCM.
     ///
     /// # Errors
@@ -2348,20 +2116,16 @@ impl Sm4Key {
         }
     }
 }
-
 impl Zeroize for Sm4Key {
     fn zeroize(&mut self) {
         *self = Sm4Key::new([0u8; 16]);
     }
 }
-
 impl ZeroizeOnDrop for Sm4Key {}
-
 impl IntoSchema for Sm4Key {
     fn type_name() -> String {
         "Sm4Key".into()
     }
-
     fn update_schema_map(map: &mut iroha_schema::MetaMap) {
         map.insert::<Self>(iroha_schema::Metadata::Tuple(
             iroha_schema::UnnamedFieldsMeta {
@@ -2370,7 +2134,6 @@ impl IntoSchema for Sm4Key {
         ));
     }
 }
-
 /// Intrinsic dispatch policy applied to SM acceleration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SmIntrinsicPolicy {
@@ -2384,7 +2147,6 @@ pub enum SmIntrinsicPolicy {
     /// Intrinsics unsupported (non-AArch64 build or feature disabled).
     ScalarOnly,
 }
-
 impl SmIntrinsicPolicy {
     #[must_use]
     /// Returns the persistent string identifier for the policy.
@@ -2397,17 +2159,14 @@ impl SmIntrinsicPolicy {
         }
     }
 }
-
 impl fmt::Display for SmIntrinsicPolicy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
-
 /// Error returned when parsing [`SmIntrinsicPolicy`] from a string fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SmIntrinsicPolicyParseError;
-
 impl fmt::Display for SmIntrinsicPolicyParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(
@@ -2415,12 +2174,9 @@ impl fmt::Display for SmIntrinsicPolicyParseError {
         )
     }
 }
-
 impl std::error::Error for SmIntrinsicPolicyParseError {}
-
 impl FromStr for SmIntrinsicPolicy {
     type Err = SmIntrinsicPolicyParseError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim().to_ascii_lowercase().as_str() {
             "auto" => Ok(Self::Auto),
@@ -2431,13 +2187,11 @@ impl FromStr for SmIntrinsicPolicy {
         }
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonSerialize for SmIntrinsicPolicy {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(self.as_str(), out);
     }
-
     fn json_serialize_to(
         &self,
         out: &mut dyn json::JsonWriteSink,
@@ -2445,7 +2199,6 @@ impl JsonSerialize for SmIntrinsicPolicy {
         json::write_json_string_to(self.as_str(), out)
     }
 }
-
 #[cfg(feature = "json")]
 impl JsonDeserialize for SmIntrinsicPolicy {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -2456,12 +2209,10 @@ impl JsonDeserialize for SmIntrinsicPolicy {
         })
     }
 }
-
 /// Apply the configured SM intrinsic dispatch policy.
 pub fn set_intrinsic_policy(policy: SmIntrinsicPolicy) {
     sm_accel::set_intrinsic_policy(policy);
 }
-
 /// Returns the configured intrinsic policy before hardware detection.
 #[must_use]
 pub fn configured_intrinsic_policy() -> SmIntrinsicPolicy {
@@ -2473,14 +2224,12 @@ mod test_support {
     use std::sync::{Mutex, MutexGuard};
 
     static SM_ACCEL_STATE_LOCK: Mutex<()> = Mutex::new(());
-
     pub(super) fn lock_accel_state() -> MutexGuard<'static, ()> {
         SM_ACCEL_STATE_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
-
 /// Summary of SM acceleration capabilities at runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SmAccelerationAdvert {
@@ -2493,7 +2242,6 @@ pub struct SmAccelerationAdvert {
     /// Dispatch policy describing how intrinsics are selected.
     pub policy: SmIntrinsicPolicy,
 }
-
 impl SmAccelerationAdvert {
     #[must_use]
     /// Returns the string identifier corresponding to the dispatch policy.
@@ -2501,7 +2249,6 @@ impl SmAccelerationAdvert {
         self.policy.as_str()
     }
 }
-
 /// Return the current SM acceleration advert (scalar + optional intrinsics).
 #[must_use]
 pub fn acceleration_advert() -> SmAccelerationAdvert {
@@ -2521,7 +2268,6 @@ pub fn acceleration_advert() -> SmAccelerationAdvert {
         policy,
     }
 }
-
 /// Report the intrinsic dispatch policy applied to SM acceleration.
 #[must_use]
 pub fn intrinsic_policy() -> SmIntrinsicPolicy {
@@ -2541,12 +2287,10 @@ mod intrinsic_policy_tests {
         SmIntrinsicPolicy, configured_intrinsic_policy, intrinsic_policy, set_intrinsic_policy,
         test_support,
     };
-
     struct PolicyGuard {
         previous: SmIntrinsicPolicy,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
-
     impl PolicyGuard {
         fn new() -> Self {
             let lock = test_support::lock_accel_state();
@@ -2556,17 +2300,14 @@ mod intrinsic_policy_tests {
             }
         }
     }
-
     impl Drop for PolicyGuard {
         fn drop(&mut self) {
             set_intrinsic_policy(self.previous);
         }
     }
-
     #[test]
     fn setter_overrides_intrinsic_policy() {
         let _guard = PolicyGuard::new();
-
         set_intrinsic_policy(SmIntrinsicPolicy::ForceDisable);
         assert_eq!(
             configured_intrinsic_policy(),
@@ -2578,7 +2319,6 @@ mod intrinsic_policy_tests {
             SmIntrinsicPolicy::ForceDisable,
             "runtime policy should honour forced disable"
         );
-
         set_intrinsic_policy(SmIntrinsicPolicy::ForceEnable);
         assert_eq!(
             configured_intrinsic_policy(),
@@ -2592,7 +2332,6 @@ mod intrinsic_policy_tests {
         );
     }
 }
-
 #[cfg(feature = "sm-ffi-openssl")]
 /// Preview metadata and guard rails for the optional OpenSSL-backed SM provider.
 pub mod openssl_provider {
@@ -2625,16 +2364,13 @@ pub mod openssl_provider {
         #[error("OpenSSL unavailable: {0}")]
         OpenSslUnavailable(&'static str),
     }
-
     /// Preview provider exposing OpenSSL metadata and SM capability checks.
     #[derive(Debug, Clone, Copy)]
     pub struct OpenSslProvider;
-
     fn preview_flag() -> &'static AtomicBool {
         static FLAG: OnceLock<AtomicBool> = OnceLock::new();
         FLAG.get_or_init(|| AtomicBool::new(false))
     }
-
     impl OpenSslProvider {
         /// Attempt to load the OpenSSL-backed provider.
         ///
@@ -2666,22 +2402,18 @@ pub mod openssl_provider {
             }
             Ok(Self)
         }
-
         /// Enable or disable the OpenSSL preview backend explicitly.
         pub fn set_preview_enabled(enabled: bool) {
             preview_flag().store(enabled, Ordering::SeqCst);
         }
-
         /// Returns `true` when the preview backend is toggled on via configuration.
         pub fn is_enabled() -> bool {
             preview_flag().load(Ordering::SeqCst)
         }
-
         /// Returns `true` when OpenSSL runtime symbols are available.
         pub fn is_available() -> bool {
             version::number() != 0
         }
-
         /// Report the OpenSSL version string for diagnostics.
         pub fn openssl_version() -> &'static str {
             version::version()
@@ -2696,7 +2428,6 @@ pub mod openssl_provider {
             previous: bool,
             _lock: std::sync::MutexGuard<'static, ()>,
         }
-
         #[cfg(feature = "sm-ffi-openssl")]
         impl PreviewFlagGuard {
             fn set(enabled: bool) -> Self {
@@ -2708,26 +2439,22 @@ pub mod openssl_provider {
                     _lock: lock,
                 }
             }
-
             fn enable() -> Self {
                 Self::set(true)
             }
         }
-
         #[cfg(feature = "sm-ffi-openssl")]
         impl Drop for PreviewFlagGuard {
             fn drop(&mut self) {
                 OpenSslProvider::set_preview_enabled(self.previous);
             }
         }
-
         #[test]
         fn load_requires_preview_flag() {
             let _guard = PreviewFlagGuard::set(false);
             let err = OpenSslProvider::load().expect_err("preview disabled blocks load");
             assert_eq!(err, OpenSslProviderError::PreviewDisabled);
         }
-
         #[test]
         fn unavailable_capability_error_uses_provider_wording() {
             let message = OpenSslProviderError::NotImplemented.to_string();
@@ -2737,7 +2464,6 @@ pub mod openssl_provider {
                 "provider capability errors must not look like unfinished code"
             );
         }
-
         #[test]
         fn load_validates_backend_capabilities_when_enabled() {
             let _guard = PreviewFlagGuard::enable();
@@ -2823,11 +2549,9 @@ pub mod openssl_sm {
         #[error("Invalid SM4 CCM nonce length: expected between 7 and 13 bytes, got {0}")]
         InvalidCcmNonceLength(usize),
     }
-
     /// Preview-only facade over the optional OpenSSL-backed SM primitives.
     #[derive(Debug, Clone, Copy)]
     pub struct OpenSslSmBackend;
-
     fn fetch_sm4_gcm_cipher() -> Result<Cipher, OpenSslSmError> {
         #[cfg(ossl300)]
         {
@@ -2838,7 +2562,6 @@ pub mod openssl_sm {
             Err(OpenSslSmError::Sm4GcmNotImplemented)
         }
     }
-
     #[cfg(feature = "sm-ccm")]
     #[allow(dead_code)]
     fn fetch_sm4_ccm_cipher() -> Result<Cipher, OpenSslSmError> {
@@ -2851,7 +2574,6 @@ pub mod openssl_sm {
             Err(OpenSslSmError::Sm4CcmNotImplemented)
         }
     }
-
     fn validate_sm4_gcm_params(
         key: &[u8],
         nonce: &[u8],
@@ -2868,7 +2590,6 @@ pub mod openssl_sm {
         }
         Ok(())
     }
-
     #[cfg(feature = "sm-ccm")]
     fn validate_sm4_ccm_params(
         key: &[u8],
@@ -2887,7 +2608,6 @@ pub mod openssl_sm {
         }
         Ok(())
     }
-
     impl OpenSslSmBackend {
         /// Hashes input bytes using OpenSSL's SM3 implementation when the preview is enabled.
         ///
@@ -2905,7 +2625,6 @@ pub mod openssl_sm {
             out.copy_from_slice(&digest);
             Ok(out)
         }
-
         /// Encrypt data using OpenSSL's SM4-GCM implementation.
         ///
         /// # Errors
@@ -2927,22 +2646,17 @@ pub mod openssl_sm {
             ctx.encrypt_init(Some(cipher_ref), None, None)?;
             ctx.set_iv_length(nonce.len())?;
             ctx.encrypt_init(None, Some(key), Some(nonce))?;
-
             if !aad.is_empty() {
                 ctx.cipher_update(aad, None)?;
             }
-
             let mut ciphertext = vec![0u8; plaintext.len() + cipher.block_size()];
             let mut written = ctx.cipher_update(plaintext, Some(&mut ciphertext))?;
             written += ctx.cipher_final(&mut ciphertext[written..])?;
             ciphertext.truncate(written);
-
             let mut tag = [0u8; 16];
             ctx.tag(&mut tag)?;
-
             Ok((ciphertext, tag))
         }
-
         /// Decrypt data using OpenSSL's SM4-GCM implementation.
         ///
         /// # Errors
@@ -2965,21 +2679,16 @@ pub mod openssl_sm {
             ctx.decrypt_init(Some(cipher_ref), None, None)?;
             ctx.set_iv_length(nonce.len())?;
             ctx.decrypt_init(None, Some(key), Some(nonce))?;
-
             if !aad.is_empty() {
                 ctx.cipher_update(aad, None)?;
             }
-
             ctx.set_tag(tag)?;
-
             let mut plaintext = vec![0u8; ciphertext.len() + cipher.block_size()];
             let mut written = ctx.cipher_update(ciphertext, Some(&mut plaintext))?;
             written += ctx.cipher_final(&mut plaintext[written..])?;
             plaintext.truncate(written);
-
             Ok(plaintext)
         }
-
         /// Encrypt data using OpenSSL's SM4-CCM implementation when preview support is enabled.
         ///
         /// # Errors
@@ -3006,20 +2715,16 @@ pub mod openssl_sm {
             ctx.set_tag_length(tag_len)?;
             ctx.encrypt_init(None, Some(key), Some(nonce))?;
             ctx.set_data_len(plaintext.len())?;
-
             if !aad.is_empty() {
                 ctx.cipher_update(aad, None)?;
             }
-
             let mut ciphertext = Vec::with_capacity(plaintext.len());
             ctx.cipher_update_vec(plaintext, &mut ciphertext)?;
             ctx.cipher_final_vec(&mut ciphertext)?;
-
             let mut tag = vec![0u8; tag_len];
             ctx.tag(&mut tag)?;
             Ok((ciphertext, tag))
         }
-
         /// Decrypt data using OpenSSL's SM4-CCM implementation when preview support is enabled.
         ///
         /// # Errors
@@ -3046,16 +2751,13 @@ pub mod openssl_sm {
             ctx.set_tag(tag)?;
             ctx.decrypt_init(None, Some(key), Some(nonce))?;
             ctx.set_data_len(ciphertext.len())?;
-
             if !aad.is_empty() {
                 ctx.cipher_update(aad, None)?;
             }
-
             let mut plaintext = Vec::with_capacity(ciphertext.len());
             ctx.cipher_update_vec(ciphertext, &mut plaintext)?;
             Ok(plaintext)
         }
-
         /// Verify SM2 signatures via OpenSSL when preview support is enabled.
         ///
         /// # Errors
@@ -3070,7 +2772,6 @@ pub mod openssl_sm {
             if !OpenSslProvider::is_enabled() {
                 return Err(OpenSslSmError::PreviewDisabled);
             }
-
             let sm_public = match super::Sm2PublicKey::from_sec1_bytes(distid, public_key_sec1) {
                 Ok(public) => public,
                 Err(crate::ParseError(message)) => {
@@ -3080,12 +2781,10 @@ pub mod openssl_sm {
                     return Err(OpenSslSmError::InvalidPublicKey(message));
                 }
             };
-
             let group = match EcGroup::from_curve_name(Nid::SM2) {
                 Ok(group) => group,
                 Err(_) => return Err(OpenSslSmError::Sm2NotImplemented),
             };
-
             let mut ctx = BigNumContext::new()?;
             let point = match EcPoint::from_bytes(&group, public_key_sec1, &mut ctx) {
                 Ok(point) => point,
@@ -3095,7 +2794,6 @@ pub mod openssl_sm {
                 Ok(key) => key,
                 Err(_) => return Err(OpenSslSmError::Sm2NotImplemented),
             };
-
             let za = sm_public
                 .compute_z(distid)
                 .map_err(|crate::ParseError(message)| OpenSslSmError::InvalidDistid(message))?;
@@ -3105,7 +2803,6 @@ pub mod openssl_sm {
             let digest = hasher.finalize();
             let mut digest_bytes = [0u8; Sm3Digest::LENGTH];
             digest_bytes.copy_from_slice(&digest);
-
             let der = signature
                 .try_as_der()
                 .map_err(|crate::ParseError(message)| OpenSslSmError::InvalidPublicKey(message))?;
@@ -3138,64 +2835,48 @@ mod tests {
     const SM4_GMT_VECTOR_KEY: &str = "0123456789abcdeffedcba9876543210";
     const SM4_GMT_VECTOR_BLOCK: &str = "0123456789abcdeffedcba9876543210";
     const SM4_GMT_VECTOR_CIPHERTEXT: &str = "681EDF34D206965E86B3E94F536E4246";
-
     struct FailingTryRng;
-
     #[derive(Debug)]
     struct FailingTryRngError;
-
     impl std::fmt::Display for FailingTryRngError {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.write_str("failing SM2 RNG")
         }
     }
-
     impl TryRngCore for FailingTryRng {
         type Error = FailingTryRngError;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Err(FailingTryRngError)
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Err(FailingTryRngError)
         }
-
         fn try_fill_bytes(&mut self, _dest: &mut [u8]) -> Result<(), Self::Error> {
             Err(FailingTryRngError)
         }
     }
-
     impl TryCryptoRng for FailingTryRng {}
-
     struct FixedTryRng {
         byte: u8,
     }
-
     impl TryRngCore for FixedTryRng {
         type Error = core::convert::Infallible;
-
         fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
             Ok(u32::from_le_bytes([self.byte; 4]))
         }
-
         fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
             Ok(u64::from_le_bytes([self.byte; 8]))
         }
-
         fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
             dest.fill(self.byte);
             Ok(())
         }
     }
-
     impl TryCryptoRng for FixedTryRng {}
-
     struct IntrinsicPolicyGuard {
         previous: SmIntrinsicPolicy,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
-
     impl IntrinsicPolicyGuard {
         fn set(policy: SmIntrinsicPolicy) -> Self {
             let lock = test_support::lock_accel_state();
@@ -3207,19 +2888,16 @@ mod tests {
             }
         }
     }
-
     impl Drop for IntrinsicPolicyGuard {
         fn drop(&mut self) {
             set_intrinsic_policy(self.previous);
         }
     }
-
     #[cfg(all(feature = "sm-ffi-openssl", feature = "sm-ccm"))]
     struct OpenSslPreviewGuard {
         previous: bool,
         _lock: std::sync::MutexGuard<'static, ()>,
     }
-
     #[cfg(all(feature = "sm-ffi-openssl", feature = "sm-ccm"))]
     impl OpenSslPreviewGuard {
         fn set(enabled: bool) -> Self {
@@ -3232,14 +2910,12 @@ mod tests {
             }
         }
     }
-
     #[cfg(all(feature = "sm-ffi-openssl", feature = "sm-ccm"))]
     impl Drop for OpenSslPreviewGuard {
         fn drop(&mut self) {
             OpenSslProvider::set_preview_enabled(self.previous);
         }
     }
-
     #[cfg(feature = "sm-ffi-openssl")]
     #[test]
     fn openssl_sm4_ccm_error_mapping_describes_ccm_lengths() {
@@ -3268,7 +2944,6 @@ mod tests {
             )
         );
     }
-
     #[test]
     fn sm_intrinsic_policy_parse_accepts_aliases() {
         assert_eq!(
@@ -3289,7 +2964,6 @@ mod tests {
         );
         assert!(SmIntrinsicPolicy::from_str("not-a-policy").is_err());
     }
-
     #[test]
     fn sm_intrinsic_policy_setter_updates_configuration() {
         let _guard = IntrinsicPolicyGuard::set(SmIntrinsicPolicy::ForceDisable);
@@ -3298,11 +2972,9 @@ mod tests {
             SmIntrinsicPolicy::ForceDisable
         );
     }
-
     fn hex_to_vec(hex: &str) -> Vec<u8> {
         hex_decode(hex).expect("valid hex")
     }
-
     fn hex_to_array<const N: usize>(hex: &str) -> [u8; N] {
         let bytes = hex_to_vec(hex);
         bytes
@@ -3310,7 +2982,6 @@ mod tests {
             .try_into()
             .unwrap_or_else(|_| panic!("expected {N} bytes"))
     }
-
     fn manual_compute_z(distid: &str, public: &Sm2PublicKey) -> [u8; 32] {
         let entla_bits = distid
             .len()
@@ -3319,7 +2990,6 @@ mod tests {
         let entla = u16::try_from(entla_bits)
             .expect("distid length fits in u16 bits")
             .to_be_bytes();
-
         let mut hasher = Sm3::new();
         hasher.update(entla);
         hasher.update(distid.as_bytes());
@@ -3327,26 +2997,22 @@ mod tests {
         hasher.update(SM2_EQUATION_B_BYTES);
         hasher.update(SM2_GENERATOR_X_BYTES);
         hasher.update(SM2_GENERATOR_Y_BYTES);
-
         let encoded = public.as_inner().as_affine().to_encoded_point(false);
         let Coordinates::Uncompressed { x, y } = encoded.coordinates() else {
             panic!("SM2 public key must encode as uncompressed SEC1 point");
         };
         hasher.update(x);
         hasher.update(y);
-
         let digest = hasher.finalize();
         let mut out = [0u8; 32];
         out.copy_from_slice(&digest);
         out
     }
-
     #[test]
     fn sm3_digest_has_expected_length() {
         let digest = Sm3Digest::hash(b"Iroha");
         assert_eq!(digest.as_bytes().len(), 32);
     }
-
     #[test]
     fn sm4_block_encrypt_roundtrip() {
         let key = Sm4Key::new([0x11; 16]);
@@ -3355,13 +3021,11 @@ mod tests {
         let decrypted = key.decrypt_block(&ciphertext);
         assert_eq!(plaintext, decrypted);
     }
-
     #[test]
     fn sm3_digest_matches_gm_standard_vector() {
         let digest = Sm3Digest::hash(b"abc");
         assert_eq!(hex::encode_upper(digest.as_bytes()), SM3_ABC_HEX);
     }
-
     #[test]
     fn sm3_digest_fallback_produces_expected_bytes() {
         let _accel_lock = test_support::lock_accel_state();
@@ -3369,7 +3033,6 @@ mod tests {
         let digest = Sm3Digest::hash(b"abc");
         assert_eq!(hex::encode_upper(digest.as_bytes()), SM3_ABC_HEX);
     }
-
     #[test]
     fn sm4_block_encrypt_matches_gm_standard_vector() {
         let key = Sm4Key::new(hex_to_array::<16>(SM4_GMT_VECTOR_KEY));
@@ -3377,7 +3040,6 @@ mod tests {
         let ciphertext = key.encrypt_block(&block);
         assert_eq!(hex::encode_upper(ciphertext), SM4_GMT_VECTOR_CIPHERTEXT);
     }
-
     #[test]
     fn sm4_block_encrypt_fallback_matches_reference_vector() {
         let _accel_lock = test_support::lock_accel_state();
@@ -3387,33 +3049,27 @@ mod tests {
         let ciphertext = key.encrypt_block(&block);
         assert_eq!(hex::encode_upper(ciphertext), SM4_GMT_VECTOR_CIPHERTEXT);
     }
-
     #[test]
     fn sm4_scalar_fixed_key_constructor_matches_fallible_reference() {
         let key = hex_to_array::<16>(SM4_GMT_VECTOR_KEY);
         let block = hex_to_array::<16>(SM4_GMT_VECTOR_BLOCK);
         let reference_cipher = sm4::Sm4::new_from_slice(&key).expect("valid reference SM4 key");
-
         let mut reference_ciphertext_block = Block::<sm4::Sm4>::default();
         reference_ciphertext_block.clone_from_slice(&block);
         reference_cipher.encrypt_block(&mut reference_ciphertext_block);
         let mut reference_ciphertext = [0u8; 16];
         reference_ciphertext.copy_from_slice(reference_ciphertext_block.as_ref());
-
         let scalar_ciphertext = sm4_encrypt_block_scalar(&key, &block);
         assert_eq!(scalar_ciphertext, reference_ciphertext);
-
         let mut reference_plaintext_block = Block::<sm4::Sm4>::default();
         reference_plaintext_block.clone_from_slice(&scalar_ciphertext);
         reference_cipher.decrypt_block(&mut reference_plaintext_block);
         let mut reference_plaintext = [0u8; 16];
         reference_plaintext.copy_from_slice(reference_plaintext_block.as_ref());
-
         let scalar_plaintext = sm4_decrypt_block_scalar(&key, &scalar_ciphertext);
         assert_eq!(scalar_plaintext, reference_plaintext);
         assert_eq!(scalar_plaintext, block);
     }
-
     #[test]
     fn sm2_public_key_pem_roundtrip() {
         let mut rng = OsRng;
@@ -3426,13 +3082,11 @@ mod tests {
             .expect("decode SM2 public key");
         assert_eq!(decoded.to_sec1_bytes(false), public.to_sec1_bytes(false));
     }
-
     #[test]
     fn sm2_pem_wrapping_uses_ascii_base64_string_slices() {
         let der = [0x42_u8; 49];
         let pem = encode_pem("TEST OBJECT", &der);
         let lines = pem.lines().collect::<Vec<_>>();
-
         assert_eq!(lines.first().copied(), Some("-----BEGIN TEST OBJECT-----"));
         assert_eq!(lines.last().copied(), Some("-----END TEST OBJECT-----"));
         assert_eq!(
@@ -3446,7 +3100,6 @@ mod tests {
             "remaining base64 PEM line must preserve the tail"
         );
     }
-
     #[test]
     fn sm2_compute_z_matches_annex_example() {
         let distid = "ALICE123@YAHOO.COM";
@@ -3464,7 +3117,6 @@ mod tests {
             }
         }
     }
-
     #[test]
     fn sm2_compute_z_aligns_with_signing_key() {
         let mut rng = OsRng;
@@ -3472,23 +3124,19 @@ mod tests {
         let private = Sm2PrivateKey::random(distid, &mut rng).expect("valid distid");
         let public = private.public_key();
         let za = public.compute_z(distid).expect("compute ZA");
-
         let message = b"za alignment check";
         let signature = private.sign(message);
         let raw_signature = signature.as_sm2().expect("convert to raw signature");
-
         let mut sm3 = Sm3::new();
         sm3.update(za);
         sm3.update(message);
         let prehash = sm3.finalize();
-
         let verifier = sm2::dsa::VerifyingKey::from_affine(distid, *public.as_inner().as_affine())
             .expect("construct verifier");
         verifier
             .verify_prehash(prehash.as_slice(), &raw_signature)
             .expect("signature verifies with computed ZA");
     }
-
     #[test]
     fn sm2_compute_z_matches_manual_formula_samples() {
         use rand::{RngCore as _, SeedableRng as _};
@@ -3509,71 +3157,58 @@ mod tests {
                     })
                     .collect()
             };
-
             let private = match Sm2PrivateKey::from_seed(&distid, &seed) {
                 Ok(private) => private,
                 Err(_) => continue,
             };
             let public = private.public_key();
-
             let manual = manual_compute_z(&distid, &public);
             let computed = public.compute_z(&distid).expect("compute ZA");
-
             assert_eq!(
                 manual, computed,
                 "ZA mismatch for distinguishing identifier {distid}"
             );
         }
     }
-
     #[test]
     fn sm4_gcm_vector_matches_rfc8998() {
         let key = Sm4Key::new(hex_to_array::<16>("0123456789abcdeffedcba9876543210"));
         let nonce = hex_to_array::<12>("00001234567800000000abcd");
         let aad = hex_to_vec("feedfacedeadbeeffeedfacedeadbeefabaddad2");
         let plaintext = hex_to_vec("d9313225f88406e5a55909c5aff5269a");
-
         let (ciphertext, tag) = key.encrypt_gcm(&nonce, &aad, &plaintext).expect("encrypt");
-
         let decrypted = key
             .decrypt_gcm(&nonce, &aad, &ciphertext, &tag)
             .expect("decrypt");
         assert_eq!(decrypted, plaintext);
     }
-
     #[test]
     fn sm4_gcm_rejects_modified_tag() {
         let key = Sm4Key::new(hex_to_array::<16>("0123456789abcdeffedcba9876543210"));
         let nonce = hex_to_array::<12>("00001234567800000000abcd");
         let aad = hex_to_vec("feedfacedeadbeeffeedfacedeadbeefabaddad2");
         let plaintext = hex_to_vec("d9313225f88406e5a55909c5aff5269a");
-
         let (ciphertext, mut tag) = key.encrypt_gcm(&nonce, &aad, &plaintext).expect("encrypt");
         tag[0] ^= 0xFF;
         let result = key.decrypt_gcm(&nonce, &aad, &ciphertext, &tag);
         assert!(result.is_err(), "tampering must fail verification");
     }
-
     #[test]
     fn sm4_ccm_vector_matches_rfc8998() {
         let key = Sm4Key::new(hex_to_array::<16>("404142434445464748494a4b4c4d4e4f"));
         let nonce = hex_to_vec("10111213141516");
         let aad = hex_to_vec("000102030405060708090a0b0c0d0e0f");
         let plaintext = hex_to_vec("202122232425262728292a2b2c2d2e2f");
-
         let (ciphertext, tag) = key
             .encrypt_ccm(&nonce, &aad, &plaintext, 4)
             .expect("SM4-CCM encryption must succeed");
-
         let decrypted = key
             .decrypt_ccm(&nonce, &aad, &ciphertext, &tag)
             .expect("SM4-CCM decryption must succeed");
-
         assert_eq!(decrypted, plaintext);
         assert_eq!(ciphertext, hex_to_vec("a9550cebab5f227d9590e8979caafd1f"));
         assert_eq!(tag, hex_to_vec("03a1f305"));
     }
-
     #[test]
     fn sm4_ccm_rejects_modified_tag() {
         let key = Sm4Key::new(hex_to_array::<16>("404142434445464748494a4b4c4d4e4f"));
@@ -3583,14 +3218,12 @@ mod tests {
         let (ciphertext, mut tag) = key
             .encrypt_ccm(&nonce, &aad, &plaintext, 4)
             .expect("SM4-CCM encryption must succeed");
-
         tag[0] ^= 0xFF;
         assert!(
             key.decrypt_ccm(&nonce, &aad, &ciphertext, &tag).is_err(),
             "altered tag must fail verification"
         );
     }
-
     #[test]
     fn sm4_ccm_rejects_invalid_parameters() {
         let key = Sm4Key::new([0x01; 16]);
@@ -3605,7 +3238,6 @@ mod tests {
             "unsupported tag length must be rejected"
         );
     }
-
     #[cfg(all(feature = "sm-ffi-openssl", feature = "sm-ccm"))]
     #[test]
     fn openssl_sm4_ccm_preview_matches_rfc8998_when_available() {
@@ -3616,7 +3248,6 @@ mod tests {
         let plaintext = hex_to_vec("202122232425262728292a2b2c2d2e2f");
         let expected_ciphertext = hex_to_vec("a9550cebab5f227d9590e8979caafd1f");
         let expected_tag = hex_to_vec("03a1f305");
-
         let (ciphertext, tag) =
             match OpenSslSmBackend::sm4_ccm_encrypt(&key_bytes, &nonce, &aad, &plaintext, 4) {
                 Ok(result) => result,
@@ -3629,7 +3260,6 @@ mod tests {
                 }
                 Err(err) => panic!("unexpected OpenSSL SM4-CCM encrypt error: {err:?}"),
             };
-
         assert_eq!(ciphertext, expected_ciphertext);
         assert_eq!(tag, expected_tag);
         assert_eq!(
@@ -3637,7 +3267,6 @@ mod tests {
                 .expect("OpenSSL SM4-CCM decrypts RFC8998 vector"),
             plaintext
         );
-
         let mut tampered_tag = tag.clone();
         tampered_tag[0] ^= 0xff;
         assert!(
@@ -3651,7 +3280,6 @@ mod tests {
             .is_err(),
             "OpenSSL SM4-CCM must reject modified tags"
         );
-
         let key = Sm4Key::new(key_bytes);
         let (routed_ciphertext, routed_tag) = key
             .encrypt_ccm(&nonce, &aad, &plaintext, 4)
@@ -3664,65 +3292,55 @@ mod tests {
             plaintext
         );
     }
-
     #[test]
     fn sm2_signature_roundtrip_and_verify() {
         let private =
             Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, [0x11; 32]).expect("secret key");
         let message = b"hello world";
         let signature = private.sign(message);
-
         let public = private.public_key();
         public
             .verify(message, &signature)
             .expect("signature verifies");
     }
-
     #[test]
     fn sm2_signature_from_bytes_rejects_zero_scalars_before_backend() {
         let all_zero = [0u8; Sm2Signature::LENGTH];
         let err = Sm2Signature::from_bytes(&all_zero)
             .expect_err("all-zero SM2 signature must fail before backend parsing");
         assert!(err.to_string().contains("all-zero"));
-
         let mut zero_r = [0u8; Sm2Signature::LENGTH];
         zero_r[Sm2Signature::LENGTH - 1] = 1;
         let err =
             Sm2Signature::from_bytes(&zero_r).expect_err("zero r scalar must fail before backend");
         assert!(err.to_string().contains("zero scalar"));
-
         let mut zero_s = [0u8; Sm2Signature::LENGTH];
         zero_s[31] = 1;
         let err =
             Sm2Signature::from_bytes(&zero_s).expect_err("zero s scalar must fail before backend");
         assert!(err.to_string().contains("zero scalar"));
     }
-
     #[test]
     fn sm2_public_key_from_sec1_bytes_rejects_all_zero_material_before_backend() {
         let all_zero = [0u8; 65];
         let err = Sm2PublicKey::from_sec1_bytes(Sm2PublicKey::DEFAULT_DISTID, &all_zero)
             .expect_err("all-zero SM2 SEC1 public key must fail before backend parsing");
-
         assert!(
             err.to_string().contains("all-zero"),
             "unexpected all-zero public key error: {err}"
         );
     }
-
     #[test]
     fn sm2_public_key_from_sec1_bytes_rejects_zero_coordinate_material_before_backend() {
         let mut zero_coordinates = [0u8; SM2_PUBLIC_KEY_UNCOMPRESSED_LEN];
         zero_coordinates[0] = 0x04;
         let err = Sm2PublicKey::from_sec1_bytes(Sm2PublicKey::DEFAULT_DISTID, &zero_coordinates)
             .expect_err("zero-coordinate SM2 SEC1 public key must fail before backend parsing");
-
         assert!(
             err.to_string().contains("all-zero SEC1 coordinate"),
             "unexpected zero-coordinate public key error: {err}"
         );
     }
-
     #[test]
     fn sm2_public_key_verify_maps_malformed_signature_to_bad_signature() {
         let private =
@@ -3731,27 +3349,22 @@ mod tests {
         let mut s = [0u8; 32];
         s[31] = 1;
         let malformed = Sm2Signature { r: [0u8; 32], s };
-
         let err = public
             .verify(b"message", &malformed)
             .expect_err("malformed in-memory signature must fail closed");
-
         assert!(matches!(err, Error::BadSignature));
     }
-
     #[test]
     fn sm2_try_sign_roundtrip_and_verify() {
         let private =
             Sm2PrivateKey::new(Sm2PublicKey::DEFAULT_DISTID, [0x12; 32]).expect("secret key");
         let message = b"hello checked sm2";
         let signature = private.try_sign(message).expect("checked SM2 signing");
-
         let public = private.try_public_key().expect("checked public key");
         public
             .verify(message, &signature)
             .expect("signature verifies");
     }
-
     #[test]
     fn sm2_random_private_key_roundtrip() {
         let mut rng = OsRng;
@@ -3764,7 +3377,6 @@ mod tests {
             .verify(message, &signature)
             .expect("signature verifies");
     }
-
     #[test]
     fn sm2_try_random_reports_rng_failure() {
         let mut rng = FailingTryRng;
@@ -3776,7 +3388,6 @@ mod tests {
             Ok(_) => panic!("RNG failure must be reported"),
         }
     }
-
     #[test]
     fn sm2_try_random_from_os_roundtrip() {
         let private =
@@ -3788,7 +3399,6 @@ mod tests {
             .verify(message, &signature)
             .expect("signature verifies");
     }
-
     #[test]
     fn sm2_default_distid_can_be_overridden() {
         let original = Sm2PublicKey::default_distid();
@@ -3796,7 +3406,6 @@ mod tests {
         assert_eq!(Sm2PublicKey::default_distid(), "override-distid");
         Sm2PublicKey::set_default_distid(original).expect("restore distid");
     }
-
     #[test]
     fn sm2_default_distid_rejects_invalid_value() {
         let original = Sm2PublicKey::default_distid();
@@ -3807,7 +3416,6 @@ mod tests {
         );
         assert_eq!(Sm2PublicKey::default_distid(), original);
     }
-
     #[test]
     fn sm2_public_key_equality_includes_distid() {
         let secret = [0x44u8; 32];
@@ -3818,7 +3426,6 @@ mod tests {
         assert_eq!(pk_a.to_sec1_bytes(false), pk_b.to_sec1_bytes(false));
         assert_ne!(pk_a, pk_b);
     }
-
     #[test]
     fn sm2_private_key_pkcs8_roundtrip() {
         let original = Sm2PrivateKey::from_seed("roundtrip-distid", b"deterministic-seed")
@@ -3831,7 +3438,6 @@ mod tests {
             restored.public_key().to_sec1_bytes(false)
         );
     }
-
     #[test]
     fn sm2_from_seed_rejects_all_zero_seed_material() {
         match Sm2PrivateKey::from_seed(Sm2PublicKey::DEFAULT_DISTID, &[0u8; 32]) {
@@ -3842,24 +3448,20 @@ mod tests {
             Ok(_) => panic!("all-zero SM2 seed material must fail"),
         }
     }
-
     #[test]
     fn sm2_private_key_from_bytes_rejects_all_zero_material() {
         let err = match Sm2PrivateKey::from_bytes(Sm2PublicKey::DEFAULT_DISTID, &[0u8; 32]) {
             Ok(_) => panic!("all-zero SM2 private-key material must fail"),
             Err(err) => err,
         };
-
         assert!(
             err.to_string().contains("all zero"),
             "unexpected all-zero private-key error: {err}"
         );
     }
-
     #[test]
     fn sm2_try_random_rejects_all_zero_rng_material() {
         let mut rng = FixedTryRng { byte: 0 };
-
         match Sm2PrivateKey::try_random(Sm2PublicKey::DEFAULT_DISTID, &mut rng) {
             Err(err) => assert!(
                 err.to_string().contains("all-zero seed material"),
@@ -3868,7 +3470,6 @@ mod tests {
             Ok(_) => panic!("all-zero SM2 RNG material must fail"),
         }
     }
-
     #[test]
     fn sm2_from_seed_rejects_invalid_distid_before_derivation() {
         let oversized_distid = "x".repeat((u16::MAX as usize / 8) + 1);
@@ -3880,13 +3481,11 @@ mod tests {
             Ok(_) => panic!("oversized SM2 distinguishing identifier must fail"),
         }
     }
-
     #[test]
     fn sm2_payload_roundtrip_preserves_distid() {
         let distid = "payload-distid";
         let private = Sm2PrivateKey::from_seed(distid, b"payload-seed").expect("seeded key");
         let public = private.public_key();
-
         let sec1 = public.to_sec1_bytes(false);
         let public_payload =
             encode_sm2_public_key_payload(distid, &sec1).expect("encode public payload");
@@ -3894,7 +3493,6 @@ mod tests {
             decode_sm2_public_key_payload(&public_payload).expect("decode public payload");
         assert_eq!(decoded_public.to_sec1_bytes(false), sec1);
         assert_eq!(decoded_public.distid(), distid);
-
         let secret = private.secret_bytes();
         let private_payload =
             encode_sm2_private_key_payload(distid, &secret).expect("encode private payload");
@@ -3903,7 +3501,6 @@ mod tests {
         assert_eq!(decoded_private.secret_bytes(), secret);
         assert_eq!(decoded_private.distid(), distid);
     }
-
     #[test]
     fn sm2_payload_decode_rejects_short_length_prefix() {
         let err = match decode_sm2_public_key_payload(&[0x01]) {
@@ -3914,7 +3511,6 @@ mod tests {
             err.to_string().contains("missing distid length prefix"),
             "unexpected error: {err}"
         );
-
         let err = match decode_sm2_private_key_payload(&[0x01]) {
             Ok(_) => panic!("short SM2 private payload prefix must be rejected"),
             Err(err) => err,
@@ -3924,7 +3520,6 @@ mod tests {
             "unexpected error: {err}"
         );
     }
-
     #[test]
     fn sm2_distid_length_overflow_is_rejected() {
         let distid = "a".repeat(8192);
@@ -3940,14 +3535,12 @@ mod tests {
             "expected oversized distid to be rejected"
         );
     }
-
     #[test]
     fn sm2_random_rejects_invalid_distid() {
         let mut rng = OsRng;
         let distid = "a".repeat(8192);
         assert!(Sm2PrivateKey::random(distid, &mut rng).is_err());
     }
-
     #[cfg(not(feature = "ffi_import"))]
     #[test]
     fn sm2_public_key_prefixed_string_matches_public_key_helper() {
@@ -3959,13 +3552,11 @@ mod tests {
         let prefixed = public
             .try_to_prefixed_string()
             .expect("checked SM2 prefixed formatting");
-
         assert!(
             prefixed.starts_with("sm2:"),
             "prefixed multihash must include sm2 prefix"
         );
         assert_eq!(public.to_prefixed_string(), prefixed);
-
         let sec1 = public.to_sec1_bytes(false);
         let payload = encode_sm2_public_key_payload(public.distid(), &sec1).expect("SM2 payload");
         let general =
@@ -3977,25 +3568,21 @@ mod tests {
                 .expect("generic checked SM2 prefixed formatting")
         );
     }
-
     #[test]
     fn sm2_signature_der_roundtrip_matches_annex() {
         let signature = Sm2Signature::from_hex(ANNEX_SIG_HEX).expect("Annex signature");
         let der = signature.as_der();
         assert_eq!(hex::encode_upper(&der), ANNEX_SIG_DER_HEX);
-
         let parsed = Sm2Signature::from_der(&hex::decode(ANNEX_SIG_DER_HEX).expect("DER hex"))
             .expect("parse DER");
         assert_eq!(signature, parsed);
     }
-
     #[test]
     fn sm2_signature_try_as_der_matches_compatibility_export() {
         let signature = Sm2Signature::from_hex(ANNEX_SIG_HEX).expect("Annex signature");
         let checked = signature
             .try_as_der()
             .expect("SM2 DER short-form lengths fit");
-
         assert_eq!(checked, signature.as_der());
         assert!(!checked.is_empty(), "SM2 DER export must not be empty");
         assert_eq!(
@@ -4003,7 +3590,6 @@ mod tests {
             Some(checked.len() - 2)
         );
     }
-
     #[test]
     fn sm2_signature_der_handles_high_bit_components() {
         let mut rng = OsRng;
@@ -4020,7 +3606,6 @@ mod tests {
         }
         panic!("failed to produce SM2 signature with high-bit component after 1024 attempts");
     }
-
     #[test]
     fn sm2_signature_der_rejects_non_canonical_leading_zero() {
         let der = hex::decode(ANNEX_SIG_DER_HEX).expect("DER hex");
@@ -4030,7 +3615,6 @@ mod tests {
         let s_end = s_start + 32;
         let r = &der[r_start..r_end];
         let s = &der[s_start..s_end];
-
         let seq_len = der[1].checked_add(1).expect("sequence length fits");
         let mut non_canonical = Vec::with_capacity(der.len() + 1);
         non_canonical.push(0x30);
@@ -4042,17 +3626,14 @@ mod tests {
         non_canonical.push(0x02);
         non_canonical.push(0x20);
         non_canonical.extend_from_slice(s);
-
         assert!(Sm2Signature::from_der(&non_canonical).is_err());
     }
-
     #[test]
     fn sm2_signature_der_rejects_negative_integer_encoding() {
         let mut r = [0u8; 32];
         r[0] = 0x80;
         let mut s = [0u8; 32];
         s[31] = 0x01;
-
         let mut der = Vec::with_capacity(70);
         der.push(0x30);
         der.push(0x44);
@@ -4062,14 +3643,11 @@ mod tests {
         der.push(0x02);
         der.push(0x20);
         der.extend_from_slice(&s);
-
         assert!(Sm2Signature::from_der(&der).is_err());
     }
-
     #[test]
     fn sm2_signature_der_rejects_negative_single_byte_integer() {
         let der = vec![0x30, 0x06, 0x02, 0x01, 0x80, 0x02, 0x01, 0x01];
-
         assert!(Sm2Signature::from_der(&der).is_err());
     }
 }

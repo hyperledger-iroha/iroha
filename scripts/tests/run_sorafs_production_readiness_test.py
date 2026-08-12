@@ -36,6 +36,37 @@ RESILIENCE_SIGNER_PUBLIC_KEY = resilience_public_key_from_seed(
 )
 
 
+def test_promotion_docs_match_exact_22_input_replay_contract() -> None:
+    """Keep the documented replay inventory identical to the executable one."""
+
+    root = MODULE_PATH.parents[1]
+    ledger = " ".join(
+        (root / "specs/sorafs/v1_closure_ledger.md").read_text(
+            encoding="utf-8"
+        ).split()
+    )
+    resilience = " ".join(
+        (root / "specs/sorafs/l1_resilience_qualification.md").read_text(
+            encoding="utf-8"
+        ).split()
+    )
+    runner = MODULE_PATH.read_text(encoding="utf-8")
+
+    assert "Return the exact ordered 22-input promotion replay set." in runner
+    assert (
+        "contains 22 top-level inputs: topology qualification summary, signed "
+        "topology qualification envelope, resilience qualification, signed L1 "
+        "lane evidence inventory, foundational envelope, and the 17 lane summaries"
+        in ledger
+    )
+    assert (
+        "signed L1 lane evidence inventory + foundation + 17 lane summaries "
+        "equals 22 immutable inputs" in resilience
+    )
+    assert "contains 20 top-level inputs" not in ledger
+    assert "equals 21 immutable inputs" not in resilience
+
+
 def write_json(path: Path) -> Path:
     path.write_text('{"schema":"placeholder"}\n', encoding="utf-8")
     return path

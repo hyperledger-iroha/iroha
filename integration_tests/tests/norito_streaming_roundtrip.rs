@@ -1,9 +1,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Integration coverage for the Norito Streaming baseline codec and chunk helpers.
 
-#[path = "streaming/mod.rs"]
-mod streaming;
-
+use crate::streaming;
 use hex::encode as hex_encode;
 use norito::streaming::{
     EntropyMode, FecScheme, Hash, Multiaddr, PrivacyCapabilities, PrivacyRelay, PrivacyRoute,

@@ -189,7 +189,7 @@ mod json_string_allocation_tests {
             json::Value::Bool(false),
             json::Value::Bool(true),
         ]);
-        let bytes = 3 * core::mem::size_of::<bool>();
+        let bytes = 3 * ::core::mem::size_of::<bool>();
         let (copied, usage) = core::with_decode_limits_measured(allocation_limits(bytes), || {
             Vec::<bool>::json_from_value(&vec_source)
         });

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 from html import unescape
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,11 @@ from sorafs_path_identity import diagnostic_text_is_canonical, error_diagnostic_
 CHUNK_BYTES = 1024 * 1024
 EVIDENCE_JSON_LOAD_DIAGNOSTIC = "failed to load evidence JSON"
 EVIDENCE_JSON_READ_DIAGNOSTIC = "evidence JSON cannot be read"
+EVIDENCE_FILE_HARDLINK_DIAGNOSTIC = "evidence file must not be hardlinked"
+EVIDENCE_FILE_CHANGED_DIAGNOSTIC = "evidence file changed while it was read"
+EVIDENCE_FILE_PATH_CHANGED_DIAGNOSTIC = (
+    "evidence file path changed while it was read"
+)
 JSON_DUPLICATE_KEY_EXTRA_SENSITIVE_KEYS = frozenset(
     {
         "access_log_entries",
@@ -240,12 +246,83 @@ def validate_evidence_file_for_read(path: Path) -> None:
 def evidence_read_open_flags() -> int:
     """Return platform read flags that refuse a final symlink when available."""
 
+    nonblock = getattr(os, "O_NONBLOCK", 0)
+    if not nonblock:
+        raise RuntimeError(EVIDENCE_FILE_INSPECTION_DIAGNOSTIC)
     return (
         os.O_RDONLY
         | getattr(os, "O_BINARY", 0)
         | getattr(os, "O_CLOEXEC", 0)
+        | nonblock
         | getattr(os, "O_NOFOLLOW", 0)
     )
+
+
+def _anchored_evidence_components(path: Path) -> tuple[str, ...]:
+    absolute = path if path.is_absolute() else Path.cwd() / path
+    components = absolute.parts[1:]
+    if not components or any(
+        component in {"", ".", ".."} for component in components
+    ):
+        raise RuntimeError(EVIDENCE_FILE_INSPECTION_DIAGNOSTIC)
+    return components
+
+
+def _evidence_directory_open_flags() -> int:
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    directory = getattr(os, "O_DIRECTORY", 0)
+    if not nofollow or not directory:
+        raise RuntimeError(EVIDENCE_FILE_INSPECTION_DIAGNOSTIC)
+    return os.O_RDONLY | nofollow | directory | getattr(os, "O_CLOEXEC", 0)
+
+
+def _open_anchored_evidence_parent(path: Path) -> tuple[int, str, list[int]]:
+    components = _anchored_evidence_components(path)
+    directory_fds: list[int] = []
+    try:
+        current = os.open("/", _evidence_directory_open_flags())
+        directory_fds.append(current)
+        for component in components[:-1]:
+            current = os.open(
+                component,
+                _evidence_directory_open_flags(),
+                dir_fd=current,
+            )
+            directory_fds.append(current)
+        return current, components[-1], directory_fds
+    except BaseException:
+        for directory_fd in reversed(directory_fds):
+            os.close(directory_fd)
+        raise
+
+
+def _anchored_evidence_identity_matches(
+    path: Path,
+    *,
+    expected_parent: os.stat_result,
+    expected_leaf: os.stat_result,
+) -> bool:
+    directory_fds: list[int] = []
+    try:
+        parent_fd, leaf, directory_fds = _open_anchored_evidence_parent(path)
+        parent = os.fstat(parent_fd)
+        leaf_stat = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        return (
+            parent.st_dev,
+            parent.st_ino,
+            leaf_stat.st_dev,
+            leaf_stat.st_ino,
+        ) == (
+            expected_parent.st_dev,
+            expected_parent.st_ino,
+            expected_leaf.st_dev,
+            expected_leaf.st_ino,
+        )
+    except (OSError, RuntimeError):
+        return False
+    finally:
+        for directory_fd in reversed(directory_fds):
+            os.close(directory_fd)
 
 
 def read_evidence_bytes(path: Path, max_bytes: int) -> bytes:
@@ -260,21 +337,58 @@ def read_evidence_bytes(path: Path, max_bytes: int) -> bytes:
     ):
         raise ValueError("evidence byte limit must be positive")
     validate_evidence_file_for_read(path)
+    directory_fds: list[int] = []
+    fd = -1
     chunks: list[bytes] = []
     size = 0
-    fd = os.open(path, evidence_read_open_flags())
     try:
-        handle = os.fdopen(fd, "rb")
-        fd = -1
-        with handle:
-            for chunk in iter(lambda: handle.read(CHUNK_BYTES), b""):
-                size += len(chunk)
-                if size > max_bytes:
-                    raise EvidenceFileTooLargeError(max_bytes)
-                chunks.append(chunk)
+        parent_fd, leaf, directory_fds = _open_anchored_evidence_parent(path)
+        parent_identity = os.fstat(parent_fd)
+        before_path = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        fd = os.open(leaf, evidence_read_open_flags(), dir_fd=parent_fd)
+        before = os.fstat(fd)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or (before.st_dev, before.st_ino)
+            != (before_path.st_dev, before_path.st_ino)
+        ):
+            raise ValueError(EVIDENCE_FILE_CHANGED_DIAGNOSTIC)
+        if before.st_nlink != 1:
+            raise ValueError(EVIDENCE_FILE_HARDLINK_DIAGNOSTIC)
+        if before.st_size > max_bytes:
+            raise EvidenceFileTooLargeError(max_bytes)
+        while True:
+            chunk = os.read(fd, min(CHUNK_BYTES, max_bytes + 1 - size))
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > max_bytes:
+                raise EvidenceFileTooLargeError(max_bytes)
+            chunks.append(chunk)
+        after = os.fstat(fd)
+        stable_fields = (
+            "st_dev",
+            "st_ino",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+        )
+        if after.st_nlink != 1 or any(
+            getattr(before, field) != getattr(after, field)
+            for field in stable_fields
+        ):
+            raise ValueError(EVIDENCE_FILE_CHANGED_DIAGNOSTIC)
+        if not _anchored_evidence_identity_matches(
+            path,
+            expected_parent=parent_identity,
+            expected_leaf=after,
+        ):
+            raise ValueError(EVIDENCE_FILE_PATH_CHANGED_DIAGNOSTIC)
     finally:
         if fd >= 0:
             os.close(fd)
+        for directory_fd in reversed(directory_fds):
+            os.close(directory_fd)
     return b"".join(chunks)
 
 

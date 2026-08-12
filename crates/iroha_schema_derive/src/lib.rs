@@ -303,109 +303,139 @@ struct NoritoFieldAttrs {
     rename: Option<String>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NoritoFieldFlag {
+    Skip,
+    Required,
+    Default,
+    SkipSerializingIf,
+    With,
+    BoundedWith,
+    Json,
+    Flatten,
+    NeedsSize,
+}
+
+#[derive(Default)]
+struct NoritoFieldAttrParser {
+    attrs: NoritoFieldAttrs,
+    seen: Vec<NoritoFieldFlag>,
+}
+
+impl NoritoFieldAttrParser {
+    fn parse_meta(&mut self, meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<()> {
+        if meta.path.is_ident("rename") {
+            let lit: syn::LitStr = meta.value()?.parse()?;
+            if self.attrs.rename.replace(lit.value()).is_some() {
+                return Err(meta.error("duplicate `rename` attribute"));
+            }
+        } else if meta.path.is_ident("skip") {
+            self.parse_bare_flag(meta, NoritoFieldFlag::Skip, "skip")?;
+        } else if meta.path.is_ident("required") {
+            self.parse_bare_flag(meta, NoritoFieldFlag::Required, "required")?;
+        } else if meta.path.is_ident("default") {
+            if self.has_seen(NoritoFieldFlag::Default) {
+                return Err(meta.error("duplicate `default` attribute"));
+            }
+            self.seen.push(NoritoFieldFlag::Default);
+            if !meta.input.is_empty() {
+                Self::parse_path(meta)?;
+            }
+        } else if meta.path.is_ident("skip_serializing_if") {
+            self.parse_unique_path(
+                meta,
+                NoritoFieldFlag::SkipSerializingIf,
+                "skip_serializing_if",
+            )?;
+        } else if meta.path.is_ident("with") {
+            self.reject_json_helper_conflict(meta)?;
+            self.parse_unique_path(meta, NoritoFieldFlag::With, "with")?;
+        } else if meta.path.is_ident("bounded_with") {
+            self.reject_json_helper_conflict(meta)?;
+            self.parse_unique_path(meta, NoritoFieldFlag::BoundedWith, "bounded_with")?;
+        } else if meta.path.is_ident("json") {
+            if self.has_seen(NoritoFieldFlag::Json)
+                || self.has_seen(NoritoFieldFlag::With)
+                || self.has_seen(NoritoFieldFlag::BoundedWith)
+            {
+                return Err(meta.error("`json` cannot be combined with `with` or `bounded_with`"));
+            }
+            Self::parse_path(meta)?;
+            self.seen.push(NoritoFieldFlag::Json);
+        } else if meta.path.is_ident("flatten") {
+            self.parse_bare_flag(meta, NoritoFieldFlag::Flatten, "flatten")?;
+        } else if meta.path.is_ident("needs_size") {
+            self.parse_bare_flag(meta, NoritoFieldFlag::NeedsSize, "needs_size")?;
+        } else {
+            return Err(meta.error("unknown `norito` field attribute"));
+        }
+
+        Ok(())
+    }
+
+    fn parse_bare_flag(
+        &mut self,
+        meta: &syn::meta::ParseNestedMeta<'_>,
+        flag: NoritoFieldFlag,
+        name: &str,
+    ) -> syn::Result<()> {
+        if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
+            return Err(meta.error(format!("`{name}` does not take a value")));
+        }
+        if self.has_seen(flag) {
+            return Err(meta.error(format!("duplicate `{name}` attribute")));
+        }
+        self.seen.push(flag);
+        Ok(())
+    }
+
+    fn parse_unique_path(
+        &mut self,
+        meta: &syn::meta::ParseNestedMeta<'_>,
+        flag: NoritoFieldFlag,
+        name: &str,
+    ) -> syn::Result<()> {
+        Self::parse_path(meta)?;
+        if self.has_seen(flag) {
+            return Err(meta.error(format!("duplicate `{name}` attribute")));
+        }
+        self.seen.push(flag);
+        Ok(())
+    }
+
+    fn parse_path(meta: &syn::meta::ParseNestedMeta<'_>) -> syn::Result<()> {
+        let lit: syn::LitStr = meta.value()?.parse()?;
+        syn::parse_str::<syn::Path>(&lit.value())
+            .map(|_| ())
+            .map_err(|err| meta.error(format!("invalid path `{}`: {err}", lit.value())))
+    }
+
+    fn reject_json_helper_conflict(
+        &self,
+        meta: &syn::meta::ParseNestedMeta<'_>,
+    ) -> syn::Result<()> {
+        if self.has_seen(NoritoFieldFlag::Json) {
+            return Err(meta.error("`json` cannot be combined with `with` or `bounded_with`"));
+        }
+        Ok(())
+    }
+
+    fn has_seen(&self, flag: NoritoFieldFlag) -> bool {
+        self.seen.contains(&flag)
+    }
+}
+
 impl NoritoFieldAttrs {
     fn from_attributes(attrs: &[syn::Attribute]) -> darling::Result<Self> {
-        let mut parsed = Self::default();
-        let mut skip = false;
-        let mut required = false;
-        let mut default = false;
-        let mut skip_serializing_if = false;
-        let mut with = false;
-        let mut bounded_with = false;
-        let mut flatten = false;
-        let mut needs_size = false;
-
+        let mut parser = NoritoFieldAttrParser::default();
         for attr in attrs {
             if !attr.path().is_ident("norito") {
                 continue;
             }
-
-            attr.parse_nested_meta(|meta| {
-                if meta.path.is_ident("rename") {
-                    let lit: syn::LitStr = meta.value()?.parse()?;
-                    if parsed.rename.replace(lit.value()).is_some() {
-                        return Err(meta.error("duplicate `rename` attribute"));
-                    }
-                } else if meta.path.is_ident("skip") {
-                    if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
-                        return Err(meta.error("`skip` does not take a value"));
-                    }
-                    if skip {
-                        return Err(meta.error("duplicate `skip` attribute"));
-                    }
-                    skip = true;
-                } else if meta.path.is_ident("required") {
-                    if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
-                        return Err(meta.error("`required` does not take a value"));
-                    }
-                    if required {
-                        return Err(meta.error("duplicate `required` attribute"));
-                    }
-                    required = true;
-                } else if meta.path.is_ident("default") {
-                    if default {
-                        return Err(meta.error("duplicate `default` attribute"));
-                    }
-                    default = true;
-                    if !meta.input.is_empty() {
-                        let lit: syn::LitStr = meta.value()?.parse()?;
-                        syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
-                            meta.error(format!("invalid path `{}`: {err}", lit.value()))
-                        })?;
-                    }
-                } else if meta.path.is_ident("skip_serializing_if") {
-                    let lit: syn::LitStr = meta.value()?.parse()?;
-                    syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
-                        meta.error(format!("invalid path `{}`: {err}", lit.value()))
-                    })?;
-                    if skip_serializing_if {
-                        return Err(meta.error("duplicate `skip_serializing_if` attribute"));
-                    }
-                    skip_serializing_if = true;
-                } else if meta.path.is_ident("with") {
-                    let lit: syn::LitStr = meta.value()?.parse()?;
-                    syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
-                        meta.error(format!("invalid path `{}`: {err}", lit.value()))
-                    })?;
-                    if with {
-                        return Err(meta.error("duplicate `with` attribute"));
-                    }
-                    with = true;
-                } else if meta.path.is_ident("bounded_with") {
-                    let lit: syn::LitStr = meta.value()?.parse()?;
-                    syn::parse_str::<syn::Path>(&lit.value()).map_err(|err| {
-                        meta.error(format!("invalid path `{}`: {err}", lit.value()))
-                    })?;
-                    if bounded_with {
-                        return Err(meta.error("duplicate `bounded_with` attribute"));
-                    }
-                    bounded_with = true;
-                } else if meta.path.is_ident("flatten") {
-                    if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
-                        return Err(meta.error("`flatten` does not take a value"));
-                    }
-                    if flatten {
-                        return Err(meta.error("duplicate `flatten` attribute"));
-                    }
-                    flatten = true;
-                } else if meta.path.is_ident("needs_size") {
-                    if meta.input.peek(syn::token::Eq) || meta.input.peek(syn::token::Paren) {
-                        return Err(meta.error("`needs_size` does not take a value"));
-                    }
-                    if needs_size {
-                        return Err(meta.error("duplicate `needs_size` attribute"));
-                    }
-                    needs_size = true;
-                } else {
-                    return Err(meta.error("unknown `norito` field attribute"));
-                }
-
-                Ok(())
-            })
-            .map_err(darling::Error::from)?;
+            attr.parse_nested_meta(|meta| parser.parse_meta(&meta))
+                .map_err(darling::Error::from)?;
         }
-
-        Ok(parsed)
+        Ok(parser.attrs)
     }
 }
 
@@ -1033,6 +1063,36 @@ mod tests {
                 .to_string()
                 .contains("duplicate `bounded_with` attribute")
         );
+    }
+
+    #[test]
+    fn combined_json_field_helper_is_accepted_and_exclusive() {
+        let field: syn::Field = parse_quote! {
+            #[norito(json = "helpers::checked")]
+            value: u32
+        };
+        NoritoFieldAttrs::from_attributes(&field.attrs)
+            .expect("schema parsing must accept Norito's combined JSON helper");
+
+        let exclusive_cases: [syn::Field; 2] = [
+            parse_quote! {
+                #[norito(json = "helpers::checked", with = "helpers")]
+                value: u32
+            },
+            parse_quote! {
+                #[norito(bounded_with = "helpers::bounded", json = "helpers::checked")]
+                value: u32
+            },
+        ];
+        for field in exclusive_cases {
+            let error = NoritoFieldAttrs::from_attributes(&field.attrs)
+                .expect_err("combined JSON helper must remain exclusive");
+            assert!(
+                error
+                    .to_string()
+                    .contains("`json` cannot be combined with `with` or `bounded_with`")
+            );
+        }
     }
 
     #[test]

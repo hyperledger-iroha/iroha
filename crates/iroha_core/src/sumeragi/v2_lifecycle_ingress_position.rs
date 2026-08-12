@@ -45,7 +45,7 @@ impl FairIngressQueuePositions {
 /// ownership history, the queue-bound lifecycle context, and the receiver-local
 /// physical admission ordinal. The selected target additionally proves that
 /// its carrier-derived context equals this bound context. The identity contains
-/// no legacy runtime lifecycle or scheduler ordinal.
+/// no superseded runtime lifecycle or scheduler ordinal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct PendingFairIngressIdentity {
     context: LifecycleContext,

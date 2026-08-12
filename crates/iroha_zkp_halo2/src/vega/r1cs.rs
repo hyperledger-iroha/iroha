@@ -63,7 +63,16 @@ pub(super) struct CoefficientDictionaryCounter {
     coefficients: HashMap<[u8; 32], ()>,
 }
 
+struct FoldRowInputs<'a> {
+    relaxed_witness: &'a [Scalar],
+    strict_witness: &'a [Scalar],
+    effective_relaxation: Scalar,
+    relaxed_public_inputs: &'a [Scalar],
+    strict_public_inputs: &'a [Scalar],
+}
+
 impl SparseMatrix {
+    #[cfg(test)]
     pub(super) fn new(
         rows: usize,
         columns: usize,
@@ -258,7 +267,7 @@ impl SparseMatrixRowBuilder {
         I: IntoIterator<Item = (usize, Scalar)>,
         I::IntoIter: ExactSizeIterator,
     {
-        if self.row_offsets.len() - 1 >= self.rows {
+        if self.row_offsets.len() > self.rows {
             return Err(R1csError::InvalidDimension);
         }
         let entries = entries.into_iter();
@@ -668,35 +677,18 @@ impl Shape {
             return Err(R1csError::InvalidDimension);
         }
         let effective_relaxation = relaxed_relaxation + Scalar::one();
+        let inputs = FoldRowInputs {
+            relaxed_witness,
+            strict_witness,
+            effective_relaxation,
+            relaxed_public_inputs,
+            strict_public_inputs,
+        };
         let mut cross_term = Vec::with_capacity(self.constraint_count);
         for (row, error) in relaxed_error.iter().copied().enumerate() {
-            let a = self.evaluate_fold_row(
-                &self.a,
-                row,
-                relaxed_witness,
-                strict_witness,
-                effective_relaxation,
-                relaxed_public_inputs,
-                strict_public_inputs,
-            );
-            let b = self.evaluate_fold_row(
-                &self.b,
-                row,
-                relaxed_witness,
-                strict_witness,
-                effective_relaxation,
-                relaxed_public_inputs,
-                strict_public_inputs,
-            );
-            let c = self.evaluate_fold_row(
-                &self.c,
-                row,
-                relaxed_witness,
-                strict_witness,
-                effective_relaxation,
-                relaxed_public_inputs,
-                strict_public_inputs,
-            );
+            let a = self.evaluate_fold_row(&self.a, row, &inputs);
+            let b = self.evaluate_fold_row(&self.b, row, &inputs);
+            let c = self.evaluate_fold_row(&self.c, row, &inputs);
             cross_term.push(a * b - effective_relaxation * c - error);
         }
         Ok(cross_term)
@@ -741,23 +733,20 @@ impl Shape {
         &self,
         matrix: &SparseMatrix,
         row: usize,
-        relaxed_witness: &[Scalar],
-        strict_witness: &[Scalar],
-        effective_relaxation: Scalar,
-        relaxed_public_inputs: &[Scalar],
-        strict_public_inputs: &[Scalar],
+        inputs: &FoldRowInputs<'_>,
     ) -> Scalar {
         matrix
             .row_entries(row)
             .expect("shape matrices have every in-range row")
             .fold(Scalar::zero(), |sum, (column, coefficient)| {
                 let value = if column < self.variable_count {
-                    relaxed_witness[column] + strict_witness[column]
+                    inputs.relaxed_witness[column] + inputs.strict_witness[column]
                 } else if column == self.variable_count {
-                    effective_relaxation
+                    inputs.effective_relaxation
                 } else {
                     let public_index = column - self.variable_count - 1;
-                    relaxed_public_inputs[public_index] + strict_public_inputs[public_index]
+                    inputs.relaxed_public_inputs[public_index]
+                        + inputs.strict_public_inputs[public_index]
                 };
                 sum + coefficient * value
             })
