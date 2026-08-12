@@ -885,6 +885,10 @@ mod tests {
         let source = include_str!("v2_lifecycle_launch.rs");
         let adapter_source = include_str!("v2.rs");
         let safety_wal_source = include_str!("safety_wal.rs");
+        let kura_source = concat!(
+            include_str!("../kura.rs"),
+            include_str!("../kura/bound_progress_and_retained_support.rs")
+        );
         let adjacent_store_source = include_str!("serviced_candidate_store.rs");
         let worker_source = include_str!("v2_worker.rs");
         let runner_source = include_str!("v2_runner.rs");
@@ -1125,8 +1129,14 @@ mod tests {
             .expect("adapter recovery open ends before projections")
             .0;
         let safety_open = adapter_open
-            .find("let wal = SafetyWal::open(")
-            .expect("adapter opens SafetyWal first");
+            .find("let (wal_path, wal) = match wal_target")
+            .expect("adapter selects one sealed WAL open target first");
+        let kura_open = adapter_open
+            .find("SafetyWal::open_with_kura_authority(")
+            .expect("production adapter consumes the Kura-root authority");
+        let fixture_open = adapter_open
+            .find("SafetyWalOpenTarget::FixturePath(wal_path)")
+            .expect("legacy pathname opening is explicitly test-only");
         let serviced_mint = adapter_open
             .find("wal.mint_serviced_candidate_store_authority(&wal_path)?")
             .expect("adapter mints the fixed serviced-candidate authority");
@@ -1136,7 +1146,8 @@ mod tests {
         let wal_replay = adapter_open
             .find("let entries = wal\n            .recovered_records()")
             .expect("adapter replays the bound WAL after adjacent recovery");
-        assert!(safety_open < serviced_mint && serviced_mint < serviced_open);
+        assert!(safety_open < kura_open && kura_open < fixture_open);
+        assert!(fixture_open < serviced_mint && serviced_mint < serviced_open);
         assert!(serviced_open < wal_replay);
 
         for capability in [
@@ -1168,19 +1179,48 @@ mod tests {
             "self.directory.verify_leaf(self.file, self.wal_name)",
             "let durable = rustix::fs::statat(",
             "promoted adjacent snapshot changed across directory sync",
-            "TODO: Mint this capability from an opened Kura-root directory handle",
+            "BoundSafetyWalDirectory::from_kura_authority(kura, authority)",
+            "safety-WAL authority belongs to a different Kura instance",
+            "#[cfg(test)]\n    fn bind(expected_path: &Path)",
+            "#[cfg(test)]\n    pub(crate) fn open(",
         ] {
             assert!(
                 safety_wal_source.contains(required),
                 "opened WAL-directory authority omitted {required}"
             );
         }
+        for required in [
+            "store_root_directory: BoundProgressDirectory",
+            "Self::open_safety_wal_store_root_directory(&store_root, &store_root_lock_file)?",
+            "KuraSafetyWalDirectoryAuthority",
+            "#[derive(Debug)]\n#[must_use = \"the Kura-bound safety-WAL directory authority must open one WAL\"]",
+        ] {
+            assert!(
+                kura_source.contains(required),
+                "Kura storage owner omitted {required}"
+            );
+        }
+        assert!(!kura_source.contains("impl Clone for KuraSafetyWalDirectoryAuthority"));
+        assert!(!kura_source.contains("impl Copy for KuraSafetyWalDirectoryAuthority"));
+        for required in [
+            "pub(crate) fn mint_safety_wal_directory_authority(",
+            "rustix::fs::openat(\n                &root.file,\n                STORE_ROOT_LOCK_FILE_NAME,",
+            "Self::sidecar_file_metadata_unchanged(&lock_before, &linked_metadata)",
+            "rustix::fs::mkdirat(&parent.file, name, rustix::fs::Mode::RWXU)",
+            "Self::open_bound_progress_child_directory(",
+            "kura_identity: self.instance_identity()",
+        ] {
+            assert!(
+                kura_source.contains(required),
+                "Kura-root WAL authority omitted {required}"
+            );
+        }
         assert_eq!(
             safety_wal_source
                 .matches("Err(SafetyWalError::UnsupportedStorageBinding {")
                 .count(),
-            2,
-            "both non-Unix adjacent authority mints must reject before constructing a wrapper"
+            3,
+            "the production Kura-root open and both adjacent authority mints must reject on non-Unix"
         );
         assert_eq!(
             safety_wal_source
@@ -1204,6 +1244,8 @@ mod tests {
             .find("LeaderWireLifecycleStoreGate::open_with_safety_wal_authority(")
             .expect("legacy runner opens only through the typed authority");
         assert!(runner_leader_mint < runner_gate_open);
+        assert!(runner_source.contains("kura\n            .mint_safety_wal_directory_authority()"));
+        assert!(runner_source.contains("kura.as_ref(),\n                wal_authority,"));
         assert!(
             take < executor
                 && executor < genesis_gate

@@ -1221,6 +1221,8 @@ pub(in crate::sumeragi) struct RetiredRecoveredCompleteTipActivationAuthorityV1 
     predecessor_frame_identity: LifecycleDigest,
     successor_frame_identity: LifecycleDigest,
     retained_high_water: u128,
+    predecessor_store: LifecycleLedgerStoreV1,
+    predecessor_ledger: LifecycleLedgerV1,
     successor_store: LifecycleLedgerStoreV1,
     successor_ledger: LifecycleLedgerV1,
 }
@@ -1273,6 +1275,49 @@ impl RetiredRecoveredCompleteTipActivationAuthorityV1 {
                             && record.owner().first_admission_ordinal() > self.retained_high_water
                     })
             }
+    }
+
+    /// Reauthenticate the retained canonical H+1 ledger at its Kura-derived target.
+    pub(in crate::sumeragi) fn authorizes_retained_successor(&self) -> bool {
+        let Some(successor_root) = self.successor_store.path.parent() else {
+            return false;
+        };
+        self.predecessor_ledger.frame_identity() == self.predecessor_frame_identity
+            && self
+                .predecessor_store
+                .is_authorized_complete_tip_predecessor_target(&self.complete_tip)
+            && self.predecessor_store.load().ok().as_ref() == Some(&self.predecessor_ledger)
+            && self.successor_descends_from_retirement()
+            && self.complete_tip.authorizes_successor_lifecycle_target(
+                successor_root,
+                self.successor_ledger.context(),
+            )
+            && self.successor_store.load().ok().as_ref() == Some(&self.successor_ledger)
+    }
+
+    /// Reauthenticate the retained canonical H+1 ledger and one prepared status.
+    ///
+    /// This is a comparison oracle rather than an extraction surface: the
+    /// retired CompleteTip authority, store handle, and ledger frame remain
+    /// sealed together. The runner calls it once before opening ingress and
+    /// the consuming status bridge calls it again immediately before
+    /// publication. This rejects observed copied, replaced, or foreign-context
+    /// state at the owner-private quiescent boundary; it does not claim to
+    /// defeat an actively replacing same-UID process between filesystem reads.
+    pub(in crate::sumeragi) fn authorizes_successor_status(
+        &self,
+        successor: &wire::SumeragiV2Status,
+    ) -> bool {
+        self.authorizes_retained_successor()
+            && self.successor_ledger.context().height() == successor.height
+            && self.complete_tip.successor_context_id() == successor.height_context_id
+            && self
+                .complete_tip
+                .predecessor()
+                .height()
+                .checked_add(1)
+                == Some(successor.height)
+            && successor.last_committed_height == self.complete_tip.predecessor().height()
     }
 
     fn exactly_matches_successor_owner(&self, owner: &mut ProductionLifecycleOwnerV1) -> bool {
@@ -1404,10 +1449,12 @@ impl BoundRecoveredCompleteTipSuccessorOwnerV1 {
 
 /// Opaque running H+1 lifecycle stack joined to its retired-H authority.
 ///
-/// TODO: The final runner activation must consume this complete wrapper while
-/// arming live clocks, opening authenticated ingress, activating the completion
-/// observer, and publishing the typed successor status atomically. Until that
-/// cut lands, neither the running stack nor retirement authority is exposed.
+/// TODO: The generic lifecycle-coordinator replacement must consume this
+/// complete wrapper while arming live clocks, opening authenticated ingress,
+/// activating the completion observer, and publishing typed successor status.
+/// The production restart bridge is deliberately narrower: it consumes the
+/// retired authority after reauthenticating the canonical ledger/status pair
+/// and neither launches nor credits this generic replacement.
 #[must_use = "the launched CompleteTip successor must remain sealed until final activation"]
 #[allow(dead_code)]
 pub(in crate::sumeragi) struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 {
@@ -1565,6 +1612,8 @@ impl AuthenticatedCompleteTipPredecessorStorageV1 {
             predecessor_frame_identity: retired.frame_identity(),
             successor_frame_identity: successor_ledger.frame_identity(),
             retained_high_water: retired.high_water(),
+            predecessor_store: terminal.ledger_store,
+            predecessor_ledger: retired,
             successor_store,
             successor_ledger,
         };
@@ -6390,6 +6439,38 @@ pub(crate) mod tests {
                 fixture.verified.context().clone(),
                 fixture.verified.proofs_of_possession().to_vec(),
             )
+        }
+
+        /// Build one genuinely retired CompleteTip/H+1 pair for the runner's
+        /// restart-activation boundary test.
+        pub(crate) fn complete_tip_restart_activation_fixture() -> (
+            std::sync::Arc<Kura>,
+            std::path::PathBuf,
+            wire::HeightContext,
+            RetiredRecoveredCompleteTipActivationAuthorityV1,
+        ) {
+            let fixture = RecoveryFixture::new("complete-tip-runner-restart", 0x48);
+            let (predecessor, projection) = terminal_decision_chain_fixture(&fixture);
+            let verified_successor = complete_tip_successor_fixture(&fixture, &projection);
+            let successor_context = verified_successor.context().clone();
+            let kura = Kura::blank_kura_for_testing();
+            let predecessor_root = kura
+                .sumeragi_v2_storage_root()
+                .join("lifecycle-v1")
+                .join(hex::encode(fixture.verified.context().id().0.as_ref()));
+            let (predecessor_store, empty) =
+                LifecycleLedgerStoreV1::open(&predecessor_root, fixture.lifecycle_context())
+                    .expect("open canonical runner-restart predecessor");
+            assert!(empty.records().is_empty());
+            predecessor_store
+                .persist(&predecessor)
+                .expect("persist runner-restart terminal predecessor");
+            let retirement =
+                complete_tip_for_terminal_decision_on_kura(&fixture, &projection, kura.as_ref())
+                    .into_canonical_predecessor_storage(&fixture.keys[0])
+                    .and_then(AuthenticatedCompleteTipPredecessorStorageV1::retire)
+                    .expect("retire the exact runner-restart predecessor");
+            (kura, predecessor_root, successor_context, retirement)
         }
 
         fn empty_successor_owner_for_complete_tip(

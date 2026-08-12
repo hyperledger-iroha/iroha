@@ -546,6 +546,14 @@ SORAFS_CLI_TOPOLOGY_TRIGGER_PATHS = frozenset(
         "specs/sorafs/l1_deployment_qualification.md",
     }
 )
+SORAFS_CLI_VERSION_MAP_TRIGGER_PATHS = frozenset(
+    {
+        "IrohaSwift/IrohaSwift.podspec",
+        "IrohaSwift/README.md",
+        "IrohaSwift/VERSION",
+        "specs/sdk/swift/index.md",
+    }
+)
 WORKFLOWS: dict[str, tuple[str, ...]] = {
     ".github/workflows/sorafs-cli-release.yml": (
         '"sorafs-cli-v*"',
@@ -600,6 +608,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/tests/sorafs_response_args_test.py"',
         '- "scripts/examples/sorafs_l1_topology_qualification_envelope.md"',
         '- "specs/sorafs/l1_deployment_qualification.md"',
+        '- "specs/sorafs_pdp_plan.md"',
         "run: bash ci/check_sorafs_cli_release.sh",
         "scripts/package_sorafs_validate_release.sh",
         "scripts/package_sorafs_cli_candidate.py",
@@ -1421,6 +1430,15 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             errors.append(
                 f"{relative}: pull_request.paths omits topology-envelope "
                 f"dependency trigger(s): {', '.join(missing_triggers)}"
+            )
+        missing_version_map_triggers = sorted(
+            SORAFS_CLI_VERSION_MAP_TRIGGER_PATHS
+            - (pull_request_paths or frozenset())
+        )
+        if missing_version_map_triggers:
+            errors.append(
+                f"{relative}: pull_request.paths omits Swift version-map "
+                f"dependency trigger(s): {', '.join(missing_version_map_triggers)}"
             )
 
     if relative.endswith("sorafs-orchestrator-sdk.yml"):

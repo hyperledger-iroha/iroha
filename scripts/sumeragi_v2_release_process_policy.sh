@@ -443,26 +443,91 @@ require_external_private_directory() {
     printf 'source root and %s directory are required\n' "$purpose" >&2
     return "$SUMERAGI_V2_RELEASE_POLICY_ERROR_STATUS"
   fi
-  if ! "$policy_python" -I -S - "$source_root" "$external_root" "$purpose" "$temp_base" <<'PY'
+  if (( $# >= 3 )); then
+    shift 3
+  else
+    set --
+  fi
+  if ! "$policy_python" -I -S - \
+    "$source_root" "$external_root" "$purpose" "$temp_base" \
+    "$@" <<'PY'
 import os
 import stat
 import sys
 
-source_root, external_root, purpose, configured_base = sys.argv[1:]
+source_root, external_root, purpose, configured_base, *cache_roots = sys.argv[1:]
 if not os.path.isabs(source_root) or not os.path.isabs(external_root):
     print(f"source and {purpose} roots must be absolute", file=sys.stderr)
     raise SystemExit(2)
+if os.path.abspath(source_root) != source_root:
+    print("source root must be normalized", file=sys.stderr)
+    raise SystemExit(2)
+if os.path.abspath(external_root) != external_root:
+    print(f"{purpose} root is not one canonical private owner directory", file=sys.stderr)
+    raise SystemExit(2)
 source = os.path.realpath(source_root)
 external = os.path.realpath(external_root)
-if not configured_base:
-    configured_base = "/private/tmp" if os.path.isdir("/private/tmp") else "/tmp"
-if not os.path.isabs(configured_base) or os.path.abspath(configured_base) != configured_base:
-    print("release temporary base must be absolute and normalized", file=sys.stderr)
-    raise SystemExit(2)
-temp_base = os.path.realpath(configured_base)
+
+
+def stable_directory_metadata(path):
+    before = os.lstat(path)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    after = os.lstat(path)
+    stable_fields = ("st_dev", "st_ino", "st_mode", "st_uid", "st_gid")
+    if any(
+        getattr(before, field) != getattr(opened, field)
+        or getattr(opened, field) != getattr(after, field)
+        for field in stable_fields
+    ):
+        raise OSError(f"directory changed while authenticated: {path}")
+    return opened
+
+
+def authenticate_temp_base(path):
+    if not os.path.isabs(path) or os.path.abspath(path) != path:
+        raise ValueError("must be absolute and normalized")
+    metadata = stable_directory_metadata(path)
+    if (
+        os.path.realpath(path) != path
+        or stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISDIR(metadata.st_mode)
+        or not os.access(path, os.W_OK | os.X_OK)
+        or not (
+            (metadata.st_uid == 0 and metadata.st_mode & stat.S_ISVTX)
+            or (metadata.st_uid == os.geteuid() and not metadata.st_mode & 0o077)
+        )
+    ):
+        raise ValueError("is not a canonical writable root-sticky or owner-private directory")
+    return path
+
+
+if configured_base:
+    try:
+        temp_base = authenticate_temp_base(configured_base)
+    except (OSError, ValueError) as error:
+        print(f"release temporary base is not authenticated: {error}", file=sys.stderr)
+        raise SystemExit(2) from error
+else:
+    temp_base = None
+    for candidate in ("/private/tmp", "/tmp"):
+        try:
+            temp_base = authenticate_temp_base(candidate)
+        except (OSError, ValueError):
+            continue
+        break
+    if temp_base is None:
+        print("no authenticated release temporary base is available", file=sys.stderr)
+        raise SystemExit(2)
+
 try:
-    external_lstat = os.lstat(external_root)
-    base_lstat = os.lstat(configured_base)
+    external_lstat = stable_directory_metadata(external_root)
 except OSError as error:
     print(f"{purpose} root is unavailable: {error}", file=sys.stderr)
     raise SystemExit(2) from error
@@ -475,32 +540,67 @@ if (
 ):
     print(f"{purpose} root is not one canonical private owner directory", file=sys.stderr)
     raise SystemExit(2)
-if (
-    temp_base != configured_base
-    or stat.S_ISLNK(base_lstat.st_mode)
-    or not stat.S_ISDIR(base_lstat.st_mode)
-    or not (
-        (base_lstat.st_uid == 0 and base_lstat.st_mode & stat.S_ISVTX)
-        or (base_lstat.st_uid == os.getuid() and not base_lstat.st_mode & 0o077)
-    )
-):
-    print("release temporary base is not authenticated and private", file=sys.stderr)
-    raise SystemExit(2)
 try:
     external_under_temp_base = os.path.commonpath((external, temp_base)) == temp_base
-    external_under_source = os.path.commonpath((external, source)) == source
 except ValueError:
     external_under_temp_base = False
-    external_under_source = True
 if (
     external == temp_base
     or not external_under_temp_base
-    or external_under_source
 ):
     print(
         f"{purpose} root must be a dedicated authenticated temporary directory outside source",
         file=sys.stderr,
     )
+    raise SystemExit(2)
+
+# Every directory between the selected temporary base and the output root is
+# owner-private. A private leaf below a caller-replaceable parent is not an
+# authenticated release root.
+current = external
+while current != temp_base:
+    try:
+        metadata = stable_directory_metadata(current)
+    except OSError as error:
+        print(f"{purpose} root ancestry is unavailable: {error}", file=sys.stderr)
+        raise SystemExit(2) from error
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o077
+    ):
+        print(f"{purpose} root ancestry is not owner-private", file=sys.stderr)
+        raise SystemExit(2)
+    parent = os.path.dirname(current)
+    if parent == current:
+        print(f"{purpose} root does not descend from its authenticated base", file=sys.stderr)
+        raise SystemExit(2)
+    current = parent
+
+
+def overlaps(left, right):
+    try:
+        common = os.path.commonpath((left, right))
+    except ValueError:
+        return False
+    return common == left or common == right
+
+
+protected_cache_roots = []
+for raw_cache_root in cache_roots:
+    if not os.path.isabs(raw_cache_root) or os.path.abspath(raw_cache_root) != raw_cache_root:
+        print("protected cache roots must be absolute and normalized", file=sys.stderr)
+        raise SystemExit(2)
+    protected_cache_roots.append(os.path.realpath(raw_cache_root))
+if overlaps(external, source):
+    print(
+        f"{purpose} root must be a dedicated authenticated temporary directory outside source",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+if any(overlaps(external, cache) for cache in protected_cache_roots):
+    print(f"{purpose} root must not overlap protected cache roots", file=sys.stderr)
     raise SystemExit(2)
 PY
   then
@@ -509,13 +609,16 @@ PY
 }
 
 require_external_cargo_target_dir() {
+  # Optional arguments after the source root are caller cache roots that the
+  # target must not contain or descend from.
   require_external_private_directory \
-    "${1:-}" "${CARGO_TARGET_DIR:-}" "Cargo target"
+    "${1:-}" "${CARGO_TARGET_DIR:-}" "Cargo target" "${@:2}"
 }
 
 require_external_release_artifact_root() {
+  # Apply the same optional protected-cache binding to artifact roots.
   require_external_private_directory \
-    "${1:-}" "${IROHA_RELEASE_ARTIFACT_ROOT:-}" "release artifact"
+    "${1:-}" "${IROHA_RELEASE_ARTIFACT_ROOT:-}" "release artifact" "${@:2}"
 }
 
 require_disjoint_release_roots() {

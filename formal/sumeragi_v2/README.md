@@ -1306,13 +1306,17 @@ The checked-in ledger cannot contain stale tool-run counts. Before each backend
 run, TLAPM performs a strict no-backend summary preflight. Each proof-bearing
 shard then runs in a fresh process with one worker, disabled fingerprints, and
 its own disposable cache. The complete wave executes inside an owned process
-group under a 2 GiB bounded polling ceiling with a target 250 ms cadence. Each `ps` or macOS
-`footprint` probe is limited to 2 seconds; an inspection timeout fails closed and
-terminates the exact owned process group. The next sample is scheduled from the
-completion of the previous probe so scheduler latency cannot create a catch-up
-storm. This portable userspace guard is not an operating-system hard allocation
-limit. A separate lifeline session cleans
-the body after supervisor death, while inherited lock descriptors keep the
+group under a 2 GiB observed ceiling with a target 250 ms cadence. A sealed
+Darwin release creates a dedicated body process group and accounts only that
+group through `libproc`; it performs no full-host process listing or foreign
+same-UID job scan. The portable developer mode retains bounded `ps` and macOS
+footprint probes. Inspection failures and memory-limit violations are latched,
+and the release fails only after the body and every owned group member finish
+naturally; the observer never signals or terminates them. The next sample is
+scheduled from the completion of the previous probe so scheduler latency cannot
+create a catch-up storm. This userspace guard is not an operating-system hard
+allocation limit. A separate lifeline session records supervisor loss while
+letting the body finish naturally, and inherited lock descriptors keep the
 per-user heavy-job lock shared with Kagemusha V4 candidate generation until
 cleanup finishes. Release receipts bind the resulting JSONL samples and
 canonical resource summary. Receipt validation also requires the exact

@@ -104,7 +104,7 @@ also reject missing, dirty, or stale build provenance. The Python native lane is
 pinned to Python 3.12 and rejects any skipped reference-validation test.
 Apple/Swift and packaged Android/JNI artifacts remain covered by the separate
 source-sealed `check_mobile_sdk_artifacts.sh` contract, which verifies every
-slice, exact ABI 22, the Android `NativeSignerBridge` JNI contract revision 4,
+slice, exact ABI 22, the Android `NativeSignerBridge` JNI contract revision 5,
 symbols, hashes, and source identity; they are not represented as host-manifest
 lanes. Swift package admission also requires the XCFramework's embedded
 `NoritoBridge.artifacts.json` to declare exact ABI 22, and the runtime loader
@@ -129,11 +129,15 @@ native host. This closes the C# packaging implementation gap only; it does not
 claim that a clean five-host run, publication canary, SBOM, or provenance record
 has been collected.
 
-CocoaPods distribution remains open: the lint gate now fails when the `pod`
-CLI is unavailable, but the current podspec does not yet define an
-authenticated vendored-XCFramework delivery path. Do not treat a local lint or
-the Git tag alone as published native Swift evidence until that archive design,
-install smoke, and signed artifact provenance are implemented.
+CocoaPods source wiring is implemented as an exact same-version split pod:
+`IrohaSwift` depends on a generated `NoritoBridge` podspec whose immutable
+`v<SemVer>` release URL, SHA-256, and vendored-XCFramework path bind the final
+authenticated ZIP. The package-first lint lane uses the package-local archive,
+validates the closed artifact
+inventory and builds the binary and source pods. Distribution remains open only
+for external publication and evidence: publish the immutable asset and both specs
+in dependency order, then capture a clean registry install, Release build, and
+signed provenance before claiming public native Swift readiness.
 
 The existing `sorafs_manifest` crate exposes `ValidationOutcomeV1`,
 `validate_provider_advert_bytes`, `validate_provider_admission_envelope_bytes`,

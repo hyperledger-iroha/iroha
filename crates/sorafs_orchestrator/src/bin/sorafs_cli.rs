@@ -1,6 +1,6 @@
 //! Aggregated CLI entry point for SoraFS packaging helpers.
 #![allow(unexpected_cfgs)]
-
+mod pdp;
 use std::{
     collections::{BTreeMap, BTreeSet},
     convert::TryInto,
@@ -412,6 +412,7 @@ fn run() -> Result<(), String> {
         }
         "deploy" => deploy(args.collect()),
         "fetch" => fetch_gateway(args.collect()),
+        "pdp" => pdp::run(args.collect()),
         "proof" => {
             let Some(sub) = args.next() else {
                 return Err(usage());
@@ -544,7 +545,6 @@ fn run() -> Result<(), String> {
         _ => Err(usage()),
     }
 }
-
 fn car_pack(raw_args: Vec<String>) -> Result<(), String> {
     let mut input: Option<PathBuf> = None;
     let mut chunker_handle: Option<String> = None;
@@ -2779,9 +2779,9 @@ fn por_report(raw_args: Vec<String>) -> Result<(), String> {
     }
     let report: PorWeeklyReportV1 = decode_por_weekly_report_v1(&body)
         .map_err(|err| format!("failed to decode PoR weekly report: {err}"))?;
-    report
-        .validate()
-        .map_err(|err| format!("weekly report failed validation: {err}"))?;
+    if report.cycle != iso_week {
+        return Err("PoR weekly report cycle does not match the requested week".into());
+    }
 
     match output_format {
         ReportOutputFormat::Markdown => {
@@ -3143,6 +3143,7 @@ fn usage() -> String {
   sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=HTTPS_ORIGIN | --gateway-url=HTTPS_URL) --provider-id-hex=HEX32 --bearer-token-env=VAR [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
+  sorafs_cli pdp enqueue|next|submit|status|export --torii-url=HTTPS_ORIGIN --network-id=GENESIS_HASH --operator-private-key-file=PATH [operation options; run `sorafs_cli pdp` for details]
   sorafs_cli reputation snapshot --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
   sorafs_cli reputation fetch --torii-url=URL --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
   sorafs_cli reputation watch --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--since=N] [--limit=N] [--max-polls=N] [--poll-interval-ms=N] [--summary-out=PATH]
@@ -3184,7 +3185,6 @@ fn usage() -> String {
   sorafs_cli governance dag mirror-query --index=PATH (--head | --block-cid=CID|hex:HEX | --node-cid=CID|hex:HEX) [--format=table|json]"
         .to_string()
 }
-
 fn reputation_usage() -> String {
     "Usage:
   sorafs_cli reputation snapshot --torii-url=URL --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
@@ -16762,11 +16762,11 @@ fn open_reputation_auth_private_key(path: &Path) -> Result<File, String> {
 #[cfg(windows)]
 fn open_reputation_auth_private_key(path: &Path) -> Result<File, String> {
     use std::os::windows::fs::OpenOptionsExt as _;
-
     const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
     let mut options = OpenOptions::new();
     options
         .read(true)
+        .share_mode(0x0000_0001)
         .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     options
         .open(path)

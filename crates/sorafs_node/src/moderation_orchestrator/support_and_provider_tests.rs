@@ -1727,6 +1727,35 @@ fn external_providers_are_qualified_before_checkpoint_access() {
 }
 
 #[test]
+fn snapshot_bounds_cannot_exceed_native_query_ceilings() {
+    let temp = TempDir::new().expect("tempdir");
+    for configure in [
+        |config: &mut ModerationOrchestratorConfigV1| {
+            config.max_cases = MODERATION_QUERY_MAX_CASES_V1 as usize + 1;
+        },
+        |config: &mut ModerationOrchestratorConfigV1| {
+            config.max_events = MODERATION_QUERY_MAX_EVENTS_V1 as usize + 1;
+        },
+    ] {
+        let mut config = config(&temp, "missing/native-query-ceiling.bin");
+        let checkpoint_parent = config
+            .checkpoint_path
+            .parent()
+            .expect("checkpoint parent")
+            .to_path_buf();
+        configure(&mut config);
+        let reader = Arc::new(MockSnapshotReader::new(empty_snapshot(1, [1; 32])));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::Unknown));
+        assert!(matches!(
+            ModerationOrchestratorV1::open(config, deps(reader, submitter)),
+            Err(ModerationOrchestratorError::InvalidConfiguration(message))
+                if message.contains("native query ceiling")
+        ));
+        assert!(!checkpoint_parent.exists());
+    }
+}
+
+#[test]
 fn signer_policy_drift_discards_the_returned_envelope() {
     let temp = TempDir::new().expect("tempdir");
     let config = config(&temp, "signer-drift.bin");

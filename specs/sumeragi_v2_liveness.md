@@ -1980,7 +1980,7 @@ be promoted.
 The same pre-network gate inventories and executes four exact, non-ignored
 Taira release-profile validators, the Rust summary-JSON schema contract, and
 the strict all-validator restart/catch-up contract: six Taira contracts total.
-It then requires exactly 39 passing mocked soak launcher/evidence tests. Those
+It then requires exactly 43 passing mocked soak launcher/evidence tests. Those
 tests reject profile drift, zero-test success, concurrent evidence ownership,
 source or artifact mismatch, malformed JSON, weakened acceptance bounds,
 inconsistent counters, invalid provisional evidence, and inconsistent status
@@ -2148,7 +2148,7 @@ that source root exactly one soak-evidence writer; a hard-killed run leaves the
 lock for explicit operator inspection. Before any real matrix, the release
 gate inventories and executes the five exact Rust release-profile/schema tests
 plus the strict all-validator restart/catch-up test,
-and requires all 39 mocked soak launcher/evidence adversaries to pass. The soak
+and requires all 43 mocked soak launcher/evidence adversaries to pass. The soak
 runner then inventories the exact ignored test and accepts Cargo output only
 when exactly one test ran and passed with networking required. The seed matrix
 also forces one fresh network startup attempt, so a later harness retry cannot
@@ -2177,15 +2177,45 @@ status snapshots. A checkout-manifest checkpoint immediately after the
 checkout-manifest and proof-evidence check rejects any later source change
 during the long corridor.
 
+### Protected release approvals
+
+Production promotion requires four independent operator decisions with the
+exact class IDs `offline-toolchain-sdk`, `formal-proof-tools`,
+`network-scale-soak`, and `final-bootstrap-publication`. Each decision is one
+canonical JSON v1 file whose exact top-level fields are `approval_id`,
+`approved_at`, `candidate_oid`, `candidate_tree`, `class_id`,
+`evidence_root_id`, `expected_duration_seconds`, `format`, `operations`,
+`profile`, `protected_tool_manifest_sha256`, and `schema_version`. Each ordered
+operation has exactly `arguments`, `operation_id`, `ordinal`, and `tool_id`.
+The four immutable inventories contain 23, 38, 8, and 8 operations,
+respectively; the canonical ordered IDs are recorded in the
+[multilane rehearsal runbook](runbooks/nexus_multilane_rehearsal.md#protected-release-approval-contract)
+and source-bound by `sumeragi_v2_release_approval_contract.py`. The canonical
+ordered operation-record SHA-256 values, in the same class order, are
+`291bbb0af4efdd2480561ceefd24fe12b71d9085da0f995f978aa5a020ea0d36`,
+`eb9f0283898f09d23970f1d6511d250b17107a0ad80fc65e1adbe1ef0b1b19bb`,
+`e922b8afbfe4848e8b2b5f858654477a28d710c3afcf7698a77276a8294681cf`,
+and `76be51f1583e2d49c8b9ac85f9218a0a0b5a3334f1923dad39aa13ec8e7768fd`.
+
+An approval file must be owner-held, mode `0400`, single-link, bounded,
+canonical, and below trusted non-writable ancestry. Its command records use
+relative arguments and stable archive/evidence IDs, never caller checkout,
+tool, cache, or evidence paths. These files record filesystem-protected
+operator decisions; they are not signatures and do not claim cryptographic
+approver identity. Bootstrap, validator, and receipt-writer import, archive,
+and independent-replay integration remains pending, so this source contract
+does not close a release gate.
+
 A production run cannot be started by invoking the candidate runner directly.
 The release operator first authenticates an out-of-tree copy of
 `bootstrap_sumeragi_v2_release.py`, the protected Python, Git, OpenSSH
 `ssh-keygen`, and Bash executables, the manifest and identity helpers, the SSH
 allowed-signers and revocation policies, the receipt validator's localnet
-manifest support module, and every expected SHA-256 digest and signer
-fingerprint. The bootstrap archives that support module as the receipt
-validator's exact sibling so the validator can load it without consulting the
-working directory or `PYTHONPATH`. The protected interpreter must start in
+manifest support module, the private-runtime copy/prune helper, and every
+expected SHA-256 digest and signer fingerprint. The bootstrap archives that
+support module as the receipt validator's exact sibling so the validator can
+load it without consulting the working directory or `PYTHONPATH`. The
+protected interpreter must start in
 isolated, no-site mode; the evidence parent must already be owner-owned mode
 `0700`, and the requested evidence child must not exist. The complete
 invocation passes those protected paths and digests explicitly, for example:
@@ -2207,6 +2237,8 @@ invocation passes those protected paths and digests explicitly, for example:
   --expected-receipt-validator-sha256 <sha256> \
   --receipt-validator-support /protected/sumeragi_v2_localnet_manifest.py \
   --expected-receipt-validator-support-sha256 <sha256> \
+  --runtime-helper /protected/copy_sumeragi_v2_release_cargo_cache.py \
+  --expected-runtime-helper-sha256 <sha256> \
   --runner-tool-manifest /protected/runner-tools.json \
   --expected-runner-tool-manifest-sha256 <sha256> \
   --bash-bin /protected/bash --expected-bash-sha256 <sha256> \
@@ -2231,21 +2263,24 @@ and rejects certificate-authority, SSH-certificate, `valid-after`, and
 the trusted inputs, authenticates the candidate's exact signed commit and
 release identity, and publishes `BOOTSTRAP_COMPLETED.json` before it launches
 the signed runner under a closed environment. Its `PATH` contains only the
-archived protected tools and a reviewed runner-tool closure. Every additional
-executable must be named in the protected canonical manifest with one protected
-record identifier, mode, size, and SHA-256 digest; the bootstrap rejects
-writable or untrusted ancestors. Before candidate build code runs, the outer
-runner copies the named language/tool runtime closures to new private inodes and binds exact
-path-withheld source and private-destination inventories. The runner independently
+archived protected tools and a reviewed runner-tool closure. The protected
+input manifest is an exact closed 41-name map whose entries contain only the
+source path and expected SHA-256; after private copying, the sanitized marker
+derives and binds each archive identifier, mode, size, and digest without
+disclosing its source path. The bootstrap rejects writable or untrusted
+ancestors. Before candidate build code runs, the outer
+runner copies the named language/tool and exact shell-utility runtime closure
+to new private inodes and binds exact path-withheld source and
+private-destination inventories. The runner independently
 validates that marker at entry, after sealing, and at every release-identity
 checkpoint before it executes another candidate helper. The bootstrap imposes
 no outer runtime or output-capture limit on the runner and never signals its
 process group; a runner which escapes its internal deadlines remains visibly
 incomplete and cannot publish either completion marker.
 
-Shell harness core utilities are still resolved from the admitted host system
-directories. Those binaries remain a release-host image prerequisite until
-they are added to the protected private-runtime inventory.
+Shell harness core utilities are resolved only from that authenticated private
+runtime. There is no `/usr/bin:/bin` execution fallback, and an unlisted
+external command fails closed before its result can enter release evidence.
 
 Runner stdout and stderr are inherited regular files created directly under
 the private evidence directory, mode `0600` while active and `0400` after a

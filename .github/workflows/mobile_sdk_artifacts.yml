@@ -9,6 +9,9 @@ on:
       - "scripts/build_norito_xcframework.sh"
       - "scripts/archive_norito_xcframework.py"
       - "scripts/tests/archive_norito_xcframework_test.py"
+      - "scripts/render_norito_bridge_podspec.py"
+      - "scripts/tests/render_norito_bridge_podspec_test.py"
+      - "scripts/tests/norito_bridge_source_seal_test.py"
       - "scripts/tests/package_mobile_sdk_artifacts_test.py"
       - "scripts/update_norito_bridge_swift_pins.py"
       - "scripts/tests/update_norito_bridge_swift_pins_test.py"
@@ -71,6 +74,9 @@ on:
       - "scripts/compute_workspace_source_manifest.py"
       - "scripts/tests/check_native_sdk_abi22_artifact_test.py"
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
+      - "roadmap.md"
+      - "specs/sorafs/v1_closure_ledger.md"
+      - "specs/sorafs_reference_sdk_plan.md"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
@@ -111,6 +117,25 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Reject a noncanonical release tag before setup or build
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          [[ "$GITHUB_REPOSITORY" == "hyperledger-iroha/iroha" ]] || {
+            echo "tagged mobile SDK releases are owned by hyperledger-iroha/iroha" >&2
+            exit 1
+          }
+          IFS= read -r pod_version < IrohaSwift/VERSION
+          [[ "$pod_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          version_bytes="$(wc -c < IrohaSwift/VERSION | tr -d '[:space:]')"
+          [[ "$version_bytes" == "$(( ${#pod_version} + 1 ))" ]] || {
+            echo "IrohaSwift/VERSION must be one canonical ASCII SemVer plus newline" >&2
+            exit 1
+          }
+          [[ "$GITHUB_REF_NAME" == "v${pod_version}" ]] || {
+            echo "release tag $GITHUB_REF_NAME must equal canonical SDK tag v${pod_version}" >&2
+            exit 1
+          }
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
@@ -123,9 +148,13 @@ jobs:
       - name: Shell syntax
         run: bash -n ci/check_kagemusha_candidate_android_lab.sh ci/check_kagemusha_jvm_native_bridge.sh ci/check_swift_pod_bridge.sh scripts/build_kagemusha_candidate_android_native.sh scripts/build_norito_xcframework.sh scripts/check_kotlin_no_reflection.sh scripts/check_mobile_sdk_artifacts.sh scripts/check_mobile_sdk_artifacts_test.sh scripts/check_swift_pod_bridge.sh scripts/deploy_localnet.sh scripts/package_mobile_sdk_artifacts.sh scripts/run_kagemusha_candidate_android_lab.sh scripts/tests/mobile_sdk_python312_contract.sh
       - name: Python syntax
-        run: PYTHONPYCACHEPREFIX="$RUNNER_TEMP/mobile-sdk-pycache" python3 -I -S -B -m py_compile scripts/archive_norito_xcframework.py scripts/tests/archive_norito_xcframework_test.py scripts/tests/package_mobile_sdk_artifacts_test.py scripts/update_norito_bridge_swift_pins.py scripts/tests/update_norito_bridge_swift_pins_test.py scripts/validate_norito_bridge_xcframework.py scripts/tests/validate_norito_bridge_xcframework_test.py scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/check_native_sdk_abi22_artifact.py scripts/tests/check_native_sdk_abi22_artifact_test.py scripts/exec_with_file_lock.py scripts/tests/exec_with_file_lock_test.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py
+        run: PYTHONPYCACHEPREFIX="$RUNNER_TEMP/mobile-sdk-pycache" python3 -I -S -B -m py_compile scripts/archive_norito_xcframework.py scripts/tests/archive_norito_xcframework_test.py scripts/render_norito_bridge_podspec.py scripts/tests/render_norito_bridge_podspec_test.py scripts/tests/norito_bridge_source_seal_test.py scripts/tests/package_mobile_sdk_artifacts_test.py scripts/update_norito_bridge_swift_pins.py scripts/tests/update_norito_bridge_swift_pins_test.py scripts/validate_norito_bridge_xcframework.py scripts/tests/validate_norito_bridge_xcframework_test.py scripts/check_android_app_native_archive.py scripts/tests/check_android_app_native_archive_test.py scripts/check_native_sdk_abi22_artifact.py scripts/tests/check_native_sdk_abi22_artifact_test.py scripts/exec_with_file_lock.py scripts/tests/exec_with_file_lock_test.py scripts/norito_bridge_source_seal.py scripts/run_mobile_hermetic_command.py
       - name: Deterministic NoritoBridge archive owner fixtures
         run: python3 -I -S -B scripts/tests/archive_norito_xcframework_test.py
+      - name: NoritoBridge CocoaPods spec renderer fixtures
+        run: python3 -I -S -B scripts/tests/render_norito_bridge_podspec_test.py
+      - name: NoritoBridge source seal fixtures
+        run: python3 -I -S -B scripts/tests/norito_bridge_source_seal_test.py
       - name: Atomic mobile SDK package publisher fixtures
         run: python3 -I -S -B scripts/tests/package_mobile_sdk_artifacts_test.py
       - name: NoritoBridge Swift pin owner fixtures
@@ -173,10 +202,10 @@ jobs:
       - name: Resolve artifact version
         run: |
           input_version="${{ github.event.inputs.version }}"
-          if [[ -n "$input_version" ]]; then
-            version="$input_version"
-          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             version="${GITHUB_REF_NAME}"
+          elif [[ -n "$input_version" ]]; then
+            version="$input_version"
           elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
             version="pr-${{ github.event.pull_request.number }}-${GITHUB_SHA:0:12}"
           else
@@ -187,13 +216,35 @@ jobs:
           [[ "$source_date_epoch" =~ ^[1-9][0-9]*$ ]]
           echo "MOBILE_SDK_VERSION=$version" >> "$GITHUB_ENV"
           echo "SOURCE_DATE_EPOCH=$source_date_epoch" >> "$GITHUB_ENV"
+      - name: Require the canonical SDK release tag
+        if: github.ref_type == 'tag'
+        run: |
+          [[ "$GITHUB_REPOSITORY" == "hyperledger-iroha/iroha" ]] || {
+            echo "tagged mobile SDK releases are owned by hyperledger-iroha/iroha" >&2
+            exit 1
+          }
+          pod_version="$(python3 -I -S -B - <<'PY'
+          from pathlib import Path
+          import re
+          raw = Path("IrohaSwift/VERSION").read_bytes()
+          match = re.fullmatch(rb"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\n", raw)
+          if match is None:
+              raise SystemExit("IrohaSwift/VERSION must be one canonical ASCII SemVer plus newline")
+          print(raw[:-1].decode("ascii"))
+          PY
+          )"
+          [[ "$GITHUB_REF_NAME" == "v${pod_version}" ]] || {
+            echo "release tag $GITHUB_REF_NAME must equal canonical SDK tag v${pod_version}" >&2
+            exit 1
+          }
       - name: Prepare external Apple build and artifact roots
         run: |
           artifact_dir="$RUNNER_TEMP/iroha-mobile-apple-artifacts"
           build_dir="$RUNNER_TEMP/iroha-mobile-apple-build"
           package_dir="$RUNNER_TEMP/iroha-mobile-sdk-package"
           swift_scratch_dir="$RUNNER_TEMP/iroha-mobile-swift-build"
-          mkdir -p "$artifact_dir" "$build_dir" "$package_dir" "$swift_scratch_dir"
+          mkdir -p "$artifact_dir" "$build_dir" "$swift_scratch_dir"
+          test ! -e "$package_dir"
           echo "MOBILE_SDK_APPLE_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
@@ -234,10 +285,6 @@ jobs:
           fi
       - name: Validate Apple mobile SDK artifact
         run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
-      - name: CocoaPods structural lint (no capability skip)
-        env:
-          SWIFT_POD_REPORT_DIR: ${{ runner.temp }}/iroha-swift-pod-report
-        run: ci/check_swift_pod_bridge.sh
       - name: Test Swift SDK
         working-directory: IrohaSwift
         run: >-
@@ -246,10 +293,24 @@ jobs:
           --scratch-path "$MOBILE_SDK_SWIFT_SCRATCH_DIR"
       - name: Package Apple mobile SDK artifact
         run: bash scripts/package_mobile_sdk_artifacts.sh --apple --version "$MOBILE_SDK_VERSION"
+      - name: CocoaPods authenticated archive and source lint (no capability skip)
+        env:
+          SWIFT_POD_REPORT_DIR: ${{ runner.temp }}/iroha-swift-pod-report
+        run: ci/check_swift_pod_bridge.sh
       - name: Consume packaged XCFramework archive with SwiftPM
         shell: bash
         run: |
-          archive="$MOBILE_SDK_PACKAGE_OUT_DIR/NoritoBridge-${MOBILE_SDK_VERSION}.xcframework.zip"
+          pod_version="$(python3 -I -S -B - <<'PY'
+          from pathlib import Path
+          import re
+          raw = Path("IrohaSwift/VERSION").read_bytes()
+          match = re.fullmatch(rb"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\n", raw)
+          if match is None:
+              raise SystemExit("IrohaSwift/VERSION must be one canonical ASCII SemVer plus newline")
+          print(raw[:-1].decode("ascii"))
+          PY
+          )"
+          archive="$MOBILE_SDK_PACKAGE_OUT_DIR/NoritoBridge-v${pod_version}.xcframework.zip"
           /usr/bin/unzip -t "$archive"
           consumer="$(mktemp -d "$RUNNER_TEMP/norito-bridge-archive-consumer.XXXXXXXX")"
           trap 'rm -rf "$consumer"' EXIT
@@ -323,10 +384,10 @@ jobs:
       - name: Resolve artifact version
         run: |
           input_version="${{ github.event.inputs.version }}"
-          if [[ -n "$input_version" ]]; then
-            version="$input_version"
-          elif [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             version="${GITHUB_REF_NAME}"
+          elif [[ -n "$input_version" ]]; then
+            version="$input_version"
           elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
             version="pr-${{ github.event.pull_request.number }}-${GITHUB_SHA:0:12}"
           else
@@ -336,6 +397,27 @@ jobs:
           maven_version="${version#v}"
           echo "MOBILE_SDK_VERSION=$version" >> "$GITHUB_ENV"
           echo "MOBILE_SDK_MAVEN_VERSION=$maven_version" >> "$GITHUB_ENV"
+      - name: Require the canonical SDK release tag
+        if: github.ref_type == 'tag'
+        run: |
+          [[ "$GITHUB_REPOSITORY" == "hyperledger-iroha/iroha" ]] || {
+            echo "tagged mobile SDK releases are owned by hyperledger-iroha/iroha" >&2
+            exit 1
+          }
+          pod_version="$(python3 -I -S -B - <<'PY'
+          from pathlib import Path
+          import re
+          raw = Path("IrohaSwift/VERSION").read_bytes()
+          match = re.fullmatch(rb"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\n", raw)
+          if match is None:
+              raise SystemExit("IrohaSwift/VERSION must be one canonical ASCII SemVer plus newline")
+          print(raw[:-1].decode("ascii"))
+          PY
+          )"
+          [[ "$GITHUB_REF_NAME" == "v${pod_version}" ]] || {
+            echo "release tag $GITHUB_REF_NAME must equal canonical SDK tag v${pod_version}" >&2
+            exit 1
+          }
       - name: Install Android SDK and NDK packages
         run: |
           sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
@@ -381,7 +463,8 @@ jobs:
           java_sorafs_tmp="$gradle_tmp/java-sorafs"
           maven_repo="$artifact_dir/maven"
           package_dir="$RUNNER_TEMP/iroha-mobile-sdk-package"
-          mkdir -p "$artifact_dir" "$gradle_home" "$project_cache" "$gradle_tmp" "$java_sorafs_tmp" "$maven_repo" "$package_dir"
+          mkdir -p "$artifact_dir" "$gradle_home" "$project_cache" "$gradle_tmp" "$java_sorafs_tmp" "$maven_repo"
+          test ! -e "$package_dir"
           echo "MOBILE_SDK_ANDROID_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "MOBILE_SDK_ANDROID_MAVEN_REPO_DIR=$maven_repo" >> "$GITHUB_ENV"
           echo "MOBILE_SDK_ANDROID_PROJECT_CACHE_DIR=$project_cache" >> "$GITHUB_ENV"
@@ -473,13 +556,14 @@ jobs:
           retention-days: 14
 
   publish-release-assets:
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' && github.repository == 'hyperledger-iroha/iroha'
     needs: [apple-mobile-sdk, android-mobile-sdk]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           pattern: mobile-sdk-*
@@ -490,8 +574,64 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          find release-assets -maxdepth 1 -type f -print | sort
-          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --notes "Mobile SDK artifacts for $GITHUB_REF_NAME"
+          [[ "$GITHUB_REPOSITORY" == "hyperledger-iroha/iroha" ]] || {
+            echo "release publication is restricted to hyperledger-iroha/iroha" >&2
+            exit 1
+          }
+          pod_version="$(python3 -I -S -B - <<'PY'
+          from pathlib import Path
+          import re
+          raw = Path("IrohaSwift/VERSION").read_bytes()
+          match = re.fullmatch(rb"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\n", raw)
+          if match is None:
+              raise SystemExit("IrohaSwift/VERSION must be one canonical ASCII SemVer plus newline")
+          print(raw[:-1].decode("ascii"))
+          PY
+          )"
+          if [[ "$GITHUB_REF_NAME" != "v${pod_version}" ]]; then
+            echo "release tag $GITHUB_REF_NAME must equal canonical SDK tag v${pod_version}" >&2
+            exit 1
           fi
-          gh release upload "$GITHUB_REF_NAME" release-assets/* --clobber
+          candidate_inventory="$(
+            find release-assets -maxdepth 1 -type f -print | sort |
+              while IFS= read -r candidate; do
+                printf '%s %s\n' "${candidate##*/}" "$(wc -c <"$candidate" | tr -d '[:space:]')"
+              done
+          )"
+          [[ -n "$candidate_inventory" ]] || {
+            echo "release asset inventory is empty" >&2
+            exit 1
+          }
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            [[ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq '.isDraft')" == "true" ]] || {
+              echo "existing release is public; refusing mutation" >&2
+              exit 1
+            }
+          else
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$GITHUB_REF_NAME" --notes "Mobile SDK artifacts for $GITHUB_REF_NAME"
+          fi
+          existing_assets="$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')"
+          [[ -z "$existing_assets" ]] || {
+            echo "draft release already contains assets; refusing partial upload" >&2
+            exit 1
+          }
+          gh release upload "$GITHUB_REF_NAME" release-assets/*
+          remote_inventory="$(
+            gh release view "$GITHUB_REF_NAME" --json assets \
+              --jq '.assets[] | "\(.name) \(.size)"' | sort
+          )"
+          [[ "$remote_inventory" == "$candidate_inventory" ]] || {
+            echo "uploaded release asset inventory is incomplete" >&2
+            exit 1
+          }
+          verify_dir="$(mktemp -d "$RUNNER_TEMP/mobile-sdk-release-verify.XXXXXXXX")"
+          trap 'rm -rf "$verify_dir"' EXIT
+          gh release download "$GITHUB_REF_NAME" --dir "$verify_dir"
+          while IFS= read -r candidate; do
+            candidate_name="${candidate##*/}"
+            [[ "$(sha256sum "$candidate" | cut -d' ' -f1)" == "$(sha256sum "$verify_dir/$candidate_name" | cut -d' ' -f1)" ]] || {
+              echo "downloaded release asset digest mismatch: $candidate_name" >&2
+              exit 1
+            }
+          done < <(find release-assets -maxdepth 1 -type f -print | sort)
+          gh release edit "$GITHUB_REF_NAME" --draft=false

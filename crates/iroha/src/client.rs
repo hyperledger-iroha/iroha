@@ -1,6 +1,9 @@
 //! End-point querying logic, including custom public and authenticated routes.
-
+mod moderation;
 mod public_musubi;
+mod repair;
+mod reputation_journal;
+mod reserve;
 mod runtime_governance_client_auth;
 pub use public_musubi::{
     PublicMusubiQueryPathV1, PublicMusubiQueryResultV1, post_public_musubi_query_v1,
@@ -144,7 +147,6 @@ use crate::{
         SubscriptionPlanListParams, SubscriptionPlanListResponse, SubscriptionUsageRequest,
     },
 };
-// (No query imports needed here)
 
 const APPLICATION_JSON: &str = "application/json";
 const PRIVACY_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
@@ -17154,7 +17156,6 @@ impl Client {
     }
 
     /// Fetch chain-authoritative `SoraFS` repair counters at an optional finalized anchor.
-    ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_repair_status(
@@ -17167,10 +17168,10 @@ impl Client {
             .header("Accept", APPLICATION_JSON)
             .build()?
             .send()
+            .and_then(|response| repair::validate_status_response(response, finalized))
     }
 
     /// Fetch a bounded finalized page of chain-authoritative `SoraFS` repair tasks.
-    ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_repair_tasks(
@@ -17183,10 +17184,10 @@ impl Client {
             .header("Accept", APPLICATION_JSON)
             .build()?
             .send()
+            .and_then(|response| repair::validate_tasks_response(response, filter))
     }
 
     /// Fetch one chain-authoritative `SoraFS` repair task by canonical ticket ID.
-    ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_repair_task(
@@ -17205,10 +17206,10 @@ impl Client {
             .header("Accept", APPLICATION_JSON)
             .build()?
             .send()
+            .and_then(|response| repair::validate_task_response(response, &ticket_id.0, finalized))
     }
 
     /// Fetch a bounded finalized page of committed `SoraFS` repair events.
-    ///
     /// # Errors
     /// Returns an error if request construction or the HTTP call fails.
     pub fn get_sorafs_repair_events(
@@ -17221,6 +17222,7 @@ impl Client {
             .header("Accept", APPLICATION_JSON)
             .build()?
             .send()
+            .and_then(|response| repair::validate_events_response(response, filter))
     }
 
     /// Submit a caller-signed transaction to one exact `SoraFS` repair command route.
@@ -17236,6 +17238,7 @@ impl Client {
         route: SorafsRepairCommandRoute,
         transaction: &SignedTransaction,
     ) -> Result<HashOf<SignedTransaction>> {
+        repair::validate_transaction_route(route, transaction)?;
         self.ensure_transaction_submit_compatibility()?;
         let payload = Self::prepare_transaction_payload(transaction);
         let hash = payload.hash();
@@ -17689,6 +17692,7 @@ impl Client {
         route: SorafsModerationCommandRoute,
         transaction: &SignedTransaction,
     ) -> Result<HashOf<SignedTransaction>> {
+        moderation::validate_transaction_route(route, transaction)?;
         self.ensure_transaction_submit_compatibility()?;
         let payload = Self::prepare_transaction_payload(transaction);
         let hash = payload.hash();
@@ -17889,18 +17893,16 @@ impl Client {
     }
 
     /// Submit a caller-signed transaction to one exact `SoraFS` reserve command route.
-    ///
     /// Torii requires exactly one route-matching native reserve instruction and uses the same
     /// strict durable admission contract as the canonical transaction endpoint.
-    ///
     /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
+    /// Returns an error if compatibility validation, request construction, admission, or HTTP fails.
     pub fn post_sorafs_reserve_transaction(
         &self,
         route: SorafsReserveCommandRoute,
         transaction: &SignedTransaction,
     ) -> Result<HashOf<SignedTransaction>> {
+        reserve::validate_transaction_route(route, transaction)?;
         self.ensure_transaction_submit_compatibility()?;
         let payload = Self::prepare_transaction_payload(transaction);
         let hash = payload.hash();
@@ -17920,10 +17922,8 @@ impl Client {
     }
 
     /// Submit one reserve top-up request transaction.
-    ///
     /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
+    /// Returns an error if compatibility validation, request construction, admission, or HTTP fails.
     pub fn post_sorafs_reserve_top_up(
         &self,
         transaction: &SignedTransaction,
@@ -17932,10 +17932,8 @@ impl Client {
     }
 
     /// Submit one reserve withdrawal request transaction.
-    ///
     /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
+    /// Returns an error if compatibility validation, request construction, admission, or HTTP fails.
     pub fn post_sorafs_reserve_withdrawal(
         &self,
         transaction: &SignedTransaction,
@@ -17944,10 +17942,8 @@ impl Client {
     }
 
     /// Submit one governed reserve movement-decision transaction.
-    ///
     /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
+    /// Returns an error if compatibility validation, request construction, admission, or HTTP fails.
     pub fn post_sorafs_reserve_movement_decision(
         &self,
         movement_id: [u8; 32],
@@ -17960,10 +17956,8 @@ impl Client {
     }
 
     /// Submit one governed reserve credit-draw transaction.
-    ///
     /// # Errors
-    /// Returns an error if compatibility validation, request construction, admission, or the
-    /// HTTP call fails.
+    /// Returns an error if compatibility validation, request construction, admission, or HTTP fails.
     pub fn post_sorafs_reserve_credit_draw(
         &self,
         transaction: &SignedTransaction,
@@ -17972,7 +17966,6 @@ impl Client {
     }
 
     /// Submit one provider-authenticated reserve credit-repayment transaction.
-    ///
     /// # Errors
     /// Returns an error if compatibility validation, request construction, admission, or the
     /// HTTP call fails.
@@ -17984,7 +17977,6 @@ impl Client {
     }
 
     /// Submit one provider-authenticated reserve appeal transaction.
-    ///
     /// # Errors
     /// Returns an error if compatibility validation, request construction, admission, or the
     /// HTTP call fails.
@@ -17996,7 +17988,6 @@ impl Client {
     }
 
     /// Submit one governed reserve appeal-decision transaction.
-    ///
     /// # Errors
     /// Returns an error if compatibility validation, request construction, admission, or the
     /// HTTP call fails.
@@ -18012,39 +18003,40 @@ impl Client {
     }
 
     /// Fetch the active chain-authoritative reserve policy at an optional finalized anchor.
-    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_policy(
         &self,
         finalized: SorafsReserveFinalizedAnchor<'_>,
     ) -> Result<Response<Vec<u8>>> {
+        reserve::validate_anchor_request(&finalized, "policy")?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/policy");
         finalized.apply_to_url(&mut url);
         self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )
+        .and_then(|response| reserve::validate_policy_response(response, &finalized))
     }
 
     /// Fetch a finalized page of chain-authoritative provider reserve accounts.
-    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_providers(
         &self,
         filter: SorafsReserveProvidersReadbackFilter<'_>,
     ) -> Result<Response<Vec<u8>>> {
+        reserve::validate_providers_request(&filter)?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/providers");
         filter.apply_to_url(&mut url);
         self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )
+        .and_then(|response| reserve::validate_providers_response(response, &filter))
     }
 
     /// Fetch one chain-authoritative provider reserve account.
-    ///
     /// # Errors
     /// Returns an error if the provider ID is malformed, request construction, signing, or the
     /// HTTP call fails.
@@ -18054,6 +18046,7 @@ impl Client {
         finalized: SorafsReserveFinalizedAnchor<'_>,
     ) -> Result<Response<Vec<u8>>> {
         let provider_id_hex = normalize_hex_lower::<32>(provider_id_hex, "provider_id_hex")?;
+        reserve::validate_detail_request(&provider_id_hex, &finalized, "provider")?;
         let path = format!("v1/sorafs/reserve/providers/{provider_id_hex}");
         let mut url = join_torii_url(&self.torii_url, &path);
         finalized.apply_to_url(&mut url);
@@ -18061,26 +18054,29 @@ impl Client {
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )
+        .and_then(|response| {
+            reserve::validate_provider_response(response, &provider_id_hex, &finalized)
+        })
     }
 
     /// Fetch a finalized page of chain-authoritative reserve movements.
-    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_movements(
         &self,
         filter: SorafsReserveMovementReadbackFilter<'_>,
     ) -> Result<Response<Vec<u8>>> {
+        reserve::validate_movements_request(&filter)?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/movements");
         filter.apply_to_url(&mut url);
         self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )
+        .and_then(|response| reserve::validate_movements_response(response, &filter))
     }
 
     /// Fetch one chain-authoritative reserve movement.
-    ///
     /// # Errors
     /// Returns an error if the movement ID is malformed, request construction, signing, or the
     /// HTTP call fails.
@@ -18090,6 +18086,7 @@ impl Client {
         finalized: SorafsReserveFinalizedAnchor<'_>,
     ) -> Result<Response<Vec<u8>>> {
         let movement_id_hex = normalize_hex_lower::<32>(movement_id_hex, "movement_id_hex")?;
+        reserve::validate_detail_request(&movement_id_hex, &finalized, "movement")?;
         let path = format!("v1/sorafs/reserve/movements/{movement_id_hex}");
         let mut url = join_torii_url(&self.torii_url, &path);
         finalized.apply_to_url(&mut url);
@@ -18097,26 +18094,29 @@ impl Client {
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )
+        .and_then(|response| {
+            reserve::validate_movement_response(response, &movement_id_hex, &finalized)
+        })
     }
 
     /// Fetch a finalized page of chain-authoritative reserve appeals.
-    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_appeals(
         &self,
         filter: SorafsReserveAppealReadbackFilter<'_>,
     ) -> Result<Response<Vec<u8>>> {
+        reserve::validate_appeals_request(&filter)?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/appeals");
         filter.apply_to_url(&mut url);
         self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )
+        .and_then(|response| reserve::validate_appeals_response(response, &filter))
     }
 
     /// Fetch one chain-authoritative reserve appeal.
-    ///
     /// # Errors
     /// Returns an error if the appeal ID is malformed, request construction, signing, or the
     /// HTTP call fails.
@@ -18126,6 +18126,7 @@ impl Client {
         finalized: SorafsReserveFinalizedAnchor<'_>,
     ) -> Result<Response<Vec<u8>>> {
         let appeal_id_hex = normalize_hex_lower::<32>(appeal_id_hex, "appeal_id_hex")?;
+        reserve::validate_detail_request(&appeal_id_hex, &finalized, "appeal")?;
         let path = format!("v1/sorafs/reserve/appeals/{appeal_id_hex}");
         let mut url = join_torii_url(&self.torii_url, &path);
         finalized.apply_to_url(&mut url);
@@ -18133,22 +18134,26 @@ impl Client {
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )
+        .and_then(|response| {
+            reserve::validate_appeal_response(response, &appeal_id_hex, &finalized)
+        })
     }
 
     /// Fetch a finalized page of committed reserve-ledger events.
-    ///
     /// # Errors
     /// Returns an error if request construction, signing, or the HTTP call fails.
     pub fn get_sorafs_reserve_events(
         &self,
         filter: SorafsReserveEventsReadbackFilter<'_>,
     ) -> Result<Response<Vec<u8>>> {
+        reserve::validate_events_request(&filter)?;
         let mut url = join_torii_url(&self.torii_url, "v1/sorafs/reserve/events");
         filter.apply_to_url(&mut url);
         self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
                 .header("Accept", APPLICATION_JSON),
         )
+        .and_then(|response| reserve::validate_events_response(response, &filter))
     }
 
     /// Convenience: GET `/v1/sorafs/appeals/pricing/config`.
@@ -31373,7 +31378,7 @@ mod tests {
     fn sorafs_repair_status_targets_finalized_status_endpoint() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
+        let response = json_response(StatusCode::NOT_FOUND, "{}");
         let finalized = SorafsRepairFinalizedAnchor {
             expected_finalized_height: Some(9),
             expected_finalized_block_hash_hex: Some("bb"),
@@ -31399,7 +31404,7 @@ mod tests {
     fn sorafs_repair_task_targets_ticket_endpoint() {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let response = json_response(StatusCode::OK, "{}");
+        let response = json_response(StatusCode::NOT_FOUND, "{}");
         let finalized = SorafsRepairFinalizedAnchor::default();
 
         with_mock_http(respond_with(&store, response), || {
@@ -32062,41 +32067,40 @@ mod tests {
                 .expect("exact commit instruction");
             assert_eq!(embedded.commit_payload(), &commit_payload);
 
-            for (route, _) in expected_routes {
-                client
-                    .post_sorafs_moderation_transaction(route, &transaction)
-                    .expect("moderation transaction route submission");
+            for (route, path) in expected_routes {
+                assert_eq!(format!("/{}", route.path()), path);
             }
+            client
+                .post_sorafs_moderation_ballot_commit(&transaction)
+                .expect("moderation commit transaction route submission");
             transaction.hash()
         });
 
         let snapshots = store.lock().expect("snapshot store");
-        assert_eq!(snapshots.len(), expected_routes.len() + 1);
-        for (_, path) in expected_routes {
-            let snapshot = snapshots
+        assert_eq!(snapshots.len(), 2);
+        let snapshot = snapshots
+            .iter()
+            .find(|snapshot| snapshot.url.path() == "/v1/sorafs/moderation/ballots/commits")
+            .expect("missing moderation commit request");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot
+                .headers
                 .iter()
-                .find(|snapshot| snapshot.url.path() == path)
-                .unwrap_or_else(|| panic!("missing moderation route request {path}"));
-            assert_eq!(snapshot.method, HttpMethod::POST);
-            assert_eq!(
-                snapshot
-                    .headers
-                    .iter()
-                    .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-                    .map(|(_, value)| value.as_str()),
-                Some(APPLICATION_NORITO)
-            );
-            assert!(
-                !snapshot
-                    .headers
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_SIGNATURE)),
-                "native transaction routes must not add competing app-auth signatures"
-            );
-            let decoded = SignedTransaction::decode_all_versioned(&snapshot.body)
-                .expect("moderation request body is a versioned SignedTransaction");
-            assert_eq!(decoded.hash(), expected_hash);
-        }
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                .map(|(_, value)| value.as_str()),
+            Some(APPLICATION_NORITO)
+        );
+        assert!(
+            !snapshot
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_SIGNATURE)),
+            "native transaction routes must not add competing app-auth signatures"
+        );
+        let decoded = SignedTransaction::decode_all_versioned(&snapshot.body)
+            .expect("moderation request body is a versioned SignedTransaction");
+        assert_eq!(decoded.hash(), expected_hash);
     }
 
     #[test]
@@ -32874,7 +32878,6 @@ mod tests {
                 "/v1/sorafs/audit/repair/appeal",
             ),
         ];
-
         let expected_hash = with_mock_http(responder, || {
             let client = client_with_base_url(base_url());
             let transaction = client.build_transaction(
@@ -32885,34 +32888,33 @@ mod tests {
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
-            for (route, _) in expected_routes {
-                client
-                    .post_sorafs_repair_transaction(route, &transaction)
-                    .expect("repair transaction route submission");
+            for (route, path) in expected_routes {
+                assert_eq!(format!("/{}", route.path()), path);
             }
+            client
+                .post_sorafs_repair_report(&transaction)
+                .expect("repair report transaction route submission");
             transaction.hash()
         });
 
         let snapshots = store.lock().expect("snapshot store");
-        assert_eq!(snapshots.len(), expected_routes.len() + 1);
-        for (_, path) in expected_routes {
-            let snapshot = snapshots
+        assert_eq!(snapshots.len(), 2);
+        let snapshot = snapshots
+            .iter()
+            .find(|snapshot| snapshot.url.path() == "/v1/sorafs/audit/repair/report")
+            .expect("missing repair report request");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot
+                .headers
                 .iter()
-                .find(|snapshot| snapshot.url.path() == path)
-                .unwrap_or_else(|| panic!("missing repair route request {path}"));
-            assert_eq!(snapshot.method, HttpMethod::POST);
-            assert_eq!(
-                snapshot
-                    .headers
-                    .iter()
-                    .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-                    .map(|(_, value)| value.as_str()),
-                Some(APPLICATION_NORITO)
-            );
-            let decoded = SignedTransaction::decode_all_versioned(&snapshot.body)
-                .expect("repair request body is a versioned SignedTransaction");
-            assert_eq!(decoded.hash(), expected_hash);
-        }
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                .map(|(_, value)| value.as_str()),
+            Some(APPLICATION_NORITO)
+        );
+        let decoded = SignedTransaction::decode_all_versioned(&snapshot.body)
+            .expect("repair request body is a versioned SignedTransaction");
+        assert_eq!(decoded.hash(), expected_hash);
     }
 
     #[test]
@@ -32935,7 +32937,6 @@ mod tests {
                 Ok(response)
             }
         };
-
         let movement_id = [0x62; 32];
         let appeal_id = [0x63; 32];
         let expected_routes = [
@@ -32974,9 +32975,9 @@ mod tests {
                 ),
             ),
         ];
-
         let expected_hash = with_mock_http(responder, || {
-            let client = client_with_base_url(base_url());
+            let mut client = client_with_base_url(base_url());
+            client.transaction_ttl = Some(Duration::from_secs(300));
             let transaction = client.build_transaction(
                 [
                     iroha_data_model::isi::sorafs::RequestSorafsReserveMovement::new(
@@ -32991,34 +32992,33 @@ mod tests {
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             );
-            for (route, _) in &expected_routes {
-                client
-                    .post_sorafs_reserve_transaction(*route, &transaction)
-                    .expect("reserve transaction route submission");
+            for (route, path) in &expected_routes {
+                assert_eq!(format!("/{}", route.path()), path.as_str());
             }
+            client
+                .post_sorafs_reserve_top_up(&transaction)
+                .expect("reserve top-up transaction route submission");
             transaction.hash()
         });
 
         let snapshots = store.lock().expect("snapshot store");
-        assert_eq!(snapshots.len(), expected_routes.len() + 1);
-        for (_, path) in expected_routes {
-            let snapshot = snapshots
+        assert_eq!(snapshots.len(), 2);
+        let snapshot = snapshots
+            .iter()
+            .find(|snapshot| snapshot.url.path() == "/v1/sorafs/reserve/top-up")
+            .expect("missing reserve top-up request");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot
+                .headers
                 .iter()
-                .find(|snapshot| snapshot.url.path() == path)
-                .unwrap_or_else(|| panic!("missing reserve route request {path}"));
-            assert_eq!(snapshot.method, HttpMethod::POST);
-            assert_eq!(
-                snapshot
-                    .headers
-                    .iter()
-                    .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-                    .map(|(_, value)| value.as_str()),
-                Some(APPLICATION_NORITO)
-            );
-            let decoded = SignedTransaction::decode_all_versioned(&snapshot.body)
-                .expect("reserve request body is a versioned SignedTransaction");
-            assert_eq!(decoded.hash(), expected_hash);
-        }
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                .map(|(_, value)| value.as_str()),
+            Some(APPLICATION_NORITO)
+        );
+        let decoded = SignedTransaction::decode_all_versioned(&snapshot.body)
+            .expect("reserve request body is a versioned SignedTransaction");
+        assert_eq!(decoded.hash(), expected_hash);
     }
 
     #[test]

@@ -8497,7 +8497,6 @@ def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
     assert "from sorafs_path_identity import (" in helper
     assert "error_diagnostic_label," in helper
     assert "resolve_path_identity" in helper
-    assert "resolve_path_identity" in helper
     assert 'resolve_path_identity(path, errors, label="input file")' in helper
     assert 'resolve_path_identity(path, errors, label="output path")' in helper
     assert "path.resolve()" not in helper
@@ -17570,26 +17569,30 @@ def test_moderation_panel_parent_surface_matcher_has_negative_controls() -> None
 
 def test_unshipped_moderation_panel_parent_service_surface_is_not_exposed() -> None:
     exposed: dict[str, list[str]] = {}
-
     for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
         source = read(path)
         matched = unshipped_moderation_panel_parent_route_matches(source)
         if matched:
             exposed[str(path.relative_to(REPO_ROOT))] = matched
-
     for path in (IROHA_CLI_SORAFS_RS, SORAFS_CLI_RS):
         source = read(path)
         matched = unshipped_moderation_panel_parent_cli_matches(source)
         if matched:
             exposed[str(path.relative_to(REPO_ROOT))] = matched
-
     assert exposed == {}
+    roadmap = read(REPO_ROOT / "roadmap.md")
+    assert "410 Gone" not in roadmap
+    assert roadmap.count("`404 Not Found`") == 2
 
 
 def test_reputation_docs_track_projector_hard_cut_and_remaining_runtime_work() -> None:
     source = read(SORAFS_REPUTATION_PLAN)
     normalized = re.sub(r"\s+", " ", source)
-
+    assert "mod reputation_journal;" in read(IROHA_CLIENT_RS)
+    reputation_client = read(IROHA_CLIENT_RS.parent / "client" / "reputation_journal.rs")
+    assert reputation_client.count("pub fn try_build_sorafs_reputation_journal_") == 3
+    assert reputation_client.count("pub fn query_sorafs_reputation_journal_") == 3
+    assert all(marker in reputation_client for marker in ("pub fn try_build_sorafs_reputation_journal_authority_policy_transaction(", "pub fn try_build_sorafs_reputation_journal_por_entry_transaction(", "pub fn try_build_sorafs_reputation_journal_stream_token_entry_transaction(", "pub fn query_sorafs_reputation_journal_authority_policy(", "pub fn query_sorafs_reputation_journal_event_by_source_id(", "pub fn query_sorafs_reputation_journal_events(", "entry.source_kind() != expected_kind", "entry.recorded_by != client.account", "event.validate(response_cursor)", "page.events.len() > usize::try_from(limit)", "after.is_none() && page.events.first().is_some_and(|event| event.sequence != 1)", "page.validate_after(after)", "transaction_builders_sign_exact_typed_instruction", "transaction_builders_reject_invalid_family_and_authority_before_signing", "typed_queries_are_authenticated_and_preserve_exact_fields", "unpinned_source_query_rejects_malformed_event_response", "event_page_query_rejects_responses_outside_request_bounds", "query_validation_rejects_bad_inputs_without_http"))
     required_open = (
         "SFM-3 has two local foundations: the deterministic reputation V1 snapshot/proof core and a native committed input journal.",
         "This is source implementation, not a readiness claim.",
@@ -17629,11 +17632,8 @@ def test_reputation_docs_track_projector_hard_cut_and_remaining_runtime_work() -
         "Resolve the latest-only snapshot-id route",
         "`StateReputationFinalizedQueryV1`",
     )
-
     assert missing == []
-    assert [
-        phrase for phrase in stale_missing_adapter_claims if phrase in normalized
-    ] == []
+    assert not any(phrase in normalized for phrase in stale_missing_adapter_claims)
 
 
 def test_reputation_bootstrap_view_uses_full_exact_request_validation() -> None:
@@ -18810,14 +18810,13 @@ def test_por_canary_builder_is_checked_in() -> None:
     ).is_file()
     assert "--route-body-blake3-hex" in scheduler_runtime_example
 
-
 def test_por_validator_docs_keep_rollout_contract_markers() -> None:
     required_current = (
         "The shared checker exports its required top-level payload fields as `EVIDENCE_REQUIRED_FIELDS`",
         "planner includes the checker-backed `evidence_contract` map in `--dry-run` output so validator/reporting operators can review the exact SF-9 artifact contract before promotion, and the runner validates the schema-closed collection plan, required kinds, thresholds, external evidence map, evidence contract, and command steps before dry-run output or verifier execution.",
+        "The report client likewise rejects a structurally valid response unless its embedded `cycle` exactly equals the requested `--week` before rendering output.",
     )
     missing_current: dict[str, list[str]] = {}
-
     # See `test_por_docs_keep_rollout_contract_markers`: translated stubs are
     # intentionally metadata-checked instead of being treated as authorities.
     for path in (SORAFS_POR_VALIDATOR_PLAN,):
@@ -18827,7 +18826,8 @@ def test_por_validator_docs_keep_rollout_contract_markers() -> None:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
 
     assert missing_current == {}
-
+    assert "if report.cycle != iso_week" in read(SORAFS_CLI_RS)
+    assert "por_report_rejects_response_for_a_different_week_before_output" in read(REPO_ROOT / "crates" / "sorafs_orchestrator" / "tests" / "sorafs_cli" / "por_report.rs")
 
 RETIRED_POR_MUTATION_ROUTES = (
     "/v1/sorafs/por/trigger",
@@ -19589,9 +19589,9 @@ def test_repair_chain_authority_is_closed_and_live_evidence_stays_open_in_docs()
         "The competing local repair authority and GC/reconciliation checkpoint dependencies are removed.",
         "Remaining rollout work is genuine four-validator evidence for a production PoR/PoTR failure, one cross-peer lease and terminal outcome, escalation/appeal, restart reconciliation, and governance handoff, followed by the SF-8b rollout evidence gate.",
     )
-    missing = [phrase for phrase in required_open if phrase not in normalized]
-
-    assert missing == []
+    assert [phrase for phrase in required_open if phrase not in normalized] == []
+    client = read(IROHA_CLIENT_RS) + read(IROHA_CLIENT_RS.parent / "client" / "repair.rs")
+    assert [marker for marker in ("mod repair;", "repair::validate_transaction_route(route, transaction)?;", "response.status() != StatusCode::OK", 'get_all("content-type")', "Some(APPLICATION_JSON)", "wrapper.len() != 2", 'Some("finalized_chain")', "RepairFinalizedStatusV1", "RepairLedgerTaskPageV1", "RepairFinalizedTaskV1", "RepairFinalizedEventPageV1", "validate_finalized_cursor", "validate_event_successor", "previous.event_index.checked_add(1)", "page.has_more != page.next_after_task_id.is_some()", "page.has_more != page.next_after.is_some()", "repair::validate_status_response(response, finalized)", "repair::validate_tasks_response(response, filter)", "repair::validate_task_response(response, &ticket_id.0, finalized)", "repair::validate_events_response(response, filter)", "repair_route_validation_accepts_every_exact_instruction", "repair_route_validation_rejects_mismatch_and_wrong_action_before_http", "repair_route_validation_rejects_non_native_and_non_singleton_before_http", "repair_read_response_binding_accepts_exact_typed_wrappers", "repair_read_response_binding_rejects_wrapper_finality_and_ticket_mismatches", "repair_task_page_response_binding_rejects_bounds_order_and_bad_continuations", "repair_event_page_response_binding_rejects_bounds_order_and_bad_continuations", "repair_event_page_response_binding_rejects_noncanonical_block_index_successors", "repair_read_response_binding_preserves_every_non_ok_response", "repair_read_methods_validate_every_successful_response_after_send") if marker not in client] == []
 
 
 def test_repair_docs_keep_rollout_contract_markers() -> None:
@@ -20562,7 +20562,6 @@ def test_unshipped_reference_sdk_distribution_surface_is_not_exposed() -> None:
 def test_pdp_provider_protocol_and_chain_repair_boundary_are_documented() -> None:
     source = read(SORAFS_PDP_PLAN)
     normalized = re.sub(r"\s+", " ", source)
-
     required_finalized_projection = (
         "does not read the provider protocol's local scheduler state",
         "exact `(pdp, challenge_id)` lookup in the finalized native proof-outcome ledger",
@@ -20570,8 +20569,7 @@ def test_pdp_provider_protocol_and_chain_repair_boundary_are_documented() -> Non
         "Canonical terminal archives also use the authorized retry-safe `SubmitSorafsProofOutcome` transaction forwarder and reconcile the committed record.",
         "Finalized PDP proof-outcome state is keyed by the exact governed challenge ID.",
         "`outcome_identity_hex` equal to `challenge_id_hex`",
-        "the terminal outcome digest",
-        "the council-verified admission envelope digest",
+        "the terminal outcome digest", "the council-verified admission envelope digest",
         "finalized block height/hash",
         "Only `success` or a canonical terminal `failure` is valid; `pending` and process-local-only states are not wire results.",
         "binds the returned finalized terminal projection to the requested challenge, manifest, and provider.",
@@ -20591,7 +20589,7 @@ def test_pdp_provider_protocol_and_chain_repair_boundary_are_documented() -> Non
         "Governance DAG archival for accepted proofs and failure reports.",
         "An explicit repair-handoff boundary for `pdp_failure` events.",
         "The sixth item and terminal archive now use durable signed native transaction forwarders with exact finalized reconciliation.",
-        "Do not document the unshipped `sorafs pdp ...` commands as operator-ready until they exist in the CLI and have focused tests.",
+        "All five commands require `--torii-url`, the exact `--network-id`, and a software Ed25519 `--operator-private-key-file`.",
         "Required before production enablement:",
         "`sorafs_node::StorageBackend` persists the commitment and bounded retained tree, rehydrates them on restart, and generates exact challenge witnesses while holding the manifest read lease.",
         "Integration and adversarial tests cover restart parity, corrupted chunks, short/mutating reads, symlink and hard-link replacement, out-of-range/duplicate samples, and eviction races.",
@@ -20599,25 +20597,27 @@ def test_pdp_provider_protocol_and_chain_repair_boundary_are_documented() -> Non
         "SF-13 remains open because cross-peer exactly-once repair has not yet been proved and genuine multi-provider transport, restart, key-rotation, metrics, archive, and repair evidence remains external rollout work.",
         "Remaining production gates:",
         "Prove the finalized native handoff across peer and process restarts. The deleted local manager/checkpoint format has no production compatibility branch.",
-        "Ship dedicated operator CLI commands and complete cross-SDK validation parity.",
+        "The authenticated five-operation operator CLI and cross-SDK fixture parity are complete local prerequisites; neither requires deployment evidence.", "On Linux, Android, macOS, and iOS, file-producing commands require an existing immediate output directory owned by the current effective user with exact mode `0700`;",
     )
-    missing = [
-        phrase
-        for phrase in (*required_finalized_projection, *required_open)
-        if phrase not in normalized
-    ]
-
+    missing = [phrase for phrase in (*required_finalized_projection, *required_open) if phrase not in normalized]
     assert missing == []
+    pdp_parent, pdp_cli = read(SORAFS_CLI_RS), read(SORAFS_CLI_RS.parent / "sorafs_cli" / "pdp.rs")
+    pdp_test_parent, pdp_tests = read(REPO_ROOT / "crates" / "sorafs_orchestrator" / "tests" / "sorafs_cli.rs"), read(REPO_ROOT / "crates" / "sorafs_orchestrator" / "tests" / "sorafs_cli" / "pdp.rs")
+    assert "mod pdp;" in pdp_parent and '"pdp" => pdp::run(args.collect())' in pdp_parent
+    assert 'include!("sorafs_cli/pdp.rs");' in pdp_test_parent
+    required_pdp_cli = (
+        "/v1/sorafs/pdp/challenge", "/v1/sorafs/pdp/next", "/v1/sorafs/pdp/proof", "/v1/sorafs/pdp/status", "/v1/sorafs/pdp/export", "iroha.operator.http-request.network.v1", "x-iroha-operator-public-key", ".verify_signature()", "geteuid()", "openat(", "unlinkat(", ".share_mode(0x0000_0001)", "current-EUID-owned mode 0700", "operator trust boundary", "PDP proof submission response has an invalid terminal outcome", "accepted PDP submission response does not match the submitted proof scope", "duplicate challenge IDs or provider scopes",
+    )
+    assert all(marker in pdp_cli for marker in required_pdp_cli)
+    required_pdp_tests = (
+        "pdp_operator_commands_sign_exact_bodies_and_validate_all_five_routes", "pdp_next_rejects_unknown_response_fields_before_output",
+        "pdp_outputs_are_create_new_and_fail_before_network", "pdp_submit_rejects_canonical_proof_with_tampered_signed_payload_before_network", "pdp_submit_rejects_accepted_response_with_mismatched_proof_scope", "pdp_submit_rejects_terminal_reasons_that_cannot_result_from_proof_submission", "pdp_export_rejects_duplicate_challenge_ids_and_provider_scopes", "pdp_file_outputs_fail_closed_without_private_descriptor_relative_creation",
+    )
+    assert all(marker in pdp_tests for marker in required_pdp_tests)
     checker = read(SCRIPTS_DIR / "check_sorafs_gateway_load_rollout_evidence.py")
-    checker_test = read(
-        SCRIPTS_DIR / "tests" / "check_sorafs_gateway_load_rollout_evidence_test.py"
-    )
-    assert (
-        "require_string_inventory_count_match(payload, \"scenarios\", \"scenario_count\", errors)"
-        in checker
-    )
-    assert "test_local_conformance_scenario_count_must_match_unique_scenarios" in checker_test
-    assert "test_local_conformance_scenarios_must_not_duplicate" in checker_test
+    checker_test = read(SCRIPTS_DIR / "tests" / "check_sorafs_gateway_load_rollout_evidence_test.py")
+    assert "require_string_inventory_count_match(payload, \"scenarios\", \"scenario_count\", errors)" in checker
+    assert "test_local_conformance_scenario_count_must_match_unique_scenarios" in checker_test and "test_local_conformance_scenarios_must_not_duplicate" in checker_test
 
 
 def test_pdp_docs_keep_rollout_contract_markers() -> None:
@@ -22343,25 +22343,29 @@ def test_orderbook_service_surface_matcher_has_negative_controls() -> None:
 
 def test_unshipped_orderbook_service_surface_is_not_exposed() -> None:
     exposed: dict[str, list[str]] = {}
-
     for path in (TORII_SORAFS_API_RS, TORII_OPENAPI_RS):
         source = read(path)
         matched = unshipped_orderbook_service_route_matches(source)
         if matched:
             exposed[str(path.relative_to(REPO_ROOT))] = matched
-
     cli_source = read(SORAFS_CLI_RS)
     matched_commands = unshipped_orderbook_service_cli_matches(cli_source)
     if matched_commands:
         exposed[str(SORAFS_CLI_RS.relative_to(REPO_ROOT))] = matched_commands
-
     assert exposed == {}
 
+def test_hedging_billing_cli_binds_exact_checkpoint_responses_before_output() -> None:
+    cli = read(IROHA_CLI_SORAFS_RS)
+    response = read(IROHA_CLI_SORAFS_RS.parent / "sorafs" / "hedging_billing_response.rs")
+    response_tests = read(IROHA_CLI_SORAFS_RS.parent / "sorafs" / "hedging_billing_response_tests.rs")
+    assert "mod hedging_billing_response;" in cli and cli.count("hedging_billing_response::render(") == 2 and 'include!("sorafs/hedging_billing_response_tests.rs");' in cli
+    render_position = response.index("context.print_data(&value)")
+    assert all(response.index(marker) < render_position for marker in ('get_all("content-type")', 'Some("application/json")', "values.next().is_none()", "if status != StatusCode::OK", "norito::json::from_slice", 'anchor.get("checkpoint_fingerprint")', "expected_checkpoint.to_ascii_uppercase()"))
+    assert all(marker in response_tests for marker in ("billing_statements_cli_rejects_missing_response_anchor_without_output", "hedging_projection_cli_rejects_mismatched_and_wrong_case_anchors_without_output", "exact_checkpoint_cli_rejects_ambiguous_json_media_type_without_output", "exact_checkpoint_cli_rejects_non_ok_without_echoing_response"))
 
 def test_hedging_runtime_docs_distinguish_shipped_core_from_external_deployment() -> None:
     source = read(SORAFS_HEDGING_PLAN)
     normalized = re.sub(r"\s+", " ", source)
-
     required_shipped = (
         "The separate `sorafs_node::hedging_billing_service` and supervised `irohad::sorafs_hedging_billing_runtime` now implement the local committed service pipeline.",
         "interfaces ingest contiguous typed event pages and authenticated period closes.",
@@ -22421,11 +22425,9 @@ def test_hedging_runtime_docs_distinguish_shipped_core_from_external_deployment(
     stale_present = [
         phrase for phrase in stale_unshipped_core_claims if phrase in normalized
     ]
-
     assert missing_shipped == []
     assert missing_external == []
     assert stale_present == []
-
 
 def test_hedging_docs_keep_rollout_contract_markers() -> None:
     required_current = (
@@ -22447,14 +22449,12 @@ def test_hedging_docs_keep_rollout_contract_markers() -> None:
         "The runner validates the schema-closed collection-plan envelope before printing dry-run JSON or executing the verifier.",
     )
     missing_current: dict[str, list[str]] = {}
-
     for path in (SORAFS_HEDGING_PLAN,):
         source = read(path)
         normalized = re.sub(r"\s+", " ", source)
         missing = [phrase for phrase in required_current if phrase not in normalized]
         if missing:
             missing_current[str(path.relative_to(REPO_ROOT))] = missing
-
     assert missing_current == {}
     checker = read(SCRIPTS_DIR / "check_sorafs_hedging_rollout_evidence.py")
     checker_test = read(SCRIPTS_DIR / "tests" / "check_sorafs_hedging_rollout_evidence_test.py")
@@ -23778,16 +23778,16 @@ def test_commit_reveal_client_cli_no_show_readback_regressions_are_pinned() -> N
 
 
 def test_commit_reveal_client_cli_use_only_native_transaction_mutations() -> None:
-    client = read(IROHA_CLIENT_RS)
+    client = read(IROHA_CLIENT_RS) + read(IROHA_CLIENT_RS.parent / "client" / "moderation.rs")
     cli = read(IROHA_CLI_SORAFS_RS)
     combined = client + "\n" + cli
 
     required_client = (
         "pub enum SorafsModerationCommandRoute",
         "try_build_sorafs_moderation_transaction",
-        "post_sorafs_moderation_transaction",
+        "post_sorafs_moderation_transaction", "mod moderation;", "moderation::validate_transaction_route(route, transaction)?;",
         '.header("Content-Type", APPLICATION_NORITO)',
-        "TransactionResponseHandler::handle(&response)",
+        "TransactionResponseHandler::handle(&response)", "moderation_route_validation_rejects_non_native_and_non_singleton_before_http",
     )
     required_cli = (
         "SubmitSorafsModerationCommit::new(payload)",
@@ -27690,9 +27690,9 @@ def test_reserve_rent_chain_authoritative_contract_stays_open_until_evidence() -
         "Reputation, orderbook, compliance, and transparency consumers must use these committed projections",
         "The reserve lane is release-ready only when these tests, the full workspace and SDK gates, the four-validator deployment exercise, security review, disaster recovery rehearsal, and signed aggregate readiness evidence all pass.",
     )
-    missing = [phrase for phrase in required_contract if phrase not in normalized]
-
-    assert missing == []
+    assert [phrase for phrase in required_contract if phrase not in normalized] == []
+    client = read(IROHA_CLIENT_RS) + read(IROHA_CLIENT_RS.parent / "client" / "reserve.rs")
+    assert all(marker in client for marker in ("mod reserve;", "reserve::validate_transaction_route(route, transaction)?;", "reserve_route_validation_accepts_every_exact_instruction", "reserve_route_validation_rejects_wrong_kind_and_identifiers_before_http", "reserve_route_validation_rejects_wrong_type_non_native_and_non_singleton_before_http"))
 
 
 def test_reserve_rent_docs_do_not_reopen_process_local_authority() -> None:

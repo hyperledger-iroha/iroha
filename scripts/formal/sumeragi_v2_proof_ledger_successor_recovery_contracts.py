@@ -53,6 +53,20 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
                 f"time(s); found {observed}"
             )
 
+    def require_literal_count(
+        path: Path,
+        label: str,
+        body: str,
+        literal: str,
+        expected: int,
+    ) -> None:
+        observed = mask_rust_comments(body).count(literal)
+        if observed != expected:
+            errors.append(
+                f"{path}: {label} must contain exact production literal "
+                f"{literal!r} exactly {expected} time(s); found {observed}"
+            )
+
     def require_order(
         path: Path,
         label: str,
@@ -291,8 +305,11 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "authority.into_canonical_predecessor_storage(local_signer)?",
                 ".retire()?",
                 "Self::RecoveredCompleteTip { authority: retired }",
-                "V2RunnerError::CompleteTipSuccessorLifecycleOwnerRequired",
+                "authority.authorizes_retained_successor()",
+                "authority.authorizes_successor_status(successor)",
+                "V2RunnerError::CompleteTipSuccessorAuthorityInvalid",
                 "predecessor: authority.predecessor()",
+                "super::status::activate_recovered_complete_tip_v2_height(authority, successor)?;",
                 "super::status::activate_snapshot_bootstrap_v2_height(authority, successor)?;",
             ),
         )
@@ -307,9 +324,10 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "let Some(checked_lifecycle) = check_production_successor_startup_lifecycle_transition(lifecycle) else",
                 "return Err(V2RunnerError::SuccessorRefinementRejected)",
                 "let _authorized_lifecycle = checked_lifecycle.into_projection()",
+                "Ok(match authority",
                 "into_canonical_predecessor_storage(local_signer)",
                 ".retire()",
-                "Ok(match authority",
+                "Self::RecoveredCompleteTip { authority: retired }",
             ),
         )
         reject_tokens(
@@ -334,12 +352,13 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             "open_ingress_for_active_height",
             open_ingress,
             (
-                "activation.preflight_ingress_open()?",
-                "output_guard.acquire()",
+                "output_guard.begin_fail_stop_operation()",
+                "activation.preflight_ingress_open(successor)?",
                 "block_ingress.open()",
-                "ingress_ready.store(true, Ordering::Release)",
                 "activation.publish(successor)",
                 "close_ingress_for_rollover(ingress_ready, block_ingress)",
+                "ingress_ready.store(true, Ordering::Release)",
+                "ingress_activation.complete()",
             ),
         )
         run_inner = run_inner_item.source if run_inner_item is not None else ""
@@ -349,18 +368,18 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             run_inner,
             (
                 "PendingSuccessorActivation::recovered(authority, &common_config.key_pair)",
-                "activation.preflight_ingress_open()?",
+                "activation.preflight_recovered_startup()?",
                 "guard.complete()",
             ),
         )
         require_order(
             runner_path,
-            "run_inner CompleteTip fail-closed owner preflight",
+            "run_inner CompleteTip restart authority preflight",
             run_inner,
             (
                 "let recovered_activation_guard = recovered_successor_activation",
                 "PendingSuccessorActivation::recovered(authority, &common_config.key_pair)",
-                "activation.preflight_ingress_open()?",
+                "activation.preflight_recovered_startup()?",
                 "guard.complete()",
                 "SumeragiV2Adapter::open_deferred_status_with_capacity_geometry(",
             ),
@@ -550,18 +569,6 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "set_v2_status_at(successor, now);",
             ),
         )
-        reject_tokens(
-            status_path,
-            "no proof-free recovered status publication",
-            status_source,
-            (
-                "fn activate_recovered_v2_successor_height_at(",
-                "fn activate_recovered_v2_successor_height(",
-                "fn activate_retired_complete_tip_v2_height_at(",
-                "fn activate_retired_complete_tip_v2_height(",
-                "SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP",
-            ),
-        )
         require_order(
             status_path,
             "publish_recovered_v2_successor_height_at",
@@ -624,7 +631,51 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             "typed recovered status publishers",
             status_source,
             "publish_recovered_v2_successor_height_at(",
-            2,
+            3,
+        )
+        complete_tip_activation = region(
+            status_path,
+            status_source,
+            "activate_recovered_complete_tip_v2_height",
+            "fn activate_recovered_complete_tip_v2_height_at(",
+            "\nfn activate_snapshot_bootstrap_v2_height_at(",
+        )
+        require_tokens(
+            status_path,
+            "activate_recovered_complete_tip_v2_height",
+            complete_tip_activation,
+            (
+                "authority.authorizes_successor_status(&successor)",
+                "V2SuccessorActivationError::RecoveredCompleteTipAuthorityMismatch",
+                "let predecessor = authority.predecessor().refinement_projection();",
+                "let expected_successor_context_id = successor.height_context_id;",
+                "SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP",
+                "CanonicalIdentityProjection::zero()",
+                "drop(authority);",
+                "pub(crate) fn activate_recovered_complete_tip_v2_height(",
+                "activate_recovered_complete_tip_v2_height_at(authority, successor, Instant::now())",
+            ),
+        )
+        require_order(
+            status_path,
+            "activate_recovered_complete_tip_v2_height",
+            complete_tip_activation,
+            (
+                "authority.authorizes_successor_status(&successor)",
+                "authority.predecessor().refinement_projection()",
+                "publish_recovered_v2_successor_height_at(",
+                "SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP",
+                "drop(authority)",
+            ),
+        )
+        reject_tokens(
+            status_path,
+            "activate_recovered_complete_tip_v2_height",
+            complete_tip_activation,
+            (
+                "authority.into_parts()",
+                "production_recovered_successor_trace_refines_indexed_activation_kernel(",
+            ),
         )
         snapshot_public = region(
             status_path,
@@ -771,8 +822,24 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
             genesis_context_path,
             "signed genesis bootstrap seal retention",
             genesis_bootstrap,
+            ("signed_block: genesis.0.clone()",),
+        )
+        genesis_bootstrap_owner = region(
+            genesis_context_path,
+            genesis_context_source,
+            "move-only authenticated genesis owner extraction",
+            "impl GenesisV2Bootstrap {",
+            "\n/// Extract the only voting roster source accepted at fresh genesis:",
+        )
+        require_order(
+            genesis_context_path,
+            "signed genesis bootstrap seal retention",
+            genesis_bootstrap_owner,
             (
-                "signed_block: genesis.0.clone()",
+                "impl GenesisV2Bootstrap",
+                "fn into_parts( self, )",
+                "self.verified_context",
+                "self.staged_nexus_amx_context",
                 "self.authenticated_genesis",
             ),
         )
@@ -945,15 +1012,17 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "self.path == root.join(LEDGER_FILE)",
                     "pub(in crate::sumeragi) fn open_complete_tip_predecessor_storage(",
                     "complete_tip.authorizes_predecessor_storage_inputs(",
-                    "CertifiedServePayloadStoreV1::open( predecessor_root, verified_predecessor.context(), )?",
-                    "recovered.authenticate_for_complete_tip_retirement( &verified_predecessor, local_signer, )?",
-                    "authenticate_complete_tip_serve_census( &terminal.ledger, &serve_payloads, )?",
+                    "CertifiedServePayloadStoreV1::open( predecessor_root, verified_predecessor.context() )?",
+                    "recovered.authenticate_for_complete_tip_retirement( &verified_predecessor, local_signer )?",
+                    "authenticate_complete_tip_serve_census( &terminal.ledger, &serve_payloads )?",
                     "payload_store.retire_authenticated_cut(serve_payloads, &retained_serve_payloads)?",
                     "reconcile_complete_tip_serve_retirement(",
                     ".stage_complete_tip_all_row_retirement(serve_reconciliation)?",
                     ".persist_exact_successor(&terminal.ledger, &retired)?",
                     "successor.open_initialized_or_descendant(retired.high_water())?",
                     "RetiredRecoveredCompleteTipActivationAuthorityV1",
+                    "predecessor_store: LifecycleLedgerStoreV1",
+                    "predecessor_ledger: LifecycleLedgerV1",
                     "successor_store: LifecycleLedgerStoreV1",
                     "successor_ledger: LifecycleLedgerV1",
                     "fn bind_successor_owner(",
@@ -966,6 +1035,49 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "adapter_startup.authorizes_verified_context(&owner.verified)",
                     "self.complete_tip.authorizes_successor_kura(owner.kura_binding.as_ref())",
                     "serve_payloads: recovery.into_serve_payloads()",
+                ),
+            )
+            restart_publication = region(
+                ledger_path,
+                ledger_source,
+                "CompleteTip restart publication authority",
+                "fn successor_descends_from_retirement(",
+                "\n    fn exactly_matches_successor_owner(",
+            )
+            require_order(
+                ledger_path,
+                "CompleteTip restart publication authority",
+                restart_publication,
+                (
+                    "self.successor_ledger.context() == self.successor_store.context",
+                    "self.successor_ledger.frame_identity() == self.successor_frame_identity",
+                    "self.successor_ledger.records.is_empty()",
+                    "self.successor_ledger.high_water == self.retained_high_water",
+                    "record.ordinal() > self.retained_high_water",
+                    "fn authorizes_retained_successor(&self) -> bool",
+                    "self.predecessor_ledger.frame_identity() == self.predecessor_frame_identity",
+                    ".is_authorized_complete_tip_predecessor_target(&self.complete_tip)",
+                    "self.predecessor_store.load().ok().as_ref() == Some(&self.predecessor_ledger)",
+                    "self.successor_descends_from_retirement()",
+                    "self.complete_tip.authorizes_successor_lifecycle_target(",
+                    "self.successor_store.load().ok().as_ref() == Some(&self.successor_ledger)",
+                    "fn authorizes_successor_status(",
+                    "self.authorizes_retained_successor()",
+                    "self.complete_tip.successor_context_id() == successor.height_context_id",
+                    ".checked_add(1)",
+                    "Some(successor.height)",
+                    "successor.last_committed_height == self.complete_tip.predecessor().height()",
+                ),
+            )
+            reject_tokens(
+                ledger_path,
+                "CompleteTip restart publication authority",
+                restart_publication,
+                (
+                    "#[cfg(test)]",
+                    "into_parts",
+                    "fn root(",
+                    "fn ledger(",
                 ),
             )
             successor_owner_bind = region(
@@ -987,13 +1099,12 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "if !self.exactly_matches_successor_owner(&mut owner)",
                     "BoundRecoveredCompleteTipSuccessorOwnerV1 { owner, retirement: self, }",
                     "struct BoundRecoveredCompleteTipSuccessorOwnerV1 { owner: ProductionLifecycleOwnerV1, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
-                    "COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_BEGIN",
+                    "impl BoundRecoveredCompleteTipSuccessorOwnerV1",
                     "fn launch( self, inputs: super::launch::ProductionLifecycleLaunchInputsV1, )",
                     "let Self { owner, retirement } = self",
                     "let launched = owner.launch(inputs)?",
                     "LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched, retirement, }",
                     "struct LaunchedRecoveredCompleteTipSuccessorLifecycleV1 { launched: super::launch::LaunchedProductionLifecycleV1, retirement: RetiredRecoveredCompleteTipActivationAuthorityV1, }",
-                    "COMPLETE_TIP_BOUND_SUCCESSOR_LAUNCH_END",
                 ),
             )
             reject_tokens(
@@ -1091,14 +1202,25 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 "canonical Kura-bound lifecycle-owner factory",
                 canonical_owner_factory,
                 (
-                    "storage: RecoveredLifecycleStorageAuthorityV1",
+                    "factory_inputs: RecoveredLifecycleOwnerFactoryInputsV1",
+                    "let RecoveredLifecycleOwnerFactoryInputsV1 { adapter_owner, storage, state, queue, kura, provider_ingest_finalized_archive, reputation_finalized_archive, block_cadence, events_sender, } = factory_inputs",
+                    "Arc::ptr_eq(&adapter_owner, &self.factory_owner)",
                     "storage.context_id != context.id() || storage.height != context.height",
-                    "body_store.matches_lifecycle_storage_root( &storage.body_store_root, context, &storage.signature_policy, )",
+                    "body_store.matches_lifecycle_storage_root( &storage.body_store_root, &context, &storage.signature_policy, )",
                     "self.adapter.wal.matches_path(&storage.wal_path)",
-                    "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, genesis_account, wal_path, chunk_root, lifecycle_root, .. } = storage",
+                    "let apply_service = super::v2_apply::V2ApplyService::new(",
+                    "storage.genesis_account.clone()",
+                    "apply_service.matches_lifecycle_launch( &state, &kura, &context, &validator_set_pops )",
+                    "apply_service.recovered_finality_subject(&context)",
+                    "retain_recovered_markers_for_subject(subject)",
+                    "retain_recovered_markers_for_authority(validation_authority)",
+                    "revalidate_recovered_markers(|body|",
+                    "apply_service.revalidate_recovered_candidate(&context, body)",
+                    "body_store.into_revalidated_startup()",
+                    "let RecoveredLifecycleStorageAuthorityV1 { kura_identity, wal_path, chunk_root, lifecycle_root, .. } = storage",
                     "self.open_production_lifecycle_owner_v1_at_authenticated_roots(",
-                    "let kura_binding = RecoveredLifecycleOwnerKuraBindingV1 { kura_identity, genesis_account, wal_path, chunk_root, }",
-                    "owner.with_recovered_kura_binding(kura_binding)",
+                    "let kura_binding = RecoveredLifecycleOwnerKuraBindingV1 { kura_identity, wal_path, chunk_root, }",
+                    "owner.with_recovered_kura_binding_and_apply_service( kura_binding, apply_service )",
                 ),
             )
             reject_tokens(
@@ -1124,7 +1246,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "wal_path: PathBuf",
                     "chunk_root: PathBuf",
                     "struct RecoveredLifecycleOwnerKuraBindingV1 {",
-                    "fn genesis_account_for_launch(&self, kura: &Kura) -> Option<AccountId>",
+                    "fn matches_identity(&self, identity: &KuraInstanceIdentity) -> bool",
                     "fn storage_paths_for_launch(",
                     "fn mint_from_recovered_height(",
                     "permit: super::v2_recovery::RecoveredLifecycleStorageMintPermitV1",
@@ -1135,9 +1257,16 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "chunk_root: storage_root.join(\"chunks\")",
                     "lifecycle_root: storage_root .join(\"lifecycle-v1\") .join(hex::encode(context.id().0.as_ref()))",
                     "body_store_root: storage_root.join(\"bodies\")",
-                    "fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout()",
-                    "a body store outside the Kura layout must fail closed",
-                    "a wrong body signature policy must fail closed",
+                    "storage.genesis_account.clone()",
+                    "apply_service.matches_lifecycle_launch( &state, &kura, &context, &validator_set_pops )",
+                    "fn recovered_wal_sign_status_publication_is_exact_last_and_unwired()",
+                    "assert!(context_binding < body_root)",
+                    "assert!(body_root < wal_path)",
+                    "assert!(wal_path < apply_service)",
+                    "assert!(apply_service < finality)",
+                    "assert!(replay < seal)",
+                    "assert!(seal < sealed_parts)",
+                    "assert!(authenticated_roots < kura_binding)",
                 ),
             )
         if body_store_source:
@@ -1204,7 +1333,7 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 (
                     "begin_fail_stop_operation()",
                     "binding.matches_kura(inputs.kura.as_ref())",
-                    "binding.genesis_account_for_launch(inputs.kura.as_ref())",
+                    "service.matches_lifecycle_launch( &inputs.state, &inputs.kura, &context, &validator_set_pops, )",
                     "binding.storage_paths_for_launch(inputs.kura.as_ref())",
                     "prepare_leader_wire_launch(launch_storage.wal_path())",
                     "ProductionV2Services::restore_lifecycle_ordinal_source(",
@@ -1214,10 +1343,13 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "ProductionLeaderWireIngressBindingV1::bind(",
                     "self.adapter_startup.take()",
                     "self.body_store.take()",
+                    "self.apply_service.take()",
                     "V2EffectExecutor::open_with_body_store(",
                     "if let Some(authenticated_genesis) = inputs.authenticated_genesis.as_ref()",
                     "executor.install_authenticated_genesis_body(authenticated_genesis.signed_block())",
-                    "ProductionV2Services::start(",
+                    "ProductionV2Services::start_with_apply_service(",
+                    "ProductionLifecycleApplyServiceLaunchPermitV1",
+                    "apply_service,",
                 ),
             )
             require_tokens(
@@ -1313,6 +1445,28 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "let durable = rustix::fs::statat(",
                     "fn write_all(&mut self, bytes: &[u8])",
                     "fn sync_data(&mut self)",
+                    "BoundSafetyWalDirectory::from_kura_authority(kura, authority)",
+                ),
+            )
+            require_literal_count(
+                safety_wal_path,
+                "opened safety-WAL exact Kura identity rejection",
+                safety_wal_source,
+                '"safety-WAL authority belongs to a different Kura instance"',
+                1,
+            )
+            require_tokens(
+                kura_path,
+                "Kura-root safety-WAL authority",
+                kura_source,
+                (
+                    "struct KuraSafetyWalDirectoryAuthority",
+                    "fn mint_safety_wal_directory_authority(",
+                    "rustix::fs::openat(&root.file, STORE_ROOT_LOCK_FILE_NAME",
+                    "Self::sidecar_file_metadata_unchanged(&lock_before, &linked_metadata)",
+                    "rustix::fs::mkdirat(&parent.file, name, rustix::fs::Mode::RWXU)",
+                    "Self::open_bound_progress_child_directory(",
+                    "kura_identity: self.instance_identity()",
                 ),
             )
             reject_tokens(
@@ -1338,6 +1492,37 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "self.storage.publish_atomic(&frame, self.max_frame_bytes)",
                 ),
             )
+            serviced_candidate_open = _require_qualified_rust_item(
+                adjacent_store_path,
+                adjacent_store_source,
+                "ServicedCandidateStore",
+                "open_with_safety_wal_authority",
+                errors,
+                "typed WAL-adjacent production stores omits production refinement tokens in the serviced-candidate constructor",
+            )
+            _require_rust_token_sequence(
+                adjacent_store_path,
+                serviced_candidate_open,
+                "storage: SafetyWalServicedCandidateStoreAuthority",
+                "typed WAL-adjacent production stores omits production refinement tokens in the serviced-candidate constructor",
+                errors,
+            )
+            leader_wire_open = _require_qualified_rust_item(
+                adjacent_store_path,
+                adjacent_store_source,
+                "LeaderWireLifecycleStoreGate",
+                "open_with_safety_wal_authority",
+                errors,
+                "typed WAL-adjacent production stores omits production refinement tokens in the leader-wire constructor",
+                expected_attributes=("#[allow(clippy::too_many_arguments)]",),
+            )
+            _require_rust_token_sequence(
+                adjacent_store_path,
+                leader_wire_open,
+                "storage: SafetyWalLeaderWireStoreAuthority",
+                "typed WAL-adjacent production stores omits production refinement tokens in the leader-wire constructor",
+                errors,
+            )
             reject_tokens(
                 adapter_path,
                 "move-only leader-wire launch authority",
@@ -1354,9 +1539,12 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 owner_source,
                 (
                     "kura_binding: Option<crate::sumeragi::v2::RecoveredLifecycleOwnerKuraBindingV1>",
-                    "fn with_recovered_kura_binding(",
+                    "apply_service: Option<crate::sumeragi::v2_apply::V2ApplyService>",
+                    "fn with_recovered_kura_binding_and_apply_service(",
                     "assert!(self.kura_binding.is_none())",
+                    "assert!(self.apply_service.is_none())",
                     "self.kura_binding = Some(binding)",
+                    "self.apply_service = Some(apply_service)",
                 ),
             )
             require_tokens(
@@ -1370,6 +1558,8 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "Arc::ptr_eq(&self.0, &other.0)",
                     "fn instance_identity(&self) -> KuraInstanceIdentity",
                     "fn instance_identity_names_only_the_exact_live_kura()",
+                    "store_root_directory: BoundProgressDirectory",
+                    "Self::open_safety_wal_store_root_directory(&store_root, &store_root_lock_file)?",
                 ),
             )
         payload_store_path, payload_store_source = load(
@@ -1415,7 +1605,6 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                 (
                     "fn authenticate_for_complete_tip_retirement(",
                     ".certificate .signers .binary_search(&persisted_responder)",
-                    '"persisted response signer lost certified local retention authority"',
                     "body_revalidated: body_store.is_some()",
                     "fn permits_payload_store_ahead_terminal_rebind(&self) -> bool",
                     "fn retirement_rejects_completed_metadata_from_a_noncertified_responder()",
@@ -1426,6 +1615,20 @@ let predecessor = DurableV2PredecessorIdentity::authenticate(&artifact, &receipt
                     "fn authenticated_cut_rejects_store_directory_symlink_replacement()",
                 ),
             )
+            payload_authentication = _require_rust_item(
+                payload_store_path,
+                payload_store_source,
+                "authenticate_inner",
+                errors,
+            )
+            if payload_authentication is not None:
+                require_literal_count(
+                    payload_store_path,
+                    "CompleteTip body-independent Completed metadata authority",
+                    payload_authentication.source,
+                    '"persisted response signer lost certified local retention authority"',
+                    1,
+                )
             require_tokens(
                 lifecycle_open_path,
                 "CompleteTip bodyless completion promotion guard",

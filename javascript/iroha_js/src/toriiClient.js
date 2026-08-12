@@ -140,6 +140,13 @@ import {
 import { assertValidEd25519PublicKey } from "./ed25519Strict.js";
 import { AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 } from "./authenticatedBlockProofs.js";
 import { createVpnSchema } from "./vpnSchema.js";
+import {
+  assertSorafsOrderbookFixedHeaders,
+  prepareSorafsOrderbookSubmission,
+  SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1,
+  validateSorafsOrderbookSubmissionHeaders,
+  verifySorafsOrderbookSubmissionReceipt,
+} from "./sorafsOrderbookSubmission.js";
 
 const DEFAULT_PAGE_SIZE = 100;
 const EXPLORER_CURSOR_DEFAULT_LIMIT = 25;
@@ -871,60 +878,6 @@ function toVersionedTransactionPayloadStrict(payload, nativeBinding) {
     Buffer.from([VERSIONED_TRANSACTION_PAYLOAD_VERSION]),
     rawPayload,
   ]);
-}
-
-function canonicalSorafsOrderbookSignedTransactionPayload(
-  signedTransaction,
-  nativeBinding,
-  context,
-) {
-  if (signedTransaction === undefined || signedTransaction === null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.signedTransaction is required`,
-      `${context}.signedTransaction`,
-    );
-  }
-  let payload;
-  try {
-    payload = toBuffer(signedTransaction);
-  } catch (cause) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.signedTransaction must be canonical Norito SignedTransaction bytes`,
-      `${context}.signedTransaction`,
-      cause instanceof Error ? cause : undefined,
-    );
-  }
-  if (payload.length === 0) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.signedTransaction must not be empty`,
-      `${context}.signedTransaction`,
-    );
-  }
-  const native = resolveOptionalNativeBinding(nativeBinding);
-  if (
-    !native ||
-    (typeof native.encodeSignedTransactionVersioned !== "function" &&
-      typeof native.encodeSignedTransactionNorito !== "function")
-  ) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.signedTransaction requires native canonical SignedTransaction validation`,
-      `${context}.signedTransaction`,
-    );
-  }
-  try {
-    return toVersionedTransactionPayloadStrict(payload, native);
-  } catch (cause) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      `${context}.signedTransaction must be canonical Norito SignedTransaction bytes`,
-      `${context}.signedTransaction`,
-      cause instanceof Error ? cause : undefined,
-    );
-  }
 }
 
 function encodeTransactionPayloadBatch(payloads, nativeBinding) {
@@ -3835,6 +3788,7 @@ export class ToriiClient {
   async submitSorafsOrderbookOrder(signedTransaction, options = {}) {
     return this._submitSorafsOrderbookTransaction(
       "/v1/sorafs/orderbook/orders",
+      "order",
       signedTransaction,
       options,
       "submitSorafsOrderbookOrder",
@@ -3851,6 +3805,7 @@ export class ToriiClient {
   async submitSorafsOrderbookCancel(signedTransaction, options = {}) {
     return this._submitSorafsOrderbookTransaction(
       "/v1/sorafs/orderbook/cancel",
+      "cancel",
       signedTransaction,
       options,
       "submitSorafsOrderbookCancel",
@@ -3867,6 +3822,7 @@ export class ToriiClient {
   async submitSorafsOrderbookReceipt(signedTransaction, options = {}) {
     return this._submitSorafsOrderbookTransaction(
       "/v1/sorafs/orderbook/receipts",
+      "receipt",
       signedTransaction,
       options,
       "submitSorafsOrderbookReceipt",
@@ -11388,28 +11344,66 @@ export class ToriiClient {
     return params;
   }
 
-  async _submitSorafsOrderbookTransaction(path, signedTransaction, options, context) {
-    const { signal } = normalizeSignalOnlyOption(options, context);
-    const body = canonicalSorafsOrderbookSignedTransactionPayload(
-      signedTransaction,
-      this._nativeBinding,
-      context,
+  async _submitSorafsOrderbookTransaction(path, route, signedTransaction, options, context) {
+    const normalized = requirePlainObjectOption(options, `${context} options`);
+    assertSupportedOptionKeys(
+      normalized,
+      new Set(["signal", "expectedReceiptSigner"]),
+      `${context} options`,
     );
+    const { signal } = normalizeSignalOption(normalized, context);
+    const expectedReceiptSigner = normalized.expectedReceiptSigner;
+    if (!(this._localSigningContext instanceof LocalSigningContext)) {
+      throw new TypeError(`${context} requires ToriiClient options.localSigningContext`);
+    }
+    assertSorafsOrderbookFixedHeaders(this._config.defaultHeaders, `${context} defaultHeaders`);
+    const native = resolveOptionalNativeBinding(this._nativeBinding);
+    const prepared = prepareSorafsOrderbookSubmission({
+      route,
+      signedTransaction: Buffer.from(toBuffer(signedTransaction)),
+      expectedNetworkIdBytes: networkIdBytes(
+        this._localSigningContext.networkId,
+        `${context}.networkId`,
+      ),
+      expectedReceiptSigner,
+      native,
+      context,
+    });
     throwIfAborted(signal);
     await waitForPromiseWithSignal(this._ensureDataModelValidation(), signal);
     throwIfAborted(signal);
     const response = await this._request("POST", path, {
       headers: {
         "Content-Type": APPLICATION_NORITO,
-        Accept: `${APPLICATION_NORITO}, ${APPLICATION_JSON}`,
+        Accept: APPLICATION_NORITO,
+        "Accept-Encoding": "identity",
       },
-      body,
+      body: prepared.body,
       disableRetries: true,
       redirect: "error",
       signal,
     });
-    await this._expectStatus(response, [200, 201, 202, 204], { signal });
-    return this._decodeTransactionIngressResponse(response, signal);
+    await this._expectStatus(response, [202], { signal });
+    validateSorafsOrderbookSubmissionHeaders(
+      {
+        contentType: this._getHeader(response, "content-type"),
+        contentEncoding: this._getHeader(response, "content-encoding"),
+        txHash: this._getHeader(response, "x-iroha-transaction-hash"),
+        entrypointHash: this._getHeader(response, "x-iroha-entrypoint-hash"),
+        signedTransactionHash: this._getHeader(
+          response,
+          "x-iroha-signed-transaction-hash",
+        ),
+      },
+      prepared.identity,
+    );
+    const { bytes } = await this._readBoundedResponseBytes(
+      response,
+      SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1,
+      `${context} receipt`,
+      { signal },
+    );
+    return verifySorafsOrderbookSubmissionReceipt(Buffer.from(bytes), prepared);
   }
 
   /**

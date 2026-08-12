@@ -55,8 +55,10 @@ use sorafs_manifest::{
     PdpMerkleTreeV1, PdpProofLeafV1, PdpSampleV1, estimated_heap_bytes as estimated_pdp_heap_bytes,
 };
 use thiserror::Error;
-
 pub mod bundle_archive;
+#[cfg(feature = "dev-tools")]
+#[doc(hidden)]
+pub mod chunk_store_cli;
 pub mod chunker_registry;
 mod chunker_registry_data;
 pub mod fetch_plan;
@@ -85,7 +87,6 @@ pub mod taikai;
 pub mod trustless;
 #[cfg(feature = "manifest")]
 pub mod verifier;
-
 #[cfg(feature = "manifest")]
 pub use reference::{validate_manifest_car_replay, validate_manifest_car_replay_bytes};
 #[cfg(feature = "manifest")]
@@ -95,7 +96,6 @@ pub use trustless::{
 };
 #[cfg(feature = "manifest")]
 pub use verifier::{CarVerificationReport, CarVerifier, CarVerifyError, VerifiedCanonicalCarV1};
-
 /// Compute the BLAKE3 digest of the provided payload.
 #[must_use]
 pub fn compute_chunk_digest(payload: &[u8]) -> [u8; 32] {

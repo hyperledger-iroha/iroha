@@ -2932,3 +2932,33 @@ fn canonical_finality_path_rejects_legacy_v2_private_record_on_read_and_restart(
         Err(Error::IO(error, _)) if error.kind() == ErrorKind::InvalidData
     ));
 }
+
+#[test]
+fn instance_identity_names_only_the_exact_live_kura() {
+    let first = super::Kura::blank_kura_for_testing();
+    let second = super::Kura::blank_kura_for_testing();
+    let first_identity = first.instance_identity();
+
+    assert!(first_identity.matches(first.as_ref()));
+    assert!(first_identity.same_instance(&first.instance_identity()));
+    assert!(!first_identity.matches(second.as_ref()));
+    assert!(!first_identity.same_instance(&second.instance_identity()));
+
+    #[cfg(all(unix, not(target_os = "espidf")))]
+    {
+        let authority = first
+            .mint_safety_wal_directory_authority()
+            .expect("mint descriptor-relative safety-WAL authority");
+        assert!(authority.matches_kura(first.as_ref()));
+        assert!(!authority.matches_kura(second.as_ref()));
+        assert_eq!(
+            authority.directory.expected_path,
+            first.sumeragi_v2_storage_root().join("wal")
+        );
+        let opened = authority.directory.file.metadata().expect("opened WAL root");
+        let linked = std::fs::symlink_metadata(&authority.directory.expected_path)
+            .expect("linked WAL root");
+        assert!(opened.is_dir());
+        assert!(super::Kura::sidecar_metadata_same_object(&opened, &linked));
+    }
+}

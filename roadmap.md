@@ -65,15 +65,12 @@ regeneration from a clean exact candidate; the dirty unsigned development
 checkout is not release provenance. The outstanding revision-4 work is limited
 to:
 
-- At runner cutover, replace the lexical Kura storage-root handoff with an
-  opened Kura-root directory capability which mints the existing opened
-  SafetyWal directory owner. The current seam already rejects a final `wal/`
-  symlink and every post-open parent/leaf substitution, and all WAL-adjacent
-  production I/O is descriptor-relative, but pre-open ancestor substitution
-  is not yet physically joined to Kura's instance identity. Add the equivalent
-  fail-closed handle-relative implementation before enabling the adjacent
-  serviced-candidate and leader-wire stores on non-Unix targets; basic WAL
-  recovery and append retain their legacy portable path fallback meanwhile.
+- Execute the focused Rust coverage for the source-implemented Kura-root WAL
+  handoff. Kura now retains the exact opened locked root; runner cutover mints
+  and consumes a move-only exact-instance `sumeragi_v2/wal` authority through
+  descriptor-relative no-follow traversal, and legacy pathname opening is
+  test-only. No build/test receipt is yet attached. Non-Unix production opening
+  remains fail-closed pending an equivalent handle-relative implementation.
 - Wire the unified consuming V1 lifecycle-owner factory into the serialized
   runner so the retained verified context, coordinator, concrete registry,
   Certified-Serve payload store, and body store become the sole production
@@ -929,9 +926,9 @@ The Rust-owned protocol-4 grouped fixture contains 55 negative controls and
 hashes to
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
 its grouped and diagnostics suite-source manifests hash to
-`86dd4b10f7e5274567ced410c1008681213b9de98f44186e7e9e94a47fa4a8d3`
+`1d58304900412b6dc81e69d2d14b959a4cb0a9ec8f5f289849c3cf292764e2e4`
 and
-`79ebd39ff5a534079b9c62daa1d45d8d78b7546d48601d6a0008948f604cb378`;
+`7a05657040a785023d22d91c0197eec20feb1b04e55030e2e0dea238f7af912c`;
 the synchronized 48-line wire TSV hashes to
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The current grouped harness inventories OpenAPI `7`, Python `62`, JavaScript
@@ -1009,9 +1006,9 @@ The remaining work is evidence-driven and must stay in order:
   fixture SHA-256
   `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`,
   grouped/diagnostics suite-source manifest SHA-256 values
-  `86dd4b10f7e5274567ced410c1008681213b9de98f44186e7e9e94a47fa4a8d3`
+  `1d58304900412b6dc81e69d2d14b959a4cb0a9ec8f5f289849c3cf292764e2e4`
   and
-  `79ebd39ff5a534079b9c62daa1d45d8d78b7546d48601d6a0008948f604cb378`,
+  `7a05657040a785023d22d91c0197eec20feb1b04e55030e2e0dea238f7af912c`,
   and wire-TSV SHA-256
   `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
   The current harness inventories OpenAPI `7`, Python `62`, JavaScript `60`,
@@ -1159,7 +1156,7 @@ reference inventory currently binds 82 payload artifacts, 32 exact
 `ValidationOutcomeV1` files, and 38 negative payload vectors; all eight
 appeal-finance `CancelAssetLock` files are mandatory. The current non-native
 hard-cut slice passes 85 focused Python tests, seven static guards, 36
-fixture-workflow trigger tests, and 39 native-artifact contract tests; managed
+fixture-workflow trigger tests, and 53 native-artifact contract cases; managed
 Kotlin/JVM, mirrored Java Android, and C# parity is green. No checked-in,
 clean-source, five-target ABI-22 inventory or
 authenticated native replay record exists, so no native-dependent SDK suite is
@@ -1335,8 +1332,8 @@ closes the local reserve producer gap only; connecting every other finalized
 producer and collecting distributed transparency evidence remain open.
 Moderation GETs now consume only a fresh supervised finalized
 projection, and the signed receipt checkpoint/projection is the sole viewer
-audit authority; the retired local audit POSTs are authenticated `410 Gone`
-tombstones and have no scheduler. The retained checkpoint now exposes an
+audit authority; the retired local audit POSTs are unmounted and unadvertised,
+so requests return `404 Not Found` and no scheduler exists. The retained checkpoint now exposes an
 Ed25519-signed canonical digest/receipt-count/chain-head anchor; audit pages
 require that exact digest and an explicit digest-bound limit, reject alternate
 query encodings, and return `409` on checkpoint change. The supervised
@@ -8133,9 +8130,9 @@ excluded from the first release.
   enabled. Legal holds take precedence over erasure without a check/commit
   race. The signed receipt checkpoint and exact predecessor-bound receipt
   projection are now the sole evidence-access audit authority. The old
-  aggregate-audit POSTs authenticate and authorize before
-  returning `410 Gone`; their scheduler and all Torii calls into the former
-  local viewer registry are removed. Moderation GETs read only the fresh
+  aggregate-audit POSTs are unmounted and unadvertised, so requests return
+  `404 Not Found`; their scheduler and all Torii calls into the former local
+  viewer registry are removed. Moderation GETs read only the fresh
   worker-owned finalized projection, while reconciliation runs outside request
   threads with supervised deadlines, non-overlap fencing, monotonic
   cursor/freshness/liveness checks, dead-letter readiness, and typed
@@ -26928,12 +26925,13 @@ launch. Direct production-runner entry fails before another candidate helper.
 The bootstrap neither times out nor output-captures the runner and never
 signals its process group; an escaped internal deadline stays visibly
 incomplete.
-Its outer `PATH` consists of archived protected tools plus a digest-pinned
+Its outer `PATH` consists only of archived protected tools plus a digest-pinned
 runner-tool closure. Before any candidate build child starts, the outer runner
-copies the named reviewed language/tool runtime closures to new private inodes and binds
-their source and destination inventories; the child receives only those private
-paths. Shell core utilities still come from admitted host system directories
-and remain a host-image prerequisite. Tool sources and all ancestors must be trusted-owner and non-writable.
+copies the named reviewed language/tool and exact shell-utility runtime closure
+to new private inodes and binds their source and destination inventories; the
+child receives only those private paths. There is no `/usr/bin:/bin` execution
+fallback, and an unlisted external command fails closed. Tool sources and all
+ancestors must be trusted-owner and non-writable.
 Runner stdout/stderr inherit owner-private regular files, so a
 blocked bootstrap stream cannot stall the runner; normal exit seals them
 read-only, while bootstrap-only interruption preserves active logs without an
@@ -26969,10 +26967,10 @@ repository's pinned 1.93.1 toolchain after Git/Rust semantic-environment cleanup
 and run with an isolated configuration-free `CARGO_HOME`; exact tool paths,
 versions, and hashes are receipt-bound.
 
-The current release-support suites collect 302 release-receipt and 252
-protected-bootstrap tests without selector inflation. The source-bound release
-gate now requires exactly 5,291 proof-fidelity cases and 26 formal-launcher
-cases. The source-derived proof-fidelity composition is 5,189 ledger/checker
+The current release-support suites collect 367 aggregate release-receipt and
+258 protected-bootstrap tests without selector inflation. The source-bound
+release gate now requires exactly 5,291 proof-fidelity cases and 27
+formal-launcher cases. The source-derived proof-fidelity composition is 5,189 ledger/checker
 cases, 28 pinned-Verus evidence cases, 15 TLC-normalizer cases, eight
 reviewed-Rust closure cases, 31 Native/passive multilane source-contract cases,
 and twenty selected layout/wire cases. It includes

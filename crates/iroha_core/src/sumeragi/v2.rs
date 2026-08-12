@@ -82,7 +82,9 @@ use super::v2_lifecycle_coordinator::{
 
 // Keep wire admission and reducer capacity identical; mismatches fail at compile time.
 const _: [(); wire::MAX_VALIDATORS_PER_HEIGHT] = [(); reducer::MAX_VOTING_ROSTER_LEN];
-use crate::kura::{Kura, KuraInstanceIdentity, KuraV2CommitReceipt};
+use crate::kura::{
+    Kura, KuraInstanceIdentity, KuraSafetyWalDirectoryAuthority, KuraV2CommitReceipt,
+};
 
 const AGGREGATE_TOKEN_PREFIX: &[u8] = b"sumeragi-v2:verified-aggregate\0";
 const MAX_DEFERRED_INPUTS: usize = 1024;
@@ -9004,6 +9006,15 @@ pub(crate) struct SumeragiV2Adapter {
     fail_closed: bool,
 }
 
+enum SafetyWalOpenTarget<'kura> {
+    Kura {
+        kura: &'kura Kura,
+        authority: KuraSafetyWalDirectoryAuthority,
+    },
+    #[cfg(test)]
+    FixturePath(PathBuf),
+}
+
 fn commit_qc_status(
     certificate: &wire::QuorumCertificate,
     context: &wire::HeightContext,
@@ -9066,7 +9077,8 @@ impl SumeragiV2Adapter {
     /// serviced-identity table while its legitimate lifecycles remain active.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_with_capacity_geometry(
-        wal_path: impl Into<PathBuf>,
+        kura: &Kura,
+        wal_authority: KuraSafetyWalDirectoryAuthority,
         verified_context: VerifiedHeightContext,
         local_validator: Option<wire::ValidatorIndex>,
         generation: reducer::Generation,
@@ -9076,7 +9088,10 @@ impl SumeragiV2Adapter {
         deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
         Self::open_with_aggregator_and_publication_with_capacity(
-            wal_path,
+            SafetyWalOpenTarget::Kura {
+                kura,
+                authority: wal_authority,
+            },
             verified_context,
             local_validator,
             generation,
@@ -9097,7 +9112,8 @@ impl SumeragiV2Adapter {
     #[cfg_attr(not(test), allow(dead_code))]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_recovered_startup_with_capacity_geometry(
-        wal_path: impl Into<PathBuf>,
+        kura: &Kura,
+        wal_authority: KuraSafetyWalDirectoryAuthority,
         verified_context: VerifiedHeightContext,
         local_validator: Option<wire::ValidatorIndex>,
         generation: reducer::Generation,
@@ -9107,7 +9123,10 @@ impl SumeragiV2Adapter {
         deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     ) -> Result<RecoveredAdapterStartup, AdapterError> {
         let (adapter, effects) = Self::open_with_aggregator_and_publication_with_capacity(
-            wal_path,
+            SafetyWalOpenTarget::Kura {
+                kura,
+                authority: wal_authority,
+            },
             verified_context,
             local_validator,
             generation,
@@ -9155,7 +9174,8 @@ impl SumeragiV2Adapter {
     /// Open with deferred status publication and the validated queue geometry.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn open_deferred_status_with_capacity_geometry(
-        wal_path: impl Into<PathBuf>,
+        kura: &Kura,
+        wal_authority: KuraSafetyWalDirectoryAuthority,
         verified_context: VerifiedHeightContext,
         local_validator: Option<wire::ValidatorIndex>,
         generation: reducer::Generation,
@@ -9165,7 +9185,10 @@ impl SumeragiV2Adapter {
         deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
         Self::open_with_aggregator_and_publication_with_capacity(
-            wal_path,
+            SafetyWalOpenTarget::Kura {
+                kura,
+                authority: wal_authority,
+            },
             verified_context,
             local_validator,
             generation,
@@ -9244,7 +9267,7 @@ impl SumeragiV2Adapter {
         deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
         Self::open_with_aggregator_and_publication_with_capacity(
-            wal_path,
+            SafetyWalOpenTarget::FixturePath(wal_path.into()),
             verified_context,
             local_validator,
             generation,
@@ -9259,7 +9282,7 @@ impl SumeragiV2Adapter {
 
     #[allow(clippy::too_many_arguments)]
     fn open_with_aggregator_and_publication_with_capacity(
-        wal_path: impl Into<PathBuf>,
+        wal_target: SafetyWalOpenTarget<'_>,
         verified_context: VerifiedHeightContext,
         local_validator: Option<wire::ValidatorIndex>,
         generation: reducer::Generation,
@@ -9275,7 +9298,6 @@ impl SumeragiV2Adapter {
             proofs_of_possession,
             parent_verification,
         } = verified_context;
-        let wal_path = wal_path.into();
         let mut registry = WireRegistry::new(&wire_context)?;
         let context = registry.core_context(&wire_context)?;
         let local_validator = local_validator
@@ -9298,12 +9320,31 @@ impl SumeragiV2Adapter {
                     "producer-continuation lifecycle capacity is not representable".to_owned(),
                 )
             })?;
-        let wal = SafetyWal::open(
-            wal_path.clone(),
-            wire::PROTOCOL_VERSION,
-            network_id,
-            consensus_key_hash,
-        )?;
+        let (wal_path, wal) = match wal_target {
+            SafetyWalOpenTarget::Kura { kura, authority } => {
+                let wal_name = format!("{:020}.wal", wire_context.height);
+                let wal_path = kura.sumeragi_v2_storage_root().join("wal").join(&wal_name);
+                let wal = SafetyWal::open_with_kura_authority(
+                    kura,
+                    authority,
+                    wal_name,
+                    wire::PROTOCOL_VERSION,
+                    network_id,
+                    consensus_key_hash,
+                )?;
+                (wal_path, wal)
+            }
+            #[cfg(test)]
+            SafetyWalOpenTarget::FixturePath(wal_path) => {
+                let wal = SafetyWal::open(
+                    wal_path.clone(),
+                    wire::PROTOCOL_VERSION,
+                    network_id,
+                    consensus_key_hash,
+                )?;
+                (wal_path, wal)
+            }
+        };
         let serviced_candidate_storage = wal.mint_serviced_candidate_store_authority(&wal_path)?;
         let (serviced_candidate_store, restored_serviced_candidates) =
             ServicedCandidateStore::open_with_safety_wal_authority(
@@ -21266,7 +21307,7 @@ mod tests {
         capacity_geometry: ServicedCandidateCapacityGeometry,
     ) -> Result<(SumeragiV2Adapter, Vec<AdapterEffect>), AdapterError> {
         SumeragiV2Adapter::open_with_aggregator_and_publication_with_capacity(
-            directory.path().join("capacity-safety.wal"),
+            SafetyWalOpenTarget::FixturePath(directory.path().join("capacity-safety.wal")),
             verified_genesis(context()),
             Some(0),
             reducer::Generation::new(1),

@@ -15439,11 +15439,11 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
             "production lifecycle owner retained Serve census omits production refinement tokens",
         ),
         (
-            "crates/iroha_core/src/sumeragi/status.rs",
-            "fn complete_tip_retirement_and_successor_owner_bind_are_release_bound()",
-            "crate::sumeragi::v2_lifecycle_coordinator::run_complete_tip_retirement_release_regressions",
-            "crate::sumeragi::v2_lifecycle_coordinator::skip_complete_tip_retirement_release_regressions",
-            "CompleteTip retirement release wrapper omits production refinement tokens",
+            "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
+            "fn authorizes_successor_status(",
+            "self.complete_tip.successor_context_id() == successor.height_context_id",
+            "true",
+            "CompleteTip restart publication authority must preserve exact production order",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
@@ -15499,16 +15499,17 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         ),
         (
             "crates/iroha_core/src/sumeragi/safety_wal.rs",
-            "fn publish_atomic(&self, frame: &[u8], maximum: u64",
+            "fn publish_atomic(&self, frame: &[u8], maximum: u64, label: &str)",
             "let durable = rustix::fs::statat(",
             "let durable = promoted;",
             "opened safety-WAL directory authority omits production refinement tokens",
         ),
         (
             "crates/iroha_core/src/sumeragi/serviced_candidate_store.rs",
-            "pub(crate) fn open_with_safety_wal_authority(",
-            "storage: SafetyWalLeaderWireStoreAuthority",
+            "pub(crate) fn open_with_safety_wal_authority(\n"
+            "        storage: SafetyWalServicedCandidateStoreAuthority,",
             "storage: SafetyWalServicedCandidateStoreAuthority",
+            "storage: SafetyWalLeaderWireStoreAuthority",
             "typed WAL-adjacent production stores omits production refinement tokens",
         ),
         (
@@ -15590,16 +15591,16 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs",
-            "fn exactly_matches_successor_owner(",
-            ".authorizes_successor_kura(owner.kura_binding.as_ref())",
-            ".authorizes_successor_kura(None)",
-            "CompleteTip canonical predecessor store join omits production refinement tokens",
+            "fn authorizes_retained_successor(",
+            "self.predecessor_store.load().ok().as_ref() == Some(&self.predecessor_ledger)",
+            "true",
+            "CompleteTip restart publication authority must preserve exact production order",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner/height_ingress_bindings.rs",
             "fn open_ingress_for_active_height(",
-            "activation.publish(successor)",
-            "drop(activation); let _ = successor",
+            "output_guard.begin_fail_stop_operation()",
+            "output_guard.acquire()",
             "open_ingress_for_active_height must preserve exact production order",
         ),
         (
@@ -15784,14 +15785,14 @@ def test_successor_run_inner_parser_rejects_neighbor_lookalike(
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn recovered(authority: RecoveredSuccessorActivationAuthority)",
+            "fn recovered(\n        authority: RecoveredSuccessorActivationAuthority,",
             "let published_height = super::status::v2_status().map_or(0, |status| status.height);",
             "let published_height = 0;",
             "PendingSuccessorActivation omits production refinement tokens",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "fn recovered(authority: RecoveredSuccessorActivationAuthority)",
+            "fn recovered(\n        authority: RecoveredSuccessorActivationAuthority,",
             "let Some(checked_lifecycle) =\n"
             "            check_production_successor_startup_lifecycle_transition(lifecycle)\n"
             "        else {\n"
@@ -15954,6 +15955,18 @@ def test_successor_production_source_mapping_mutations_fail_closed(
 
     errors = module._successor_production_source_fidelity_errors(tmp_path)
     assert any(error_fragment in error for error in errors), errors
+    if (
+        relative_path == "crates/iroha_core/src/sumeragi/v2_lifecycle_ledger.rs"
+        and region_marker == "fn authorizes_retained_successor("
+    ):
+        successor_reload = (
+            "self.successor_store.load().ok().as_ref() "
+            "== Some(&self.successor_ledger)"
+        )
+        assert source.count(successor_reload) == 1
+        path.write_text(source.replace(successor_reload, "true", 1), encoding="utf-8")
+        errors = module._successor_production_source_fidelity_errors(tmp_path)
+        assert any(error_fragment in error for error in errors), errors
 
 
 def test_locked_body_reproposal_source_fidelity_rejects_formal_and_production_mutants(
@@ -29746,6 +29759,31 @@ def test_serviced_candidate_production_contract_is_complete(
         in module.validate_ledger.__code__.co_names
     )
     assert_authenticated_wal_v4_negatives(module, tmp_path)
+
+    safety_path = (
+        tmp_path / "crates/iroha_core/src/sumeragi/safety_wal.rs"
+    )
+    canonical_safety = safety_path.read_text(encoding="utf-8")
+    selector = "let linked_before = match rustix::fs::statat("
+    assert canonical_safety.count(selector) == 1
+    safety_path.write_text(
+        canonical_safety.replace(
+            selector,
+            "let linked_before = match disconnected_adjacent_statat(",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._serviced_candidate_production_source_fidelity_errors(
+        tmp_path
+    )
+    assert any(
+        "require exactly one parsed bounded adjacent read function named "
+        "read_bounded; found 0" in error
+        for error in errors
+    ), errors
+    safety_path.write_text(canonical_safety, encoding="utf-8")
+
 
 @pytest.mark.parametrize(
     ("relative", "old", "new", "expected_error"),

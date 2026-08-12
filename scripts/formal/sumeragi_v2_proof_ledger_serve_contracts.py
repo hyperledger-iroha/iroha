@@ -1449,6 +1449,9 @@ _SERVICED_CANDIDATE_V4_STORE_ITEM_SHA256 = {
     "store_open_with_capacities": (
         "8abe37b42d072f5a50b54c37025e6042bdafd6cecaec48e7f3fc217a41537b95"
     ),
+    "store_open_with_storage_and_capacities": (
+        "efd1503685bf7b1871785e2dcc66f7b24286035c043015f0faef8ac7679d6199"
+    ),
     "store_load": (
         "7d11d50560c963ae104e22e07e706dc6625f39263047391023a715127fb57de6"
     ),

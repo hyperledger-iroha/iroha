@@ -4245,6 +4245,32 @@ pub struct ProductionInFlightFirstReleaseTransitionProjection {
     pub after: ProductionInFlightFirstReleaseStateProjection,
 }
 
+/// Verus-side lossless four-word projection of one 256-bit digest.
+#[derive(Copy, Clone)]
+pub struct ProductionDigest256Projection {
+    pub word0: u64,
+    pub word1: u64,
+    pub word2: u64,
+    pub word3: u64,
+}
+
+/// Verus-side mirror of the production V1 transition witness.
+///
+/// SHA-256 recomputation is intentionally kept in the production wrapper and
+/// its source-bound contract; the reviewed cryptography ledger row remains the
+/// trusted boundary. This mirror proves that the version, parameters, and TLA+
+/// source identity refine the same composed transition kernel.
+#[derive(Copy, Clone)]
+pub struct ProductionInFlightFirstReleaseTransitionWitnessV1 {
+    pub schema_version: u16,
+    pub action: u8,
+    pub actor: u128,
+    pub target: u128,
+    pub before_state_digest: ProductionDigest256Projection,
+    pub after_state_digest: ProductionDigest256Projection,
+    pub source_identity: ProductionDigest256Projection,
+}
+
 /// Verus-side reverse classification of one terminal economic owner.
 #[derive(Copy, Clone)]
 pub struct ProductionInFlightFirstReleaseTerminalOwnerProjection {
@@ -4807,6 +4833,14 @@ pub closed spec fn production_in_flight_first_release_transition_kernel(
     projection: ProductionInFlightFirstReleaseTransitionProjection,
 ) -> bool {
     production_in_flight_first_release_transition_body!(projection)
+}
+
+/// Exact Verus mirror of the production V1 witness's structural binding.
+pub closed spec fn production_in_flight_first_release_witness_binding_kernel(
+    projection: ProductionInFlightFirstReleaseTransitionProjection,
+    witness: ProductionInFlightFirstReleaseTransitionWitnessV1,
+) -> bool {
+    production_in_flight_first_release_witness_binding_body!(projection, witness)
 }
 
 /// Exact applied predecessor ownership and the prepared successor marker admit

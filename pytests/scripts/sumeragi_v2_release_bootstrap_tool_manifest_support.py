@@ -12,6 +12,22 @@ import sys
 import sysconfig
 
 
+RELEASE_SHELL_UTILITY_NAMES = (
+    "awk", "basename", "cat", "chmod", "cmp", "cp", "cut", "diff",
+    "dirname", "env", "find", "grep", "ln", "ls", "mkdir", "mkfifo",
+    "mktemp", "mv", "openssl", "rm", "rmdir", "sed", "sh", "sleep",
+    "tail", "tee", "tr", "uname", "wc", "xargs",
+    "shasum" if sys.platform == "darwin" else "sha256sum",
+)
+RELEASE_LANGUAGE_TOOL_NAMES = (
+    "cargo", "cargo-verus", "git-index-pack", "git-upload-pack", "java",
+    "node", "rustc", "swift", "tlapm", "verus",
+)
+REQUIRED_RUNNER_TOOL_NAMES = tuple(
+    sorted((*RELEASE_SHELL_UTILITY_NAMES, *RELEASE_LANGUAGE_TOOL_NAMES))
+)
+
+
 def provision_future_archived_python_runtime(source: Path, root: Path) -> None:
     """Provision the framework companion for ``root/evidence/python3``."""
 
@@ -28,7 +44,7 @@ def provision_rebound_archived_python_runtime(
 
 
 def provision_archived_python_runtime(source: Path, archive: Path) -> None:
-    """Provide the external runtime needed by a copied macOS Python launcher."""
+    """Provide the complete runtime needed by a copied macOS Python launcher."""
 
     if sys.platform != "darwin":
         return
@@ -38,46 +54,83 @@ def provision_archived_python_runtime(source: Path, archive: Path) -> None:
     if not isinstance(framework_name, str) or not framework_name:
         return
 
+    source = source.resolve(strict=True)
     version_root = source.parent.parent
     framework_binary = version_root / framework_name
     framework_resources = version_root / "Resources"
-    if not framework_binary.is_file() or not framework_resources.is_dir():
+    libdest_value = sysconfig.get_config_var("LIBDEST")
+    if not isinstance(libdest_value, str) or not libdest_value:
+        return
+    framework_stdlib = Path(libdest_value).resolve(strict=True)
+    if (
+        not framework_binary.is_file()
+        or framework_binary.is_symlink()
+        or not framework_resources.is_dir()
+        or framework_resources.is_symlink()
+        or not framework_stdlib.is_dir()
+        or framework_stdlib.is_symlink()
+        or framework_stdlib.parent != version_root / "lib"
+    ):
         return
 
     # The archived launcher lives at ``<root>/evidence/python3``. Apple
     # framework builds load ``@executable_path/../<framework>`` and then use
-    # the adjacent Resources/Python.app trampoline. Those loader inputs are an
-    # external bootstrap prerequisite, so keep their test copies outside both
-    # the candidate and the authenticated evidence directory.
+    # the adjacent Resources/Python.app trampoline. Prefix discovery also
+    # requires the exact ``lib/pythonX.Y`` landmark; without it the copied
+    # executable silently imports from the caller's framework installation.
+    # Keep this test layout aligned with the production archive contract.
     runtime_root = archive.parent.parent
     archived_framework = runtime_root / framework_name
     archived_resources = runtime_root / "Resources"
-    if archived_framework.exists() or archived_resources.exists():
+    archived_stdlib = runtime_root / "lib" / framework_stdlib.name
+    if (
+        archived_framework.exists()
+        or archived_resources.exists()
+        or archived_stdlib.exists()
+    ):
         assert archived_framework.is_file()
         assert not archived_framework.is_symlink()
         assert archived_framework.read_bytes() == framework_binary.read_bytes()
-        archived_trampoline = (
-            archived_resources / "Python.app" / "Contents" / "MacOS" / "Python"
+        assert _tree_members(archived_resources) == _tree_members(
+            framework_resources
         )
-        source_trampoline = (
-            framework_resources / "Python.app" / "Contents" / "MacOS" / "Python"
-        )
-        assert archived_trampoline.is_file()
-        assert archived_trampoline.read_bytes() == source_trampoline.read_bytes()
+        assert _tree_members(archived_stdlib) == _tree_members(framework_stdlib)
         return
 
     shutil.copyfile(framework_binary, archived_framework)
     archived_framework.chmod(0o500)
-    shutil.copytree(framework_resources, archived_resources)
+    shutil.copytree(framework_resources, archived_resources, symlinks=True)
+    archived_stdlib.parent.mkdir(mode=0o700)
+    shutil.copytree(framework_stdlib, archived_stdlib, symlinks=True)
+
+
+def _tree_members(root: Path) -> dict[str, tuple[object, ...]]:
+    """Return an exact no-follow member inventory for one fixture tree."""
+
+    assert root.is_dir() and not root.is_symlink()
+    records: dict[str, tuple[object, ...]] = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        metadata = path.lstat()
+        if path.is_symlink():
+            records[relative] = ("symlink", os.readlink(path))
+        elif path.is_dir():
+            records[relative] = ("directory",)
+        elif path.is_file():
+            records[relative] = (
+                "file",
+                metadata.st_size,
+                hashlib.sha256(path.read_bytes()).hexdigest(),
+            )
+        else:
+            raise AssertionError(f"framework Python fixture has special member: {path}")
+    return records
 
 
 def runner_tool_manifest(tool_root: Path) -> bytes:
     """Return the canonical manifest for the host tools trusted by the test runner."""
     tools: dict[str, dict[str, str]] = {}
-    for name in (
-        "chmod", "ln", "mv", "sleep", "cargo", "rustc",
-        "git-upload-pack", "git-index-pack",
-    ):
+    for name in REQUIRED_RUNNER_TOOL_NAMES:
         if name in {"cargo", "rustc"}:
             rustup = shutil.which("rustup", path=os.environ.get("PATH", ""))
             assert rustup is not None
@@ -103,7 +156,11 @@ def runner_tool_manifest(tool_root: Path) -> bytes:
             discovered = str(private_tool)
         else:
             discovered = shutil.which(name, path=os.defpath)
-        assert discovered is not None
+        if discovered is None:
+            private_tool = tool_root / f"runner-{name}"
+            private_tool.write_bytes(b"#!/bin/sh\nexit 0\n")
+            private_tool.chmod(0o500)
+            discovered = str(private_tool)
         path = Path(discovered).resolve(strict=True)
         tools[name] = {
             "path": str(path),

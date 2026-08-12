@@ -176,6 +176,7 @@ if [[ -z "$ROOT_ARG" ]]; then
 fi
 ROOT_DIR="$(cd "$ROOT_ARG" && pwd -P)"
 APPLE_ARCHIVE_OWNER="$ROOT_DIR/scripts/archive_norito_xcframework.py"
+COCOAPODS_SPEC_RENDERER="$ROOT_DIR/scripts/render_norito_bridge_podspec.py"
 APPLE_ARTIFACT_DIR="${MOBILE_SDK_APPLE_ARTIFACT_DIR:-}"
 
 if [[ "$PACKAGE_APPLE" == "0" && "$PACKAGE_ANDROID" == "0" ]]; then
@@ -597,7 +598,7 @@ copy_android_artifact() {
 }
 
 write_manifest() {
-  local index count
+  local index count pod_version
   count="${#ARTIFACT_RECORDS[@]}"
   if [[ "$count" -eq 0 ]]; then
     echo "[mobile-sdk-package] ERROR: no artifacts were packaged" >&2
@@ -607,6 +608,10 @@ write_manifest() {
   {
     printf '{\n'
     printf '  "version": "%s",\n' "$VERSION"
+    if [[ "$PACKAGE_APPLE" == "1" ]]; then
+      pod_version="$(<"$ROOT_DIR/IrohaSwift/VERSION")"
+      printf '  "apple_sdk_semver": "%s",\n' "$pod_version"
+    fi
     printf '  "mode": "%s",\n' "$MODE_LABEL"
     printf '  "artifacts": [\n'
     for index in "${!ARTIFACT_RECORDS[@]}"; do
@@ -744,11 +749,32 @@ package_apple() {
   local artifact_root
   local xcframework
   local bridge_manifest
-  local apple_zip="$OUT_DIR/NoritoBridge-${VERSION}.xcframework.zip"
-  local versioned_manifest="$OUT_DIR/NoritoBridge-${VERSION}.artifacts.json"
+  local pod_version
+  local release_label
+  local apple_zip
+  local versioned_manifest
+  local podspec
+
+  if [[ ! -f "$ROOT_DIR/IrohaSwift/VERSION" || -L "$ROOT_DIR/IrohaSwift/VERSION" ]]; then
+    echo "[mobile-sdk-package] ERROR: IrohaSwift VERSION must be a regular non-symbolic file" >&2
+    exit 66
+  fi
+  pod_version="$(<"$ROOT_DIR/IrohaSwift/VERSION")"
+  if [[ ! "$pod_version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+    echo "[mobile-sdk-package] ERROR: IrohaSwift VERSION must be canonical SemVer" >&2
+    exit 66
+  fi
+  release_label="v${pod_version}"
+  apple_zip="$OUT_DIR/NoritoBridge-${release_label}.xcframework.zip"
+  versioned_manifest="$OUT_DIR/NoritoBridge-${release_label}.artifacts.json"
+  podspec="$OUT_DIR/NoritoBridge-${pod_version}.podspec"
 
   if [[ ! -f "$APPLE_ARCHIVE_OWNER" || -L "$APPLE_ARCHIVE_OWNER" ]]; then
     echo "[mobile-sdk-package] ERROR: deterministic Apple archive owner is unavailable: $APPLE_ARCHIVE_OWNER" >&2
+    exit 66
+  fi
+  if [[ ! -f "$COCOAPODS_SPEC_RENDERER" || -L "$COCOAPODS_SPEC_RENDERER" ]]; then
+    echo "[mobile-sdk-package] ERROR: CocoaPods spec renderer is unavailable: $COCOAPODS_SPEC_RENDERER" >&2
     exit 66
   fi
   require_dir "$APPLE_ARTIFACT_DIR" "Apple artifact directory"
@@ -793,7 +819,8 @@ package_apple() {
       --xcframework "$xcframework" \
       --output "$apple_zip" \
       --scratch-dir "$OUT_PARENT"
-  run_isolated_python - "$apple_zip" "$versioned_manifest" <<'PY'
+  run_isolated_python - "$apple_zip" "$versioned_manifest" "$pod_version" <<'PY'
+import json
 import os
 from pathlib import Path
 import sys
@@ -802,9 +829,19 @@ import zipfile
 
 archive_path = Path(sys.argv[1])
 output = Path(sys.argv[2])
+expected_version = sys.argv[3]
 entry = "NoritoBridge.xcframework/NoritoBridge.artifacts.json"
 with zipfile.ZipFile(archive_path) as archive:
     payload = archive.read(entry)
+try:
+    manifest = json.loads(payload)
+except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    raise SystemExit(f"embedded NoritoBridge manifest is not canonical JSON: {error}") from None
+if not isinstance(manifest, dict) or manifest.get("version") != expected_version:
+    raise SystemExit(
+        "embedded NoritoBridge manifest version must equal IrohaSwift/VERSION: "
+        f"expected {expected_version!r}, found {manifest.get('version')!r}"
+    )
 descriptor, temporary_name = tempfile.mkstemp(
     prefix=f".{output.name}.",
     suffix=".tmp",
@@ -830,8 +867,14 @@ except BaseException:
     raise
 PY
 
+  run_isolated_python "$COCOAPODS_SPEC_RENDERER" \
+    --root "$ROOT_DIR" \
+    --archive "$apple_zip" \
+    --output "$podspec"
+
   record_artifact "$apple_zip" "apple-xcframework"
   record_artifact "$versioned_manifest" "apple-manifest"
+  record_artifact "$podspec" "apple-cocoapods-podspec"
 }
 
 package_android() {
@@ -901,7 +944,8 @@ publish_package_stage() {
   run_isolated_python - \
     "$PACKAGE_STAGE_DIR" "$PACKAGE_STAGE_BASELINE" \
     "$FINAL_OUT_DIR" "$FINAL_OUT_BASELINE" \
-    "$PACKAGE_LOCK" "$PACKAGE_LOCK_FD" <<'PY'
+    "$PACKAGE_LOCK" "$PACKAGE_LOCK_FD" \
+    "$MODE_LABEL" "$VERSION" "${POD_VERSION_FOR_PACKAGE:-}" <<'PY'
 import ctypes
 import fcntl
 import os
@@ -915,6 +959,9 @@ final = Path(sys.argv[3])
 expected_final_identity = sys.argv[4]
 lock_path = Path(sys.argv[5])
 raw_lock_descriptor = sys.argv[6]
+mode = sys.argv[7]
+diagnostic_version = sys.argv[8]
+pod_version = sys.argv[9]
 
 
 def fail(message: str) -> None:
@@ -1074,6 +1121,7 @@ def rename_with_flag(source: Path, destination: Path, flag: int) -> None:
         raise OSError(error_number, os.strerror(error_number), os.fspath(destination))
 
 
+# PACKAGE_TEST_BEFORE_STAGE_INVENTORY
 if not stage.is_absolute() or not final.is_absolute() or stage.parent != final.parent:
     fail("package stage and destination must be absolute siblings")
 if stage.parent.resolve(strict=True) != stage.parent:
@@ -1087,6 +1135,34 @@ if expected_final_identity != "absent":
     fail("first-release package destination must be absent")
 if directory_identity(final) != expected_final_identity:
     fail("package destination changed while the package was being assembled")
+if mode == "apple":
+    expected_names = {
+        f"NoritoBridge-v{pod_version}.xcframework.zip",
+        f"NoritoBridge-v{pod_version}.artifacts.json",
+        f"NoritoBridge-{pod_version}.podspec",
+        f"SHA256SUMS-apple-{diagnostic_version}.txt",
+        f"mobile-sdk-apple-{diagnostic_version}.artifacts.json",
+    }
+elif mode == "android":
+    expected_names = {
+        f"iroha-mobile-sdk-android-{diagnostic_version}.zip",
+        f"SHA256SUMS-android-{diagnostic_version}.txt",
+        f"mobile-sdk-android-{diagnostic_version}.artifacts.json",
+    }
+elif mode == "all":
+    expected_names = {
+        f"NoritoBridge-v{pod_version}.xcframework.zip",
+        f"NoritoBridge-v{pod_version}.artifacts.json",
+        f"NoritoBridge-{pod_version}.podspec",
+        f"iroha-mobile-sdk-android-{diagnostic_version}.zip",
+        f"SHA256SUMS-all-{diagnostic_version}.txt",
+        f"mobile-sdk-all-{diagnostic_version}.artifacts.json",
+    }
+else:
+    fail(f"unsupported package mode: {mode}")
+actual_names = {entry.name for entry in stage.iterdir()}
+if actual_names != expected_names:
+    fail(f"package stage does not contain the exact {mode} file set")
 
 authenticate_lock()
 fsync_tree(stage)
@@ -1112,6 +1188,7 @@ PY
 
 if [[ "$PACKAGE_APPLE" == "1" ]]; then
   package_apple
+  POD_VERSION_FOR_PACKAGE="$(<"$ROOT_DIR/IrohaSwift/VERSION")"
 fi
 
 if [[ "$PACKAGE_ANDROID" == "1" ]]; then

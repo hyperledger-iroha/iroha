@@ -184,8 +184,8 @@ There is no skip-build, preserved-target, alternate-lock, or manual-packaging mo
 
 CI runs `.github/workflows/mobile_sdk_artifacts.yml` to authenticate the exact
 external Apple artifact, enforce mandatory missing-artifact rejection, run the
-Swift suite, and execute the CocoaPods structural lint without a missing-tool
-skip.
+Swift suite, package the final ZIP, and lint the checksum-pinned CocoaPods binary
+and source pods without a missing-tool skip.
 
 ### CocoaPods
 
@@ -193,12 +193,16 @@ skip.
 pod 'IrohaSwift', :path => '/path/to/iroha/IrohaSwift'
 ```
 
-Native CocoaPods delivery is not release-ready. The lint wrapper requires an
-authenticated local or external `NoritoBridge.xcframework` and fails when
-CocoaPods or that artifact is missing, but the current podspec does not yet
-define a vendored-XCFramework archive path. Do not treat a local lint as native
-pod installation evidence or publish the podspec until that delivery path and
-downstream install smoke are implemented (see
+`IrohaSwift` declares an exact same-version dependency on the generated
+`NoritoBridge` binary pod. `IrohaSwift/VERSION` owns both pod versions, the
+canonical `v<version>` tag, and the archive name. That podspec pins
+`NoritoBridge-v<version>.xcframework.zip` from the canonical `v<version>` release
+with its exact SHA-256 and vendored-XCFramework path. The lint wrapper consumes
+the packaged ZIP through an explicit package-local `file://` source, validates
+the closed package inventory, and builds both pods. Do not treat this lint as
+public installation evidence: CocoaPods may still consult configured spec
+sources. Publish the immutable release asset and both specs, then capture a clean
+registry `pod install` and Release build before advertising the coordinate (see
 [`docs/norito_bridge_release.md`](../docs/norito_bridge_release.md)).
 
 Usage:
@@ -1988,9 +1992,12 @@ The release process for the Norito Swift bindings is documented in
 [`docs/norito_bridge_release.md`](../docs/norito_bridge_release.md). Follow the
 authenticated external-artifact build, validation, and packaging flow there.
 `Package.swift` uses that exact local/external path and does not use a remote
-URL/checksum binary target; native CocoaPods distribution remains an explicit
-blocker. Generated artifacts stay untracked, and the resulting release asset
-must share the reviewed version with the `norito` Rust crate.
+URL/checksum binary target. CocoaPods uses the same archive through the generated
+checksum-pinned `NoritoBridge` binary pod; public registry/install evidence remains
+external. Generated artifacts stay untracked, and the resulting release asset
+uses the SemVer in `IrohaSwift/VERSION`; it need not numerically equal the
+`norito` Rust crate version. The release binds Rust inputs through the reviewed
+commit, source fingerprint, and root lockfile.
 The canonical `NoritoBridge.artifacts.json` is embedded in the XCFramework and
 records the bridge version plus per-platform SHA-256 hashes.
 `dist/NoritoBridge.artifacts.json` is the stable relative symlink to that embedded

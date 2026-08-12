@@ -2,6 +2,7 @@
 
 
 def test_receipt_replay_supervision_has_no_forbidden_process_controls() -> None:
+    _case_release_approval_four_class_binding_and_path_free_archives()
     source = SCRIPT.read_text(encoding="utf-8")
     for forbidden in (
         "import signal",

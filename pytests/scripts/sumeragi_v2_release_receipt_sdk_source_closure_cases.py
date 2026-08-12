@@ -149,6 +149,7 @@ def _run_sdk_source_closure_resolver(
 
 
 def test_receipt_owns_no_duplicate_sdk_source_closure_arrays() -> None:
+    _case_release_approval_schema_canonicality_and_path_disclosure_fail_closed()
     source = SCRIPT.read_text(encoding="utf-8")
     component_source = SCRIPT.with_name(
         "write_sumeragi_v2_release_receipt_corridor_log.py"

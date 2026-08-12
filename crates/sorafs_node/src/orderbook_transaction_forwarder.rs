@@ -50,7 +50,7 @@ pub const ORDERBOOK_TRANSACTION_FORWARDER_DEFAULT_MAX_ATTEMPTS_V1: u32 = 8;
 /// Maximum entries returned by one worker scan.
 pub const ORDERBOOK_TRANSACTION_FORWARDER_MAX_SCAN_ITEMS_V1: usize = 1_000;
 /// Hard ceiling for one canonical signed orderbook transaction.
-pub const ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1: usize = 2 * 1024 * 1024;
+pub use iroha_data_model::sorafs::orderbook_submission::ORDERBOOK_TRANSACTION_MAX_CANONICAL_BYTES_V1;
 const CHECKPOINT_LOCK_FILE_NAME: &str = "orderbook-transaction-forwarder-state.lock";
 const REVISION_IDENTITY_DOMAIN_V1: &[u8] =
     b"sorafs.orderbook.transaction-forwarder.revision-identity.v1\0";

@@ -97,7 +97,7 @@ Checked-in response-file examples cover provider and metrics canaries.
 | Scoring engine (`reputation_engine`) | Aggregates finalized projections, runs the fixed-point EigenTrust-style algorithm, applies policy penalties, and generates canonical snapshot material. | Runs on the configured supervised interval and writes only the bounded durable checkpoint/outbox; publication becomes visible through the authenticated Governance DAG and committed-derived projection. |
 | Snapshot publisher (`reputation_publisher`) | Independently threshold-signs exact projector outbox material, publishes it to the Governance DAG/committed projection, and acknowledges the canonical result. | The supervised keyless worker is wired; production threshold-signer and authenticated DAG publication/readback adapters remain open. |
 | API gateway (`sorafs_reputation_api`) | Exposes authenticated read-only REST, SSE, and WebSocket committed projections. | The obsolete local POST is removed. Exact empty-body GETs require the signature quartet or exact witness. Latest/provider/weights/event reads use the ready committed projection; snapshot-id reads return the exact retained authenticated snapshot or `404` after bounded eviction, and the runtime cannot start in production until all required injected adapters exist. |
-| CLI/SDK modules | Archived-proof verification plus authenticated CLI and SDK read helpers. | JS/TS and Python support signer or witness authentication; Kotlin, Java, Swift, and C# expose signer-only typed finite/SSE clients. Signed Rust live reads and the rollout collector require exact I105/key-file inputs. Native journal transaction/query builders and the complete SDK/native validation matrix remain open. |
+| CLI/SDK modules | Archived-proof verification plus authenticated CLI and SDK read helpers. | JS/TS and Python support signer or witness authentication; Kotlin, Java, Swift, and C# expose signer-only typed finite/SSE clients. Signed Rust live reads and the rollout collector require exact I105/key-file inputs. Dedicated type-safe Rust journal transaction/query builders are implemented locally; the complete SDK/native validation matrix remains open. |
 
 ### Data Flow
 1. Governance activates an exact recorder-policy revision in committed state.
@@ -449,10 +449,10 @@ publication authority.
     `Opened` integration, `ResolveSorafsCapacityDispute`, typed committed
     events, `FindSorafsReputationJournalEvents`, and the exact finalized
     `FindSorafsReputationJournalEventBySourceId` lookup.
-  - Generic authenticated signed-transaction and typed-query transport plus
-    committed read projections are present. Dedicated authenticated SDK
-    journal transaction/query builders remain open; no local snapshot route is
-    an authoritative journal mutation API.
+  - Generic authenticated signed-transaction and typed-query transport,
+    dedicated type-safe Rust `Client` journal transaction/query builders, and
+    committed read projections are present. No local snapshot route is an
+    authoritative journal mutation API.
 - Standard-daemon runtime:
   - Implemented: strict non-secret `iroha_config` construction for the release
     window, governed weights, resource bounds, checkpoint roots, external
@@ -546,12 +546,12 @@ publication authority.
   snapshot publications. Lag notifications use `event = "lagged"` frames so
   clients can resynchronize through `GET /v1/sorafs/reputation/events`.
 - SDK helpers:
-  - Rust currently has generic signed native transaction/query submission for
-    the journal ISIs, `FindSorafsReputationJournalEvents`, and
-    `FindSorafsReputationJournalEventBySourceId`; there is no dedicated
-    `ReputationClient`. Dedicated authenticated native journal mutation/query
-    builders remain release work; the committed read projections are
-    implemented.
+  - Rust exposes dedicated type-safe `Client` builders for caller-signed native
+    journal policy, `PoR`, and stream-token transactions plus authenticated
+    active-policy, by-source, and fixed-view event-page queries. The helpers
+    validate canonical payloads, source family, transaction authority, cursors,
+    page bounds, and typed responses. The complete SDK/native validation matrix
+    remains release work; there is no separate `ReputationClient`.
   - Implemented locally in JS/TS:
     `getSorafsReputationLatest`, `getSorafsReputationProvider`,
     `getSorafsReputationSnapshot`, `getSorafsReputationWeights`,
@@ -802,8 +802,7 @@ Completed local foundations:
 
 Remaining production gates:
 
-- Expose dedicated authenticated SDK journal transaction/query builders;
-  validate the wired fixed-view
+- Validate the dedicated Rust `Client` journal transaction/query builders and the wired fixed-view
   active-policy query, externally authenticated PoR/countable-token submission,
   and finality reconciler; validate the existing committed-derived GET/event
   reads under restart and failover; deploy external threshold-signing and

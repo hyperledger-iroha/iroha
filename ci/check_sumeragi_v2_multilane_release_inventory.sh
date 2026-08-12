@@ -11,6 +11,8 @@ readonly native_file="integration_tests/tests/native_amx_routing.rs"
 readonly native_recovery_file="$native_file"
 readonly launcher="scripts/run_nexus_cross_dataspace_atomic_swap.sh"
 readonly release_runner="scripts/run_sumeragi_v2_release_gates.sh"
+readonly release_bootstrap="scripts/bootstrap_sumeragi_v2_release.py"
+readonly release_bootstrap_test="pytests/scripts/sumeragi_v2_release_bootstrap_test.py"
 readonly cargo_cache_copier="scripts/copy_sumeragi_v2_release_cargo_cache.py"
 readonly grouped_parity_harness="ci/run_native_amx_v2_grouped_sdk_parity.sh"
 readonly sdk_diagnostics_harness="ci/run_sumeragi_v2_sdk_diagnostics.sh"
@@ -289,7 +291,9 @@ python3 -I -S - \
   "$release_receipt_corridor_component" \
   "$canonical_production_test_count" \
   "$process_policy" \
-  "$cargo_cache_copier" <<'PY'
+  "$cargo_cache_copier" \
+  "$release_bootstrap" \
+  "$release_bootstrap_test" <<'PY'
 from __future__ import annotations
 
 import ast
@@ -313,6 +317,125 @@ process_policy = Path(sys.argv[6])
 process_policy_source = process_policy.read_text(encoding="utf-8")
 cargo_cache_copier = Path(sys.argv[7])
 cargo_cache_source = cargo_cache_copier.read_text(encoding="utf-8")
+release_bootstrap = Path(sys.argv[8])
+release_bootstrap_source = release_bootstrap.read_text(encoding="utf-8")
+release_bootstrap_test = Path(sys.argv[9])
+release_bootstrap_test_source = release_bootstrap_test.read_text(encoding="utf-8")
+
+
+def reject(message: str) -> None:
+    raise SystemExit(f"{runner}: {message}")
+
+
+expected_shell_utilities = (
+    "awk", "basename", "cat", "chmod", "cmp", "cp", "cut", "diff",
+    "dirname", "env", "find", "grep", "ln", "ls", "mkdir", "mkfifo",
+    "mktemp", "mv", "openssl", "rm", "rmdir", "sed", "sh", "sleep",
+    "tail", "tee", "tr", "uname", "wc", "xargs",
+    "shasum" if sys.platform == "darwin" else "sha256sum",
+)
+expected_language_tools = (
+    "cargo", "cargo-verus", "git-index-pack", "git-upload-pack", "java",
+    "node", "rustc", "swift", "tlapm", "verus",
+)
+
+
+def assigned_string_collection(source_text: str, name: str) -> tuple[str, ...]:
+    tree = ast.parse(source_text)
+    assignments = [
+        node for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+    ]
+    if len(assignments) != 1:
+        reject(f"{name} must have one assignment")
+    value = assignments[0].value
+    if isinstance(value, ast.Call):
+        if (
+            not isinstance(value.func, ast.Name)
+            or value.func.id != "frozenset"
+            or len(value.args) != 1
+            or value.keywords
+            or not isinstance(value.args[0], ast.Set)
+        ):
+            reject(f"{name} must be one literal tuple or frozenset")
+        elements = value.args[0].elts
+    elif isinstance(value, ast.Tuple):
+        elements = value.elts
+    else:
+        reject(f"{name} must be one literal tuple or frozenset")
+    values: list[str] = []
+    for element in elements:
+        if isinstance(element, ast.Constant) and isinstance(element.value, str):
+            values.append(element.value)
+        elif (
+            isinstance(element, ast.IfExp)
+            and isinstance(element.test, ast.Compare)
+            and isinstance(element.test.left, ast.Attribute)
+            and isinstance(element.test.left.value, ast.Name)
+            and element.test.left.value.id == "sys"
+            and element.test.left.attr == "platform"
+            and isinstance(element.body, ast.Constant)
+            and isinstance(element.body.value, str)
+            and isinstance(element.orelse, ast.Constant)
+            and isinstance(element.orelse.value, str)
+        ):
+            values.append(element.body.value if sys.platform == "darwin" else element.orelse.value)
+        else:
+            reject(f"{name} contains a non-literal command selector")
+    return tuple(values)
+
+
+if set(assigned_string_collection(release_bootstrap_source, "_RELEASE_SHELL_UTILITY_NAMES")) != set(expected_shell_utilities):
+    reject("bootstrap shell-utility command closure is not exact")
+if set(assigned_string_collection(release_bootstrap_source, "_RELEASE_LANGUAGE_TOOL_NAMES")) != set(expected_language_tools):
+    reject("bootstrap release language-tool closure is not exact")
+if assigned_string_collection(cargo_cache_source, "_RELEASE_SHELL_UTILITY_NAMES") != expected_shell_utilities:
+    reject("private-runtime shell-utility command closure is not exact")
+for token, count in (
+    ("*_RELEASE_SHELL_UTILITY_NAMES,", 2),
+    ("set(tools) != _REQUIRED_RUNNER_TOOL_NAMES", 1),
+):
+    observed = (
+        cargo_cache_source.count(token)
+        if token.startswith("*_RELEASE")
+        else release_bootstrap_source.count(token)
+    )
+    if observed != count:
+        reject(f"release command-closure guard changed: {token}")
+
+
+def runner_array(name: str) -> tuple[str, ...]:
+    match = re.search(
+        rf"^  {re.escape(name)}=\(\n(?P<body>.*?)^  \)$",
+        source,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        reject(f"release runner lacks exact {name} array")
+    return tuple(match.group("body").split())
+
+
+for array_name in ("pr_shell_utility_names", "release_shell_utility_names"):
+    if runner_array(array_name) != expected_shell_utilities[:-1]:
+        reject(f"release runner {array_name} fixed command closure is not exact")
+if source.count("/usr/bin:/bin") != 0 or source.count("/usr/bin/env -i") != 0:
+    reject("private release children retain an ambient execution fallback")
+for token, count in (
+    ('"$pr_bin/env" -i \\', 1),
+    ('"$release_child_bin/env" -i \\', 1),
+    ('export PATH="$IROHA_RELEASE_PR_BIN" GIT_EXEC_PATH="$IROHA_RELEASE_PR_BIN"', 1),
+    ('export PATH="${IROHA_RELEASE_INVOCATION_ROOT}/runtime/bin"', 1),
+):
+    if source.count(token) != count:
+        reject(f"private child command-closure binding changed: {token}")
+for token, count in (
+    ('"unlisted-command": "iroha-unlisted-release-command"', 1),
+    ("def test_undeclared_runner_tool_has_no_ambient_path_fallback(", 1),
+    ("assert result.returncode == 127", 1),
+):
+    if release_bootstrap_test_source.count(token) != count:
+        reject(f"unknown-command rejection contract changed: {token}")
 
 for token, count in (
     ("# RELEASE_CARGO_CACHE_COPY_HELPER_V1", 1),
@@ -355,11 +478,6 @@ if 'Path(fields["artifact_root_path"])' in receipt_corridor_component_source:
     raise SystemExit(
         f"{receipt_corridor_component}: corridor fields must not authorize an artifact root"
     )
-
-
-def reject(message: str) -> None:
-    raise SystemExit(f"{runner}: {message}")
-
 
 def exact_line(line: str) -> int:
     matches = [index for index, candidate in enumerate(lines) if candidate == line]
@@ -423,6 +541,8 @@ expected_receipt_component_symbols = (
     "_formal_artifacts",
 )
 expected_receipt_corridor_component_symbols = (
+    "_receipt_validation_invocation_value_sha256",
+    "_receipt_validation_invocation_binding",
     "_cargo_cache_relative_path",
     "_cargo_cache_final_relative_path",
     "_cargo_cache_octal_mode",
@@ -615,8 +735,8 @@ if observed_counts != module_counts:
     reject("release runner inventory does not match receipt module counts")
 canonical_inventory = ("\n".join(canonical_rows) + "\n").encode()
 if hashlib.sha256(canonical_inventory).hexdigest() != (
-    "df90ef7d94284bc805ff55ead6c6d938"
-    "ba0f681a1d39e7b929fc275e8019aefa"
+    "07da36398f20bccca0d535ebad55cf21"
+    "c1239e1773369ba063af7bed643eb9bf"
 ):
     reject(
         f"canonical {canonical_production_test_count}-test production TSV "
@@ -1123,30 +1243,72 @@ for array_name, leg_id, package, expected_count, cargo_target in g_unit_groups:
 fixture_check = """\
 run_corridor_leg \\
   native-amx-rust-fixture-check command 0 \\
-  "cargo run --locked --offline -p iroha_data_model --features dev-tools --bin sumeragi_v2_wire_fixtures -- --check" \\
-  run_cargo run --locked --offline -p iroha_data_model --features dev-tools \\
-    --bin sumeragi_v2_wire_fixtures -- --check"""
+  "regenerate Native AMX Rust fixture authority twice into disjoint private roots and byte-authenticate both outputs" \\
+  regenerate_native_amx_rust_fixtures_twice"""
 if source.count(fixture_check) != 1:
     reject(
         "Rust-owned grouped fixture regeneration must be one guarded "
         "source-sealed corridor leg"
     )
+fixture_helper = """\
+regenerate_native_amx_rust_fixtures_twice() {
+  run_cargo run --locked --offline -p iroha_data_model --features dev-tools \\
+    --bin sumeragi_v2_wire_fixtures -- \\
+    --out-dir "$native_amx_fixture_regeneration_first"
+  run_cargo run --locked --offline -p iroha_data_model --features dev-tools \\
+    --bin sumeragi_v2_wire_fixtures -- \\
+    --out-dir "$native_amx_fixture_regeneration_second"
+  python3 -I -S ci/resolve_sumeragi_v2_sdk_source_closure.py \\
+    --root "$repo_root" \\
+    --manifest ci/sumeragi_v2_sdk_source_closure.json \\
+    --suite native-amx-v2-grouped \\
+    --check-regeneration rust-fixtures \\
+    --first-output-root "$native_amx_fixture_regeneration_first" \\
+    --second-output-root "$native_amx_fixture_regeneration_second"
+}"""
+if source.count(fixture_helper) != 1:
+    reject(
+        "Rust-owned grouped fixture corridor leg must generate twice and "
+        "authenticate both complete private inventories"
+    )
 
-scaling_definition = exact_line("run_release_scaling_and_formal_gates() {")
-scaling_call = exact_line("  run_release_scaling_and_formal_gates")
+post_preflight_identity = exact_line(
+    'verify_release_identity "after release contract preflights"'
+)
+formal_definition = exact_line("run_release_formal_gate() {")
+formal_release = exact_line("    bash scripts/run_sumeragi_v2_formal_release.sh")
+formal_call = exact_line("  run_release_formal_gate")
+seed_matrix = exact_line('  bash scripts/run_sumeragi_v2_seed_matrix.sh "$profile"')
+if not (
+    post_preflight_identity
+    < formal_definition
+    < formal_release
+    < formal_call
+    < seed_matrix
+):
+    reject(
+        "formal release evidence must complete after source preflights and "
+        "before the seed matrix"
+    )
+if (
+    lines[formal_call - 1] != 'if [[ "$profile" == "--release" ]]; then'
+    or lines[formal_call + 1] != "fi"
+):
+    reject("formal release evidence must execute only in the release profile")
+
+scaling_definition = exact_line("run_release_scaling_gate() {")
+scaling_validation = exact_line(
+    "    scripts/nexus/validate_multilane_scaling_evidence.py \\"
+)
+scaling_call = exact_line("  run_release_scaling_gate")
 g12_soak = exact_line(
     '  verify_release_identity "after G-12P two-hour rotating-validator fault soak"'
 )
 pr_branch = exact_line('if [[ "$profile" == "--pr" ]]; then')
-if not scaling_definition < g12_soak < scaling_call < pr_branch:
-    reject("scaling/formal release gates must run after the completed G-12P fault soak")
-
-scaling_validation = exact_line(
-    "    scripts/nexus/validate_multilane_scaling_evidence.py \\"
-)
-formal_release = exact_line("    bash scripts/run_sumeragi_v2_formal_release.sh")
-if not scaling_definition < scaling_validation < formal_release < g12_soak:
-    reject("scaling/formal gate function must validate scaling before formal evidence")
+if not scaling_definition < scaling_validation < g12_soak < scaling_call < pr_branch:
+    reject("scaling release evidence must run after the completed G-12P fault soak")
+if "run_release_scaling_and_formal_gates" in source:
+    reject("formal and scaling release gates must remain independent")
 
 final_proof_validation = exact_line(
     'verify_release_identity "after final proof-evidence validation"'

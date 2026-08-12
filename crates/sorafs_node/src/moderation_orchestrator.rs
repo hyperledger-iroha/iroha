@@ -40,8 +40,9 @@ use iroha_data_model::{
         moderation_ledger::{
             MODERATION_LEDGER_MAX_CANDIDATE_POOL_SIZE_V1, MODERATION_LEDGER_MAX_CHALLENGES_V1,
             MODERATION_LEDGER_MAX_NONCE_BYTES_V1, MODERATION_LEDGER_MAX_PANEL_SIZE_V1,
-            MODERATION_LEDGER_MAX_REASON_BYTES_V1, ModerationAppealStatusV1,
-            ModerationCaseStatusV1, ModerationChallengeDecisionV1, ModerationSortitionError,
+            MODERATION_LEDGER_MAX_REASON_BYTES_V1, MODERATION_QUERY_MAX_CASES_V1,
+            MODERATION_QUERY_MAX_EVENTS_V1, ModerationAppealStatusV1, ModerationCaseStatusV1,
+            ModerationChallengeDecisionV1, ModerationSortitionError,
             is_canonical_moderation_identifier_v1, sorafs_moderation_select_panel_v1,
         },
     },
@@ -698,11 +699,7 @@ pub struct ModerationOrchestratorConfigV1 {
     pub checkpoint_store_handle: String,
     /// Exact checkpoint-store adapter and public-policy qualification.
     pub expected_checkpoint_store_qualification: ModerationRuntimeProviderQualificationV1,
-    /// Archive-lifetime-stable Ed25519 trust anchor authenticating checkpoint
-    /// terminal-set attestations.
-    ///
-    /// An HSM may rotate internal material only while preserving this public
-    /// identity. V1 rejects changing this key once archive history exists.
+    /// Stable Ed25519 trust anchor for checkpoint attestations; V1 rotation preserves it.
     pub checkpoint_store_attestation_public_key: [u8; 32],
     /// Maximum appeals and activated cases retained in the projection.
     pub max_cases: usize,
@@ -786,6 +783,13 @@ impl ModerationOrchestratorConfigV1 {
                     "{name} must be non-zero"
                 )));
             }
+        }
+        if self.max_cases > MODERATION_QUERY_MAX_CASES_V1 as usize
+            || self.max_events > MODERATION_QUERY_MAX_EVENTS_V1 as usize
+        {
+            return Err(ModerationOrchestratorError::InvalidConfiguration(
+                "moderation snapshot bounds exceed the native query ceiling".to_owned(),
+            ));
         }
         if self.max_handoffs > MODERATION_PANEL_NOTIFICATION_ARCHIVE_MAX_RECORDS_V1 {
             return Err(ModerationOrchestratorError::InvalidConfiguration(
@@ -928,13 +932,9 @@ pub struct ModerationTransactionRequestV1 {
 }
 
 impl ModerationTransactionRequestV1 {
-    /// Construct the canonical submission request for one authenticated action.
+    /// Construct one canonical authenticated submission request.
     ///
-    /// # Errors
-    ///
-    /// Fails closed when the authority does not match the action, the action
-    /// cannot be canonically encoded, the request binding is inert, or the
-    /// finalized baseline is invalid.
+    /// Fails on invalid authority, action, binding, encoding, or finalized baseline.
     pub fn new(
         network_id: iroha_data_model::NetworkId,
         envelope_generation: u32,

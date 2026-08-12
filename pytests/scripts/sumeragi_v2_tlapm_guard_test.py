@@ -342,9 +342,16 @@ def test_darwin_group_inspection_rejects_contaminant_identity(
     message: str,
 ) -> None:
     identities = {321: _darwin_identity(321), 322: identity}
-    monkeypatch.setattr(
-        guard, "_darwin_list_process_group_pids", lambda _pgid: (321, 322)
-    )
+    enumerations = 0
+
+    def scoped_pids(_process_group_id: int) -> tuple[int, ...]:
+        nonlocal enumerations
+        enumerations += 1
+        # A transient contaminant must fail closed even if it disappears before
+        # a retry could make the scoped membership look clean.
+        return (321, 322) if enumerations == 1 else (321,)
+
+    monkeypatch.setattr(guard, "_darwin_list_process_group_pids", scoped_pids)
     monkeypatch.setattr(
         guard, "_darwin_process_identity", lambda pid: identities[pid]
     )
@@ -356,6 +363,7 @@ def test_darwin_group_inspection_rejects_contaminant_identity(
 
     with pytest.raises(guard.GuardError, match=message):
         guard._darwin_process_group_rows(321)
+    assert enumerations == 1
 
 
 def test_darwin_group_inspection_requires_body_and_kernel_confirmed_exit(
@@ -367,15 +375,29 @@ def test_darwin_group_inspection_requires_body_and_kernel_confirmed_exit(
     with pytest.raises(guard.GuardError, match="omitted the guarded body"):
         guard._darwin_process_group_rows(321)
 
-    monkeypatch.setattr(
-        guard, "_darwin_list_process_group_pids", lambda _pgid: ()
-    )
-    monkeypatch.setattr(guard, "_process_group_exists", lambda _pgid: False)
-    assert guard._darwin_process_group_rows(321) == []
+    scoped_absence_reads: list[int] = []
 
-    monkeypatch.setattr(guard, "_process_group_exists", lambda _pgid: True)
-    with pytest.raises(guard.GuardError, match="omitted an existing"):
-        guard._darwin_process_group_rows(321)
+    def scoped_absence(process_group_id: int) -> tuple[int, ...]:
+        scoped_absence_reads.append(process_group_id)
+        return ()
+
+    monkeypatch.setattr(guard, "_darwin_list_process_group_pids", scoped_absence)
+    monkeypatch.setattr(
+        guard,
+        "_process_rows",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("scoped group-exit confirmation invoked ps")
+        ),
+    )
+    monkeypatch.setattr(
+        guard,
+        "_process_group_exists",
+        lambda _pgid: (_ for _ in ()).throw(
+            AssertionError("scoped group-exit confirmation used the global helper")
+        ),
+    )
+    assert guard._darwin_process_group_rows(321) == []
+    assert scoped_absence_reads == [321, 321]
 
 
 @pytest.mark.parametrize("result", [-1, guard.DARWIN_PROCESS_GROUP_PID_CAPACITY])
@@ -654,6 +676,8 @@ def test_guard_source_contains_no_process_control_or_timed_termination() -> None
     )
 
     assert all(token not in source for token in forbidden)
+    assert source.count("os.setpgid(0, 0)") == 1
+    assert "release-owned process-group accounting requires Darwin libproc" in source
 
 
 def test_guarded_session_close_waits_naturally_before_control_eof() -> None:
@@ -852,6 +876,82 @@ def test_darwin_runtime_uses_observation_only_tree_snapshots(
     assert status == 0
     assert global_inspections >= 3
     assert "natural-completion" in events
+
+    release_jsonl = tmp_path / "release-resource.jsonl"
+    release_summary = tmp_path / "release-summary.json"
+    release_events: list[str] = []
+    release_session = _fake_session(release_events, polls_before_completion=4)
+    release_session.body_identity = _darwin_identity(
+        501,
+        process_group_id=501,
+        parent_id=release_session.wrapper.pid,
+    )
+    monkeypatch.setattr(
+        guard, "_spawn_guarded_session", lambda *_args, **_kwargs: release_session
+    )
+    monkeypatch.setattr(
+        guard,
+        "_process_rows",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("release accounting performed a full-host inspection")
+        ),
+    )
+    monkeypatch.setattr(
+        guard,
+        "_foreign_heavy_jobs",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("release accounting scanned foreign same-UID jobs")
+        ),
+    )
+    scoped_inspections: list[tuple[int, guard.DarwinProcessIdentity | None]] = []
+
+    def scoped_rows(
+        process_group_id: int,
+        *,
+        expected_body_identity: guard.DarwinProcessIdentity | None = None,
+    ) -> list[guard.ProcessRow]:
+        scoped_inspections.append((process_group_id, expected_body_identity))
+        return [
+            guard.ProcessRow(
+                501,
+                700,
+                501,
+                os.getuid(),
+                1024,
+                "/bin/worker",
+                physical_footprint_bytes=2048,
+            )
+        ]
+
+    monkeypatch.setattr(guard, "_darwin_process_group_rows", scoped_rows)
+    release_status = guard._run_guarded(
+        ["/fake/body"],
+        report_path=release_jsonl,
+        summary_path=release_summary,
+        sample_interval_seconds=0.01,
+        physical_footprint_interval_seconds=60,
+        release_owned_darwin_process_group=True,
+    )
+
+    assert release_status == 0
+    assert scoped_inspections
+    assert all(
+        process_group_id == 501 and identity == release_session.body_identity
+        for process_group_id, identity in scoped_inspections
+    )
+    assert "natural-completion" in release_events
+
+    monkeypatch.setattr(guard.sys, "platform", "linux")
+    with pytest.raises(
+        guard.GuardError,
+        match="release-owned process-group accounting requires Darwin libproc",
+    ):
+        guard._run_guarded(
+            ["/fake/body"],
+            report_path=tmp_path / "unsupported.jsonl",
+            summary_path=tmp_path / "unsupported-summary.json",
+            release_owned_darwin_process_group=True,
+        )
 
 
 def test_sampling_failure_is_latched_until_fake_body_completes_naturally(
@@ -1347,6 +1447,13 @@ def test_runner_self_wraps_and_defaults_to_one_thread() -> None:
     assert "IROHA_RESOURCE_GUARD_AUTH_FD" in source
     assert "IROHA_RESOURCE_GUARD_AUTH_TOKEN" in source
     assert "RESOURCE_AUTH_MAGIC" in source
+    assert (
+        'readonly RELEASE_PROCESS_OBSERVATION_MODE="owned-darwin-process-group-v1"'
+        in source
+    )
+    assert source.count("--release-owned-darwin-process-group") == 1
+    assert '${IROHA_RELEASE_SEALED_WORKTREE:-0}' in source
+    assert '${IROHA_RELEASE_FORMAL_PROCESS_OBSERVATION_MODE:-}' in source
     assert "readonly TLAPM_THREADS=1" in source
     assert '"${SUMERAGI_TLAPS_THREADS:-1}" != 1' in source
     assert "SUMERAGI_TLAPS_THREADS must equal 1" in source

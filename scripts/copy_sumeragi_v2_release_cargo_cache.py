@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import ctypes
 import errno
 import hashlib
@@ -16,7 +15,11 @@ import re
 import secrets
 import shutil
 import stat
+import subprocess
 import sys
+import tarfile
+import unicodedata
+import zipfile
 
 
 MAXIMUM_RECORDS = 250_000
@@ -28,11 +31,115 @@ MAXIMUM_PATH_BYTES = 4096
 INPUT_FORMAT = "iroha-sumeragi-v2-cargo-cache-input"
 FINAL_FORMAT = "iroha-sumeragi-v2-cargo-cache-final"
 RETAINED_FORMAT = "iroha-sumeragi-v2-retained-release-evidence"
+RETAINED_PRIVATE_PROVENANCE_FORMAT = (
+    "iroha-sumeragi-v2-bootstrap-private-retained-provenance"
+)
+SDK_SOURCE_FORMAT = "iroha-sumeragi-v2-sdk-dependency-sources"
+SDK_BUNDLE_FORMAT = "iroha-sumeragi-v2-sdk-dependency-bundle"
+SDK_WORK_FORMAT = "iroha-sumeragi-v2-sdk-dependency-work-final"
+SDK_BUNDLE_ARCHIVE_ID = "release-sdk-dependencies.bundle.v1"
+SDK_SOURCE_INVENTORY_FORMAT = (
+    "iroha-sumeragi-v2-sdk-dependency-source-inventory"
+)
+SDK_GRADLE_DISTRIBUTION_URL = (
+    "https://services.gradle.org/distributions/gradle-9.3.0-bin.zip"
+)
+# Gradle PathAssembler uses the base-36 unsigned MD5 of the distribution URI.
+# This is the exact key for SDK_GRADLE_DISTRIBUTION_URL; accepting an arbitrary
+# cache directory would let a wrapper select bytes outside the authenticated
+# distribution closure.
+SDK_GRADLE_WRAPPER_CACHE_KEY = "79n14ral3mx1ozqr3csh2u872"
+SDK_GRADLE_LAUNCHER_ARCHIVE_NAME = (
+    "gradle/gradle-user-home/wrapper/dists/gradle-9.3.0-bin/"
+    f"{SDK_GRADLE_WRAPPER_CACHE_KEY}/gradle-9.3.0/bin/gradle"
+)
+SDK_OBJECT_ID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 VALIDATOR_FAILURE_FORMAT = "iroha-sumeragi-v2-receipt-validation-failure"
 VALIDATOR_DIAGNOSTIC_BYTES = 64 * 1024
 VALIDATOR_FAILURE_MARKER_BYTES = 64 * 1024
-VALIDATOR_OPTION_NAMES_SHA256 = (
-    "deea2d469c8fe65392527c24562b64fa728c21f6ee9f679d595e09304e8b56b1"
+VALIDATOR_OPTION_ORDER = (
+    "--candidate-identity",
+    "--sealed-identity",
+    "--release-root",
+    "--bootstrap-completion",
+    "--bootstrap-evidence-dir",
+    "--bootstrap-identity",
+    "--bootstrap-attestation",
+    "--bootstrap-transcript",
+    "--expected-bootstrap-completion-sha256",
+    "--bootstrap-candidate-root",
+    "--bootstrap-runner",
+    "--signature-attestation",
+    "--signature-transcript",
+    "--signature-raw-commit",
+    "--signature-cargo-lock",
+    "--signature-allowed-signers",
+    "--signature-revocation",
+    "--signature-git",
+    "--signature-ssh-keygen",
+    "--expected-git-sha256",
+    "--expected-ssh-keygen-sha256",
+    "--expected-allowed-signers-sha256",
+    "--expected-revocation-sha256",
+    "--expected-signer-fingerprint",
+    "--corridor-completion",
+    "--formal-completion",
+    "--seed-completion",
+    "--chaos-completion",
+    "--taira-completion",
+    "--g4p-completion",
+    "--g12-seed-completion",
+    "--g12-fault-soak-completion",
+    "--scaling-evidence-manifest",
+    "--sdk-dependency-archive",
+    "--sdk-dependency-input-inventory",
+    "--sdk-dependency-final-work-inventory",
+    "--expected-scaling-trial-harness-sha256",
+    "--expected-scaling-configuration-sha256",
+    "--expected-scaling-irohad-sha256",
+    "--expected-scaling-iroha-cli-sha256",
+    "--repository-root",
+    "--output",
+    "--verify-existing",
+    "--validation-ack",
+    "--source-manifest-sha256",
+)
+VALIDATOR_PATH_OPTIONS = frozenset(
+    {
+        "--candidate-identity",
+        "--sealed-identity",
+        "--release-root",
+        "--bootstrap-completion",
+        "--bootstrap-evidence-dir",
+        "--bootstrap-identity",
+        "--bootstrap-attestation",
+        "--bootstrap-transcript",
+        "--bootstrap-candidate-root",
+        "--bootstrap-runner",
+        "--signature-attestation",
+        "--signature-transcript",
+        "--signature-raw-commit",
+        "--signature-cargo-lock",
+        "--signature-allowed-signers",
+        "--signature-revocation",
+        "--signature-git",
+        "--signature-ssh-keygen",
+        "--corridor-completion",
+        "--formal-completion",
+        "--seed-completion",
+        "--chaos-completion",
+        "--taira-completion",
+        "--g4p-completion",
+        "--g12-seed-completion",
+        "--g12-fault-soak-completion",
+        "--scaling-evidence-manifest",
+        "--sdk-dependency-archive",
+        "--sdk-dependency-input-inventory",
+        "--sdk-dependency-final-work-inventory",
+        "--repository-root",
+        "--output",
+        "--validation-ack",
+    }
 )
 IDENTITY_FIELDS = (
     "st_dev",
@@ -350,6 +457,8 @@ def _copy_regular(
     relative: str,
     before: os.stat_result,
     budget: dict[str, int],
+    *,
+    destination_name: str | None = None,
 ) -> dict[str, object]:
     if before.st_size > MAXIMUM_FILE_BYTES:
         raise CacheCopyError(f"cache input file exceeds its size limit: {relative}")
@@ -370,8 +479,9 @@ def _copy_regular(
         opened = os.fstat(source_fd)
         if not stat.S_ISREG(opened.st_mode) or not _unchanged(before, opened):
             raise CacheCopyError(f"cache file changed while opened: {relative}")
+        destination_entry = name if destination_name is None else destination_name
         destination_fd = os.open(
-            name,
+            destination_entry,
             os.O_WRONLY
             | os.O_CREAT
             | os.O_EXCL
@@ -410,7 +520,10 @@ def _copy_regular(
             or (copied.st_dev, copied.st_ino) == (opened.st_dev, opened.st_ino)
         ):
             raise CacheCopyError(f"cache copy is not inode-independent: {relative}")
-        _revalidate_entry(destination_parent_fd, name, copied, f"cache copy {relative}")
+        _revalidate_entry(
+            destination_parent_fd, destination_entry, copied,
+            f"cache copy {relative}",
+        )
     finally:
         if destination_fd is not None:
             os.close(destination_fd)
@@ -583,6 +696,110 @@ def _canonical_payload(document: dict[str, object]) -> bytes:
     if len(payload) > 256 * 1024 * 1024:
         raise CacheCopyError("Cargo cache inventory exceeds its size limit")
     return payload
+
+
+def _validator_invocation_value_sha256(kind: str, value: str | bool) -> str:
+    payload = json.dumps(
+        {"kind": kind, "value": value},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _validate_validator_invocation(
+    value: object,
+    *,
+    expected_values: dict[str, tuple[str, str | bool]],
+) -> None:
+    """Independently recompute and authenticate a validator invocation digest."""
+
+    if not isinstance(value, dict) or set(value) != {
+        "profile",
+        "operation",
+        "python_flags",
+        "validator",
+        "ordered_options",
+        "invocation_sha256",
+    }:
+        raise CacheCopyError("receipt validator invocation binding is malformed")
+    options = value["ordered_options"]
+    if (
+        value["profile"] != "release"
+        or value["operation"] != "verify-existing-and-ack"
+        or value["python_flags"] != ["-I", "-S"]
+        or value["validator"] != "protected:validate-receipt.py"
+        or not isinstance(options, list)
+        or len(options) != len(VALIDATOR_OPTION_ORDER)
+        or not isinstance(value["invocation_sha256"], str)
+        or re.fullmatch(r"[0-9a-f]{64}", value["invocation_sha256"]) is None
+    ):
+        raise CacheCopyError("receipt validator invocation contract is not exact")
+    if set(expected_values) != set(VALIDATOR_OPTION_ORDER):
+        raise CacheCopyError(
+            "receipt validator invocation reconstruction is incomplete"
+        )
+    for expected_name, binding in zip(VALIDATOR_OPTION_ORDER, options):
+        expected_kind = (
+            "flag"
+            if expected_name == "--verify-existing"
+            else "path"
+            if expected_name in VALIDATOR_PATH_OPTIONS
+            else "text"
+        )
+        if (
+            not isinstance(binding, dict)
+            or set(binding)
+            != {"name", "value_kind", "normalized_value_sha256"}
+            or binding["name"] != expected_name
+            or binding["value_kind"] != expected_kind
+            or not isinstance(binding["normalized_value_sha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", binding["normalized_value_sha256"])
+            is None
+        ):
+            raise CacheCopyError("receipt validator ordered option binding is not exact")
+        known = expected_values.get(expected_name)
+        if known is None:
+            raise CacheCopyError(
+                "receipt validator invocation reconstruction is incomplete"
+            )
+        kind, normalized = known
+        if (
+            (kind == "flag" and normalized is not True)
+            or (kind in {"path", "text"} and not isinstance(normalized, str))
+            or (
+                kind == "path"
+                and isinstance(normalized, str)
+                and normalized != os.path.abspath(os.path.normpath(normalized))
+            )
+        ):
+            raise CacheCopyError(
+                "receipt validator reconstructed option value is not canonical"
+            )
+        if (
+            kind != expected_kind
+            or binding["normalized_value_sha256"]
+            != _validator_invocation_value_sha256(kind, normalized)
+        ):
+            raise CacheCopyError(
+                "receipt validator normalized option value is not exact"
+            )
+    invocation = {
+        "profile": value["profile"],
+        "operation": value["operation"],
+        "python_flags": value["python_flags"],
+        "validator": value["validator"],
+        "ordered_options": options,
+    }
+    payload = json.dumps(
+        invocation,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    if hashlib.sha256(payload).hexdigest() != value["invocation_sha256"]:
+        raise CacheCopyError("receipt validator invocation digest changed")
 
 
 def _publish_inventory(
@@ -1403,6 +1620,7 @@ def publish_validation_failure(
         forbidden = {
             "BOOTSTRAP_RELEASE_COMPLETED.json", "RELEASE_COMPLETED.json",
             "receipt-validation-ack.json", "release-retained-inventory.json",
+            "release-runner-private-provenance.json",
             "release-runner-result.json", "sealed-identity.json",
         }
         if any(
@@ -1479,7 +1697,7 @@ def publish_validation_failure(
         )
         marker = {
             "format": VALIDATOR_FAILURE_FORMAT,
-            "schema_version": 1,
+            "schema_version": 2,
             "result": "release-failed",
             "stage": "protected-receipt-validation",
             "profile": "release",
@@ -1505,7 +1723,7 @@ def publish_validation_failure(
                 "python_flags": ["-I", "-S"],
                 "validator": "protected:validate-receipt.py",
                 "operation": "verify-existing-and-ack",
-                "option_names_sha256": VALIDATOR_OPTION_NAMES_SHA256,
+                "invocation_binding": "not-published-validation-failed",
             },
             "diagnostics": stream_records,
             "invocation_cleanup": "complete",
@@ -1536,12 +1754,33 @@ def publish_validation_failure(
 
 
 def _validation_ack(
-    ack_held: dict[str, object], receipt_held: dict[str, object], source: Path, bootstrap_evidence: Path,
+    ack_held: dict[str, object],
+    receipt_held: dict[str, object],
+    source: Path,
+    bootstrap_evidence: Path,
     source_manifest_sha256: str,
+    candidate_root: Path,
+    scaling_evidence_manifest: Path,
+    expected_signer_fingerprint: str,
+    expected_scaling_trial_harness_sha256: str,
+    expected_scaling_configuration_sha256: str,
+    expected_scaling_irohad_sha256: str,
+    expected_scaling_iroha_cli_sha256: str,
 ) -> tuple[str, int]:
     path, payload, metadata = ack_held["path"], ack_held["data"], ack_held["metadata"]
-    receipt, receipt_payload = receipt_held["path"], receipt_held["data"]
-    assert isinstance(path, Path) and isinstance(payload, bytes) and isinstance(metadata, os.stat_result) and isinstance(receipt, Path) and isinstance(receipt_payload, bytes)
+    receipt, receipt_payload, receipt_metadata = (
+        receipt_held["path"],
+        receipt_held["data"],
+        receipt_held["metadata"],
+    )
+    assert (
+        isinstance(path, Path)
+        and isinstance(payload, bytes)
+        and isinstance(metadata, os.stat_result)
+        and isinstance(receipt, Path)
+        and isinstance(receipt_payload, bytes)
+        and isinstance(receipt_metadata, os.stat_result)
+    )
     digest, size = hashlib.sha256(payload).hexdigest(), len(payload)
     if stat.S_IMODE(metadata.st_mode) != 0o400 or metadata.st_uid != os.geteuid() or metadata.st_nlink != 1:
         raise CacheCopyError("receipt validation acknowledgment metadata is not exact")
@@ -1556,30 +1795,228 @@ def _validation_ack(
     receipt_digest, receipt_size = hashlib.sha256(receipt_payload).hexdigest(), len(receipt_payload)
     stdout = f"Sumeragi v2 aggregate release receipt verified: {receipt}\n".encode()
     expected_streams = {
-        "stdout": {"base64": base64.b64encode(stdout).decode(), "sha256": hashlib.sha256(stdout).hexdigest(), "size": len(stdout)},
-        "stderr": {"base64": "", "sha256": hashlib.sha256(b"").hexdigest(), "size": 0},
+        "stdout": {
+            "sha256": hashlib.sha256(stdout).hexdigest(),
+            "size_bytes": len(stdout),
+        },
+        "stderr": {
+            "sha256": hashlib.sha256(b"").hexdigest(),
+            "size_bytes": 0,
+        },
     }
+    if not isinstance(value, dict):
+        raise CacheCopyError("receipt validation acknowledgment is malformed")
+    try:
+        receipt_document = json.loads(receipt_payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CacheCopyError("aggregate receipt is malformed") from error
+    if not isinstance(receipt_document, dict):
+        raise CacheCopyError("aggregate receipt is malformed")
+
+    def receipt_path(*names: str) -> str:
+        item: object = receipt_document
+        try:
+            for name in names:
+                if not isinstance(item, dict):
+                    raise KeyError(name)
+                item = item[name]
+        except KeyError as error:
+            raise CacheCopyError(
+                "aggregate receipt lacks a validator invocation path"
+            ) from error
+        if isinstance(item, dict):
+            item = item.get("path")
+        if not isinstance(item, str):
+            raise CacheCopyError(
+                "aggregate receipt validator invocation path is malformed"
+            )
+        return item
+
+    try:
+        authentication = receipt_document["authentication"]
+        authentication["bootstrap"]
+        receipt_document["evidence"]
+    except (KeyError, TypeError) as error:
+        raise CacheCopyError(
+            "aggregate receipt lacks validator invocation authentication"
+        ) from error
+
+    completion_payload, _ = _read_regular(completion, "bootstrap completion")
+    try:
+        completion_document = json.loads(completion_payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CacheCopyError("bootstrap completion is malformed") from error
+    if not isinstance(completion_document, dict):
+        raise CacheCopyError("bootstrap completion is malformed")
+    trusted_inputs = completion_document.get("trusted_inputs")
+    if not isinstance(trusted_inputs, dict):
+        raise CacheCopyError("bootstrap completion lacks trusted inputs")
+
+    def trusted_digest(name: str) -> str:
+        record = trusted_inputs.get(name)
+        if not isinstance(record, dict):
+            raise CacheCopyError(
+                f"bootstrap completion lacks trusted {name} input"
+            )
+        value = record.get("sha256")
+        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise CacheCopyError(
+                f"bootstrap completion trusted {name} digest is malformed"
+            )
+        return value
+
+    for name, expected_value in (
+        ("expected signer fingerprint", expected_signer_fingerprint),
+        (
+            "expected scaling trial-harness digest",
+            expected_scaling_trial_harness_sha256,
+        ),
+        (
+            "expected scaling configuration digest",
+            expected_scaling_configuration_sha256,
+        ),
+        ("expected scaling irohad digest", expected_scaling_irohad_sha256),
+        (
+            "expected scaling iroha CLI digest",
+            expected_scaling_iroha_cli_sha256,
+        ),
+    ):
+        pattern = r"SHA256:[A-Za-z0-9+/]{43}" if name == "expected signer fingerprint" else r"[0-9a-f]{64}"
+        if (
+            not isinstance(expected_value, str)
+            or re.fullmatch(pattern, expected_value) is None
+        ):
+            raise CacheCopyError(f"{name} is malformed")
+
+    identity_path = bootstrap_evidence / "candidate-identity.json"
+    protected_archives = {
+        "attestation": bootstrap_evidence / "identity-attestation.json",
+        "transcript": bootstrap_evidence / "identity-transcript.json",
+        "raw_commit": bootstrap_evidence / "identity-raw-commit",
+        "cargo_lock": bootstrap_evidence / "identity-Cargo.lock",
+        "allowed_signers": bootstrap_evidence / "identity-allowed-signers",
+        "revocation": bootstrap_evidence / "identity-revocation",
+        "git": bootstrap_evidence / "identity-git",
+        "ssh_keygen": bootstrap_evidence / "identity-ssh-keygen",
+    }
+    expected_invocation_values = {
+        "--candidate-identity": ("path", str(identity_path)),
+        "--sealed-identity": ("path", str(source.parent / "sealed-identity.json")),
+        "--release-root": ("path", str(source)),
+        "--bootstrap-completion": ("path", str(completion)),
+        "--bootstrap-evidence-dir": ("path", str(bootstrap_evidence)),
+        "--bootstrap-identity": ("path", str(identity_path)),
+        "--bootstrap-attestation": ("path", str(protected_archives["attestation"])),
+        "--bootstrap-transcript": ("path", str(protected_archives["transcript"])),
+        "--expected-bootstrap-completion-sha256": ("text", completion_digest),
+        "--bootstrap-candidate-root": ("path", str(candidate_root)),
+        "--bootstrap-runner": (
+            "path", str(candidate_root / "scripts" / "run_sumeragi_v2_release_gates.sh")
+        ),
+        "--signature-attestation": ("path", str(protected_archives["attestation"])),
+        "--signature-transcript": ("path", str(protected_archives["transcript"])),
+        "--signature-raw-commit": ("path", str(protected_archives["raw_commit"])),
+        "--signature-cargo-lock": ("path", str(protected_archives["cargo_lock"])),
+        "--signature-allowed-signers": ("path", str(protected_archives["allowed_signers"])),
+        "--signature-revocation": ("path", str(protected_archives["revocation"])),
+        "--signature-git": ("path", str(protected_archives["git"])),
+        "--signature-ssh-keygen": ("path", str(protected_archives["ssh_keygen"])),
+        "--expected-git-sha256": ("text", trusted_digest("git")),
+        "--expected-ssh-keygen-sha256": ("text", trusted_digest("ssh_keygen")),
+        "--expected-allowed-signers-sha256": ("text", trusted_digest("allowed_signers")),
+        "--expected-revocation-sha256": ("text", trusted_digest("revocation")),
+        "--expected-signer-fingerprint": ("text", expected_signer_fingerprint),
+        "--corridor-completion": (
+            "path", receipt_path("evidence", "corridor_completion")
+        ),
+        "--formal-completion": (
+            "path", receipt_path("evidence", "formal_completion")
+        ),
+        "--seed-completion": (
+            "path", receipt_path("evidence", "seed_matrix_completion")
+        ),
+        "--chaos-completion": (
+            "path", receipt_path("evidence", "chaos_completion")
+        ),
+        "--taira-completion": (
+            "path", receipt_path("evidence", "taira_completion")
+        ),
+        "--g4p-completion": (
+            "path", receipt_path("evidence", "g4p_multilane", "completion")
+        ),
+        "--g12-seed-completion": (
+            "path",
+            receipt_path("evidence", "g12_cross_dataspace", "seed_completion"),
+        ),
+        "--g12-fault-soak-completion": (
+            "path",
+            receipt_path(
+                "evidence", "g12_cross_dataspace", "fault_soak_completion"
+            ),
+        ),
+        "--scaling-evidence-manifest": ("path", str(scaling_evidence_manifest)),
+        "--sdk-dependency-archive": (
+            "path", str(source.parent / "sdk-dependency-bundle.tar")
+        ),
+        "--sdk-dependency-input-inventory": (
+            "path", str(source.parent / "sdk-dependency-input.json")
+        ),
+        "--sdk-dependency-final-work-inventory": (
+            "path", str(source.parent / "sdk-dependency-work-final.json")
+        ),
+        "--expected-scaling-trial-harness-sha256": (
+            "text", expected_scaling_trial_harness_sha256
+        ),
+        "--expected-scaling-configuration-sha256": (
+            "text", expected_scaling_configuration_sha256
+        ),
+        "--expected-scaling-irohad-sha256": (
+            "text", expected_scaling_irohad_sha256
+        ),
+        "--expected-scaling-iroha-cli-sha256": (
+            "text", expected_scaling_iroha_cli_sha256
+        ),
+        "--repository-root": ("path", str(source)),
+        "--output": ("path", str(receipt)),
+        "--verify-existing": ("flag", True),
+        "--validation-ack": ("path", str(path)),
+        "--source-manifest-sha256": ("text", source_manifest_sha256),
+    }
+    _validate_validator_invocation(
+        value.get("invocation"),
+        expected_values=expected_invocation_values,
+    )
     if (
-        not isinstance(value, dict)
-        or set(value) != {"format", "schema_version", "profile", "invocation_root", "sealed_source", "receipt", "validator", "argv", "exit_status", "stdout", "stderr"}
+        set(value) != {"format", "schema_version", "profile", "sealed_source", "receipt", "validator", "invocation", "exit_status", "stdout", "stderr"}
         or value["format"] != "iroha-sumeragi-v2-receipt-validation-ack"
-        or type(value["schema_version"]) is not int or value["schema_version"] != 1
-        or value["profile"] != "release" or value["invocation_root"] != str(source.parent)
-        or value["sealed_source"] != {"path": str(source), "manifest_sha256": source_manifest_sha256}
-        or not isinstance(value["receipt"], dict) or type(value["receipt"].get("size")) is not int
-        or value["receipt"] != {"path": str(receipt), "sha256": receipt_digest, "size": receipt_size}
+        or type(value["schema_version"]) is not int or value["schema_version"] != 3
+        or value["profile"] != "release"
+        or value["sealed_source"] != {
+            "archive_id": "release-retained.source.v1",
+            "manifest_sha256": source_manifest_sha256,
+        }
+        or not isinstance(value["receipt"], dict)
+        or type(value["receipt"].get("size_bytes")) is not int
+        or value["receipt"] != {
+            "archive_id": "release-terminal.receipt.v1",
+            "mode": f"{stat.S_IMODE(receipt_metadata.st_mode):04o}",
+            "sha256": receipt_digest,
+            "size_bytes": receipt_size,
+        }
         or not isinstance(value["validator"], dict)
-        or set(value["validator"]) != {"path", "sha256", "bootstrap_completion_sha256"}
-        or value["validator"] != {"path": str(validator), "sha256": validator_digest, "bootstrap_completion_sha256": completion_digest}
+        or set(value["validator"]) != {"archive_id", "sha256", "bootstrap_completion_sha256"}
+        or value["validator"] != {
+            "archive_id": "release-bootstrap.receipt-validator.v1",
+            "sha256": validator_digest,
+            "bootstrap_completion_sha256": completion_digest,
+        }
         or type(value["exit_status"]) is not int or value["exit_status"] != 0
-        or not all(isinstance(value[name], dict) and type(value[name].get("size")) is int for name in ("stdout", "stderr"))
+        or not all(
+            isinstance(value[name], dict)
+            and type(value[name].get("size_bytes")) is int
+            for name in ("stdout", "stderr")
+        )
         or value["stdout"] != expected_streams["stdout"] or value["stderr"] != expected_streams["stderr"]
-        or not isinstance(value["argv"], dict)
-        or set(value["argv"]) != {"profile", "python_flags", "validator", "operation", "option_names_sha256"}
-        or value["argv"]["profile"] != "release" or value["argv"]["python_flags"] != ["-I", "-S"]
-        or value["argv"]["validator"] != "protected:validate-receipt.py"
-        or value["argv"]["operation"] != "verify-existing-and-ack"
-        or value["argv"]["option_names_sha256"] != "deea2d469c8fe65392527c24562b64fa728c21f6ee9f679d595e09304e8b56b1"
         or payload != _canonical_payload(value)
     ):
         raise CacheCopyError("receipt validation acknowledgment contract is not exact")
@@ -1590,11 +2027,20 @@ def seal_release_result(
     invocation_root: Path,
     bootstrap_evidence: Path,
     source_manifest_sha256: str,
+    candidate_root: Path,
+    scaling_evidence_manifest: Path,
+    expected_signer_fingerprint: str,
+    expected_scaling_trial_harness_sha256: str,
+    expected_scaling_configuration_sha256: str,
+    expected_scaling_irohad_sha256: str,
+    expected_scaling_iroha_cli_sha256: str,
 ) -> None:
     """Prune build runtime and publish a protected exact retained-evidence binding."""
 
     _normalized_absolute(invocation_root, "release invocation root")
     _normalized_absolute(bootstrap_evidence, "bootstrap evidence root")
+    _normalized_absolute(candidate_root, "candidate root")
+    _normalized_absolute(scaling_evidence_manifest, "scaling evidence manifest")
     invocation_fd, invocation_identity = _open_directory(invocation_root, "release invocation root")
     bootstrap_fd, bootstrap_identity = _open_directory(bootstrap_evidence, "bootstrap evidence root")
     os.close(invocation_fd)
@@ -1626,6 +2072,9 @@ def seal_release_result(
     protected_inventory = bootstrap_evidence / "release-retained-inventory.json"
     protected_ack = bootstrap_evidence / "receipt-validation-ack.json"
     result_path = bootstrap_evidence / "release-runner-result.json"
+    private_provenance_path = (
+        bootstrap_evidence / "release-runner-private-provenance.json"
+    )
     held_files: list[dict[str, object]] = []
     published: list[tuple[Path, tuple[os.stat_result, os.stat_result]]] = []
     try:
@@ -1636,13 +2085,26 @@ def seal_release_result(
         identity_held = _hold_regular(identity, "sealed identity")
         held_files.append(identity_held)
         ack_digest, ack_size = _validation_ack(
-            ack_held, receipt_held, source, bootstrap_evidence, source_manifest_sha256,
+            ack_held,
+            receipt_held,
+            source,
+            bootstrap_evidence,
+            source_manifest_sha256,
+            candidate_root,
+            scaling_evidence_manifest,
+            expected_signer_fingerprint,
+            expected_scaling_trial_harness_sha256,
+            expected_scaling_configuration_sha256,
+            expected_scaling_irohad_sha256,
+            expected_scaling_iroha_cli_sha256,
         )
         invocation_fd, invocation_identity = _open_directory(invocation_root, "release invocation root")
         output_fd, output_identity = _open_directory(output, "release output root")
         os.close(output_fd); os.close(invocation_fd)
         for parent, name in (
             (invocation_root, "runtime"),
+            (invocation_root, "sdk-inputs"),
+            (invocation_root, "sdk-work"),
             *((output, name) for name in ("home", "tmp", "cache", "cargo-home")),
             (invocation_root, "target"),
         ):
@@ -1671,9 +2133,9 @@ def seal_release_result(
         records, total_bytes = _retained_tree(invocation_root, {source, inventory_path})
         inventory = {
             "format": RETAINED_FORMAT,
-            "schema_version": 1,
-            "invocation_root": str(invocation_root),
-            "source_root": str(source),
+            "schema_version": 2,
+            "invocation_archive_id": "release-retained.invocation.v1",
+            "source_archive_id": "release-retained.source.v1",
             "source_manifest_sha256": source_manifest_sha256,
             "record_count": len(records),
             "file_bytes": total_bytes,
@@ -1698,27 +2160,65 @@ def seal_release_result(
             (protected_ack, ack_bytes),
         ):
             published.append((path, _publish_inventory(path, data)))
-        result = {
-            "format": RETAINED_FORMAT,
+        private_provenance = {
+            "format": RETAINED_PRIVATE_PROVENANCE_FORMAT,
             "schema_version": 1,
             "invocation_root": str(invocation_root),
             "source_root": str(source),
+            "artifacts": {
+                "sealed_identity": {
+                    "path": str(identity),
+                    "protected_path": str(protected_identity),
+                },
+                "receipt": {
+                    "path": str(receipt),
+                    "protected_path": str(protected_receipt),
+                },
+                "inventory": {
+                    "path": str(inventory_path),
+                    "protected_path": str(protected_inventory),
+                },
+                "receipt_validation": {
+                    "path": str(ack),
+                    "protected_path": str(protected_ack),
+                },
+            },
+        }
+        published.append((
+            private_provenance_path,
+            _publish_inventory(
+                private_provenance_path, _canonical_payload(private_provenance)
+            ),
+        ))
+        result = {
+            "format": RETAINED_FORMAT,
+            "schema_version": 2,
+            "invocation_archive_id": "release-retained.invocation.v1",
+            "source_archive_id": "release-retained.source.v1",
             "source_manifest_sha256": source_manifest_sha256,
             "sealed_identity": {
-                "path": str(identity), "sha256": identity_digest,
-                "size": identity_size, "protected_path": str(protected_identity),
+                "archive_id": "release-retained.identity.v1",
+                "mode": "0400",
+                "sha256": identity_digest,
+                "size_bytes": identity_size,
             },
             "receipt": {
-                "path": str(receipt), "sha256": receipt_digest,
-                "size": receipt_size, "protected_path": str(protected_receipt),
+                "archive_id": "release-terminal.receipt.v1",
+                "mode": "0400",
+                "sha256": receipt_digest,
+                "size_bytes": receipt_size,
             },
             "inventory": {
-                "path": str(inventory_path), "sha256": inventory_digest,
-                "size": inventory_size, "protected_path": str(protected_inventory),
+                "archive_id": "release-retained.inventory.v2",
+                "mode": "0400",
+                "sha256": inventory_digest,
+                "size_bytes": inventory_size,
             },
             "receipt_validation": {
-                "path": str(ack), "sha256": ack_digest,
-                "size": ack_size, "protected_path": str(protected_ack),
+                "archive_id": "release-retained.receipt-validation-ack.v3",
+                "mode": "0400",
+                "sha256": ack_digest,
+                "size_bytes": ack_size,
             },
         }
         published.append((result_path, _publish_inventory(result_path, _canonical_payload(result))))
@@ -1876,14 +2376,23 @@ def _bind_runtime_destinations(
             raise CacheCopyError("runtime source destination provenance changed")
 
 
+_RELEASE_SHELL_UTILITY_NAMES = (
+    "awk", "basename", "cat", "chmod", "cmp", "cp", "cut", "diff",
+    "dirname", "env", "find", "grep", "ln", "ls", "mkdir", "mkfifo",
+    "mktemp", "mv", "openssl", "rm", "rmdir", "sed", "sh", "sleep",
+    "tail", "tee", "tr", "uname", "wc", "xargs",
+    "shasum" if sys.platform == "darwin" else "sha256sum",
+)
 _RELEASE_RUNTIME_NAMES = (
     "python3", "git", "ssh-keygen", "bash", "cargo", "rustc", "node",
     "swift", "tlapm", "java", "verus", "cargo-verus", "tla2tools.jar",
     "tlapm-stdlib", "git-upload-pack", "git-index-pack",
+    *_RELEASE_SHELL_UTILITY_NAMES,
 )
 _PR_RUNTIME_NAMES = (
     "python3", "git", "bash", "cargo", "rustc",
     "git-upload-pack", "git-index-pack",
+    *_RELEASE_SHELL_UTILITY_NAMES,
 )
 
 
@@ -1893,6 +2402,443 @@ def _runtime_names(resolved: list[Path]) -> tuple[str, ...]:
     if len(resolved) == len(_PR_RUNTIME_NAMES):
         return _PR_RUNTIME_NAMES
     raise CacheCopyError("runtime source inputs are not exact")
+
+
+def _framework_python_closure(
+    resolved: list[Path],
+) -> tuple[Path, str, str] | None:
+    """Return the exact selected macOS framework-Python closure, if any."""
+
+    if (
+        sys.platform != "darwin"
+        or Path(sys.executable).resolve(strict=True) != resolved[0]
+    ):
+        return None
+    import sysconfig
+
+    framework = sysconfig.get_config_var("PYTHONFRAMEWORK")
+    if not isinstance(framework, str) or not framework:
+        raise CacheCopyError("selected macOS Python is not a framework runtime")
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", framework) is None:
+        raise CacheCopyError("selected Python framework name is unsafe")
+    executable = resolved[0]
+    version_root = executable.parent.parent
+    if executable.parent.name != "bin" or executable.parent.parent != version_root:
+        raise CacheCopyError("selected Python launcher is outside its framework version")
+    prefixes = (
+        sys.prefix,
+        sys.exec_prefix,
+        sys.base_prefix,
+        sys.base_exec_prefix,
+    )
+    if any(
+        not isinstance(prefix, str)
+        or Path(prefix) != version_root
+        or not Path(prefix).is_absolute()
+        for prefix in prefixes
+    ):
+        raise CacheCopyError("selected Python prefixes do not name one framework version")
+
+    stdlib_name = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    expected_path = (
+        str(
+            version_root
+            / "lib"
+            / f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+        ),
+        str(version_root / "lib" / stdlib_name),
+        str(version_root / "lib" / stdlib_name / "lib-dynload"),
+    )
+    if tuple(sys.path) != expected_path:
+        raise CacheCopyError(
+            "selected Python isolated path is not its exact framework stdlib"
+        )
+
+    root_fd, root_metadata = _open_directory(
+        version_root, "selected Python framework version",
+    )
+    try:
+        if (
+            root_metadata.st_uid not in {0, os.geteuid()}
+            or stat.S_IMODE(root_metadata.st_mode) & 0o022
+        ):
+            raise CacheCopyError(
+                "selected Python framework version metadata is unsafe"
+            )
+        required = {
+            framework: "file",
+            "Resources": "directory",
+            "lib": "directory",
+            "bin": "directory",
+        }
+        for name, kind in required.items():
+            metadata = _entry_stat(
+                root_fd, name, f"selected Python framework {name}",
+            )
+            matches = (
+                stat.S_ISREG(metadata.st_mode)
+                if kind == "file"
+                else stat.S_ISDIR(metadata.st_mode)
+            )
+            if stat.S_ISLNK(metadata.st_mode) or not matches:
+                raise CacheCopyError(
+                    f"selected Python framework {name} is not a no-follow {kind}"
+                )
+        bin_fd = os.open("bin", _DIRECTORY_FLAGS, dir_fd=root_fd)
+        lib_fd = os.open("lib", _DIRECTORY_FLAGS, dir_fd=root_fd)
+        resources_fd = os.open("Resources", _DIRECTORY_FLAGS, dir_fd=root_fd)
+        try:
+            launcher = _entry_stat(
+                bin_fd, executable.name, "selected Python framework launcher",
+            )
+            source_launcher = executable.lstat()
+            if (
+                stat.S_ISLNK(launcher.st_mode)
+                or not stat.S_ISREG(launcher.st_mode)
+                or not _unchanged(launcher, source_launcher)
+                or not launcher.st_mode & 0o111
+                or launcher.st_uid not in {0, os.geteuid()}
+                or stat.S_IMODE(launcher.st_mode) & 0o022
+            ):
+                raise CacheCopyError(
+                    "selected Python framework launcher is unsafe"
+                )
+            stdlib = _entry_stat(
+                lib_fd, stdlib_name, "selected Python framework stdlib",
+            )
+            if stat.S_ISLNK(stdlib.st_mode) or not stat.S_ISDIR(stdlib.st_mode):
+                raise CacheCopyError(
+                    "selected Python framework stdlib is unsafe"
+                )
+            stdlib_fd = os.open(stdlib_name, _DIRECTORY_FLAGS, dir_fd=lib_fd)
+            try:
+                dynload = _entry_stat(
+                    stdlib_fd, "lib-dynload",
+                    "selected Python framework extension directory",
+                )
+                if (
+                    stat.S_ISLNK(dynload.st_mode)
+                    or not stat.S_ISDIR(dynload.st_mode)
+                ):
+                    raise CacheCopyError(
+                        "selected Python framework extension directory is unsafe"
+                    )
+            finally:
+                os.close(stdlib_fd)
+            descriptor = resources_fd
+            opened: list[int] = []
+            try:
+                for part in ("Python.app", "Contents", "MacOS"):
+                    metadata = _entry_stat(
+                        descriptor, part,
+                        "selected Python framework resource trampoline",
+                    )
+                    if (
+                        stat.S_ISLNK(metadata.st_mode)
+                        or not stat.S_ISDIR(metadata.st_mode)
+                    ):
+                        raise CacheCopyError(
+                            "selected Python framework resource trampoline is unsafe"
+                        )
+                    child = os.open(part, _DIRECTORY_FLAGS, dir_fd=descriptor)
+                    if not _unchanged(metadata, os.fstat(child)):
+                        os.close(child)
+                        raise CacheCopyError(
+                            "selected Python framework resource trampoline changed"
+                        )
+                    opened.append(child)
+                    descriptor = child
+                trampoline = _entry_stat(
+                    descriptor, "Python",
+                    "selected Python framework resource executable",
+                )
+                if (
+                    stat.S_ISLNK(trampoline.st_mode)
+                    or not stat.S_ISREG(trampoline.st_mode)
+                    or not trampoline.st_mode & 0o111
+                ):
+                    raise CacheCopyError(
+                        "selected Python framework resource executable is unsafe"
+                    )
+            finally:
+                for descriptor in reversed(opened):
+                    os.close(descriptor)
+        finally:
+            os.close(bin_fd)
+            os.close(lib_fd)
+            os.close(resources_fd)
+    finally:
+        os.close(root_fd)
+    return version_root, framework, stdlib_name
+
+
+def _validate_framework_python_sources(
+    version_root: Path, framework: str,
+) -> None:
+    """Validate every selected framework member without following a symlink."""
+
+    allowed_roots = {framework, "Resources", "lib"}
+    root_fd, root_metadata = _open_directory(
+        version_root, "selected Python framework version",
+    )
+
+    def safe_metadata(metadata: os.stat_result, label: str) -> None:
+        if (
+            metadata.st_uid not in {0, os.geteuid()}
+            or (
+                not stat.S_ISLNK(metadata.st_mode)
+                and stat.S_IMODE(metadata.st_mode) & 0o022
+            )
+        ):
+            raise CacheCopyError(
+                f"selected Python framework member is unsafe: {label}"
+            )
+
+    def walk(directory_fd: int, parts: tuple[str, ...]) -> None:
+        before = os.fstat(directory_fd)
+        safe_metadata(before, "/".join(parts))
+        names = _directory_entries(
+            directory_fd, f"selected Python framework {'/'.join(parts)}",
+        )
+        for name in names:
+            child_parts = (*parts, name)
+            label = "/".join(child_parts)
+            _bounded_relative(label)
+            metadata = _entry_stat(
+                directory_fd, name, f"selected Python framework {label}",
+            )
+            safe_metadata(metadata, label)
+            if stat.S_ISDIR(metadata.st_mode):
+                child = os.open(name, _DIRECTORY_FLAGS, dir_fd=directory_fd)
+                try:
+                    if not _unchanged(metadata, os.fstat(child)):
+                        raise CacheCopyError(
+                            f"selected Python framework directory changed: {label}"
+                        )
+                    walk(child, child_parts)
+                finally:
+                    os.close(child)
+                _revalidate_entry(
+                    directory_fd, name, metadata,
+                    f"selected Python framework directory {label}",
+                )
+            elif stat.S_ISREG(metadata.st_mode):
+                continue
+            elif stat.S_ISLNK(metadata.st_mode):
+                target = _validate_symlink(
+                    directory_fd, name, metadata, root_fd, parts, label,
+                )
+                target_parts = _safe_target_parts(parts, target, label)
+                if target_parts[0] not in allowed_roots:
+                    raise CacheCopyError(
+                        "selected Python framework symlink leaves "
+                        f"its archive closure: {label}"
+                    )
+            else:
+                raise CacheCopyError(
+                    f"selected Python framework contains a special member: {label}"
+                )
+        if (
+            _directory_entries(
+                directory_fd, f"selected Python framework {'/'.join(parts)}",
+            )
+            != names
+            or not _unchanged(before, os.fstat(directory_fd))
+        ):
+            raise CacheCopyError(
+                f"selected Python framework directory changed: {'/'.join(parts)}"
+            )
+
+    try:
+        safe_metadata(root_metadata, ".")
+        framework_metadata = _entry_stat(
+            root_fd, framework, "selected Python framework library",
+        )
+        safe_metadata(framework_metadata, framework)
+        if (
+            stat.S_ISLNK(framework_metadata.st_mode)
+            or not stat.S_ISREG(framework_metadata.st_mode)
+        ):
+            raise CacheCopyError("selected Python framework library is unsafe")
+        for name in ("Resources", "lib"):
+            metadata = _entry_stat(
+                root_fd, name, f"selected Python framework {name}",
+            )
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+                raise CacheCopyError(
+                    f"selected Python framework {name} is unsafe"
+                )
+            descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=root_fd)
+            try:
+                if not _unchanged(metadata, os.fstat(descriptor)):
+                    raise CacheCopyError(
+                        f"selected Python framework {name} changed while opened"
+                    )
+                walk(descriptor, (name,))
+            finally:
+                os.close(descriptor)
+            _revalidate_entry(
+                root_fd, name, metadata, f"selected Python framework {name}",
+            )
+    finally:
+        os.close(root_fd)
+
+
+def _validate_framework_python_runtime_records(
+    records: list[dict[str, object]], framework: str, stdlib_name: str,
+) -> None:
+    """Require a complete, internally closed destination-member inventory."""
+
+    by_path = {
+        record.get("path"): record
+        for record in records
+        if isinstance(record, dict) and isinstance(record.get("path"), str)
+    }
+    if len(by_path) != len(records):
+        raise CacheCopyError("private runtime framework inventory is not unique")
+    required = {
+        "bin/python3": "file",
+        framework: "file",
+        "Resources": "directory",
+        "Resources/Python.app/Contents/MacOS/Python": "file",
+        "lib": "directory",
+        f"lib/{stdlib_name}": "directory",
+        f"lib/{stdlib_name}/lib-dynload": "directory",
+    }
+    if any(
+        not isinstance(by_path.get(path), dict)
+        or by_path[path].get("kind") != kind
+        for path, kind in required.items()
+    ):
+        raise CacheCopyError("private runtime framework closure is incomplete")
+    allowed_roots = {framework, "Resources", "lib"}
+    for path, record in by_path.items():
+        if (
+            not isinstance(path, str)
+            or PurePosixPath(path).parts[0] not in allowed_roots
+            or record.get("kind") != "symlink"
+        ):
+            continue
+        target = record.get("target")
+        if not isinstance(target, str):
+            raise CacheCopyError("private runtime framework symlink is malformed")
+        parent_parts = tuple(PurePosixPath(path).parts[:-1])
+        target_parts = _safe_target_parts(parent_parts, target, path)
+        if target_parts[0] not in allowed_roots:
+            raise CacheCopyError(
+                f"private runtime framework symlink leaves its closure: {path}"
+            )
+        for index in range(1, len(target_parts) + 1):
+            target_path = "/".join(target_parts[:index])
+            target_record = by_path.get(target_path)
+            if not isinstance(target_record, dict):
+                raise CacheCopyError(
+                    f"private runtime framework symlink target is absent: {path}"
+                )
+            if (
+                index < len(target_parts)
+                and target_record.get("kind") != "directory"
+            ):
+                raise CacheCopyError(
+                    f"private runtime framework symlink target is indirect: {path}"
+                )
+            if (
+                index == len(target_parts)
+                and target_record.get("kind") not in {"directory", "file"}
+            ):
+                raise CacheCopyError(
+                    f"private runtime framework symlink target is unsafe: {path}"
+                )
+
+
+def _reject_framework_python_destination_overlap(
+    version_root: Path, runtime_root: Path, inventory_path: Path,
+) -> None:
+    if (
+        _overlap(version_root, runtime_root)
+        or _contained(inventory_path, version_root)
+    ):
+        raise CacheCopyError(
+            "Python framework source, private runtime, and inventory must be disjoint"
+        )
+
+
+_FRAMEWORK_PYTHON_PROBE = """\
+import sys
+expected_executable, expected_root, expected_zip, expected_stdlib, expected_dynload = sys.argv[1:]
+if sys.executable != expected_executable:
+    raise SystemExit(91)
+if (sys.prefix, sys.exec_prefix, sys.base_prefix, sys.base_exec_prefix) != (expected_root,) * 4:
+    raise SystemExit(92)
+if sys.path != [expected_zip, expected_stdlib, expected_dynload]:
+    raise SystemExit(93)
+sys.stdout.buffer.write(sys.executable.encode('utf-8', 'surrogateescape') + b'\\n')
+"""
+
+
+def _probe_framework_python_runtime(
+    runtime_root: Path, stdlib_name: str,
+) -> bytes:
+    """Run the archived interpreter and require its exact archive-local identity."""
+
+    executable = runtime_root / "bin" / "python3"
+    metadata = executable.lstat()
+    if (
+        stat.S_ISLNK(metadata.st_mode)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) != 0o500
+        or metadata.st_nlink != 1
+    ):
+        raise CacheCopyError(
+            "archived framework Python executable metadata is unsafe"
+        )
+    expected_zip = runtime_root / "lib" / (
+        f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+    )
+    expected_stdlib = runtime_root / "lib" / stdlib_name
+    expected_dynload = expected_stdlib / "lib-dynload"
+    argv = [
+        str(executable),
+        "-I",
+        "-S",
+        "-c",
+        _FRAMEWORK_PYTHON_PROBE,
+        str(executable),
+        str(runtime_root),
+        str(expected_zip),
+        str(expected_stdlib),
+        str(expected_dynload),
+    ]
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=runtime_root,
+            env={
+                "LANG": "C",
+                "LC_ALL": "C",
+                "PATH": str(runtime_root / "bin"),
+            },
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise CacheCopyError(
+            "archived framework Python probe could not run"
+        ) from error
+    expected_stdout = os.fsencode(str(executable)) + b"\n"
+    if (
+        result.returncode != 0
+        or result.stdout != expected_stdout
+        or result.stderr != b""
+    ):
+        raise CacheCopyError(
+            "archived framework Python isolated probe did not report its executable"
+        )
+    return expected_stdout
 
 
 def _runtime_source_roots(resolved: list[Path]) -> dict[str, Path]:
@@ -1910,15 +2856,14 @@ def _runtime_source_roots(resolved: list[Path]) -> dict[str, Path]:
             "cargo", "rustc", "swift", "java", "verus", "cargo-verus",
         }:
             roots[name] = source
-    if sys.platform == "darwin" and Path(sys.executable).resolve(strict=True) == resolved[0]:
-        import sysconfig
-        framework = sysconfig.get_config_var("PYTHONFRAMEWORK")
-        version_root = resolved[0].parent.parent
-        if isinstance(framework, str) and framework and (version_root / framework).is_file():
-            roots[framework] = version_root / framework
-        for companion in ("Resources", "lib", "share"):
-            if (version_root / companion).is_dir():
-                roots[companion] = version_root / companion
+    framework_python = _framework_python_closure(resolved)
+    if framework_python is not None:
+        version_root, framework, _ = framework_python
+        roots.update({
+            framework: version_root / framework,
+            "Resources": version_root / "Resources",
+            "lib": version_root / "lib",
+        })
     return roots
 
 
@@ -1929,6 +2874,13 @@ def verify_runtime_sources(
         raise CacheCopyError("runtime source verification inputs are not exact")
     resolved = [source.resolve(strict=True) for source in sources]
     _runtime_names(resolved)
+    framework_python = _framework_python_closure(resolved)
+    if framework_python is not None:
+        version_root, framework, stdlib_name = framework_python
+        _reject_framework_python_destination_overlap(
+            version_root, runtime_root, inventory_path,
+        )
+        _validate_framework_python_sources(version_root, framework)
     payload, inventory_metadata = _read_regular(inventory_path, "runtime inventory")
     try:
         inventory = json.loads(payload)
@@ -1957,6 +2909,10 @@ def verify_runtime_sources(
                 raise CacheCopyError("private runtime record numeric field is not exact")
         if not isinstance(record["mode"], str) or re.fullmatch(r"[0-7]{4}", record["mode"]) is None or (kind == "file" and (not isinstance(record["sha256"], str) or re.fullmatch(r"[0-9a-f]{64}", record["sha256"]) is None)) or (kind == "symlink" and not isinstance(record["target"], str)):
             raise CacheCopyError("private runtime record metadata is not exact")
+    if framework_python is not None:
+        _validate_framework_python_runtime_records(
+            inventory["records"], framework, stdlib_name,
+        )
     _bind_runtime_destinations(inventory["input_records"], inventory["records"], update=False)
     if not isinstance(inventory["runtime_root"], str):
         raise CacheCopyError("private runtime path is not exact")
@@ -1981,24 +2937,39 @@ def verify_runtime_sources(
         or inventory.get("records") != sorted(records, key=lambda record: str(record["path"]))
     ):
         raise CacheCopyError("private runtime changed after publication")
+    if framework_python is not None:
+        _probe_framework_python_runtime(runtime_root, stdlib_name)
 
 
-def _seal_copied_tree(root: Path, label: str) -> None:
+def _seal_copied_tree(
+    root: Path,
+    label: str,
+    *,
+    owner_private_directory_roots: tuple[tuple[str, ...], ...] = (),
+) -> None:
     root_fd, root_identity = _open_directory(root, label)
 
-    def seal(directory_fd: int, relative: str) -> None:
+    def owner_private(parts: tuple[str, ...]) -> bool:
+        return any(
+            parts[:len(prefix)] == prefix
+            for prefix in owner_private_directory_roots
+        )
+
+    def seal(directory_fd: int, relative: str, parts: tuple[str, ...]) -> None:
         for name in _directory_entries(directory_fd, relative):
+            child_parts = (*parts, name)
             metadata = _entry_stat(directory_fd, name, f"{relative}/{name}")
             if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
                 child = os.open(name, _DIRECTORY_FLAGS, dir_fd=directory_fd)
                 try:
                     if not _same_directory(metadata, os.fstat(child)):
                         raise CacheCopyError(f"{label} directory changed: {relative}/{name}")
-                    seal(child, f"{relative}/{name}")
+                    seal(child, f"{relative}/{name}", child_parts)
                 finally:
                     os.close(child)
                 sealed = _entry_stat(directory_fd, name, f"{relative}/{name}")
-                if not _same_directory_inode(metadata, sealed) or stat.S_IMODE(sealed.st_mode) != 0o500:
+                expected_mode = 0o700 if owner_private(child_parts) else 0o500
+                if not _same_directory_inode(metadata, sealed) or stat.S_IMODE(sealed.st_mode) != expected_mode:
                     raise CacheCopyError(f"{label} directory sealing changed identity: {relative}/{name}")
             elif stat.S_ISREG(metadata.st_mode):
                 descriptor = os.open(name, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
@@ -2011,10 +2982,10 @@ def _seal_copied_tree(root: Path, label: str) -> None:
                     os.close(descriptor)
             elif not stat.S_ISLNK(metadata.st_mode):
                 raise CacheCopyError(f"{label} contains a special entry: {relative}/{name}")
-        os.fchmod(directory_fd, 0o500)
+        os.fchmod(directory_fd, 0o700 if owner_private(parts) else 0o500)
 
     try:
-        seal(root_fd, label)
+        seal(root_fd, label, ())
     finally:
         os.close(root_fd)
     observed = root.lstat()
@@ -2099,6 +3070,1328 @@ def copy_private_bundle(source_root: Path, bundle_root: Path, inventory_path: Pa
         os.close(source_fd); os.close(parent_fd)
 
 
+def _sdk_records_sha256(records: list[dict[str, object]]) -> str:
+    """Digest one canonical path-free dependency member inventory."""
+
+    payload = json.dumps(
+        records, ensure_ascii=True, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _sdk_inventory_records_contract(
+    value: object, label: str,
+) -> tuple[list[dict[str, object]], int]:
+    """Validate an exact complete source-tree member inventory."""
+
+    if (
+        not isinstance(value, list)
+        or not value
+        or len(value) > MAXIMUM_RECORDS
+    ):
+        raise CacheCopyError(f"{label} record count is not bounded")
+    paths: list[str] = []
+    by_path: dict[str, dict[str, object]] = {}
+    file_bytes = 0
+    for index, raw in enumerate(value):
+        if not isinstance(raw, dict):
+            raise CacheCopyError(f"{label} record {index} is not an object")
+        kind = raw.get("kind")
+        expected = {
+            "directory": {"path", "kind", "mode"},
+            "file": {"path", "kind", "mode", "size", "sha256"},
+            "symlink": {"path", "kind", "mode", "target"},
+        }.get(kind)
+        relative = raw.get("path")
+        mode = raw.get("mode")
+        if (
+            expected is None
+            or set(raw) != expected
+            or not isinstance(relative, str)
+            or (relative != "." and (
+                PurePosixPath(relative).is_absolute()
+                or PurePosixPath(relative).as_posix() != relative
+                or not PurePosixPath(relative).parts
+                or any(
+                    part in {"", ".", ".."}
+                    for part in PurePosixPath(relative).parts
+                )
+            ))
+            or not isinstance(mode, str)
+            or re.fullmatch(r"[0-7]{4}", mode) is None
+            or relative in by_path
+        ):
+            raise CacheCopyError(f"{label} record {index} is not canonical")
+        if kind == "file":
+            size = raw.get("size")
+            digest = raw.get("sha256")
+            if (
+                type(size) is not int
+                or not 0 <= size <= MAXIMUM_FILE_BYTES
+                or not isinstance(digest, str)
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            ):
+                raise CacheCopyError(f"{label} file record is malformed")
+            file_bytes += size
+            if file_bytes > MAXIMUM_TOTAL_BYTES:
+                raise CacheCopyError(f"{label} file bytes exceed their bound")
+        elif kind == "symlink":
+            target = raw.get("target")
+            if (
+                not isinstance(target, str)
+                or "\0" in target
+                or PurePosixPath(target).is_absolute()
+                or PurePosixPath(target).as_posix() != target
+            ):
+                raise CacheCopyError(f"{label} symlink target is unsafe")
+        paths.append(relative)
+        by_path[relative] = raw
+    root = value[0]
+    if (
+        root.get("path") != "."
+        or root.get("kind") != "directory"
+        or paths[1:] != sorted(paths[1:])
+    ):
+        raise CacheCopyError(f"{label} root or ordering is not exact")
+    for relative, record in by_path.items():
+        if relative == ".":
+            continue
+        pure = PurePosixPath(relative)
+        parent = pure.parent.as_posix()
+        parent_record = by_path.get(parent)
+        if (
+            not isinstance(parent_record, dict)
+            or parent_record.get("kind") != "directory"
+        ):
+            raise CacheCopyError(f"{label} member lacks its exact parent")
+        if record["kind"] == "symlink":
+            parts = list(pure.parent.parts) if parent != "." else []
+            for part in PurePosixPath(str(record["target"])).parts:
+                if part in {"", "."}:
+                    continue
+                if part == "..":
+                    if not parts:
+                        raise CacheCopyError(f"{label} symlink escapes its root")
+                    parts.pop()
+                else:
+                    parts.append(part)
+            target = "/".join(parts) or "."
+            if target not in by_path:
+                raise CacheCopyError(f"{label} symlink target is not inventoried")
+    return value, file_bytes
+
+
+def _sdk_source_inventory_contract(
+    value: object, label: str,
+) -> tuple[list[dict[str, object]], int]:
+    if not isinstance(value, dict) or set(value) != {
+        "format", "schema_version", "record_count", "file_bytes",
+        "records_sha256", "records",
+    }:
+        raise CacheCopyError(f"{label} schema is not exact")
+    records, file_bytes = _sdk_inventory_records_contract(
+        value["records"], label,
+    )
+    if (
+        value["format"] != SDK_SOURCE_INVENTORY_FORMAT
+        or type(value["schema_version"]) is not int
+        or value["schema_version"] != 1
+        or type(value["record_count"]) is not int
+        or value["record_count"] != len(records)
+        or type(value["file_bytes"]) is not int
+        or value["file_bytes"] != file_bytes
+        or not isinstance(value["records_sha256"], str)
+        or value["records_sha256"] != _sdk_records_sha256(records)
+    ):
+        raise CacheCopyError(f"{label} accounting or digest is not exact")
+    return records, file_bytes
+
+
+def _sdk_source_manifest(
+    path: Path, expected_sha256: str,
+) -> tuple[dict[str, object], str]:
+    """Read the protected, path-disclosing SDK source manifest."""
+
+    _normalized_absolute(path, "SDK dependency source manifest")
+    parent_fd, parent_metadata = _open_directory(
+        path.parent, "SDK dependency source manifest parent",
+    )
+    os.close(parent_fd)
+    if (
+        parent_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(parent_metadata.st_mode) != 0o700
+    ):
+        raise CacheCopyError("SDK dependency source manifest is not bootstrap-private")
+    payload, metadata = _read_regular(path, "SDK dependency source manifest")
+    digest = hashlib.sha256(payload).hexdigest()
+    if (
+        re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+        or digest != expected_sha256
+        or stat.S_IMODE(metadata.st_mode) != 0o400
+    ):
+        raise CacheCopyError("SDK dependency source manifest trust anchor changed")
+    try:
+        document = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CacheCopyError("SDK dependency source manifest is malformed") from error
+    if (
+        not isinstance(document, dict)
+        or set(document) != {
+            "format", "schema_version", "git", "node", "swiftpm", "gradle",
+        }
+        or document.get("format") != SDK_SOURCE_FORMAT
+        or type(document.get("schema_version")) is not int
+        or document["schema_version"] != 2
+        or payload != _canonical_payload(document)
+    ):
+        raise CacheCopyError("SDK dependency source manifest contract is not exact")
+    git = document["git"]
+    node, swiftpm, gradle = document["node"], document["swiftpm"], document["gradle"]
+    if (
+        not isinstance(git, dict)
+        or set(git) != {"executable", "sha256"}
+        or not isinstance(node, dict)
+        or set(node) != {
+            "node_modules_root", "package_lock_sha256",
+            "node_modules_inventory",
+        }
+        or not isinstance(swiftpm, dict)
+        or set(swiftpm) != {
+            "cache_root", "cache_inventory", "package_resolved_sha256",
+            "resolved_revisions",
+        }
+        or not isinstance(gradle, dict)
+        or set(gradle) != {
+            "distribution_archive", "distribution_sha256", "gradle_user_home",
+            "distribution_url", "gradle_user_home_inventory",
+            "java_wrapper_properties_sha256", "kotlin_wrapper_properties_sha256",
+            "version", "wrapper_cache_key",
+        }
+    ):
+        raise CacheCopyError("SDK dependency source sections are not exact")
+    for section, name in (
+        (git, "executable"),
+        (node, "node_modules_root"),
+        (swiftpm, "cache_root"),
+        (gradle, "distribution_archive"),
+        (gradle, "gradle_user_home"),
+    ):
+        value = section.get(name)
+        if not isinstance(value, str):
+            raise CacheCopyError("SDK dependency source path is malformed")
+        candidate = Path(value)
+        _normalized_absolute(candidate, f"SDK dependency {name}")
+        if candidate.resolve(strict=True) != candidate:
+            raise CacheCopyError(f"SDK dependency {name} is not canonical")
+    for section, name in (
+        (git, "sha256"),
+        (node, "package_lock_sha256"),
+        (swiftpm, "package_resolved_sha256"),
+        (gradle, "distribution_sha256"),
+        (gradle, "java_wrapper_properties_sha256"),
+        (gradle, "kotlin_wrapper_properties_sha256"),
+    ):
+        if not isinstance(section.get(name), str) or re.fullmatch(
+            r"[0-9a-f]{64}", str(section[name]),
+        ) is None:
+            raise CacheCopyError(f"SDK dependency {name} is not lowercase SHA-256")
+    git_digest, _, git_metadata = _digest_regular(
+        Path(str(git["executable"])), "protected SDK Git executable",
+    )
+    if (
+        git_digest != git["sha256"]
+        or git_metadata.st_uid != os.geteuid()
+        or git_metadata.st_nlink != 1
+        or stat.S_IMODE(git_metadata.st_mode) & 0o111 == 0
+    ):
+        raise CacheCopyError("protected SDK Git executable changed")
+    revisions = swiftpm.get("resolved_revisions")
+    if not isinstance(revisions, list) or not revisions:
+        raise CacheCopyError("SwiftPM resolved revisions are absent")
+    seen_identities: set[str] = set()
+    seen_checkouts: set[str] = set()
+    for revision in revisions:
+        if (
+            not isinstance(revision, dict)
+            or set(revision) != {"identity", "checkout", "revision", "tree"}
+            or not isinstance(revision.get("identity"), str)
+            or re.fullmatch(r"[a-z0-9][a-z0-9._-]*", revision["identity"]) is None
+            or not isinstance(revision.get("checkout"), str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", revision["checkout"]) is None
+            or not isinstance(revision.get("revision"), str)
+            or SDK_OBJECT_ID_RE.fullmatch(revision["revision"]) is None
+            or not isinstance(revision.get("tree"), str)
+            or SDK_OBJECT_ID_RE.fullmatch(revision["tree"]) is None
+            or revision["identity"] in seen_identities
+            or revision["checkout"] in seen_checkouts
+        ):
+            raise CacheCopyError("SwiftPM resolved revision binding is malformed")
+        seen_identities.add(revision["identity"])
+        seen_checkouts.add(revision["checkout"])
+    if revisions != sorted(revisions, key=lambda item: str(item["identity"])):
+        raise CacheCopyError("SwiftPM resolved revisions are not canonically ordered")
+    _sdk_source_inventory_contract(
+        node["node_modules_inventory"], "Node node_modules source inventory",
+    )
+    _sdk_source_inventory_contract(
+        swiftpm["cache_inventory"], "SwiftPM cache source inventory",
+    )
+    _sdk_source_inventory_contract(
+        gradle["gradle_user_home_inventory"],
+        "Gradle user-home source inventory",
+    )
+    if (
+        gradle.get("version") != "9.3.0"
+        or gradle.get("distribution_url") != SDK_GRADLE_DISTRIBUTION_URL
+        or gradle.get("wrapper_cache_key") != SDK_GRADLE_WRAPPER_CACHE_KEY
+    ):
+        raise CacheCopyError("release Gradle dependency closure must be version 9.3.0")
+    return document, digest
+
+
+def _sdk_sources(
+    manifest: dict[str, object], repository_root: Path,
+) -> dict[str, Path]:
+    node = manifest["node"]
+    swiftpm = manifest["swiftpm"]
+    gradle = manifest["gradle"]
+    assert isinstance(node, dict) and isinstance(swiftpm, dict) and isinstance(gradle, dict)
+    return {
+        "node/node_modules": Path(str(node["node_modules_root"])),
+        "node/package-lock.json": repository_root / "javascript/iroha_js/package-lock.json",
+        "swiftpm/cache": Path(str(swiftpm["cache_root"])),
+        "swiftpm/Package.resolved": repository_root / "IrohaSwift/Package.resolved",
+        "gradle/gradle-user-home": Path(str(gradle["gradle_user_home"])),
+        "gradle/gradle-9.3.0-bin.zip": Path(str(gradle["distribution_archive"])),
+        "gradle/kotlin-gradle-wrapper.properties": repository_root / "kotlin/gradle/wrapper/gradle-wrapper.properties",
+        "gradle/java-gradle-wrapper.properties": repository_root / "java/iroha_android/gradle/wrapper/gradle-wrapper.properties",
+    }
+
+
+def _sdk_validate_manifest_source_inventories(
+    manifest: dict[str, object], sources: dict[str, Path],
+) -> None:
+    """Recompute every protected dependency tree against its member manifest."""
+
+    node = manifest["node"]
+    swiftpm = manifest["swiftpm"]
+    gradle = manifest["gradle"]
+    assert isinstance(node, dict)
+    assert isinstance(swiftpm, dict)
+    assert isinstance(gradle, dict)
+    specifications = (
+        (
+            sources["node/node_modules"],
+            node["node_modules_inventory"],
+            "Node node_modules source inventory",
+        ),
+        (
+            sources["swiftpm/cache"],
+            swiftpm["cache_inventory"],
+            "SwiftPM cache source inventory",
+        ),
+        (
+            sources["gradle/gradle-user-home"],
+            gradle["gradle_user_home_inventory"],
+            "Gradle user-home source inventory",
+        ),
+    )
+    for source, expected, label in specifications:
+        expected_records, expected_bytes = _sdk_source_inventory_contract(
+            expected, label,
+        )
+        observed_records, observed_bytes = _sdk_sanitized_snapshot(
+            source, label,
+        )
+        if (
+            observed_records != expected_records
+            or observed_bytes != expected_bytes
+            or _sdk_records_sha256(observed_records)
+            != expected["records_sha256"]
+        ):
+            raise CacheCopyError(
+                f"{label} differs from its protected complete member inventory"
+            )
+    _sdk_verify_swift_checkout_git(manifest, sources["swiftpm/cache"])
+
+
+def _sdk_verify_swift_checkout_git(
+    manifest: dict[str, object], swift_cache: Path,
+) -> None:
+    """Use the protected Git to bind each clean Swift checkout commit and tree."""
+
+    git = manifest["git"]
+    swiftpm = manifest["swiftpm"]
+    assert isinstance(git, dict) and isinstance(swiftpm, dict)
+    executable = Path(str(git["executable"]))
+    environment = {
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+        "HOME": os.devnull,
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "",
+        "TZ": "UTC",
+    }
+    for item in swiftpm["resolved_revisions"]:
+        checkout = swift_cache / "checkouts" / str(item["checkout"])
+        command = [
+            str(executable),
+            "-c", "core.hooksPath=/dev/null",
+            "-c", "core.fsmonitor=false",
+            "-C", str(checkout),
+            "rev-parse", "HEAD^{commit}", "HEAD^{tree}",
+        ]
+        try:
+            identity = subprocess.run(
+                command,
+                check=False,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+            )
+            status = subprocess.run(
+                [
+                    str(executable),
+                    "-c", "core.hooksPath=/dev/null",
+                    "-c", "core.fsmonitor=false",
+                    "-C", str(checkout),
+                    "status", "--porcelain=v1", "--untracked-files=all",
+                ],
+                check=False,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise CacheCopyError("protected SDK Git verification failed") from error
+        try:
+            identity_lines = identity.stdout.decode("ascii", "strict").splitlines()
+        except UnicodeDecodeError as error:
+            raise CacheCopyError("protected SDK Git identity is malformed") from error
+        if (
+            identity.returncode != 0
+            or identity.stderr
+            or identity_lines != [item["revision"], item["tree"]]
+            or status.returncode != 0
+            or status.stdout
+            or status.stderr
+        ):
+            raise CacheCopyError(
+                "SwiftPM checkout is not the exact clean protected Git tree"
+            )
+
+
+def _sdk_source_state(
+    sources: dict[str, Path],
+) -> tuple[list[dict[str, object]], int]:
+    records: list[dict[str, object]] = []
+    budget = {"records": 0, "bytes": 0}
+    for archive_name, source in sorted(sources.items()):
+        metadata = source.lstat()
+        if stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode):
+            descriptor, opened = _open_directory(source, f"SDK dependency {archive_name}")
+            try:
+                if (
+                    opened.st_uid != os.geteuid()
+                    or stat.S_IMODE(opened.st_mode) & 0o022
+                ):
+                    raise CacheCopyError(f"SDK dependency root is unsafe: {archive_name}")
+                budget["records"] += 1
+                records.append({
+                    "path": archive_name, "kind": "directory",
+                    "device": opened.st_dev, "inode": opened.st_ino,
+                    "mode": format(stat.S_IMODE(opened.st_mode), "04o"),
+                })
+                nested: list[dict[str, object]] = []
+                _snapshot_directory(descriptor, descriptor, None, (), nested, budget)
+                for record in nested:
+                    record["path"] = f"{archive_name}/{record['path']}"
+                records.extend(nested)
+            finally:
+                os.close(descriptor)
+            _revalidate_directory_path(source, opened, f"SDK dependency {archive_name}")
+        else:
+            parent_fd, _ = _open_directory(source.parent, f"SDK dependency {archive_name} parent")
+            try:
+                before = _entry_stat(parent_fd, source.name, f"SDK dependency {archive_name}")
+                budget["records"] += 1
+                records.append(_snapshot_regular(
+                    parent_fd, source.name, archive_name, before, budget,
+                ))
+            finally:
+                os.close(parent_fd)
+    return sorted(records, key=lambda record: str(record["path"])), budget["bytes"]
+
+
+def _sdk_source_state_sha256(records: list[dict[str, object]]) -> str:
+    payload = json.dumps(records, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _sdk_sanitized_snapshot(
+    root: Path, label: str,
+) -> tuple[list[dict[str, object]], int]:
+    descriptor, identity = _open_directory(root, label)
+    records: list[dict[str, object]] = [{
+        "path": ".", "kind": "directory",
+        "mode": format(stat.S_IMODE(identity.st_mode), "04o"),
+    }]
+    raw: list[dict[str, object]] = []
+    budget = {"records": 1, "bytes": 0}
+    try:
+        _snapshot_directory(descriptor, descriptor, None, (), raw, budget)
+    finally:
+        os.close(descriptor)
+    _revalidate_directory_path(root, identity, label)
+    fields = {
+        "directory": ("path", "kind", "mode"),
+        "file": ("path", "kind", "mode", "size", "sha256"),
+        "symlink": ("path", "kind", "mode", "target"),
+    }
+    for record in raw:
+        keys = fields.get(str(record.get("kind")))
+        if keys is None:
+            raise CacheCopyError(f"{label} inventory contains an unsupported entry")
+        records.append({key: record[key] for key in keys})
+    return sorted(records, key=lambda record: str(record["path"])), budget["bytes"]
+
+
+def _sdk_new_directory(parent_fd: int, name: str, label: str) -> tuple[int, os.stat_result]:
+    if _optional_entry_stat(parent_fd, name, label) is not None:
+        raise CacheCopyError(f"{label} already exists")
+    os.mkdir(name, 0o700, dir_fd=parent_fd)
+    created = _entry_stat(parent_fd, name, label)
+    descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
+    opened = os.fstat(descriptor)
+    if (
+        not _same_directory_inode(created, opened)
+        or opened.st_uid != os.geteuid()
+        or stat.S_IMODE(opened.st_mode) != 0o700
+    ):
+        os.close(descriptor)
+        raise CacheCopyError(f"{label} is not owner-private")
+    return descriptor, opened
+
+
+def _sdk_copy_file(
+    source: Path, destination_fd: int, destination_name: str, archive_name: str,
+    records: list[dict[str, object]], budget: dict[str, int],
+) -> None:
+    source_parent, _ = _open_directory(source.parent, f"SDK dependency {archive_name} parent")
+    try:
+        before = _entry_stat(source_parent, source.name, f"SDK dependency {archive_name}")
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise CacheCopyError(f"SDK dependency file is not an unlinked regular file: {archive_name}")
+        budget["records"] += 1
+        if budget["records"] > MAXIMUM_RECORDS:
+            raise CacheCopyError("SDK dependency closure contains too many entries")
+        records.append(_copy_regular(
+            source_parent, destination_fd, source.name, archive_name, before,
+            budget, destination_name=destination_name,
+        ))
+    finally:
+        os.close(source_parent)
+
+
+def _sdk_copy_layout(
+    sources: dict[str, Path], bundle_root: Path,
+) -> os.stat_result:
+    parent_fd, _ = _open_directory(bundle_root.parent, "SDK dependency bundle parent")
+    root_fd: int | None = None
+    created: os.stat_result | None = None
+    complete = False
+    try:
+        root_fd, created = _sdk_new_directory(parent_fd, bundle_root.name, "SDK dependency bundle")
+        children: dict[str, int] = {}
+        try:
+            for name in ("node", "swiftpm", "gradle"):
+                child, _ = _sdk_new_directory(root_fd, name, f"SDK dependency {name} bundle")
+                children[name] = child
+            records: list[dict[str, object]] = []
+            budget = {"records": 0, "bytes": 0}
+            for archive_name, source in sorted(sources.items()):
+                first, leaf = archive_name.split("/", 1)
+                if "/" in leaf:
+                    raise CacheCopyError("SDK dependency archive layout is not exact")
+                if source.is_dir() and not source.is_symlink():
+                    source_fd, source_identity = _open_directory(source, f"SDK dependency {archive_name}")
+                    try:
+                        _copy_directory(
+                            source_fd, children[first], leaf, archive_name,
+                            source_fd, (), records, budget,
+                        )
+                    finally:
+                        os.close(source_fd)
+                    _revalidate_directory_path(source, source_identity, f"SDK dependency {archive_name}")
+                else:
+                    _sdk_copy_file(
+                        source, children[first], leaf, archive_name, records, budget,
+                    )
+        finally:
+            for child in children.values():
+                os.close(child)
+        complete = True
+        return created
+    finally:
+        if root_fd is not None:
+            os.close(root_fd)
+        os.close(parent_fd)
+        if not complete and created is not None and bundle_root.exists():
+            _quiescent_remove_tree(bundle_root, "partial SDK dependency bundle")
+
+
+def _sdk_copy_work(bundle_root: Path, work_root: Path) -> os.stat_result:
+    parent_fd, _ = _open_directory(work_root.parent, "SDK dependency work parent")
+    root_fd: int | None = None
+    created: os.stat_result | None = None
+    complete = False
+    bundle_fd, _ = _open_directory(bundle_root, "SDK dependency bundle")
+    try:
+        root_fd, created = _sdk_new_directory(parent_fd, work_root.name, "SDK dependency work root")
+        records: list[dict[str, object]] = []
+        budget = {"records": 0, "bytes": 0}
+        for source_parts, destination_name in (
+            (("swiftpm", "cache"), "swiftpm"),
+            (("gradle", "gradle-user-home"), "gradle-home"),
+        ):
+            parent = os.dup(bundle_fd)
+            try:
+                for part in source_parts:
+                    child = os.open(part, _DIRECTORY_FLAGS, dir_fd=parent)
+                    os.close(parent)
+                    parent = child
+                _copy_directory(
+                    parent, root_fd, destination_name, destination_name,
+                    parent, (), records, budget,
+                )
+            finally:
+                os.close(parent)
+        complete = True
+        return created
+    finally:
+        if root_fd is not None:
+            os.close(root_fd)
+        os.close(bundle_fd)
+        os.close(parent_fd)
+        if not complete and created is not None and work_root.exists():
+            _quiescent_remove_tree(work_root, "partial SDK dependency work root")
+
+
+def create_sdk_command_work(
+    bundle_root: Path, command_work_root: Path,
+) -> None:
+    """Create one fresh disposable writable SDK work copy for one command."""
+
+    _normalized_absolute(bundle_root, "SDK dependency immutable input root")
+    _normalized_absolute(command_work_root, "SDK dependency command work root")
+    if (
+        command_work_root.parent != bundle_root.parent
+        or command_work_root == bundle_root
+        or _overlap(bundle_root, command_work_root)
+    ):
+        raise CacheCopyError("SDK command work root is not an exact disjoint sibling")
+    _sdk_copy_work(bundle_root, command_work_root)
+
+
+def cleanup_sdk_command_work(
+    bundle_root: Path, command_work_root: Path,
+) -> None:
+    """Remove one exact fresh SDK command work copy after natural completion."""
+
+    _normalized_absolute(bundle_root, "SDK dependency immutable input root")
+    _normalized_absolute(command_work_root, "SDK dependency command work root")
+    if (
+        command_work_root.parent != bundle_root.parent
+        or command_work_root == bundle_root
+        or _overlap(bundle_root, command_work_root)
+        or not command_work_root.name.startswith("sdk-command-work.")
+    ):
+        raise CacheCopyError("refusing to prune an unsafe SDK command work root")
+    _quiescent_remove_named(
+        command_work_root.parent,
+        command_work_root.name,
+        "SDK command work root",
+        require_directory=True,
+    )
+
+
+def _sdk_reject_path_disclosure(
+    bundle_root: Path, records: list[dict[str, object]], sources: dict[str, Path],
+    forbidden_roots: tuple[Path, ...] = (),
+) -> None:
+    tokens = {
+        os.fsencode(str(path))
+        for source in (*sources.values(), *forbidden_roots)
+        for path in (source, source.parent)
+        if len(str(path)) > 1
+    }
+    longest = max((len(token) for token in tokens), default=1)
+    for record in records:
+        if record.get("kind") != "file" or record.get("path") == ".":
+            continue
+        path = bundle_root / str(record["path"])
+        parent_fd, _ = _open_directory(path.parent, "SDK dependency disclosure scan parent")
+        try:
+            descriptor = os.open(
+                path.name,
+                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=parent_fd,
+            )
+            tail = b""
+            try:
+                while block := os.read(descriptor, 1024 * 1024):
+                    sample = tail + block
+                    if any(token in sample for token in tokens):
+                        raise CacheCopyError(
+                            "SDK dependency bundle contains an original absolute path"
+                        )
+                    tail = sample[-(longest - 1):] if longest > 1 else b""
+            finally:
+                os.close(descriptor)
+        finally:
+            os.close(parent_fd)
+
+
+def _sdk_json(path: Path, label: str) -> tuple[dict[str, object], bytes]:
+    payload, _ = _read_regular(path, label)
+    try:
+        value = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CacheCopyError(f"{label} is malformed") from error
+    if not isinstance(value, dict):
+        raise CacheCopyError(f"{label} is not a JSON object")
+    return value, payload
+
+
+def _sdk_gradle_distribution(
+    bundle_root: Path, expected_sha256: str,
+) -> str:
+    archive = bundle_root / "gradle/gradle-9.3.0-bin.zip"
+    digest, _, _ = _digest_regular(archive, "Gradle 9.3.0 distribution archive")
+    if digest != expected_sha256:
+        raise CacheCopyError("Gradle 9.3.0 distribution archive digest changed")
+    home = bundle_root / "gradle/gradle-user-home"
+    if {path.name for path in home.iterdir()} != {"caches", "wrapper"}:
+        raise CacheCopyError("Gradle offline home is not the exact curated cache closure")
+    cache_names = {path.name for path in (home / "caches").iterdir()}
+    if (
+        not {"9.3.0", "modules-2"} <= cache_names
+        or not cache_names <= {
+            "9.3.0", "CACHEDIR.TAG", "jars-9", "journal-1", "modules-2",
+        }
+    ):
+        raise CacheCopyError("Gradle offline home lacks versioned and module caches")
+    wrapper_names = {path.name for path in (home / "wrapper").iterdir()}
+    if wrapper_names != {"dists"}:
+        raise CacheCopyError("Gradle wrapper home is not the exact distribution closure")
+    dists_names = {path.name for path in (home / "wrapper/dists").iterdir()}
+    if not {"gradle-9.3.0-bin"} <= dists_names or not dists_names <= {
+        "CACHEDIR.TAG", "gradle-9.3.0-bin",
+    }:
+        raise CacheCopyError("Gradle wrapper home contains an unrelated distribution")
+    if any(
+        path.name.endswith((".lock", ".lck"))
+        for path in home.rglob("*")
+    ):
+        raise CacheCopyError("Gradle offline archive contains a mutable lock file")
+    distribution_root = home / "wrapper/dists/gradle-9.3.0-bin"
+    cache_keys = [path for path in distribution_root.iterdir() if path.is_dir() and not path.is_symlink()]
+    if (
+        len(cache_keys) != 1
+        or cache_keys[0].name != SDK_GRADLE_WRAPPER_CACHE_KEY
+    ):
+        raise CacheCopyError("Gradle 9.3.0 wrapper distribution cache is not exact")
+    cache_entries = {path.name for path in cache_keys[0].iterdir()}
+    if cache_entries != {"gradle-9.3.0", "gradle-9.3.0-bin.zip.ok"}:
+        raise CacheCopyError("Gradle 9.3.0 wrapper cache contains stale or mutable entries")
+    extracted = cache_keys[0] / "gradle-9.3.0"
+    actual_records, _ = _sdk_sanitized_snapshot(extracted, "extracted Gradle 9.3.0")
+    actual_files = {
+        str(record["path"]): record
+        for record in actual_records if record.get("kind") == "file"
+    }
+    actual_directories = {
+        str(record["path"])
+        for record in actual_records
+        if record.get("kind") == "directory" and record.get("path") != "."
+    }
+    expected_files: set[str] = set()
+    expected_directories: set[str] = set()
+    expanded_bytes = 0
+    try:
+        with zipfile.ZipFile(archive) as distribution:
+            infos = distribution.infolist()
+            if len({info.filename for info in infos}) != len(infos):
+                raise CacheCopyError("Gradle distribution ZIP has duplicate members")
+            folded_names: set[str] = set()
+            for info in infos:
+                name = PurePosixPath(info.filename)
+                canonical_name = name.as_posix() + ("/" if info.is_dir() else "")
+                member_mode = (info.external_attr >> 16) & 0o177777
+                member_type = stat.S_IFMT(member_mode)
+                if (
+                    info.flag_bits & 1
+                    or info.filename != canonical_name
+                    or unicodedata.normalize("NFC", info.filename) != info.filename
+                    or name.is_absolute()
+                    or ".." in name.parts
+                    or "\\" in info.filename
+                    or not name.parts
+                    or name.parts[0] != "gradle-9.3.0"
+                    or member_type == stat.S_IFLNK
+                    or member_type not in {0, stat.S_IFREG, stat.S_IFDIR}
+                ):
+                    raise CacheCopyError("Gradle distribution ZIP member is unsafe")
+                folded = canonical_name.rstrip("/").casefold()
+                if folded in folded_names:
+                    raise CacheCopyError(
+                        "Gradle distribution ZIP has a platform-alias member"
+                    )
+                folded_names.add(folded)
+                relative_path = PurePosixPath(*name.parts[1:])
+                relative = relative_path.as_posix()
+                if info.is_dir():
+                    if relative and relative != ".":
+                        expected_directories.add(relative)
+                    continue
+                if not relative:
+                    raise CacheCopyError("Gradle distribution ZIP member is malformed")
+                expected_directories.update(
+                    parent.as_posix()
+                    for parent in relative_path.parents
+                    if parent.as_posix() != "."
+                )
+                expanded_bytes += info.file_size
+                if info.file_size > MAXIMUM_FILE_BYTES or expanded_bytes > MAXIMUM_TOTAL_BYTES:
+                    raise CacheCopyError("Gradle distribution ZIP exceeds release bounds")
+                record = actual_files.get(relative)
+                member_digest = hashlib.sha256()
+                with distribution.open(info) as member:
+                    while block := member.read(1024 * 1024):
+                        member_digest.update(block)
+                if (
+                    not isinstance(record, dict)
+                    or record.get("size") != info.file_size
+                    or record.get("sha256") != member_digest.hexdigest()
+                ):
+                    raise CacheCopyError("extracted Gradle distribution disagrees with its ZIP")
+                expected_files.add(relative)
+    except zipfile.BadZipFile as error:
+        raise CacheCopyError("Gradle 9.3.0 distribution is not a valid ZIP") from error
+    if set(actual_files) != expected_files:
+        raise CacheCopyError("extracted Gradle distribution has unbound files")
+    if actual_directories != expected_directories:
+        raise CacheCopyError("extracted Gradle distribution has unbound directories")
+    launcher = actual_files.get("bin/gradle")
+    if not isinstance(launcher, dict) or int(str(launcher["mode"]), 8) & 0o111 == 0:
+        raise CacheCopyError("extracted Gradle launcher is not executable")
+    return cache_keys[0].name
+
+
+def _sdk_bindings(
+    bundle_root: Path, manifest: dict[str, object],
+) -> dict[str, object]:
+    node = manifest["node"]
+    swiftpm = manifest["swiftpm"]
+    gradle = manifest["gradle"]
+    assert isinstance(node, dict) and isinstance(swiftpm, dict) and isinstance(gradle, dict)
+    package_lock, package_bytes = _sdk_json(
+        bundle_root / "node/package-lock.json", "SDK package-lock.json",
+    )
+    hidden_lock, hidden_bytes = _sdk_json(
+        bundle_root / "node/node_modules/.package-lock.json", "installed Node lockfile",
+    )
+    if (
+        hashlib.sha256(package_bytes).hexdigest() != node["package_lock_sha256"]
+        or package_lock.get("lockfileVersion") != 3
+        or hidden_lock.get("lockfileVersion") != 3
+        or (hidden_lock.get("name"), hidden_lock.get("version"))
+        != (package_lock.get("name"), package_lock.get("version"))
+        or not isinstance(package_lock.get("packages"), dict)
+        or not isinstance(hidden_lock.get("packages"), dict)
+        or not hidden_lock["packages"]
+        or any(
+            package_lock["packages"].get(name) != value
+            for name, value in hidden_lock["packages"].items()
+        )
+    ):
+        raise CacheCopyError("installed Node closure is not bound to package-lock.json")
+    resolved, resolved_bytes = _sdk_json(
+        bundle_root / "swiftpm/Package.resolved", "Swift Package.resolved",
+    )
+    resolved_pairs = sorted(
+        (
+            {"identity": pin.get("identity"), "revision": pin.get("state", {}).get("revision")}
+            for pin in resolved.get("pins", [])
+            if isinstance(pin, dict) and isinstance(pin.get("state"), dict)
+        ),
+        key=lambda item: str(item["identity"]),
+    ) if isinstance(resolved.get("pins"), list) else []
+    expected_revisions = [
+        {"identity": item["identity"], "revision": item["revision"]}
+        for item in swiftpm["resolved_revisions"]
+    ]
+    if (
+        hashlib.sha256(resolved_bytes).hexdigest() != swiftpm["package_resolved_sha256"]
+        or resolved.get("version") != 2
+        or resolved_pairs != expected_revisions
+    ):
+        raise CacheCopyError("Swift Package.resolved revisions changed")
+    checkout_root = bundle_root / "swiftpm/cache/checkouts"
+    expected_checkouts = {str(item["checkout"]) for item in swiftpm["resolved_revisions"]}
+    if {path.name for path in checkout_root.iterdir()} != expected_checkouts:
+        raise CacheCopyError("SwiftPM checkout inventory changed")
+    if {path.name for path in (bundle_root / "swiftpm/cache").iterdir()} != {"checkouts", "repositories"}:
+        raise CacheCopyError("SwiftPM cache is not the exact path-free source closure")
+    for item in swiftpm["resolved_revisions"]:
+        head, _ = _read_regular(
+            checkout_root / str(item["checkout"]) / ".git/HEAD",
+            "SwiftPM detached checkout HEAD",
+        )
+        if head.decode("ascii", "strict").strip() != item["revision"]:
+            raise CacheCopyError("SwiftPM checkout does not match Package.resolved")
+    wrapper_digests: dict[str, str] = {}
+    for kind in ("kotlin", "java"):
+        wrapper = bundle_root / f"gradle/{kind}-gradle-wrapper.properties"
+        payload, _ = _read_regular(wrapper, f"{kind} Gradle wrapper properties")
+        digest = hashlib.sha256(payload).hexdigest()
+        if digest != gradle[f"{kind}_wrapper_properties_sha256"]:
+            raise CacheCopyError(f"{kind} Gradle wrapper properties changed")
+        values = dict(
+            line.split("=", 1) for line in payload.decode("utf-8").splitlines()
+            if line and not line.startswith("#") and "=" in line
+        )
+        if values.get("distributionUrl") != SDK_GRADLE_DISTRIBUTION_URL.replace(
+            ":", r"\:", 1,
+        ):
+            raise CacheCopyError(f"{kind} Gradle wrapper does not select 9.3.0")
+        pinned = values.get("distributionSha256Sum")
+        if pinned is not None and pinned != gradle["distribution_sha256"]:
+            raise CacheCopyError(f"{kind} Gradle wrapper checksum disagrees with the protected manifest")
+        wrapper_digests[kind] = digest
+    gradle_cache_key = _sdk_gradle_distribution(
+        bundle_root, str(gradle["distribution_sha256"]),
+    )
+    return {
+        "node": {
+            "node_modules_archive_name": "node/node_modules",
+            "package_lock_archive_name": "node/package-lock.json",
+            "package_lock_sha256": node["package_lock_sha256"],
+            "installed_lock_sha256": hashlib.sha256(hidden_bytes).hexdigest(),
+        },
+        "swiftpm": {
+            "cache_archive_name": "swiftpm/cache",
+            "package_resolved_archive_name": "swiftpm/Package.resolved",
+            "package_resolved_sha256": swiftpm["package_resolved_sha256"],
+            "resolved_revisions": swiftpm["resolved_revisions"],
+        },
+        "gradle": {
+            "distribution_archive_name": "gradle/gradle-9.3.0-bin.zip",
+            "distribution_sha256": gradle["distribution_sha256"],
+            "distribution_url": SDK_GRADLE_DISTRIBUTION_URL,
+            "gradle_user_home_archive_name": "gradle/gradle-user-home",
+            "wrapper_cache_key": gradle_cache_key,
+            "launcher_archive_name": SDK_GRADLE_LAUNCHER_ARCHIVE_NAME,
+            "version": "9.3.0",
+            "wrapper_properties_sha256": wrapper_digests,
+        },
+    }
+
+
+def _sdk_publish_tar(
+    bundle_root: Path, archive_path: Path, records: list[dict[str, object]],
+) -> tuple[dict[str, object], tuple[os.stat_result, os.stat_result]]:
+    bundle_fd, bundle_identity = _open_directory(
+        bundle_root, "SDK dependency archive source root",
+    )
+    parent_fd, parent_identity = _open_directory(archive_path.parent, "SDK archive parent")
+    temporary = f".sdk-archive.{secrets.token_hex(16)}"
+    descriptor: int | None = None
+    published: os.stat_result | None = None
+    try:
+        if _optional_entry_stat(parent_fd, archive_path.name, "SDK dependency archive") is not None:
+            raise CacheCopyError("SDK dependency archive already exists")
+        descriptor = os.open(
+            temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+            0o600, dir_fd=parent_fd,
+        )
+        with os.fdopen(os.dup(descriptor), "wb", closefd=True) as stream:
+            with tarfile.open(fileobj=stream, mode="w", format=tarfile.PAX_FORMAT) as archive:
+                for record in records:
+                    relative = str(record["path"])
+                    name = "sdk-inputs" if relative == "." else f"sdk-inputs/{relative}"
+                    member = tarfile.TarInfo(name)
+                    member.mode = int(str(record["mode"]), 8)
+                    member.uid = member.gid = member.mtime = 0
+                    member.uname = member.gname = ""
+                    kind = record["kind"]
+                    if kind == "directory":
+                        member.type = tarfile.DIRTYPE
+                        archive.addfile(member)
+                    elif kind == "symlink":
+                        member.type = tarfile.SYMTYPE
+                        member.linkname = str(record["target"])
+                        archive.addfile(member)
+                    elif kind == "file":
+                        member.size = int(record["size"])
+                        parts = PurePosixPath(relative).parts
+                        directory_fd = os.dup(bundle_fd)
+                        try:
+                            for part in parts[:-1]:
+                                child = os.open(
+                                    part, _DIRECTORY_FLAGS, dir_fd=directory_fd,
+                                )
+                                os.close(directory_fd)
+                                directory_fd = child
+                            source_fd = os.open(
+                                parts[-1],
+                                os.O_RDONLY
+                                | getattr(os, "O_CLOEXEC", 0)
+                                | getattr(os, "O_NOFOLLOW", 0),
+                                dir_fd=directory_fd,
+                            )
+                            try:
+                                opened = os.fstat(source_fd)
+                                if (
+                                    not stat.S_ISREG(opened.st_mode)
+                                    or opened.st_nlink != 1
+                                    or opened.st_size != member.size
+                                    or stat.S_IMODE(opened.st_mode)
+                                    != int(str(record["mode"]), 8)
+                                ):
+                                    raise CacheCopyError(
+                                        "SDK dependency archive source changed"
+                                    )
+                                with os.fdopen(
+                                    os.dup(source_fd), "rb", closefd=True,
+                                ) as source_stream:
+                                    archive.addfile(member, source_stream)
+                            finally:
+                                os.close(source_fd)
+                        finally:
+                            os.close(directory_fd)
+                    else:
+                        raise CacheCopyError("SDK dependency archive member kind is unsupported")
+        os.fsync(descriptor)
+        os.fchmod(descriptor, 0o400)
+        final = os.fstat(descriptor)
+        _rename_noreplace_at(parent_fd, temporary, archive_path.name)
+        published = _entry_stat(parent_fd, archive_path.name, "SDK dependency archive")
+        if (
+            any(
+                getattr(final, field) != getattr(published, field)
+                for field in IDENTITY_FIELDS if field != "st_ctime_ns"
+            )
+            or published.st_nlink != 1
+            or published.st_uid != os.geteuid()
+            or stat.S_IMODE(published.st_mode) != 0o400
+        ):
+            raise CacheCopyError("SDK dependency archive publication is unsafe")
+        os.fsync(parent_fd)
+        digest, size, _ = _digest_regular(archive_path, "SDK dependency archive")
+        _revalidate_directory_path(
+            bundle_root, bundle_identity,
+            "SDK dependency archive source root",
+        )
+        binding = {
+            "archive_id": SDK_BUNDLE_ARCHIVE_ID,
+            "archive_name": archive_path.name,
+            "mode": "0400", "size_bytes": size, "sha256": digest,
+        }
+        return binding, (published, parent_identity)
+    except BaseException:
+        if published is not None:
+            _owned_remove_entry(
+                parent_fd, archive_path.name,
+                (published.st_dev, published.st_ino), "partial SDK dependency archive",
+            )
+        raise
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        temporary_metadata = _optional_entry_stat(parent_fd, temporary, "SDK archive temporary")
+        if temporary_metadata is not None:
+            _owned_remove_entry(
+                parent_fd, temporary, (temporary_metadata.st_dev, temporary_metadata.st_ino),
+                "SDK archive temporary",
+            )
+        os.close(parent_fd)
+        os.close(bundle_fd)
+
+
+def _sdk_verify_tar(
+    archive_path: Path, archive_binding: dict[str, object],
+    records: list[dict[str, object]],
+) -> None:
+    digest, size, metadata = _digest_regular(archive_path, "SDK dependency archive")
+    if archive_binding != {
+        "archive_id": SDK_BUNDLE_ARCHIVE_ID,
+        "archive_name": archive_path.name,
+        "mode": "0400", "size_bytes": size, "sha256": digest,
+    } or stat.S_IMODE(metadata.st_mode) != 0o400:
+        raise CacheCopyError("SDK dependency archive binding changed")
+    expected = {
+        ("sdk-inputs" if record["path"] == "." else f"sdk-inputs/{record['path']}"): record
+        for record in records
+    }
+    try:
+        with tarfile.open(archive_path, mode="r:") as archive:
+            members = archive.getmembers()
+            if len(members) != len(expected) or {member.name for member in members} != set(expected):
+                raise CacheCopyError("SDK dependency archive member inventory changed")
+            for member in members:
+                record = expected[member.name]
+                kind = record["kind"]
+                if (
+                    member.uid != 0 or member.gid != 0 or member.mtime != 0
+                    or member.mode != int(str(record["mode"]), 8)
+                    or (kind == "directory" and not member.isdir())
+                    or (kind == "symlink" and (not member.issym() or member.linkname != record["target"]))
+                    or (kind == "file" and (not member.isfile() or member.size != record["size"]))
+                ):
+                    raise CacheCopyError("SDK dependency archive member metadata changed")
+                if kind == "file":
+                    stream = archive.extractfile(member)
+                    if stream is None:
+                        raise CacheCopyError("SDK dependency archive file is unavailable")
+                    member_digest = hashlib.sha256()
+                    while block := stream.read(1024 * 1024):
+                        member_digest.update(block)
+                    if member_digest.hexdigest() != record["sha256"]:
+                        raise CacheCopyError("SDK dependency archive file bytes changed")
+    except tarfile.TarError as error:
+        raise CacheCopyError("SDK dependency archive is malformed") from error
+
+
+def _sdk_inventory(
+    inventory_path: Path,
+) -> tuple[dict[str, object], bytes]:
+    payload, metadata = _read_regular(inventory_path, "SDK dependency inventory")
+    try:
+        document = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CacheCopyError("SDK dependency inventory is malformed") from error
+    keys = {
+        "format", "schema_version", "archive_id", "source_disclosure",
+        "source_manifest_sha256", "source_state_sha256", "bindings", "archive",
+        "record_count", "file_bytes", "records", "work_initial_record_count",
+        "work_initial_file_bytes", "work_initial_records",
+    }
+    if (
+        not isinstance(document, dict) or set(document) != keys
+        or document.get("format") != SDK_BUNDLE_FORMAT
+        or document.get("schema_version") != 1
+        or document.get("archive_id") != SDK_BUNDLE_ARCHIVE_ID
+        or document.get("source_disclosure") != "withheld"
+        or stat.S_IMODE(metadata.st_mode) != 0o400
+        or payload != _canonical_payload(document)
+        or not isinstance(document.get("records"), list)
+        or not isinstance(document.get("work_initial_records"), list)
+    ):
+        raise CacheCopyError("SDK dependency inventory contract is not exact")
+    for name in ("records", "work_initial_records"):
+        for record in document[name]:
+            kind = record.get("kind") if isinstance(record, dict) else None
+            expected_keys = {
+                "directory": {"path", "kind", "mode"},
+                "file": {"path", "kind", "mode", "size", "sha256"},
+                "symlink": {"path", "kind", "mode", "target"},
+            }.get(kind)
+            path = record.get("path") if isinstance(record, dict) else None
+            if (
+                expected_keys is None or set(record) != expected_keys
+                or not isinstance(path, str)
+                or (path != "." and (
+                    PurePosixPath(path).as_posix() != path
+                    or PurePosixPath(path).is_absolute()
+                    or ".." in PurePosixPath(path).parts
+                ))
+                or not isinstance(record.get("mode"), str)
+                or re.fullmatch(r"[0-7]{4}", str(record["mode"])) is None
+            ):
+                raise CacheCopyError("SDK dependency member record is malformed")
+    return document, payload
+
+
+def verify_sdk_dependencies(
+    source_manifest: Path, expected_source_manifest_sha256: str,
+    repository_root: Path, bundle_root: Path, work_root: Path,
+    archive_path: Path, inventory_path: Path,
+    final_work_inventory: Path | None = None,
+    *, verify_initial_work: bool = False,
+) -> None:
+    """Reauthenticate external sources, retained archive, and private work roots."""
+
+    manifest, manifest_sha256 = _sdk_source_manifest(
+        source_manifest, expected_source_manifest_sha256,
+    )
+    parent_fd, parent_metadata = _open_directory(
+        bundle_root.parent, "SDK dependency output parent",
+    )
+    os.close(parent_fd)
+    if (
+        parent_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(parent_metadata.st_mode) != 0o700
+    ):
+        raise CacheCopyError("SDK dependency output parent is not owner-private")
+    inventory, inventory_payload = _sdk_inventory(inventory_path)
+    if inventory["source_manifest_sha256"] != manifest_sha256:
+        raise CacheCopyError("SDK dependency source-manifest binding changed")
+    sources = _sdk_sources(manifest, repository_root)
+    _sdk_validate_manifest_source_inventories(manifest, sources)
+    source_records, _ = _sdk_source_state(sources)
+    if inventory["source_state_sha256"] != _sdk_source_state_sha256(source_records):
+        raise CacheCopyError("SDK dependency source closure changed after copy")
+    records, file_bytes = _sdk_sanitized_snapshot(bundle_root, "SDK dependency bundle")
+    if (
+        not records or records[0] != {
+            "path": ".", "kind": "directory", "mode": "0500",
+        }
+        or inventory["records"] != records
+        or inventory["record_count"] != len(records)
+        or inventory["file_bytes"] != file_bytes
+        or inventory["bindings"] != _sdk_bindings(bundle_root, manifest)
+    ):
+        raise CacheCopyError("SDK dependency bundle changed after publication")
+    _sdk_reject_path_disclosure(
+        bundle_root, records, sources, (repository_root,),
+    )
+    if not isinstance(inventory.get("archive"), dict):
+        raise CacheCopyError("SDK dependency archive binding is malformed")
+    _sdk_verify_tar(archive_path, inventory["archive"], records)
+    work_records, work_bytes = _sdk_sanitized_snapshot(work_root, "SDK dependency work root")
+    if not work_records or work_records[0] != {
+        "path": ".", "kind": "directory", "mode": "0700",
+    }:
+        raise CacheCopyError("SDK dependency work root is not owner-private and writable")
+    if verify_initial_work and (
+        inventory["work_initial_records"] != work_records
+        or inventory["work_initial_record_count"] != len(work_records)
+        or inventory["work_initial_file_bytes"] != work_bytes
+    ):
+        raise CacheCopyError("SDK dependency work root did not start from its archive")
+    if final_work_inventory is not None:
+        if any(
+            path.name.startswith("sdk-command-work.")
+            for path in bundle_root.parent.iterdir()
+        ):
+            raise CacheCopyError(
+                "an SDK command work root survived natural completion"
+            )
+        if (
+            inventory["work_initial_records"] != work_records
+            or inventory["work_initial_record_count"] != len(work_records)
+            or inventory["work_initial_file_bytes"] != work_bytes
+        ):
+            raise CacheCopyError(
+                "SDK dependency work template changed after child execution"
+            )
+        document = {
+            "format": SDK_WORK_FORMAT, "schema_version": 1,
+            "archive_id": "release-sdk-dependencies.work-final.v1",
+            "sdk_dependency_inventory_sha256": hashlib.sha256(inventory_payload).hexdigest(),
+            "record_count": len(work_records), "file_bytes": work_bytes,
+            "records": work_records,
+        }
+        _publish_inventory(final_work_inventory, _canonical_payload(document))
+
+
+def copy_sdk_dependencies(
+    source_manifest: Path, expected_source_manifest_sha256: str,
+    repository_root: Path, bundle_root: Path, work_root: Path,
+    archive_path: Path, inventory_path: Path,
+) -> None:
+    """Create one inode-independent, path-withheld offline SDK dependency archive."""
+
+    for path, label in (
+        (repository_root, "SDK candidate root"), (bundle_root, "SDK bundle root"),
+        (work_root, "SDK work root"), (archive_path, "SDK archive"),
+        (inventory_path, "SDK inventory"),
+    ):
+        _normalized_absolute(path, label)
+    if (
+        len({bundle_root.parent, work_root.parent, archive_path.parent, inventory_path.parent}) != 1
+        or len({bundle_root, work_root, archive_path, inventory_path}) != 4
+    ):
+        raise CacheCopyError("SDK dependency outputs are not exact siblings")
+    parent_fd, parent_metadata = _open_directory(
+        bundle_root.parent, "SDK dependency output parent",
+    )
+    os.close(parent_fd)
+    if (
+        parent_metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(parent_metadata.st_mode) != 0o700
+    ):
+        raise CacheCopyError("SDK dependency output parent is not owner-private")
+    manifest, manifest_sha256 = _sdk_source_manifest(
+        source_manifest, expected_source_manifest_sha256,
+    )
+    sources = _sdk_sources(manifest, repository_root)
+    _sdk_validate_manifest_source_inventories(manifest, sources)
+    if any(_overlap(source, bundle_root) or _overlap(source, work_root) for source in sources.values()):
+        raise CacheCopyError("SDK dependency source and private output roots overlap")
+    before_records, _ = _sdk_source_state(sources)
+    created_bundle: os.stat_result | None = None
+    created_work: os.stat_result | None = None
+    archive_publication: tuple[os.stat_result, os.stat_result] | None = None
+    inventory_publication: tuple[os.stat_result, os.stat_result] | None = None
+    try:
+        created_bundle = _sdk_copy_layout(sources, bundle_root)
+        after_records, _ = _sdk_source_state(sources)
+        if after_records != before_records:
+            raise CacheCopyError("SDK dependency sources changed during private copy")
+        unsealed_records, _ = _sdk_sanitized_snapshot(bundle_root, "SDK dependency bundle")
+        _sdk_reject_path_disclosure(
+            bundle_root, unsealed_records, sources, (repository_root,),
+        )
+        bindings = _sdk_bindings(bundle_root, manifest)
+        _seal_copied_tree(bundle_root, "SDK dependency bundle")
+        records, file_bytes = _sdk_sanitized_snapshot(bundle_root, "SDK dependency bundle")
+        created_work = _sdk_copy_work(bundle_root, work_root)
+        work_records, work_bytes = _sdk_sanitized_snapshot(work_root, "SDK dependency work root")
+        archive_binding, archive_publication = _sdk_publish_tar(
+            bundle_root, archive_path, records,
+        )
+        document = {
+            "format": SDK_BUNDLE_FORMAT, "schema_version": 1,
+            "archive_id": SDK_BUNDLE_ARCHIVE_ID, "source_disclosure": "withheld",
+            "source_manifest_sha256": manifest_sha256,
+            "source_state_sha256": _sdk_source_state_sha256(before_records),
+            "bindings": bindings, "archive": archive_binding,
+            "record_count": len(records), "file_bytes": file_bytes, "records": records,
+            "work_initial_record_count": len(work_records),
+            "work_initial_file_bytes": work_bytes,
+            "work_initial_records": work_records,
+        }
+        rendered = _canonical_payload(document)
+        if any(os.fsencode(str(path)) in rendered for path in sources.values()):
+            raise CacheCopyError("SDK dependency inventory disclosed an original path")
+        inventory_publication = _publish_inventory(inventory_path, rendered)
+        verify_sdk_dependencies(
+            source_manifest, expected_source_manifest_sha256, repository_root,
+            bundle_root, work_root, archive_path, inventory_path,
+            verify_initial_work=True,
+        )
+    except BaseException:
+        _remove_published(inventory_path, inventory_publication)
+        _remove_published(archive_path, archive_publication)
+        for root, created, label in (
+            (work_root, created_work, "partial SDK dependency work root"),
+            (bundle_root, created_bundle, "partial SDK dependency bundle"),
+        ):
+            if created is not None and (root.exists() or root.is_symlink()):
+                _quiescent_remove_tree(root, label)
+        raise
+
+
 def _populate_runtime(
     runtime_root: Path, sources: list[Path], inventory_path: Path,
 ) -> tuple[os.stat_result, os.stat_result]:
@@ -2106,6 +4399,13 @@ def _populate_runtime(
 
     resolved = [source.resolve(strict=True) for source in sources]
     names = _runtime_names(resolved)
+    framework_python = _framework_python_closure(resolved)
+    if framework_python is not None:
+        version_root, framework, stdlib_name = framework_python
+        _reject_framework_python_destination_overlap(
+            version_root, runtime_root, inventory_path,
+        )
+        _validate_framework_python_sources(version_root, framework)
     cargo_index = names.index("cargo")
     rustc_index = names.index("rustc")
     cargo, rustc = resolved[cargo_index], resolved[rustc_index]
@@ -2119,15 +4419,30 @@ def _populate_runtime(
     toolchain = runtime_root / "rust-toolchain"
     input_records: list[dict[str, object]] = []
     input_budget = {"records": 0, "bytes": 0}
-    def copy_stable_tree(source: Path, destination: Path, label: str) -> None:
+    def copy_stable_tree(
+        source: Path,
+        destination: Path,
+        label: str,
+        *,
+        symlink_root: Path | None = None,
+        symlink_parts: tuple[str, ...] = (),
+    ) -> None:
         source_fd, source_identity = _open_directory(source, label)
         destination_parent_fd, destination_parent_identity = _open_directory(
             destination.parent, f"private {label} parent",
         )
+        symlink_root_fd: int | None = None
         try:
+            if symlink_root is None:
+                symlink_root_fd = os.dup(source_fd)
+            else:
+                symlink_root_fd, _ = _open_directory(
+                    symlink_root, f"{label} symlink root",
+                )
             _copy_directory(
                 source_fd, destination_parent_fd, destination.name,
-                destination.name, source_fd, (), input_records, input_budget,
+                destination.name, symlink_root_fd, symlink_parts,
+                input_records, input_budget,
             )
             _revalidate_directory_path(source, source_identity, label)
             _revalidate_directory_path(
@@ -2135,6 +4450,8 @@ def _populate_runtime(
                 f"private {label} parent",
             )
         finally:
+            if symlink_root_fd is not None:
+                os.close(symlink_root_fd)
             os.close(source_fd)
             os.close(destination_parent_fd)
 
@@ -2149,6 +4466,7 @@ def _populate_runtime(
             input_records.append(_copy_regular(
                 source_parent_fd, destination_parent_fd, source.name,
                 destination.name, before, input_budget,
+                destination_name=destination.name,
             ))
             _revalidate_entry(source_parent_fd, source.name, before, label)
             _revalidate_directory_path(source.parent, source_parent_identity, f"{label} parent")
@@ -2196,14 +4514,32 @@ def _populate_runtime(
                 "verus": "verus-distribution", "cargo-verus": "verus-distribution",
             }[name]
             os.symlink(f"../{root_name}/{name}", link)
-    if sys.platform == "darwin" and Path(sys.executable).resolve(strict=True) == resolved[0]:
-        for name in sorted(set(source_roots) - set(names) - {"rust-toolchain", "swift-toolchain", "java-runtime", "verus-distribution"}):
-            source = source_roots[name]
-            if source.is_dir():
-                copy_stable_tree(source, runtime_root / name, "Python framework resources")
-            else:
-                copy_stable_file(source, runtime_root / name, "Python framework library")
-    _seal_copied_tree(runtime_root, "runtime")
+    if framework_python is not None:
+        copy_stable_file(
+            version_root / framework,
+            runtime_root / framework,
+            "Python framework library",
+        )
+        for name in ("Resources", "lib"):
+            copy_stable_tree(
+                version_root / name,
+                runtime_root / name,
+                f"Python framework {name}",
+                symlink_root=version_root,
+                symlink_parts=(name,),
+            )
+        _validate_framework_python_sources(version_root, framework)
+    _seal_copied_tree(
+        runtime_root,
+        "runtime",
+        owner_private_directory_roots=(
+            (("Resources", "Python.app"),)
+            if framework_python is not None
+            else ()
+        ),
+    )
+    if framework_python is not None:
+        _probe_framework_python_runtime(runtime_root, stdlib_name)
     runtime_fd, runtime_identity = _open_directory(runtime_root, "private runtime")
     records: list[dict[str, object]] = []
     runtime_budget = {"records": 0, "bytes": 0}
@@ -2212,6 +4548,10 @@ def _populate_runtime(
     finally:
         os.close(runtime_fd)
     _revalidate_directory_path(runtime_root, runtime_identity, "private runtime")
+    if framework_python is not None:
+        _validate_framework_python_runtime_records(
+            records, framework, stdlib_name,
+        )
     _bind_runtime_destinations(input_records, records, update=True)
     document = {
         "format": "iroha-sumeragi-v2-private-runtime",
@@ -2268,6 +4608,340 @@ def copy_runtime(runtime_root: Path, sources: list[Path], inventory_path: Path) 
         os.close(parent_fd)
 
 
+def _framework_python_runtime_inventory(
+    runtime_root: Path,
+    records: list[dict[str, object]],
+    budget: dict[str, int],
+    input_records: list[dict[str, object]],
+    input_budget: dict[str, int],
+) -> dict[str, object]:
+    return {
+        "format": "iroha-sumeragi-v2-private-framework-python-runtime",
+        "schema_version": 1,
+        "runtime_root": str(runtime_root),
+        "record_count": len(records),
+        "file_bytes": budget["bytes"],
+        "records": sorted(records, key=lambda record: str(record["path"])),
+        "source_disclosure": "withheld",
+        "input_record_count": len(input_records),
+        "input_file_bytes": input_budget["bytes"],
+        "input_records": sorted(
+            input_records, key=lambda record: str(record["path"])
+        ),
+    }
+
+
+def verify_framework_python_runtime(
+    runtime_root: Path, inventory_path: Path,
+) -> dict[str, object]:
+    """Authenticate one protected framework-Python archive and its sources."""
+
+    source_python = Path(sys.executable).resolve(strict=True)
+    closure = _framework_python_closure([source_python])
+    if closure is None:
+        raise CacheCopyError("selected Python has no macOS framework closure")
+    version_root, framework, stdlib_name = closure
+    _reject_framework_python_destination_overlap(
+        version_root, runtime_root, inventory_path,
+    )
+    _validate_framework_python_sources(version_root, framework)
+    payload, inventory_metadata = _read_regular(
+        inventory_path, "framework Python runtime inventory",
+    )
+    try:
+        inventory = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CacheCopyError(
+            "framework Python runtime inventory is malformed"
+        ) from error
+    keys = {
+        "format",
+        "schema_version",
+        "runtime_root",
+        "record_count",
+        "file_bytes",
+        "records",
+        "source_disclosure",
+        "input_record_count",
+        "input_file_bytes",
+        "input_records",
+    }
+    if (
+        not isinstance(inventory, dict)
+        or set(inventory) != keys
+        or inventory.get("format")
+        != "iroha-sumeragi-v2-private-framework-python-runtime"
+        or type(inventory.get("schema_version")) is not int
+        or inventory["schema_version"] != 1
+        or inventory.get("runtime_root") != str(runtime_root)
+        or inventory.get("source_disclosure") != "withheld"
+        or not isinstance(inventory.get("records"), list)
+        or not isinstance(inventory.get("input_records"), list)
+        or stat.S_IMODE(inventory_metadata.st_mode) != 0o400
+        or payload != _canonical_payload(inventory)
+    ):
+        raise CacheCopyError(
+            "framework Python runtime inventory contract is not exact"
+        )
+    records = inventory["records"]
+    input_records = inventory["input_records"]
+    input_bytes = sum(
+        record.get("size", 0)
+        for record in input_records
+        if isinstance(record, dict) and record.get("kind") == "file"
+    )
+    if (
+        type(inventory.get("input_record_count")) is not int
+        or inventory["input_record_count"] != len(input_records)
+        or type(inventory.get("input_file_bytes")) is not int
+        or inventory["input_file_bytes"] != input_bytes
+    ):
+        raise CacheCopyError(
+            "framework Python source inventory accounting is not exact"
+        )
+    source_roots = {
+        "python3": source_python,
+        framework: version_root / framework,
+        "Resources": version_root / "Resources",
+        "lib": version_root / "lib",
+    }
+    _verify_runtime_sources(source_roots, input_records)
+    _bind_runtime_destinations(input_records, records, update=False)
+    _validate_framework_python_runtime_records(records, framework, stdlib_name)
+    runtime_fd, runtime_identity = _open_directory(
+        runtime_root, "protected framework Python runtime",
+    )
+    observed: list[dict[str, object]] = []
+    budget = {"records": 0, "bytes": 0}
+    try:
+        _snapshot_directory(
+            runtime_fd, runtime_fd, None, (), observed, budget,
+        )
+    finally:
+        os.close(runtime_fd)
+    _revalidate_directory_path(
+        runtime_root, runtime_identity, "protected framework Python runtime",
+    )
+    if (
+        type(inventory.get("record_count")) is not int
+        or inventory["record_count"] != len(observed)
+        or type(inventory.get("file_bytes")) is not int
+        or inventory["file_bytes"] != budget["bytes"]
+        or records
+        != sorted(observed, key=lambda record: str(record["path"]))
+    ):
+        raise CacheCopyError(
+            "protected framework Python runtime changed after publication"
+        )
+    _probe_framework_python_runtime(runtime_root, stdlib_name)
+    return inventory
+
+
+def copy_framework_python_runtime(
+    runtime_root: Path, inventory_path: Path,
+) -> None:
+    """Copy and seal the selected macOS framework-Python runtime closure."""
+
+    _normalized_absolute(runtime_root, "protected framework Python runtime")
+    _normalized_absolute(
+        inventory_path, "framework Python runtime inventory",
+    )
+    if runtime_root.parent != inventory_path.parent:
+        raise CacheCopyError(
+            "framework Python runtime and inventory must be siblings"
+        )
+    source_python = Path(sys.executable).resolve(strict=True)
+    closure = _framework_python_closure([source_python])
+    if closure is None:
+        raise CacheCopyError("selected Python has no macOS framework closure")
+    version_root, framework, stdlib_name = closure
+    _reject_framework_python_destination_overlap(
+        version_root, runtime_root, inventory_path,
+    )
+    _validate_framework_python_sources(version_root, framework)
+    parent_fd, parent_identity = _open_directory(
+        runtime_root.parent, "framework Python archive parent",
+    )
+    created = False
+    published: tuple[os.stat_result, os.stat_result] | None = None
+    input_records: list[dict[str, object]] = []
+    input_budget = {"records": 0, "bytes": 0}
+
+    def copy_file(source: Path, destination: Path, label: str) -> None:
+        source_parent_fd, source_parent = _open_directory(
+            source.parent, f"{label} parent",
+        )
+        destination_parent_fd, destination_parent = _open_directory(
+            destination.parent, f"archived {label} parent",
+        )
+        try:
+            before = _entry_stat(source_parent_fd, source.name, label)
+            if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+                raise CacheCopyError(f"{label} is not a regular source file")
+            input_budget["records"] += 1
+            if input_budget["records"] > MAXIMUM_RECORDS:
+                raise CacheCopyError(
+                    "framework Python source contains too many entries"
+                )
+            input_records.append(
+                _copy_regular(
+                    source_parent_fd,
+                    destination_parent_fd,
+                    source.name,
+                    destination.name,
+                    before,
+                    input_budget,
+                    destination_name=destination.name,
+                )
+            )
+            _revalidate_entry(source_parent_fd, source.name, before, label)
+            _revalidate_directory_path(
+                source.parent, source_parent, f"{label} parent",
+            )
+            _revalidate_directory_path(
+                destination.parent,
+                destination_parent,
+                f"archived {label} parent",
+            )
+        finally:
+            os.close(source_parent_fd)
+            os.close(destination_parent_fd)
+
+    def copy_tree(source: Path, destination: Path, name: str) -> None:
+        source_fd, source_identity = _open_directory(
+            source, f"Python framework {name}",
+        )
+        destination_parent_fd, destination_parent = _open_directory(
+            destination.parent, f"archived Python framework {name} parent",
+        )
+        root_fd, _ = _open_directory(
+            version_root, "Python framework symlink root",
+        )
+        try:
+            _copy_directory(
+                source_fd,
+                destination_parent_fd,
+                destination.name,
+                destination.name,
+                root_fd,
+                (name,),
+                input_records,
+                input_budget,
+            )
+            _revalidate_directory_path(
+                source, source_identity, f"Python framework {name}",
+            )
+            _revalidate_directory_path(
+                destination.parent,
+                destination_parent,
+                f"archived Python framework {name} parent",
+            )
+        finally:
+            os.close(source_fd)
+            os.close(destination_parent_fd)
+            os.close(root_fd)
+
+    try:
+        if (
+            _optional_entry_stat(
+                parent_fd, runtime_root.name,
+                "protected framework Python runtime",
+            )
+            is not None
+            or _optional_entry_stat(
+                parent_fd, inventory_path.name,
+                "framework Python runtime inventory",
+            )
+            is not None
+        ):
+            raise CacheCopyError(
+                "framework Python archive outputs already exist"
+            )
+        os.mkdir(runtime_root.name, mode=0o700, dir_fd=parent_fd)
+        created = True
+        runtime_fd = os.open(
+            runtime_root.name, _DIRECTORY_FLAGS, dir_fd=parent_fd,
+        )
+        try:
+            opened = os.fstat(runtime_fd)
+            if (
+                opened.st_uid != os.geteuid()
+                or stat.S_IMODE(opened.st_mode) != 0o700
+            ):
+                raise CacheCopyError(
+                    "protected framework Python runtime root is unsafe"
+                )
+            os.mkdir("bin", mode=0o700, dir_fd=runtime_fd)
+        finally:
+            os.close(runtime_fd)
+        copy_file(
+            source_python, runtime_root / "bin" / "python3",
+            "Python framework launcher",
+        )
+        copy_file(
+            version_root / framework, runtime_root / framework,
+            "Python framework library",
+        )
+        for name in ("Resources", "lib"):
+            copy_tree(version_root / name, runtime_root / name, name)
+        _validate_framework_python_sources(version_root, framework)
+        _seal_copied_tree(
+            runtime_root,
+            "protected framework Python runtime",
+            owner_private_directory_roots=(("Resources", "Python.app"),),
+        )
+        _probe_framework_python_runtime(runtime_root, stdlib_name)
+        runtime_fd, runtime_identity = _open_directory(
+            runtime_root, "protected framework Python runtime",
+        )
+        records: list[dict[str, object]] = []
+        budget = {"records": 0, "bytes": 0}
+        try:
+            _snapshot_directory(
+                runtime_fd, runtime_fd, None, (), records, budget,
+            )
+        finally:
+            os.close(runtime_fd)
+        _revalidate_directory_path(
+            runtime_root, runtime_identity,
+            "protected framework Python runtime",
+        )
+        _validate_framework_python_runtime_records(
+            records, framework, stdlib_name,
+        )
+        _bind_runtime_destinations(input_records, records, update=True)
+        document = _framework_python_runtime_inventory(
+            runtime_root, records, budget, input_records, input_budget,
+        )
+        source_roots = {
+            "python3": source_python,
+            framework: version_root / framework,
+            "Resources": version_root / "Resources",
+            "lib": version_root / "lib",
+        }
+        _verify_runtime_sources(source_roots, input_records)
+        published = _publish_inventory(
+            inventory_path, _canonical_payload(document),
+        )
+        verify_framework_python_runtime(runtime_root, inventory_path)
+        _revalidate_directory_path(
+            runtime_root.parent,
+            parent_identity,
+            "framework Python archive parent",
+        )
+    except BaseException:
+        _remove_published(inventory_path, published)
+        if created:
+            _owned_remove_tree(
+                parent_fd,
+                runtime_root.name,
+                "partial framework Python runtime",
+            )
+        raise
+    finally:
+        os.close(parent_fd)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source-cargo-home", type=Path)
@@ -2277,24 +4951,174 @@ def main() -> int:
     parser.add_argument("--publish-validation-failure", action="store_true")
     parser.add_argument("--seal-release-result", action="store_true")
     parser.add_argument("--copy-runtime", action="store_true")
+    parser.add_argument("--copy-framework-python", action="store_true")
+    parser.add_argument("--verify-framework-python", action="store_true")
     parser.add_argument("--verify-runtime-sources", action="store_true")
     parser.add_argument("--verify-cache-sources", action="store_true")
     parser.add_argument("--copy-private-bundle", action="store_true")
     parser.add_argument("--verify-private-bundle", action="store_true")
+    parser.add_argument("--copy-sdk-dependencies", action="store_true")
+    parser.add_argument("--verify-sdk-dependencies", action="store_true")
+    parser.add_argument("--create-sdk-command-work", action="store_true")
+    parser.add_argument("--cleanup-sdk-command-work", action="store_true")
     parser.add_argument("--cleanup-invocation", action="store_true")
     parser.add_argument("--runtime-root", type=Path)
     parser.add_argument("--runtime-inventory", type=Path)
     parser.add_argument("--runtime-source", type=Path, action="append", default=[])
     parser.add_argument("--bundle-source", type=Path)
     parser.add_argument("--bundle-root", type=Path)
+    parser.add_argument("--sdk-dependency-bundle-manifest", type=Path)
+    parser.add_argument("--expected-sdk-dependency-bundle-manifest-sha256")
+    parser.add_argument("--repository-root", type=Path)
+    parser.add_argument("--sdk-input-root", type=Path)
+    parser.add_argument("--sdk-work-root", type=Path)
+    parser.add_argument("--sdk-archive", type=Path)
+    parser.add_argument("--sdk-dependency-inventory", type=Path)
+    parser.add_argument("--sdk-work-final-inventory", type=Path)
     parser.add_argument("--invocation-root", type=Path)
     parser.add_argument("--bootstrap-evidence", type=Path)
     parser.add_argument("--source-manifest-sha256")
+    parser.add_argument("--candidate-root", type=Path)
+    parser.add_argument("--scaling-evidence-manifest", type=Path)
+    parser.add_argument("--expected-signer-fingerprint")
+    parser.add_argument("--expected-scaling-trial-harness-sha256")
+    parser.add_argument("--expected-scaling-configuration-sha256")
+    parser.add_argument("--expected-scaling-irohad-sha256")
+    parser.add_argument("--expected-scaling-iroha-cli-sha256")
     parser.add_argument("--validator-exit-status", type=int)
     parser.add_argument("--cleanup-base", type=Path)
     parser.add_argument("--cleanup-prefix")
     args = parser.parse_args()
     try:
+        if args.create_sdk_command_work or args.cleanup_sdk_command_work:
+            if (
+                args.create_sdk_command_work == args.cleanup_sdk_command_work
+                or args.sdk_input_root is None
+                or args.sdk_work_root is None
+                or any((
+                    args.final, args.publish_validation_failure,
+                    args.seal_release_result, args.copy_runtime,
+                    args.copy_framework_python, args.verify_framework_python,
+                    args.verify_runtime_sources, args.verify_cache_sources,
+                    args.copy_private_bundle, args.verify_private_bundle,
+                    args.copy_sdk_dependencies, args.verify_sdk_dependencies,
+                    args.cleanup_invocation,
+                ))
+                or args.runtime_source
+                or any(value is not None for value in (
+                    args.source_cargo_home, args.cargo_home, args.inventory,
+                    args.runtime_root, args.runtime_inventory,
+                    args.bundle_source, args.bundle_root,
+                    args.sdk_dependency_bundle_manifest,
+                    args.expected_sdk_dependency_bundle_manifest_sha256,
+                    args.repository_root, args.sdk_archive,
+                    args.sdk_dependency_inventory,
+                    args.sdk_work_final_inventory, args.invocation_root,
+                    args.bootstrap_evidence, args.source_manifest_sha256,
+                    args.candidate_root, args.scaling_evidence_manifest,
+                    args.expected_signer_fingerprint,
+                    args.expected_scaling_trial_harness_sha256,
+                    args.expected_scaling_configuration_sha256,
+                    args.expected_scaling_irohad_sha256,
+                    args.expected_scaling_iroha_cli_sha256,
+                    args.validator_exit_status, args.cleanup_base,
+                    args.cleanup_prefix,
+                ))
+            ):
+                raise CacheCopyError("SDK command work inputs are not exact")
+            if args.create_sdk_command_work:
+                create_sdk_command_work(args.sdk_input_root, args.sdk_work_root)
+            else:
+                cleanup_sdk_command_work(args.sdk_input_root, args.sdk_work_root)
+            return 0
+        if args.copy_sdk_dependencies or args.verify_sdk_dependencies:
+            if (
+                args.copy_sdk_dependencies == args.verify_sdk_dependencies
+                or any(value is None for value in (
+                    args.sdk_dependency_bundle_manifest,
+                    args.expected_sdk_dependency_bundle_manifest_sha256,
+                    args.repository_root, args.sdk_input_root, args.sdk_work_root,
+                    args.sdk_archive, args.sdk_dependency_inventory,
+                ))
+                or (args.copy_sdk_dependencies and args.sdk_work_final_inventory is not None)
+                or (args.verify_sdk_dependencies and args.sdk_work_final_inventory is None)
+                or any((
+                    args.final, args.publish_validation_failure,
+                    args.seal_release_result, args.copy_runtime,
+                    args.copy_framework_python, args.verify_framework_python,
+                    args.verify_runtime_sources, args.verify_cache_sources,
+                    args.copy_private_bundle, args.verify_private_bundle,
+                    args.create_sdk_command_work,
+                    args.cleanup_sdk_command_work,
+                    args.cleanup_invocation,
+                ))
+                or any(value is not None for value in (
+                    args.source_cargo_home, args.cargo_home, args.inventory,
+                    args.runtime_root, args.runtime_inventory,
+                    args.bundle_source, args.bundle_root,
+                    args.invocation_root, args.bootstrap_evidence,
+                    args.source_manifest_sha256, args.candidate_root,
+                    args.scaling_evidence_manifest,
+                    args.expected_signer_fingerprint,
+                    args.expected_scaling_trial_harness_sha256,
+                    args.expected_scaling_configuration_sha256,
+                    args.expected_scaling_irohad_sha256,
+                    args.expected_scaling_iroha_cli_sha256,
+                    args.validator_exit_status, args.cleanup_base,
+                    args.cleanup_prefix,
+                ))
+                or args.runtime_source
+            ):
+                raise CacheCopyError("SDK dependency bundle inputs are not exact")
+            sdk_arguments = (
+                args.sdk_dependency_bundle_manifest,
+                args.expected_sdk_dependency_bundle_manifest_sha256,
+                args.repository_root, args.sdk_input_root, args.sdk_work_root,
+                args.sdk_archive, args.sdk_dependency_inventory,
+            )
+            if args.copy_sdk_dependencies:
+                copy_sdk_dependencies(*sdk_arguments)
+            else:
+                verify_sdk_dependencies(
+                    *sdk_arguments,
+                    final_work_inventory=args.sdk_work_final_inventory,
+                )
+            return 0
+        if args.copy_framework_python or args.verify_framework_python:
+            if (
+                args.copy_framework_python == args.verify_framework_python
+                or args.runtime_root is None
+                or args.runtime_inventory is None
+                or args.runtime_source
+                or args.source_cargo_home is not None
+                or args.cargo_home is not None
+                or args.inventory is not None
+                or args.final
+                or args.publish_validation_failure
+                or args.seal_release_result
+                or args.copy_runtime
+                or args.verify_runtime_sources
+                or args.verify_cache_sources
+                or args.copy_private_bundle
+                or args.verify_private_bundle
+                or args.copy_sdk_dependencies
+                or args.verify_sdk_dependencies
+                or args.create_sdk_command_work
+                or args.cleanup_sdk_command_work
+                or args.cleanup_invocation
+            ):
+                raise CacheCopyError(
+                    "framework Python runtime inputs are not exact"
+                )
+            if args.copy_framework_python:
+                copy_framework_python_runtime(
+                    args.runtime_root, args.runtime_inventory,
+                )
+            else:
+                verify_framework_python_runtime(
+                    args.runtime_root, args.runtime_inventory,
+                )
+            return 0
         if args.verify_cache_sources:
             if args.source_cargo_home is None or args.cargo_home is None or args.inventory is None:
                 raise CacheCopyError("caller cache verification lacks required inputs")
@@ -2336,12 +5160,26 @@ def main() -> int:
                 args.invocation_root,
                 args.bootstrap_evidence,
                 args.source_manifest_sha256,
+                args.candidate_root,
+                args.scaling_evidence_manifest,
+                args.expected_signer_fingerprint,
+                args.expected_scaling_trial_harness_sha256,
+                args.expected_scaling_configuration_sha256,
+                args.expected_scaling_irohad_sha256,
+                args.expected_scaling_iroha_cli_sha256,
             )):
                 raise CacheCopyError("retained release publication lacks required inputs")
             seal_release_result(
                 args.invocation_root,
                 args.bootstrap_evidence,
                 args.source_manifest_sha256,
+                args.candidate_root,
+                args.scaling_evidence_manifest,
+                args.expected_signer_fingerprint,
+                args.expected_scaling_trial_harness_sha256,
+                args.expected_scaling_configuration_sha256,
+                args.expected_scaling_irohad_sha256,
+                args.expected_scaling_iroha_cli_sha256,
             )
         elif args.final:
             if args.cargo_home is None or args.inventory is None:

@@ -152,6 +152,9 @@ MATERIAL_CLOSURE_PATHS_BY_WORKFLOW = {
         ),
         "fixtures/sorafs_manifest/reference_sdk_validation_inventory_v1.json",
         "integration_tests/tests/native_escrow.rs",
+        "roadmap.md",
+        "specs/sorafs/v1_closure_ledger.md",
+        "specs/sorafs_reference_sdk_plan.md",
     },
     "pr_csharp.yml": {
         (
@@ -171,7 +174,17 @@ MATERIAL_CLOSURE_PATHS_BY_WORKFLOW = {
         "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
         "IrohaSwift/Tests/IrohaSwiftTests/NativeBridgeLoaderTests.swift",
         "ci/check_kagemusha_jvm_native_bridge.sh",
+        "javascript/iroha_js/scripts/run-test-profile.mjs",
+        "javascript/iroha_js/test/sorafsFixtureBundleValidation.test.js",
+        "javascript/iroha_js/test/sorafsPdpValidation.test.js",
         "fixtures/sorafs_manifest/appeal_finance/cancel_asset_lock_v1.json",
+        "fixtures/sorafs_manifest/orderbook/order_request_v1.to",
+        "fixtures/sorafs_manifest/pdp/commitment_v1.to",
+        "fixtures/sorafs_manifest/por/proof_v1.to",
+        "fixtures/sorafs_manifest/potr/receipt_v1.to",
+        "fixtures/sorafs_manifest/provider_admission/advert_v1.to",
+        "fixtures/sorafs_manifest/repair/task_v1.to",
+        "fixtures/sorafs_manifest/replication_order/order_v1.to",
         (
             "fixtures/sorafs_manifest/reference_sdk/"
             "appeal_finance_cancel_asset_lock_positive_validation_outcome_v1.json"
@@ -648,7 +661,9 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
     javascript_profile_runner = read("javascript/iroha_js/scripts/run-test-profile.mjs")
     assert '"cancelAssetLockV1.test.js"' in javascript_profile_runner
     assert '"sorafsAppealFinanceValidation.test.js"' in javascript_profile_runner
+    assert '"sorafsFixtureBundleValidation.test.js"' in javascript_profile_runner
     assert '"sorafsOrchestrator.parity.test.js"' in javascript_profile_runner
+    assert '"sorafsPdpValidation.test.js"' in javascript_profile_runner
     assert "swift test --filter SorafsOrchestratorParityTests" in parity_runner
     assert "swift test --filter CancelAssetLockV1Tests" in parity_runner
     assert "swift test --filter SorafsReferenceValidatorsTests" in parity_runner

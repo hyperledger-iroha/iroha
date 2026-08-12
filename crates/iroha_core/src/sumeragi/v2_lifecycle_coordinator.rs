@@ -90,6 +90,16 @@ pub(crate) fn run_complete_tip_retirement_release_regressions() {
     ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_survives_completed_serve_body_cleanup_with_live_work();
     ledger::tests::durable_ready_fetch_recovery::complete_tip_retirement_binds_only_the_exact_unlaunched_successor_owner();
 }
+#[cfg(all(test, feature = "bls"))]
+/// Build one exact retired CompleteTip/H+1 pair for runner restart tests.
+pub(crate) fn complete_tip_restart_activation_fixture() -> (
+    std::sync::Arc<crate::kura::Kura>,
+    std::path::PathBuf,
+    iroha_data_model::block::consensus_v2::HeightContext,
+    RetiredRecoveredCompleteTipActivationAuthorityV1,
+) {
+    ledger::tests::durable_ready_fetch_recovery::complete_tip_restart_activation_fixture()
+}
 #[cfg(test)]
 pub(crate) use ledger::{
     append_same_owner_foreign_terminal_for_test,

@@ -3,9 +3,10 @@
 This guide covers producing and publishing the authenticated `NoritoBridge`
 XCFramework release asset. Swift Package Manager consumes that exact artifact
 from an ignored local `dist/` directory or an explicitly configured external
-artifact directory. Native CocoaPods delivery is not complete; see
-[CocoaPods](#cocoapods) below. The workflow keeps the Swift artifact in
-lock-step with the Rust crate releases that ship Iroha's Norito codec. For
+artifact directory. CocoaPods consumes the same ZIP through the generated,
+checksum-pinned `NoritoBridge` binary pod. `IrohaSwift/VERSION` owns the shared
+source-pod, binary-pod, tag, and archive SemVer. The Rust sources are instead
+bound by the reviewed commit, source fingerprint, and root lockfile. For
 end-to-end instructions on consuming a published artifact inside an app, see the
 [public Swift SDK tutorial](https://docs.iroha.tech/guide/tutorials/swift.html).
 
@@ -19,16 +20,18 @@ that workflow for local release verification.
 - Exact Rust 1.93.1 `cargo`, `rustc`, and `rustdoc`.
 - Python 3.12.
 - Swift toolchain 5.9 or newer.
+- CocoaPods for the package-first binary/source lint.
 - Access to the Hyperledger Iroha release signing keys for tagging Swift artifacts.
 
 ## Versioning model
 
-1. Determine the Rust crate version for the Norito codec (`crates/norito/Cargo.toml`).
-2. Tag the workspace with the release identifier (`v<version>`).
+1. Select the canonical pod/archive SemVer in `IrohaSwift/VERSION`.
+2. Tag the workspace with that release identifier (`v<version>`). This one tag
+   owns the IrohaSwift source pod and the NoritoBridge binary release asset.
 3. Keep `IrohaSwift/VERSION`, the Swift loader's expected version, and the
    reviewed release version map aligned.
-4. When the Rust crate increments its version, publish a matching authenticated Swift
-   artifact.
+4. Do not require numeric equality with `crates/norito/Cargo.toml`; authenticate
+   the exact Rust source commit, source fingerprint, and root lockfile instead.
 
 ## Build steps
 
@@ -115,8 +118,32 @@ that workflow for local release verification.
    the authenticated external artifact directory and does not embed generated
    release archives or their checksums.
 
-4. Update `IrohaSwift/IrohaSwift.podspec` with the new version, checksum, and archive
-   URL.
+4. Select a canonical existing external parent and an absent dedicated package
+   destination whose basename contains `mobile-sdk`, then package and lint the
+   final archive before tagging. `--version` is a diagnostic artifact label; the
+   pod/archive SemVer still comes only from `IrohaSwift/VERSION`.
+
+   ```bash
+   export MOBILE_SDK_APPLE_ARTIFACT_DIR="$NORITO_BRIDGE_OUT_DIR"
+   export MOBILE_SDK_PACKAGE_PARENT=/absolute/cache/iroha-mobile-packages
+   mkdir -p "$MOBILE_SDK_PACKAGE_PARENT"
+   export MOBILE_SDK_PACKAGE_OUT_DIR="$MOBILE_SDK_PACKAGE_PARENT/mobile-sdk-release"
+   test ! -e "$MOBILE_SDK_PACKAGE_OUT_DIR"
+   export MOBILE_SDK_VERSION="local-$(git rev-parse --short=12 HEAD)"
+   scripts/package_mobile_sdk_artifacts.sh \
+     --apple \
+     --version "$MOBILE_SDK_VERSION"
+   ci/check_swift_pod_bridge.sh
+   ```
+
+   The package command creates
+   `NoritoBridge-v<version>.xcframework.zip` and invokes
+   `scripts/render_norito_bridge_podspec.py`, which reads `IrohaSwift/VERSION`,
+   requires the embedded bridge-manifest version to match it, validates the
+   bounded deterministic ZIP, computes its SHA-256, and exclusively creates
+   `NoritoBridge-<version>.podspec` in the private package stage. The lint wrapper
+   reauthenticates that final package before compiling both pods. Do not hand-edit
+   a release URL or checksum, and do not place generated package outputs in Git.
 
 5. **Regenerate headers if the bridge gained new exports.** The Swift bridge now exposes
    `connect_norito_set_acceleration_config` so `AccelerationSettings` can toggle Metal /
@@ -152,12 +179,23 @@ package.
 
 ### CocoaPods
 
-Native CocoaPods publication remains blocked. The current podspec does not yet
-define an authenticated vendored-XCFramework archive path. The lint wrapper now
-fails when CocoaPods is unavailable, but a local lint does not close artifact
-delivery. Do not run `pod trunk push` or claim native CocoaPods readiness until
-the vendored artifact design, install smoke, and signed provenance are
-implemented and reviewed.
+`IrohaSwift` is a source pod with an exact same-version dependency on the
+`NoritoBridge` binary pod. The generated binary podspec uses the immutable
+`v<version>` GitHub release URL, pins the exact ZIP with CocoaPods `:sha256`, and
+declares `NoritoBridge.xcframework` as its vendored framework. CI first packages
+the final archive into an atomically published current-UID-owned mode-0700
+directory, requires single-link regular inputs that are not writable by others,
+authenticates the closed checksum/manifest inventory, renders
+an explicit `file://` copy into a current-UID-owned mode-0700 temporary directory,
+then runs binary `pod spec lint` and source `pod lib lint --include-podspecs`.
+The dependency archive is package-local, but CocoaPods itself may still consult
+configured spec sources; this lane is not evidence of network isolation.
+
+This closes repository source wiring and package-local dependency compilation only.
+CocoaPods registry publication remains blocked until the immutable GitHub asset
+and both same-version specs are published in dependency order and a clean public
+`pod install`/Release build plus signed provenance are captured. Generated
+`dist/*` stays untracked; only `dist/.gitkeep` belongs in Git.
 
 ## CI considerations
 

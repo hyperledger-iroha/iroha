@@ -65,6 +65,27 @@ def test_topology_envelope_dependency_triggers_are_mandatory(
 
 
 @pytest.mark.parametrize(
+    "relative",
+    sorted(automation.SORAFS_CLI_VERSION_MAP_TRIGGER_PATHS),
+)
+def test_swift_version_map_dependency_triggers_are_mandatory(
+    tmp_path: Path, relative: str
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    trigger = f'      - "{relative}"\n'
+    assert source.count(trigger) == 1
+    workflow.write_text(source.replace(trigger, "", 1), encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match=r"pull_request\.paths omits Swift version-map dependency trigger",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
     "marker",
     automation.RUNTIME_PROVIDER_RELEASE_WORKFLOW_MARKERS,
 )
@@ -1872,13 +1893,16 @@ def test_main_emits_schema_closed_summary(capsys: pytest.CaptureFixture[str]) ->
     )
 
 
-def test_cli_release_gate_runs_topology_envelope_adversarial_suites() -> None:
-    """The strict release gate cannot omit topology signing or safe-I/O tests."""
+def test_cli_release_gate_runs_supply_chain_and_topology_adversarial_suites() -> None:
+    """The strict release gate cannot omit SF-11 or topology adversarial tests."""
 
     source = (REPO_ROOT / "ci/check_sorafs_cli_release.sh").read_text(
         encoding="utf-8"
     )
     for relative in (
+        "scripts/tests/build_sorafs_reference_sdk_supply_chain_sources_test.py",
+        "scripts/tests/sorafs_reference_sdk_supply_chain_test.py",
+        "scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_pdp_provider_protocol_and_chain_repair_boundary_are_documented",
         "scripts/tests/sorafs_evidence_json_test.py",
         "scripts/tests/sorafs_response_args_test.py",
         "scripts/tests/sorafs_topology_qualification_test.py",
