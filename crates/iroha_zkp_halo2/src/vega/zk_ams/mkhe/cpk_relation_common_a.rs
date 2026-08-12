@@ -1,8 +1,10 @@
 //! Once-validated, budgeted common-`a` derivation shared by staged workers.
 
+use crate::vega::sponge::Shake256Reader;
+
 use super::{
     ACTIVE_COLLECTIVE_PUBLIC_A_DOMAIN_V1, BgvProfile, MAX_RANDOM_REJECTION_ATTEMPTS_V1,
-    Shake256Reader, ZkAmsMkheCpkRelationErrorV1, ZkAmsMkheGovernedActiveRosterV1,
+    ZkAmsMkheCpkRelationErrorV1, ZkAmsMkheGovernedActiveRosterV1,
     active_collective_public_a_context_v1,
 };
 
