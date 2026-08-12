@@ -1,0 +1,16 @@
+
+seiyaku Hello {
+  state int Counter;
+
+  hajimari() {
+    Counter = 1;
+  }
+
+  kotoage fn write_detail() authorize("Admin") {
+    Counter = Counter + 1;
+  }
+
+  kotoage fn main() authorize("Admin") {
+    Counter = Counter + 2;
+  }
+}

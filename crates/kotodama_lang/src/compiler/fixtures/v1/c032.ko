@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main(AccountId account, AssetDefinitionId asset) {
+  ledger::asset::burn(account: account, asset_definition: Name::parse("not_asset"), amount: 1);
+}
+
+}

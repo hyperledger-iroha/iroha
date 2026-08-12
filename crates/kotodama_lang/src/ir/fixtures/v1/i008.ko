@@ -1,0 +1,16 @@
+
+            seiyaku InactivePlaceholder {
+                state int counter;
+
+                hajimari() { counter = 0; }
+
+                fn poison() -> int {
+                    counter = counter + 1;
+                    return 99;
+                }
+
+                view fn inspect() -> Option<int> {
+                    return Option::none;
+                }
+            }
+        

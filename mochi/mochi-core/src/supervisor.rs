@@ -1448,9 +1448,7 @@ fn try_build_irohad(workspace: &Path) -> Result<PathBuf> {
     if !status.success() {
         return Err(SupervisorError::BinaryUnavailable {
             binary: "iroha3d",
-            message: format!(
-                "`cargo build -p irohad --bin iroha3d` exited with status {status}"
-            ),
+            message: format!("`cargo build -p irohad --bin iroha3d` exited with status {status}"),
         });
     }
 

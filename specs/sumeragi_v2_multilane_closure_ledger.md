@@ -49,12 +49,12 @@ All counts and static pass statements in this document describe the mutable
 development checkout. They are inventories and source-consistency observations,
 not immutable-candidate execution or release receipts.
 
-## 2026-08-09 mutable-development closure snapshot
+## 2026-08-11 mutable-development closure snapshot
 
-- The bound inventory contains exactly 861 production tests across 41 modules,
-  including 443 source-sealed ownership/regression names, plus 524 G-UNIT
+- The bound inventory contains exactly 854 production tests across 40 modules,
+  including 436 source-sealed ownership/regression names, plus 525 G-UNIT
   tests and 55 grouped Native negative controls. Its source-sealed pre-network
-  corridor contains 89 legs. These are source counts, not claims that any suite
+  corridor contains 88 legs. These are source counts, not claims that any suite
   was executed for this reconciliation.
 - The reviewed closure has no remaining explicit in-scope multilane TODO. The
   former lifecycle-cursor marker is gone: signed lifecycle bootstrap,
@@ -67,20 +67,22 @@ not immutable-candidate execution or release receipts.
   a source partition only; no fresh TLC, Apalache, TLAPS, Verus, trace-replay,
   mutation, or cross-tool certificate is claimed.
 - Mutable source-budget checks report within their configured bounds. The
-  reviewed Rust include topology contains 33 parents and 208 direct entries;
+  reviewed Rust include topology contains 37 parents and 226 direct entries;
   its canonical payload SHA-256 is
-  `0aa6f7a8d02884a297ce55b0503e39eaeff430ca901b9658411c7d3b608d2cc4`.
+  `6689c2ef7d6004b99a93afa73933bc2e01f5c9c7759e9c51786911363359ccdb`.
   The SDK closure resolver and complete transitive manifests are mutable
   development inputs, not release evidence.
 - Typed status/diagnostics SDK surfaces, including the browser JavaScript
   distribution source and Kotlin/Java Native model dependencies, are present in
-  the development tree. Some reviewed sources remain untracked, and checked-in
-  JavaScript/OpenAPI generated artifacts are stale, so SDK and wire closure is
-  still Open.
+  the development tree. Every reviewed SDK closure input is tracked, both
+  mutable source-closure checks pass, and the browser JavaScript source and
+  distribution trees match. The five checked-in OpenAPI artifacts and
+  immutable-candidate execution evidence remain Open, so SDK and wire closure
+  is not claimed.
 
 Every Evidence field and every `G-*` execution or release gate therefore
-remains Open. Neither `status.md` nor `roadmap.md` is updated by this mutable-
-development reconciliation.
+remains Open. These source-consistency documentation updates do not promote the
+mutable development checkout or replace immutable-candidate evidence.
 
 ## Non-negotiable invariants
 
@@ -787,7 +789,7 @@ Historical same-day isolated Rust 1.93.1 locked/offline slices passed the 18
 exact Kura replica tests and four exact configuration tests. The mutable
 focused inventory still names those tests, but this reconciliation makes no
 immutable-candidate execution claim for them or for a multi-peer body-pruning
-corridor. Those focused runs and source anchors are not the complete 524-test `G-UNIT` receipt,
+corridor. Those focused runs and source anchors are not the complete 525-test `G-UNIT` receipt,
 so this row's evidence remains Open.
 
 **Formal obligation and mutation.** `ML-MUT-KURA-01` now owns the source-bound
@@ -1234,10 +1236,15 @@ historical namespace/accounting suite (`6/6`), first-merge crash-window repair
 (`1/1`), Native post-WSV retention (`1/1`), and authenticated geometry refresh
 (`1/1`) under isolated Rust 1.93.1 locked/offline execution. The mutable
 focused inventory still names those 12 tests, but this reconciliation makes no
-immutable-candidate execution claim. These 12 focused tests are mapped row evidence, not the complete 524-test `G-UNIT` receipt,
+immutable-candidate execution claim. These 12 focused tests are mapped row evidence, not the complete 525-test `G-UNIT` receipt,
 so this row's evidence remains Open.
 
-The source-bound focused inventory also includes
+The source-bound focused inventory binds the runner startup order directly and
+includes `production_adapter_stays_carrier_silent_until_exact_queue_activation`
+in `crates/iroha_core/src/sumeragi/v2_lane_work.rs`, the positive and
+fail-closed deferred-carrier completion regressions in
+`crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_01.rs`,
+and also includes
 `startup_reconciles_lifecycle_before_lane_work_activation` and
 `terminal_sweep_source_partitions_whole_units_before_any_mutation` in
 `crates/iroha_core/src/sumeragi/tests/v2_runner_lifecycle_startup_order.rs`,
@@ -1602,11 +1609,12 @@ name-pattern filter, and the inventory includes an explicit swapped
 status/diagnostics payload negative. The development resolver
 `ci/resolve_sumeragi_v2_sdk_source_closure.py` and manifest
 `ci/sumeragi_v2_sdk_source_closure.json` cover transitive production sources
-and Kotlin/Java Native model dependencies, but those closure files and 14 SDK
-candidates remain untracked. The two specialized static Python modules are
-canonically runner-bound but remain untracked, and the browser distribution is
-not yet freshly regenerated. The resolver
-therefore fails closed and no current suite-source digest is release-eligible.
+and Kotlin/Java Native model dependencies. Every declared candidate is tracked,
+the two specialized static Python modules are canonically runner-bound, and the
+browser distribution matches its source. Both mutable resolver checks pass.
+These are development-tree consistency observations only; stale OpenAPI
+manifests and missing immutable-candidate source-seal and execution evidence
+keep the suite digest and `G-SDK` release claim ineligible.
 
 **Differential release invariant and negative control.**
 `MLApiAuthoritySeparation` states that no diagnostics-only field can satisfy an
@@ -1680,13 +1688,13 @@ corpus includes
 The harness and source-bound release inventory both require that exact count.
 The source inventories now require OpenAPI 7, Python 62, JavaScript 60, Swift
 4, Kotlin 6, and Java 5 tests. The current mutable source closure enumerates
-1,317 grouped and 1,320 diagnostics records. The checked-in grouped fixture has
+1,348 grouped and 1,347 diagnostics records. The checked-in grouped fixture has
 SHA-256
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`;
 the grouped and diagnostics suite-source SHA-256 values are
-`4c1c7ba8e804f479467826e4e56be98f27ca64af262ef83c2b99bdf5261f985c`
+`86dd4b10f7e5274567ced410c1008681213b9de98f44186e7e9e94a47fa4a8d3`
 and
-`bbcd73ea6aeb2aca20acba9ab7f589ec3436321a89f7513dc22303c78308c276`.
+`79ebd39ff5a534079b9c62daa1d45d8d78b7546d48601d6a0008948f604cb378`.
 The diagnostics closure directly includes the 48-line wire fixture whose
 SHA-256 is
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
@@ -1753,9 +1761,10 @@ schemas, but the five checked-in OpenAPI artifacts are stale:
 `artifacts/openapi/torii.json`,
 `artifacts/openapi/versions/current/torii.json`, the corresponding root and
 current-version manifests, and `artifacts/openapi/versions.json` still require
-deterministic regeneration. The runtime
-consumer is implemented, while wire/OpenAPI generation, cross-SDK parity, and
-execution evidence remain Open.
+deterministic regeneration from a clean exact candidate. The dirty unsigned
+development checkout cannot furnish release provenance for that refresh. The
+runtime consumer is implemented, while wire/OpenAPI generation, cross-SDK
+parity, and execution evidence remain Open.
 
 **Closure condition.** Version every new persistence and wire layout. Reject
 unknown and legacy versions unless an explicitly authenticated migration
@@ -1806,29 +1815,30 @@ fetches, and every persistence crash boundary. Tests that exercise only
 `#[cfg(test)]` producer helpers do not close a live-path obligation.
 
 The mutable source inventory is internally count-consistent. The production
-inventory contains exactly 861 tests across 41 modules, including 443
-source-sealed ownership/regression names. The three Kura recovery regressions
-and governance-unlock audit are retained beside the prior source-bound closure.
+inventory contains exactly 854 tests across 40 modules, including 436
+source-sealed ownership/regression names. The duplicate inline V2 core network
+simulations are retired; the standalone `iroha_sumeragi_core` harness remains. The three Kura recovery
+regressions and governance-unlock audit are retained beside the prior source-bound closure.
 The seven additional Native AMX regressions bind finality-aware merge
 projection across canonical ordering, multi-height and same-height identity
 conflicts, coordinator-only receipts, route conflicts, duplicate sources, and
 decoded replay. The focused source inventory is now internally consistent. The
-nine arrays in `scripts/run_sumeragi_v2_release_gates.sh` contain exactly 524 unique required
-tests: 318 core, 143 queue-journal, 13 configuration, eight data-model, 39
+nine arrays in `scripts/run_sumeragi_v2_release_gates.sh` contain exactly 525 unique required
+tests: 319 core, 143 queue-journal, 13 configuration, eight data-model, 39
 Torii, one Torii-shared, and two integration. The runner and
 `ci/check_sumeragi_v2_multilane_release_inventory.sh` both require that exact
-524-row shape, including grouped Native prevote-budget rejection before
+525-row shape, including grouped Native prevote-budget rejection before
 Kura/WSV mutation, historical source-bundle authentication, crash-safe latest-
 index and prune-V2 recovery, cross-route manifest-barrier isolation, durable
 Native signing-boundary drift rejection, atomic grouped reservation commit,
 checked snapshot replay file/owner sealing, exact QueuePlan obligation
 authentication, ApplyCarrier authorization, and canonical historical
-autonomous recovery into exactly-once merge application. The G-UNIT static inventory checks establish exact `524/524` source consistency and also source-
+autonomous recovery into exactly-once merge application. The G-UNIT static inventory checks establish exact `525/525` source consistency and also source-
 bind the synchronized 55-control grouped corpus. The planned-
 association Rust coverage described under `ML-NAT-06` is present in the focused
 source inventory. The 17 merge-manifest cases under `ML-NAT-05` and 12 passive-
 diagnostics/retry cases under `ML-AUT-06` and `ML-API-01` are static Python
-source tests outside the 524 G-UNIT count.
+source tests outside the 525 G-UNIT count.
 
 On 2026-07-31, pinned Rust 1.93.1 locked/offline execution from isolated source
 `/tmp/iroha-kura-final3.dvOYAN` and isolated target
@@ -1839,8 +1849,8 @@ repair, Native post-WSV retention, and authenticated geometry refresh. That
 checkpoint also passed `cargo check -p iroha_core --lib`; later focused reruns
 covered startup binding, B/A/B recovery, the 18 Kura replica tests, and four
 configuration tests. These are historical partial results, not fresh archived
-execution of all 524 required tests. This reconciliation claims no immutable-
-candidate Cargo run or full matrix execution: the 861 production, 524 G-UNIT,
+execution of all 525 required tests. This reconciliation claims no immutable-
+candidate Cargo run or full matrix execution: the 854 production, 525 G-UNIT,
 and 55-control counts are mutable-development source inventory only. `G-UNIT`
 remains Open until the exact no-skip suites run through the compliant isolated
 wrapper and their logs and candidate identity are archived.
@@ -1957,29 +1967,42 @@ controls. The diagnostics inventory is Rust `14`, Python `121`, JavaScript
 source/distribution `88`, Swift `17`, Kotlin `26`, and Java `24`. The recursive
 source-closure design covers every transitive production input, including the
 browser JavaScript distribution, Kotlin/Java Native models, grouped JSON, and
-wire TSV; the mutable closure enumerates 1,317 grouped and 1,320 diagnostics
+wire TSV; the mutable closure enumerates 1,348 grouped and 1,347 diagnostics
 records. The current grouped JSON and wire TSV SHA-256 values are
 `48be8e2e0df144d17168210da02bdbbbe9e027e9a0071327286d62364c300ebb`
 and
 `aed9a2594c0e2a540f76e10568b8ea62fa11c6d30efdc33d7faf7f48181c6c66`.
 The grouped and diagnostics suite-source SHA-256 values are
-`4c1c7ba8e804f479467826e4e56be98f27ca64af262ef83c2b99bdf5261f985c`
+`86dd4b10f7e5274567ced410c1008681213b9de98f44186e7e9e94a47fa4a8d3`
 and
-`bbcd73ea6aeb2aca20acba9ab7f589ec3436321a89f7513dc22303c78308c276`.
+`79ebd39ff5a534079b9c62daa1d45d8d78b7546d48601d6a0008948f604cb378`.
 
-Those are development-source inventories, not SDK results. The JavaScript and
-OpenAPI generated artifacts require fresh deterministic regeneration. No
-complete immutable-candidate grouped or diagnostics harness execution, parity
-hash, or archived result is claimed, so `G-SDK` remains Open.
+Those are development-source inventories, not SDK results. The JavaScript
+source and distribution trees match in this mutable checkout. The five OpenAPI
+artifacts require fresh deterministic regeneration from a clean exact
+candidate. No complete immutable-candidate grouped or diagnostics harness
+execution, parity hash, or archived result is claimed, so `G-SDK` remains Open.
 
 ### G-FINAL — clean release validation
 
 **Evidence:** Open.
 
-Before every Cargo invocation, record
-`ps -axo pid,etime,command` and wait naturally while Cargo, rustc, or rustfmt is
-active. Use only `cargo +1.93.1`, `--locked --offline -j1`, and a fresh isolated
-`CARGO_TARGET_DIR`. Run focused crate tests, SDK parity suites, formal runners,
+Both PR and production first reproduce one clean committed identity in an
+independent no-local/no-hardlink/no-alternates clone. Before any build child,
+copy the reviewed runtime and caller Cargo-cache inputs to inode-independent
+private roots, bind canonical path-withheld input/output inventories, and keep
+private HOME, temporary, cache, Rustup, target, and artifact roots. PR is
+disposable developer validation and identity-cleans the whole invocation on
+every terminal path. Production validates the receipt with the protected
+archived validator, requires its no-clobber acknowledgment, then prunes all
+runtime/cache/target state and retains only the authenticated source,
+receipt/identity, and exact retained inventory/result.
+
+Before every Cargo invocation, acquire the invocation-local owner-private
+directory lock below the authenticated external artifact root and fail closed
+if that lock is held; never inspect or log unrelated processes. Use only the
+authenticated absolute Cargo 1.93.1 executable, `--locked --offline -j1`, and a
+fresh isolated `CARGO_TARGET_DIR`. Run focused crate tests, SDK parity suites, formal runners,
 `cargo build --workspace`, full `cargo test --workspace`, strict workspace
 Clippy, formatting check, and
 `scripts/check_no_legacy_codec.sh`. The release record must contain commands,
@@ -2036,12 +2059,12 @@ before release. Generic consensus TODOs remain out of scope as recorded below.
   implementation gaps are resolved and source-bound. Their focused Rust,
   formal-engine, SDK, and multi-peer execution receipts remain open; structural
   source validation alone cannot close those gates.
-- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 861-production-test,
-  524-G-UNIT-test, and 55-control counts, SDK group counts, recursive closure
+- `G-UNIT`, `G-SDK`, and `G-FORMAL` remain Open. The exact 854-production-test,
+  525-G-UNIT-test, and 55-control counts, SDK group counts, recursive closure
   shapes, and 27-action formal extraction partition are mutable-development
   inventories only. Historical focused Rust and direct SDK subsets do not
   substitute for a complete SDK harness, formal-engine result, or network
-  receipt; no complete 524-test execution from an immutable candidate is
+  receipt; no complete 525-test execution from an immutable candidate is
   claimed by this reconciliation.
 
 ### Explicitly out of scope
@@ -2063,6 +2086,24 @@ before release. Generic consensus TODOs remain out of scope as recorded below.
   reservation, autonomous lane QC, merge carrier, Native participant
   application, autoscale frontier, or retirement decision. It is therefore
   outside this multilane ledger.
+- **Generic lifecycle-coordinator cutover:** the TODO above
+  `v2_lifecycle_coordinator` in
+  `crates/iroha_core/src/sumeragi/mod.rs` and the source-coupled record in
+  [Sumeragi lifecycle simplification](sumeragi_v2_lifecycle_simplification.md)
+  describe a follow-on replacement of the generic Serve, witness, latch, and
+  producer-episode scheduling authority. The staged module is compiled and
+  non-test source imports sealed admission, replay, and recovery helpers, but
+  the coordinator is not wired into production services: production selection,
+  the all-or-nothing queue/registry/output-permit transaction, publication,
+  runner execution, and final scheduler cutover remain unavailable or
+  intentionally unwired, and the existing scheduler authority remains in
+  place. Completing that architectural cutover is distinct from the automatic
+  lane create, drain, archive, destruction, and recreation semantics mapped by
+  `ML-LIFE-01` through `ML-LIFE-05`; it is not an `ML-*` closure condition.
+  This disposition applies only to completion of the cutover. It does not
+  remove currently referenced helpers from source closure or ordinary
+  compile/test coverage, and it advances no Implementation, Closure, Evidence,
+  or `G-*` state.
 - **Fee sponsorship:** the TODO in
   `ensure_global_fee_sponsor_asset` in
   `crates/iroha_core/src/smartcontracts/isi/world.rs` concerns propagating

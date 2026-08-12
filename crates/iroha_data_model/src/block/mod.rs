@@ -1862,11 +1862,8 @@ mod tests {
         };
         authorization.signatures.push(DaIngestSignatureV1 {
             signer: key_pair.public_key().clone(),
-            signature: Signature::try_new(
-                key_pair.private_key(),
-                &authorization.signing_digest(),
-            )
-            .expect("sign deterministic block pin-intent authorization"),
+            signature: Signature::try_new(key_pair.private_key(), &authorization.signing_digest())
+                .expect("sign deterministic block pin-intent authorization"),
         });
         authorization
     }

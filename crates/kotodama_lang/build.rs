@@ -1,6 +1,210 @@
-//! Generate lexical tables from the normative Kotodama V1 lexical grammar.
+//! Generate Kotodama V1 lexical tables and validated translation offsets.
 
-use std::{collections::BTreeSet, env, fmt::Write as _, fs, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    env,
+    fmt::Write as _,
+    fs,
+    path::{Path, PathBuf},
+};
+
+const TRANSLATION_SPEC_PATH: &str = "src/i18n/translations/messages.v1.tsv";
+const TRANSLATION_OFFSET_OUTPUT: &str = "kotodama_i18n_v1_offsets.bin";
+const TRANSLATION_HEADER: &str = "kotodama-i18n-v1\t76\t15";
+const TRANSLATION_LANGUAGE_COUNT: usize = 76;
+const TRANSLATION_MESSAGE_COUNT: usize = 15;
+
+const TRANSLATION_LANGUAGES: &str = "English\tJapanese\tSimplifiedChinese\tTraditionalChinese\tThai\tKhmer\tVietnamese\tKorean\tArabic\tHebrew\tRussian\tBurmese\tHindi\tUrdu\tSinhala\tTamil\tFrench\tUkrainian\tPolish\tSwedish\tGerman\tGreek\tItalian\tKazakh\tMongolian\tJavanese\tMadurese\tBalinese\tMinangkabau\tAncientEgyptianHieroglyph\tDzongkha\tSerbian\tTurkish\tArmenian\tAmharic\tHausa\tTibetan\tKashmiri\tNepali\tAfrikaans\tSpanish\tFarsi\tOldAkkadian\tQuechua\tAymara\tBengali\tBalochi\tBashkir\tBrahui\tPortuguese\tPunjabi\tSindhi\tPashto\tSaraiki\tTatar\tSomali\tSundanese\tShona\tSwahili\tOromo\tIgbo\tYoruba\tZulu\tDutch\tDanish\tNorse\tFinnish\tEstonian\tLatvian\tHungarian\tCzech\tLao\tIndonesian\tPijin\tDivehi\tManchurian";
+
+const TRANSLATION_FIELDS: [(&str, &[&str]); TRANSLATION_MESSAGE_COUNT] = [
+    ("no_functions", &[]),
+    ("unsupported_binary_op", &["op"]),
+    ("unknown_param", &["name"]),
+    ("read_file", &["path", "error"]),
+    ("parser_error", &["error"]),
+    ("semantic_error", &["error"]),
+    ("lint_unused_state", &["name"]),
+    ("lint_state_shadowed_param", &["func", "name"]),
+    ("lint_state_shadowed_binding", &["func", "name"]),
+    ("lint_state_shadowed_map_binding", &["func", "name"]),
+    ("lint_unused_parameter", &["func", "name"]),
+    ("lint_unreachable_after_return", &["context"]),
+    ("lint_ok", &[]),
+    ("lint_usage", &[]),
+    ("lint_usage_help", &[]),
+];
+
+fn validate_translation_placeholders(
+    message: &str,
+    required: &[&str],
+    language: &str,
+    field: &str,
+) {
+    let mut found = vec![false; required.len()];
+    let bytes = message.as_bytes();
+    let mut cursor = 0;
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'{' => {
+                let name_start = cursor + 1;
+                let mut name_end = name_start;
+                while name_end < bytes.len() && bytes[name_end] != b'}' {
+                    assert_ne!(
+                        bytes[name_end], b'{',
+                        "nested placeholder in {language}.{field}"
+                    );
+                    name_end += 1;
+                }
+                assert!(
+                    name_end < bytes.len(),
+                    "unterminated placeholder in {language}.{field}"
+                );
+                let name = &message[name_start..name_end];
+                let mut allowed = false;
+                let mut required_index = 0;
+                while required_index < required.len() {
+                    if required[required_index] == name {
+                        allowed = true;
+                        found[required_index] = true;
+                    }
+                    required_index += 1;
+                }
+                assert!(
+                    allowed,
+                    "unknown placeholder `{{{name}}}` in {language}.{field}"
+                );
+                cursor = name_end + 1;
+            }
+            b'}' => panic!("unmatched closing brace in {language}.{field}"),
+            _ => cursor += 1,
+        }
+    }
+
+    let mut required_index = 0;
+    while required_index < required.len() {
+        assert!(
+            found[required_index],
+            "missing placeholder `{{{}}}` in {language}.{field}",
+            required[required_index]
+        );
+        required_index += 1;
+    }
+}
+
+fn write_translation_offsets(out_dir: &Path) {
+    println!("cargo:rerun-if-changed={TRANSLATION_SPEC_PATH}");
+    let languages = TRANSLATION_LANGUAGES.split('\t').collect::<Vec<_>>();
+    assert_eq!(languages.len(), TRANSLATION_LANGUAGE_COUNT);
+    let asset = fs::read_to_string(TRANSLATION_SPEC_PATH)
+        .expect("read versioned Kotodama translation asset as UTF-8");
+    assert!(
+        asset.ends_with('\n'),
+        "Kotodama translation asset must end with a newline"
+    );
+
+    let mut lines = asset.split_inclusive('\n');
+    let header_line = lines.next().expect("translation asset version header");
+    assert_eq!(
+        header_line.strip_suffix('\n'),
+        Some(TRANSLATION_HEADER),
+        "unexpected Kotodama translation asset version/count header"
+    );
+
+    let schema_line = lines.next().expect("translation asset field schema");
+    let schema = schema_line
+        .strip_suffix('\n')
+        .expect("translation asset schema line terminator");
+    let mut schema_columns = schema.split('\t');
+    assert_eq!(schema_columns.next(), Some("language"));
+    let mut message_index = 0;
+    while message_index < TRANSLATION_FIELDS.len() {
+        assert_eq!(
+            schema_columns.next(),
+            Some(TRANSLATION_FIELDS[message_index].0),
+            "translation message field {} is out of order",
+            message_index
+        );
+        message_index += 1;
+    }
+    assert_eq!(
+        schema_columns.next(),
+        None,
+        "translation asset has an unexpected message field"
+    );
+
+    let mut asset_offset = header_line.len() + schema_line.len();
+    let mut offsets = Vec::with_capacity(
+        TRANSLATION_LANGUAGE_COUNT * TRANSLATION_MESSAGE_COUNT * 2 * std::mem::size_of::<u32>(),
+    );
+    let mut language_index = 0;
+    while language_index < languages.len() {
+        let line_with_terminator = match lines.next() {
+            Some(line) => line,
+            None => panic!("missing translation row {language_index}"),
+        };
+        let record = line_with_terminator
+            .strip_suffix('\n')
+            .expect("translation record line terminator");
+        assert!(
+            !record.contains('\r'),
+            "translation row {language_index} contains a carriage return"
+        );
+        let columns = record.split('\t').collect::<Vec<_>>();
+        assert_eq!(
+            columns.len(),
+            TRANSLATION_MESSAGE_COUNT + 1,
+            "translation row {language_index} has the wrong field count"
+        );
+        assert_eq!(
+            columns[0], languages[language_index],
+            "translation language row {language_index} is out of order"
+        );
+
+        let mut relative_start = columns[0].len() + 1;
+        message_index = 0;
+        while message_index < TRANSLATION_FIELDS.len() {
+            let message = columns[message_index + 1];
+            assert!(
+                !message.is_empty(),
+                "empty translation for {}.{}",
+                columns[0],
+                TRANSLATION_FIELDS[message_index].0
+            );
+            validate_translation_placeholders(
+                message,
+                TRANSLATION_FIELDS[message_index].1,
+                columns[0],
+                TRANSLATION_FIELDS[message_index].0,
+            );
+
+            let start = asset_offset + relative_start;
+            let end = start + message.len();
+            offsets.extend_from_slice(
+                &u32::try_from(start)
+                    .expect("translation asset exceeds four gigabytes")
+                    .to_le_bytes(),
+            );
+            offsets.extend_from_slice(
+                &u32::try_from(end)
+                    .expect("translation asset exceeds four gigabytes")
+                    .to_le_bytes(),
+            );
+            relative_start += message.len() + 1;
+            message_index += 1;
+        }
+        assert_eq!(relative_start, record.len() + 1);
+        asset_offset += line_with_terminator.len();
+        language_index += 1;
+    }
+    assert!(
+        lines.next().is_none(),
+        "translation asset has rows after the language catalog"
+    );
+    assert_eq!(asset_offset, asset.len());
+
+    fs::write(out_dir.join(TRANSLATION_OFFSET_OUTPUT), offsets)
+        .expect("write Kotodama translation offsets");
+}
 
 fn regex_escape_literal(spelling: &str) -> String {
     let mut escaped = String::with_capacity(spelling.len().saturating_mul(2));
@@ -205,6 +409,7 @@ fn main() {
     .expect("write generated operator documentation constant");
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo supplies OUT_DIR"));
+    write_translation_offsets(&out_dir);
     fs::write(out_dir.join("kotodama_v1_lexical.rs"), generated)
         .expect("write generated Kotodama lexical tables");
 }

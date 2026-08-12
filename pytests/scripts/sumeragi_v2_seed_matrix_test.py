@@ -366,6 +366,7 @@ exit 65
     # preflight; each stub must instead bind itself to SOURCE_MANIFEST.
     env.pop("IROHA_RELEASE_SOURCE_MANIFEST_SHA256", None)
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["IROHA_RELEASE_CARGO_BIN"] = str(cargo)
     env["SEED_MATRIX_EXPECTED_REPO_ROOT"] = str(ROOT_DIR)
     env["SEED_MATRIX_CAPTURE"] = str(capture)
     env["SEED_MATRIX_FAKE_RUN_MODE"] = run_mode

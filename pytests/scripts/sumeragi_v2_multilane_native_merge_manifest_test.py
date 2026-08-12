@@ -45,6 +45,49 @@ def test_native_prepublication_contract_rejects_removed_prepublication_call(
         for error in errors
     ), errors
 
+    repair_root = tmp_path / "repair_call"
+    repair_models = support.copy_native_prepublication_fixture(repair_root, module)
+    repair_path = repair_root / "crates/iroha_core/src/kura.rs"
+    source = repair_path.read_text(encoding="utf-8")
+    current = (
+        "        let plan = self\n"
+        "            .native_amx_participant_application_evidence_for_block_"
+        "under_publication_guard(\n"
+        "                block,\n"
+        "                true,\n"
+        "                NativeAmxMergeAssociation::CommittedOnly,\n"
+        "            )?;"
+    )
+    formatted = (
+        "        let plan = self.native_amx_participant_application_evidence_for_"
+        "block_under_publication_guard("
+        "block, true, NativeAmxMergeAssociation::CommittedOnly)?;"
+    )
+    variants = (
+        (formatted, False),
+        (current.replace("\n                true,", "\n                false,"), True),
+        (
+            current.replace(
+                "NativeAmxMergeAssociation::CommittedOnly",
+                "NativeAmxMergeAssociation::Startup(None)",
+            ),
+            True,
+        ),
+    )
+    assert current in source
+    for variant, rejected in variants:
+        repair_path.write_text(source.replace(current, variant, 1), encoding="utf-8")
+        variant_errors = support.validate_native_prepublication_fixture(
+            repair_root, module, repair_models
+        )
+        assert (
+            any(
+                "repair_native_amx_participant_application_evidence" in error
+                for error in variant_errors
+            )
+            is rejected
+        ), variant_errors
+
 
 def test_native_merge_manifest_contract_rejects_multiple_height_guard_removal(
     tmp_path: Path,
@@ -308,19 +351,23 @@ def test_native_merge_manifest_contract_rejects_lost_startup_association_control
         (
             "crates/iroha_core/src/kura.rs",
             "fn prepublish_native_amx_participant_application_evidence(",
-            "                block, false, NativeAmxMergeAssociation::Live(staged_merge_entry),\n",
-            "                block, false, NativeAmxMergeAssociation::Startup(staged_merge_entry),\n",
+            "                block,\n"
+            "                false,\n"
+            "                NativeAmxMergeAssociation::Live(staged_merge_entry),\n",
+            "                block,\n"
+            "                false,\n"
+            "                NativeAmxMergeAssociation::Startup(staged_merge_entry),\n",
             "prepublish_native_amx_participant_application_evidence",
         ),
         (
             "crates/iroha_core/src/kura.rs",
             "fn native_amx_participant_application_evidence_for_block_under_publication_guard(",
-            "        let native_manifest = self.native_amx_manifest_for_committed_block(\n"
-            "            block, merge_association, &finality,\n"
-            "        )?;",
-            "        let native_manifest = self.native_amx_manifest_for_committed_block(\n"
-            "            block, NativeAmxMergeAssociation::CommittedOnly, &finality,\n"
-            "        )?;",
+            "        let native_manifest =\n"
+            "            self.native_amx_manifest_for_committed_block("
+            "block, merge_association, &finality)?;",
+            "        let native_manifest =\n"
+            "            self.native_amx_manifest_for_committed_block("
+            "block, NativeAmxMergeAssociation::CommittedOnly, &finality)?;",
             "native_amx_participant_application_evidence_for_block_under_publication_guard",
         ),
     ),

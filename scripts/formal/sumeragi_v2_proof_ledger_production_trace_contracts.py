@@ -1,5 +1,123 @@
 # Executed lexically in check_sumeragi_v2_proof_ledger.py; do not import directly.
 
+
+def _retained_effect_frontier_adapter_contracts(
+    effects_path: Path,
+    source: str,
+    generic_executor_context: tuple[tuple[str, ...], ...],
+    errors: list[str],
+) -> None:
+    """Bind the test adapter and parked-debt frontier semantics independently."""
+
+    retain_wrapper = _require_rust_item(
+        effects_path, source, "retain_effect_batch", errors
+    )
+    _require_rust_item_context(
+        effects_path,
+        retain_wrapper,
+        generic_executor_context,
+        "test-only retained effect batch frontier adapter",
+        errors,
+        expected_attributes=("#[cfg(test)]",),
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        retain_wrapper,
+        """
+let frontier = self
+    .runtime
+    .reconciliation_frontier()
+    .map_err(EffectExecutorError::Runtime)?;
+self.retain_effect_batch_at_frontier(effects, ownership, frontier)
+""",
+        "test-only retained effect adapter must delegate with the exact runtime frontier",
+        errors,
+    )
+    preflight = _require_rust_item(
+        effects_path, source, "preflight_effect_batch_frontier", errors
+    )
+    _require_rust_item_context(
+        effects_path,
+        preflight,
+        generic_executor_context,
+        "retained effect frontier preflight",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        preflight,
+        """
+let entering_view = Self::entering_view_tag(effects)?;
+if entering_view.is_some()
+    && !matches!(effects.first(), Some(AdapterEffect::EnterView { .. }))
+{
+    return Err(EffectExecutorError::Contract(
+        "EnterView must be the first effect in its reducer macro-step".to_owned(),
+    ));
+}
+""",
+        "frontier preflight must require the unique EnterView at the batch head",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        preflight,
+        """
+(Some(current), Some(next)) if next.strictly_advances(current) => {
+    if entering_view != Some(next) {
+        return Err(EffectExecutorError::Contract(
+            "an advancing reducer frontier omitted its leading EnterView".to_owned(),
+        ));
+    }
+}
+""",
+        "frontier preflight must bind every strict reducer advance to its leading EnterView",
+        errors,
+    )
+    prepare_parked = _require_rust_item(
+        effects_path, source, "prepare_parked_effects_for_frontier", errors
+    )
+    _require_rust_item_context(
+        effects_path,
+        prepare_parked,
+        generic_executor_context,
+        "parked effect frontier preflight and retirement",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        prepare_parked,
+        "let entering_view = self.preflight_effect_batch_frontier(effects, frontier)?;",
+        "parked effect retirement must reuse the exact batch frontier preflight",
+        errors,
+    )
+    _require_rust_token_sequence(
+        effects_path,
+        prepare_parked,
+        """
+if entering_view
+    .is_some_and(|tag| Self::parked_effect_is_retired_by_view(owned, tag))
+{
+    return false;
+}
+if let Some(decision) = frontier.decision
+    && !Self::effect_survives_decision(&owned.effect, decision)
+{
+    return false;
+}
+if let Some((superseded, replacement)) = lock_transition
+    && Self::adapter_effect_body_key(&owned.effect).is_some_and(|key| {
+        protected_lock_retires_body_key(superseded, replacement, key)
+    })
+{
+    return false;
+}
+true
+""",
+        "parked effect retirement must preserve only view-, decision-, and protected-lock-live debt",
+        errors,
+    )
+
 # The production multilane trace theorem depends on safety, durability, and
 # deterministic-execution obligations only. Generic partial-synchrony and
 # leader-progress liveness obligations remain part of the strict whole-

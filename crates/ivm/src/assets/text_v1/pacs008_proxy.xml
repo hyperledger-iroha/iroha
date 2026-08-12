@@ -1,0 +1,36 @@
+
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
+  <FIToFICstmrCdtTrf>
+    <GrpHdr>
+      <MsgId>ISO-PROXY</MsgId>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <IntrBkSttlmAmt Ccy="USD">42</IntrBkSttlmAmt>
+      <IntrBkSttlmDt>2025-02-02</IntrBkSttlmDt>
+      <DbtrAcct>
+        <Prxy>
+          <Id>proxy-debtor</Id>
+        </Prxy>
+      </DbtrAcct>
+      <CdtrAcct>
+        <Prxy>
+          <Id>proxy-creditor</Id>
+        </Prxy>
+      </CdtrAcct>
+      <DbtrAgt>
+        <FinInstnId>
+          <ClrSysMmbId>
+            <MmbId>DBTRCODE</MmbId>
+          </ClrSysMmbId>
+        </FinInstnId>
+      </DbtrAgt>
+      <CdtrAgt>
+        <FinInstnId>
+          <ClrSysMmbId>
+            <MmbId>CDTRCODE</MmbId>
+          </ClrSysMmbId>
+        </FinInstnId>
+      </CdtrAgt>
+    </CdtTrfTxInf>
+  </FIToFICstmrCdtTrf>
+</Document>

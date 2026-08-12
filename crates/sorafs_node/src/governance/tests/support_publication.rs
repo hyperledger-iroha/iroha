@@ -1198,31 +1198,13 @@ fn filesystem_publisher_writes_por_payloads_into_one_signed_canonical_chain() {
         .publish_por_weekly_report(&report, &report_encoded)
         .expect("publish PoR weekly report");
 
-    let challenge_path = temp
-        .path()
-        .join("por")
-        .join("challenges")
-        .join(format!("{:020}", publication.challenge.epoch_id))
-        .join(hex::encode(publication.challenge.challenge_id))
-        .with_extension("to");
+    let (challenge_path, _) = only_published_source_paths(temp.path(), "por_challenge_publication");
     assert_eq!(
         fs::read(&challenge_path).expect("read canonical challenge publication"),
         publication_encoded
     );
 
-    let report_digest = blake3::hash(&report_encoded).to_hex().to_string();
-    let report_path = temp
-        .path()
-        .join("por")
-        .join("reports")
-        .join(format!(
-            "{:04}-W{:02}_{:020}_{}",
-            report.cycle.year,
-            report.cycle.week,
-            report.generated_at,
-            &report_digest[..16],
-        ))
-        .with_extension("to");
+    let (report_path, _) = only_published_source_paths(temp.path(), "por_weekly_report");
     assert_eq!(
         fs::read(&report_path).expect("read canonical weekly report"),
         report_encoded
@@ -1418,15 +1400,14 @@ fn filesystem_publisher_rotates_signing_keys_with_authenticated_authority_segmen
         .runtime_dag_checkpoint_store
         .as_ref()
         .expect("rotated checkpoint store");
+    let reader = GovernanceFilesystemRootGuard::capture_source(temp.path())
+        .expect("retain read-only runtime DAG root after rotation");
     validate_existing_runtime_dag_root(temp.path(), current_signer, current_store)
         .expect("an outgoing-signed tip remains valid until the incoming key appends");
-    let rotated_snapshot = load_authenticated_runtime_dag_snapshot_v1(
-        publisher.root_guard(),
-        current_signer,
-        current_store,
-    )
-    .expect("strict reader accepts the current provider binding after rotation")
-    .expect("rotated one-block DAG has a committed snapshot");
+    let rotated_snapshot =
+        load_authenticated_runtime_dag_snapshot_v1(&reader, current_signer, current_store)
+            .expect("strict reader accepts the current provider binding after rotation")
+            .expect("rotated one-block DAG has a committed snapshot");
     let rotated_head: GovernanceDagHeadV1 =
         norito::decode_from_bytes(rotated_snapshot.head_bytes())
             .expect("decode outgoing-signed rotated head");
@@ -1479,13 +1460,10 @@ fn filesystem_publisher_rotates_signing_keys_with_authenticated_authority_segmen
     assert_eq!(head.head_signature.public_key, next_public_key.to_vec());
     validate_existing_runtime_dag_root(temp.path(), current_signer, current_store)
         .expect("segmented chain validates after the incoming key appends");
-    let incoming_snapshot = load_authenticated_runtime_dag_snapshot_v1(
-        publisher.root_guard(),
-        current_signer,
-        current_store,
-    )
-    .expect("strict reader accepts the incoming authority append")
-    .expect("two-block rotated DAG has a committed snapshot");
+    let incoming_snapshot =
+        load_authenticated_runtime_dag_snapshot_v1(&reader, current_signer, current_store)
+            .expect("strict reader accepts the incoming authority append")
+            .expect("two-block rotated DAG has a committed snapshot");
     let incoming_head: GovernanceDagHeadV1 =
         norito::decode_from_bytes(incoming_snapshot.head_bytes())
             .expect("decode incoming-signed rotated head");

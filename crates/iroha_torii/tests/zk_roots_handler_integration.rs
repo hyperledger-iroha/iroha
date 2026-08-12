@@ -9,7 +9,6 @@ use http_body_util::BodyExt as _;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
 };
 use iroha_data_model::{NewAccount, prelude::*};
@@ -133,12 +132,12 @@ fn seeded_zk_roots_state(
         ))
         .expect("empty SCCP outbox accepts roots test configuration");
 
-    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
+    let domain_id: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
     let asset_def_id = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("zkd", "universal").expect("domain id"),
+        domain_id.clone(),
         "rose".parse().expect("asset definition name"),
     );
-    let asset_alias = "rose#centralbank";
+    let asset_alias = "rose#centralbank.universal";
     let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
     {
         let header =
@@ -150,7 +149,8 @@ fn seeded_zk_roots_state(
             "rose".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
-        );
+        )
+        .with_alias(Some(asset_alias.parse().expect("asset alias literal")));
         let init_instrs: [InstructionBox; 5] = [
             Register::domain(Domain::new(domain_id.clone())).into(),
             Register::account(NewAccount::new(owner.clone())).into(),
@@ -160,20 +160,15 @@ fn seeded_zk_roots_state(
             iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None)
                 .into(),
         ];
-        for instr in init_instrs {
+        for (instruction_index, instr) in init_instrs.into_iter().enumerate() {
             stx.world
                 .executor()
                 .clone()
                 .execute_instruction(&mut stx, &owner, instr)
-                .unwrap();
+                .unwrap_or_else(|error| {
+                    panic!("ZK roots fixture instruction {instruction_index} failed: {error}")
+                });
         }
-        iroha_data_model::isi::SetAssetDefinitionAlias::bind(
-            asset_def_id.clone(),
-            asset_alias.parse().expect("asset alias literal"),
-            None,
-        )
-        .execute(&owner, &mut stx)
-        .expect("bind asset alias");
         let mut zk_state = stx
             .world
             .zk_assets()
@@ -184,11 +179,12 @@ fn seeded_zk_roots_state(
             let mut note = [0u8; 32];
             note[0] = i.saturating_add(1);
             zk_state
-                .push_commitment(note, nonzero!(64_usize))
+                .push_commitment(note, tree_roots_history_len)
                 .expect("seed authenticated commitment root");
         }
-        stx.world.zk_assets.remove(asset_def_id.clone());
-        stx.world.zk_assets.insert(asset_def_id.clone(), zk_state);
+        stx.world
+            .zk_assets_mut_for_testing()
+            .insert(asset_def_id.clone(), zk_state);
         stx.apply();
         block.transactions.insert_block(
             HashSet::<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>::new(
@@ -241,6 +237,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
         .method("POST")
         .uri("/v1/zk/roots")
         .header(http::header::CONTENT_TYPE, "application/json")
+        .header(http::header::ACCEPT, "application/json")
         .body(axum::body::Body::from(req_body))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
@@ -273,6 +270,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
         .method("POST")
         .uri("/v1/zk/roots")
         .header(http::header::CONTENT_TYPE, "application/json")
+        .header(http::header::ACCEPT, "application/json")
         .body(axum::body::Body::from(req_second_body))
         .unwrap();
     let resp_second = app.clone().oneshot(req_second).await.unwrap();
@@ -303,6 +301,7 @@ async fn zk_roots_endpoint_returns_all_roots_when_request_exceeds_history() {
         .method("POST")
         .uri("/v1/zk/roots")
         .header(http::header::CONTENT_TYPE, "application/json")
+        .header(http::header::ACCEPT, "application/json")
         .body(axum::body::Body::from(req_body))
         .unwrap();
 
@@ -333,14 +332,15 @@ async fn zk_roots_endpoint_returns_all_roots_when_request_exceeds_history() {
         payload
             .get("evaluated_block_height")
             .and_then(norito::json::Value::as_u64),
-        Some(1)
+        Some(0)
     );
+    let bootstrap_block_hash = "0".repeat(64);
     assert_eq!(
         payload
             .get("evaluated_block_hash")
             .and_then(norito::json::Value::as_str)
-            .map(str::len),
-        Some(64)
+            .map(str::to_owned),
+        Some(bootstrap_block_hash)
     );
 }
 
@@ -358,6 +358,7 @@ async fn zk_roots_endpoint_bounds_nonzero_max_by_cap() {
         .method("POST")
         .uri("/v1/zk/roots")
         .header(http::header::CONTENT_TYPE, "application/json")
+        .header(http::header::ACCEPT, "application/json")
         .body(axum::body::Body::from(req_body))
         .unwrap();
 
@@ -403,6 +404,7 @@ async fn zk_roots_endpoint_returns_profile_defined_empty_root() {
         .method("POST")
         .uri("/v1/zk/roots")
         .header(http::header::CONTENT_TYPE, "application/json")
+        .header(http::header::ACCEPT, "application/json")
         .body(axum::body::Body::from(req_body))
         .unwrap();
 
@@ -440,6 +442,7 @@ async fn zk_roots_endpoint_accepts_trimmed_alias_literal() {
         .method("POST")
         .uri("/v1/zk/roots")
         .header(http::header::CONTENT_TYPE, "application/json")
+        .header(http::header::ACCEPT, "application/json")
         .body(axum::body::Body::from(req_body))
         .unwrap();
 

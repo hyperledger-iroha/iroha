@@ -47,15 +47,89 @@ structural simplification is intended to control. Run the exact CI command when
 intentionally refreshing the baseline, review the JSON evidence, and never
 raise the baseline merely to make an unexplained regression pass.
 
+Schema-v2 evidence identifies a compile unit by package, target kind and crate
+types, source path, sorted features, and the complete Cargo profile, and fails
+closed when any identity field is missing. A baseline is usable only when its
+scope, manifest, packages, target selection, workspace/locked mode, budget
+policy, and exact Rust release match the current command. The PR affected lane
+therefore runs the guard with Rust 1.93.1.
+
+## Focused dependency-graph ratchet
+
+`python3 scripts/check_dependency_budget.py` enforces the exact no-growth
+limits in `ci/dependency_budget.json`. The checked-in scopes cover source
+graphs rooted at the shipping crates `iroha_data_model`, `irohad`, and
+`iroha_cli`, plus a whole-workspace/all-targets scope whose roots include
+development dependencies. CI runs this source-only check before classifying
+affected Rust lanes, so it does not fetch crates, invoke Cargo, depend on the
+host target, or rewrite `Cargo.lock`.
+
+The ratchet resolves workspace inheritance, local path dependencies, and root
+path patches directly from the Cargo manifests. “Required” metrics count
+non-optional dependency declarations; “declared” metrics include optional
+declarations too. Both include normal, build, and target-specific declarations
+as a cross-platform upper bound. Development dependencies are included only
+for configured roots, matching Cargo's rule that dependency crates do not
+contribute their own dev graph. The limits cover local/workspace/path package
+counts, unique external package names, and manifest dependency edges. They are
+deliberately described as a reproducible source graph: use the compile-unit
+guard or an actual Cargo profile when compiler-unit or fully resolved
+registry-package evidence is needed.
+
+After an intentional dependency reduction, refresh the exact limits with:
+
+```sh
+python3 scripts/check_dependency_budget.py \
+  --config ci/dependency_budget.json \
+  --write-baseline
+```
+
+Review the resulting diff and the content-derived manifest fingerprint. Never
+raise a limit merely to accept unexplained growth; reductions pass the existing
+ceiling and should ratchet it downward in the same change. Required UI/media
+stacks listed in `denied_required_packages` cannot be blessed by a refresh.
+Any manifest-fingerprint drift fails closed until that dependency change and
+the refreshed exact limits are reviewed together.
+
+For diagnostic comparison with a Cargo-resolved graph, opt in explicitly. The
+command remains locked unless `--allow-lock-update` is provided:
+
+```sh
+python3 scripts/check_dependency_budget.py \
+  --resolved -p iroha_data_model \
+  --max-total-packages <reviewed-limit>
+```
+
 ## Repository structure ratchets
 
-Five fast, read-only checks keep structural and provisioning debt from returning:
+Six fast, read-only checks keep structural and provisioning debt from returning:
 
 - `python3 scripts/check_source_file_budget.py` caps production and test source
   files across the complete non-ignored candidate tree, including files not
   yet staged, and applies an exact no-growth ratchet to legacy files that are
   still above the limit. Intentional splits should lower
-  `ci/source_file_budget.json`; unexplained growth must not refresh it.
+  `ci/source_file_budget.json`; unexplained growth must not refresh it. The
+  checked-in `aggregate_rust` section pins the reviewed first-party Rust
+  baseline, a ceiling requiring at least a 10% reduction, and a lower working
+  target. Until that objective is reached, `ratchet_ceiling` is the exact
+  no-growth cap enforced by CI; JSON reports say whether the objective is met
+  and expose the remaining gap. The ratchet may only move downward during the
+  transition, and must converge to the hard ceiling. `--write-baseline`
+  preserves all reviewed aggregate targets rather than redefining them from
+  the current tree.
+
+The aggregate baseline is the task-start tree at
+`cd05eebfc07c9742734b9d684394c4fe89cdb7c5`: 5,067,263 logical Rust lines.
+The checker counts tracked and non-ignored untracked regular `*.rs` files with
+UTF-8 `splitlines()`, excluding only the checked-in `excluded_prefixes`. The
+hard ceiling is 4,560,536 lines (`floor(0.90 * 5,067,263)`), and the 4,500,000
+working target leaves review headroom below it. These values are provenance,
+not a baseline that may be regenerated from a later candidate.
+- `python3 scripts/check_compile_time_table_assets.py` verifies the exact size
+  and SHA-256 of the versioned binary tables decoded into Rust constants,
+  reconstructs every removed declaration from its pinned Git preimage, rejects
+  stray binary files, and requires exactly one fixed-size `include_bytes!`
+  consumer per asset.
 - `python3 scripts/check_cargo_feature_hygiene.py` rejects workspace-wide
   feature injection and implicit default-feature ownership across every
   workspace member. Capability bundles belong to the crate or binary that
@@ -74,6 +148,67 @@ Five fast, read-only checks keep structural and provisioning debt from returning
 
 Their focused regression tests live under `scripts/tests/` and
 `pytests/scripts/`; the PR classifier runs them before selecting Rust lanes.
+
+## Reproducible Cargo profiling
+
+Use `scripts/profile_cargo_build.py` to compare compiler work without changing
+the repository-local `target/` layout used by CI. The profiler requires its
+target, report, caller-private Cargo home, and caller-private Rustup home to be
+external and disjoint. It takes bounded, inode-independent copies of the dirty
+Git-selected source bytes, Cargo `registry/` and `git/` cache roots, and full
+Rustup tree. Cargo runs only from the read-only source snapshot, against the
+writable private cache/toolchain copies and private HOME/tmp. It adds
+`--locked`, Cargo JSON messages, timing output, and a deterministic job count,
+then records the source, lockfile, initial cache/toolchain/warm-target,
+environment, PATH/core-tool, and compiled-unit fingerprints alongside
+wall-clock and completed-child resource measurements. Cargo, rustc, and Git
+are privately copied and byte-bound; other helpers reachable through the
+recorded PATH are not copied or byte-authenticated.
+
+After Cargo exits, the profiler re-captures the caller source/HEAD,
+`Cargo.lock`, caller cache/toolchain, original and private core tools, and the
+private execution source. Git reads have optional locks, fsmonitor,
+untracked-cache, hooks, and ambient system/global configuration disabled. Only
+top-level `valid: true` reports are comparable; any drift invalidates the
+report and makes an otherwise successful profile exit with status 3.
+
+For a cold profile, start with an absent or empty target directory:
+
+```sh
+python3 scripts/profile_cargo_build.py \
+  --target-dir /tmp/iroha-profile-target \
+  --out /tmp/iroha-profile/cold.json \
+  --cargo-home "$IROHA_PROFILE_CARGO_HOME" \
+  --rustup-home "$IROHA_PROFILE_RUSTUP_HOME" \
+  -- build --workspace
+```
+
+Both home arguments are required canonical, external, caller-private roots
+prepopulated for an offline build. The profiler runs locked and offline,
+creates fresh private source/cache/Rustup/HOME/tmp state beside the report,
+refuses to replace any report, transcript, or state path, and removes the
+private state after validation. Copy limits are 250,000 records, 4 GiB per
+file, 64 GiB per tree, depth 128, path length 4096 bytes, and 1 GiB free after
+each copy. Special files, hard-linked regular files in writable caller-derived
+inputs, and absolute or escaping symlinks are rejected.
+
+Warm profiles require an explicit `--reuse-target` so cached work cannot be
+mistaken for a cold measurement; reused targets containing hard-linked files
+are rejected and the initial warm target is content-bound in the report.
+Allowed manifest paths are remapped into the private source snapshot, and
+`--target` accepts target triples rather than paths. Keep the emitted JSON
+report, JSONL Cargo
+message stream, stderr log, and Cargo timing HTML together when comparing two
+revisions. A comparison is meaningful only when the report input fingerprints
+and Cargo arguments identify the intended source/toolchain change.
+
+The external target and report bundle are intentional mutable outputs. Input
+reads may update filesystem access times. The profiler provides path isolation,
+not an OS sandbox: transitive helpers selected from the recorded PATH and
+hostile processes already able to address unrelated absolute paths are outside
+the guarantee. The legacy `scripts/profile_build.py` named-scenario wrapper now
+uses the same snapshot boundary, but authoritative evidence remains schema-v3
+output from `scripts/profile_cargo_build.py`.
 
 ### Featured checks
 - `check_rust_1_92_lints.sh` – runs `cargo check` with the Rust 1.92 lint set (including the new never-type fallback and macro-export checks) so stricter diagnostics surface before CI.

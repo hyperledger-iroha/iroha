@@ -7,12 +7,8 @@ publish = false
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
-    'cfg(feature, values("bench-internal"))',
     'cfg(feature, values("compact-len"))',
-    'cfg(feature, values("cuda"))',
-    'cfg(feature, values("metal"))',
     'cfg(feature, values("packed-struct"))',
-    'cfg(feature, values("parallel-stage1"))',
     'cfg(feature, values("schema-structural"))',
 ] }
 

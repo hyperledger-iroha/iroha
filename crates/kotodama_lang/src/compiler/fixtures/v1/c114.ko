@@ -1,0 +1,6 @@
+
+seiyaku CompilerFixture {
+fn apply(AccountId replacement) {
+  ledger::account::recovery::propose(Name::parse("not_string"), replacement);
+}
+}

@@ -6,9 +6,10 @@ use std::{
     time::Duration,
 };
 
-#[path = "streaming/mod.rs"]
-mod streaming;
-
+use crate::streaming::{
+    self, StreamingTestVector, baseline_test_vector, make_peer, manifest_announce_for_viewer,
+    streaming_handle, test_keypairs,
+};
 use eyre::{Result as EyreResult, eyre};
 use iroha_core::streaming::StreamingProcessError;
 use iroha_data_model::peer::Peer;
@@ -18,10 +19,6 @@ use iroha_p2p::streaming::{
 };
 use norito::streaming::{
     CapabilityReport, CapabilityRole, ChunkAcknowledgeFrame, ControlFrame, TransportCapabilities,
-};
-use streaming::{
-    StreamingTestVector, baseline_test_vector, make_peer, manifest_announce_for_viewer,
-    streaming_handle, test_keypairs,
 };
 use tokio::time::{sleep, timeout};
 

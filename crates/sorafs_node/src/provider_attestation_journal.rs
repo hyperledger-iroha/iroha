@@ -3520,13 +3520,11 @@ impl MusubiProviderAttestationJournalRuntimeV1 {
         if checkpoint_scope.journal_policy_digest() != policy_digest {
             return Err(MusubiProviderAttestationJournalErrorV1::StoreRejected);
         }
-        let clock_scope_digest = MusubiProviderAttestationClockScopeV1::try_new(
-            network_id,
-            provider_id,
-        )
-        .map_err(|_| MusubiProviderAttestationJournalErrorV1::StoreRejected)?
-        .scope_digest()
-        .map_err(|_| MusubiProviderAttestationJournalErrorV1::StoreRejected)?;
+        let clock_scope_digest =
+            MusubiProviderAttestationClockScopeV1::try_new(network_id, provider_id)
+                .map_err(|_| MusubiProviderAttestationJournalErrorV1::StoreRejected)?
+                .scope_digest()
+                .map_err(|_| MusubiProviderAttestationJournalErrorV1::StoreRejected)?;
         if clock.scope_digest() != clock_scope_digest {
             return Err(MusubiProviderAttestationJournalErrorV1::StoreRejected);
         }

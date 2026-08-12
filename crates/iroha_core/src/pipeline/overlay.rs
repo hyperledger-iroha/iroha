@@ -4057,8 +4057,8 @@ mod tests_overlay_manifest {
         );
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             71,
             DataSpaceId::UNIVERSAL,
@@ -4152,8 +4152,8 @@ mod tests_overlay_manifest {
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             72,
             DataSpaceId::UNIVERSAL,
@@ -4644,8 +4644,8 @@ seiyaku RebuildArguments {
         let (authority, _) = gen_account_in("wonderland");
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             91,
             DataSpaceId::UNIVERSAL,
@@ -4821,8 +4821,8 @@ seiyaku QuarantineArguments {
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             95,
             DataSpaceId::UNIVERSAL,
@@ -5097,8 +5097,8 @@ seiyaku ProtectedParameterizedOverlay {
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             93,
             DataSpaceId::UNIVERSAL,
@@ -5161,8 +5161,8 @@ seiyaku ProtectedParameterizedOverlay {
         let (authority, keypair) = gen_account_in("wonderland");
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             92,
             DataSpaceId::UNIVERSAL,
@@ -5691,8 +5691,8 @@ seiyaku GuardedOverlayRebound {
         let (authority, _) = gen_account_in("wonderland");
         let root_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             82,
             DataSpaceId::UNIVERSAL,
@@ -5700,8 +5700,8 @@ seiyaku GuardedOverlayRebound {
         .expect("derive root contract address");
         let child_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             83,
             DataSpaceId::UNIVERSAL,
@@ -6879,8 +6879,8 @@ seiyaku ProtectedProvedOverlay {
         let mut world = crate::state::World::with([domain], [account], []);
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             92,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -8587,8 +8587,8 @@ seiyaku DeriveDispatch {
         let mut world = crate::state::World::with([domain], [account], []);
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             94,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -8690,8 +8690,8 @@ seiyaku DeriveDispatch {
         let (other_authority, _) = gen_account_in("wonderland");
         let root_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             1,
             DataSpaceId::UNIVERSAL,
@@ -8699,8 +8699,8 @@ seiyaku DeriveDispatch {
         .expect("derive root contract address");
         let child_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             2,
             DataSpaceId::UNIVERSAL,
@@ -8857,8 +8857,8 @@ seiyaku ProtectedProved {
         let account = build_wonderland_account(&authority);
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             93,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -8990,8 +8990,8 @@ seiyaku ProtectedProved {
         let code_hash = verified.code_hash;
         let address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             authority,
             nonce,
             DataSpaceId::UNIVERSAL,
@@ -9208,8 +9208,8 @@ seiyaku AliasBoundArguments {
         let authority = AccountId::new(kp.public_key().clone());
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             9,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
@@ -9380,8 +9380,8 @@ seiyaku AliasBoundArguments {
         let authority = AccountId::new(kp.public_key().clone());
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             10,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,

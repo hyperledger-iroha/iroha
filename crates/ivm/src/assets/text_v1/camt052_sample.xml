@@ -1,0 +1,37 @@
+
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08">
+  <BkToCstmrAcctRpt>
+    <GrpHdr>
+      <MsgId>RPT-460052</MsgId>
+      <CreDtTm>2025-11-10T15:17:49.578Z</CreDtTm>
+    </GrpHdr>
+    <Rpt>
+      <Id>RPT-460052</Id>
+      <ElctrncSeqNb>531</ElctrncSeqNb>
+      <CreDtTm>2025-11-10T15:17:49.580Z</CreDtTm>
+      <Acct>
+        <Id><Othr><Id>ALTACCOUNT</Id></Othr></Id>
+        <Ccy>USD</Ccy>
+        <Ownr>
+          <Id><OrgId><Othr><Id>OWNER001</Id><SchmeNm><Prtry>PCOD</Prtry></SchmeNm></Othr></OrgId></Id>
+        </Ownr>
+      </Acct>
+      <Bal>
+        <Tp><CdOrPrtry><Cd>CLBD</Cd></CdOrPrtry></Tp>
+        <Amt Ccy="USD">1000.00</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <Dt><Dt>2025-11-06</Dt></Dt>
+      </Bal>
+      <TxsSummry>
+        <TtlNtries>
+          <NbOfNtries>41</NbOfNtries>
+          <Sum>1011323.14</Sum>
+          <TtlNetNtry><Amt>991491.14</Amt><CdtDbtInd>DBIT</CdtDbtInd></TtlNetNtry>
+        </TtlNtries>
+        <TtlCdtNtries><NbOfNtries>21</NbOfNtries><Sum>9916.00</Sum></TtlCdtNtries>
+        <TtlDbtNtries><NbOfNtries>20</NbOfNtries><Sum>1001407.14</Sum></TtlDbtNtries>
+      </TxsSummry>
+      <AddtlRptInf>/SESSIONID/6761</AddtlRptInf>
+    </Rpt>
+  </BkToCstmrAcctRpt>
+</Document>

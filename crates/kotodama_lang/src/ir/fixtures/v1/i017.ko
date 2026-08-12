@@ -1,0 +1,16 @@
+
+            fn build(
+                AccountId owner,
+                string label,
+                Option<quantity> maybe,
+            ) -> Json {
+                let List<string, 4> labels = ["secondary", label];
+                json {
+                    owner: owner,
+                    amount: 1.25,
+                    primary: json ["primary", label],
+                    labels: labels,
+                    maybe: maybe,
+                }
+            }
+        

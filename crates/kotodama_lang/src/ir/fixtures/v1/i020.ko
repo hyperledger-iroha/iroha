@@ -1,0 +1,6 @@
+
+            fn doubled() -> List<int, 4> {
+                let List<int, 4> values = [1, 2, 3];
+                [value * 2 for value in values if value > 1]
+            }
+        

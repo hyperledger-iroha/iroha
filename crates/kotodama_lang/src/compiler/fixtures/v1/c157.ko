@@ -1,0 +1,20 @@
+
+seiyaku Test {
+  state Name LastRequestId;
+
+  hajimari() {
+    LastRequestId = Name::parse("unset");
+  }
+
+  fn update_record(Name request_id) {
+    LastRequestId = request_id;
+  }
+
+  kotoage fn run()  authorize("Entry") {
+    update_record(Name::parse("request-1"));
+  }
+
+  trigger wake -> run {
+    on time pre_commit;
+  }
+}

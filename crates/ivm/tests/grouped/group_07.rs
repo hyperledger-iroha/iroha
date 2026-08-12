@@ -8,8 +8,6 @@ mod poseidon_bridge;
 mod poseidon_circuit;
 #[path = "../poseidon_cuda_parity.rs"]
 mod poseidon_cuda_parity;
-#[path = "../poseidon_gadget_real.rs"]
-mod poseidon_gadget_real;
 #[path = "../poseidon_simd.rs"]
 mod poseidon_simd;
 #[path = "../predecode_artifact_keying.rs"]

@@ -22437,49 +22437,24 @@ where
 }
 
 fn is_trigger_inventory_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
-    use iroha_data_model::{
-        query::{
-            QueryItemKind, iter_query_inner,
-            trigger::prelude::{FindActiveTriggerIds, FindTriggers},
-        },
-        trigger::{Trigger, TriggerId},
+    use iroha_data_model::query::{
+        QueryItemKind,
+        trigger::prelude::{FindActiveTriggerIds, FindTriggers},
     };
 
-    if let Some(query_box) = query.query_box() {
-        if let Some(erased) = iter_query_inner::<Trigger>(query_box) {
-            return payload_matches_query::<FindTriggers>(erased.payload());
+    match query.item {
+        QueryItemKind::Trigger => payload_matches_query::<FindTriggers>(&query.query_payload),
+        QueryItemKind::TriggerId => {
+            payload_matches_query::<FindActiveTriggerIds>(&query.query_payload)
         }
-        if let Some(erased) = iter_query_inner::<TriggerId>(query_box) {
-            return payload_matches_query::<FindActiveTriggerIds>(erased.payload());
-        }
-        return false;
+        _ => false,
     }
-
-    query
-        .fast_dsl_parts()
-        .is_some_and(|(item_kind, _, _, payload)| match item_kind {
-            QueryItemKind::Trigger => payload_matches_query::<FindTriggers>(payload),
-            QueryItemKind::TriggerId => payload_matches_query::<FindActiveTriggerIds>(payload),
-            _ => false,
-        })
 }
 
 fn is_public_control_plane_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
-    use iroha_data_model::{
-        peer::PeerId,
-        query::{QueryItemKind, iter_query_inner, peer::prelude::FindPeers},
-    };
+    use iroha_data_model::query::{QueryItemKind, peer::prelude::FindPeers};
 
-    if let Some(query_box) = query.query_box() {
-        return iter_query_inner::<PeerId>(query_box)
-            .is_some_and(|erased| payload_matches_query::<FindPeers>(erased.payload()));
-    }
-
-    query
-        .fast_dsl_parts()
-        .is_some_and(|(item_kind, _, _, payload)| {
-            item_kind == QueryItemKind::PeerId && payload_matches_query::<FindPeers>(payload)
-        })
+    query.item == QueryItemKind::PeerId && payload_matches_query::<FindPeers>(&query.query_payload)
 }
 
 fn decode_query_payload<Query>(payload: &[u8]) -> Option<Query>
@@ -22566,57 +22541,37 @@ fn target_account_iterable_query(
             FindAssetsByAccountId, FindDomainsByAccountId, FindNftsByAccountId,
             FindPermissionsByAccountId, FindRolesByAccountId,
         },
-        query::{QueryItemKind, iter_query_inner},
-        role::RoleId,
+        query::{
+            QueryItemKind,
+            escrow::prelude::{FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller},
+        },
     };
 
-    if let Some(query_box) = query.query_box() {
-        if let Some(erased) = iter_query_inner::<iroha_data_model::domain::Domain>(query_box)
-            && let Some(query) = decode_query_payload::<FindDomainsByAccountId>(erased.payload())
-        {
-            return Some(query.account_id().clone());
+    match query.item {
+        QueryItemKind::Domain => {
+            decode_query_payload::<FindDomainsByAccountId>(&query.query_payload)
+                .map(|query| query.account_id().clone())
         }
-        if let Some(erased) = iter_query_inner::<iroha_data_model::asset::value::Asset>(query_box)
-            && let Some(query) = decode_query_payload::<FindAssetsByAccountId>(erased.payload())
-        {
-            return Some(query.account_id().clone());
+        QueryItemKind::Asset => decode_query_payload::<FindAssetsByAccountId>(&query.query_payload)
+            .map(|query| query.account_id().clone()),
+        QueryItemKind::Nft => decode_query_payload::<FindNftsByAccountId>(&query.query_payload)
+            .map(|query| query.account_id().clone()),
+        QueryItemKind::Permission => {
+            decode_query_payload::<FindPermissionsByAccountId>(&query.query_payload)
+                .map(|query| query.account_id().clone())
         }
-        if let Some(erased) = iter_query_inner::<iroha_data_model::nft::Nft>(query_box)
-            && let Some(query) = decode_query_payload::<FindNftsByAccountId>(erased.payload())
-        {
-            return Some(query.account_id().clone());
+        QueryItemKind::RoleId => decode_query_payload::<FindRolesByAccountId>(&query.query_payload)
+            .map(|query| query.account_id().clone()),
+        QueryItemKind::AssetEscrowsBySeller => {
+            decode_query_payload::<FindAssetEscrowsBySeller>(&query.query_payload)
+                .map(|query| query.seller)
         }
-        if let Some(erased) = iter_query_inner::<Permission>(query_box)
-            && let Some(query) =
-                decode_query_payload::<FindPermissionsByAccountId>(erased.payload())
-        {
-            return Some(query.account_id().clone());
+        QueryItemKind::AssetEscrowsByBuyer => {
+            decode_query_payload::<FindAssetEscrowsByBuyer>(&query.query_payload)
+                .map(|query| query.buyer)
         }
-        if let Some(erased) = iter_query_inner::<RoleId>(query_box)
-            && let Some(query) = decode_query_payload::<FindRolesByAccountId>(erased.payload())
-        {
-            return Some(query.account_id().clone());
-        }
-        return None;
+        _ => None,
     }
-
-    query
-        .fast_dsl_parts()
-        .and_then(|(item_kind, _, _, payload)| match item_kind {
-            QueryItemKind::Domain => decode_query_payload::<FindDomainsByAccountId>(payload)
-                .map(|query| query.account_id().clone()),
-            QueryItemKind::Asset => decode_query_payload::<FindAssetsByAccountId>(payload)
-                .map(|query| query.account_id().clone()),
-            QueryItemKind::Nft => decode_query_payload::<FindNftsByAccountId>(payload)
-                .map(|query| query.account_id().clone()),
-            QueryItemKind::Permission => {
-                decode_query_payload::<FindPermissionsByAccountId>(payload)
-                    .map(|query| query.account_id().clone())
-            }
-            QueryItemKind::RoleId => decode_query_payload::<FindRolesByAccountId>(payload)
-                .map(|query| query.account_id().clone()),
-            _ => None,
-        })
 }
 
 fn target_domain_iterable_query(
@@ -22646,65 +22601,26 @@ fn target_domain_iterable_query_for_app(
     app: &AppState,
     query: &iroha_data_model::query::QueryWithParams,
 ) -> Option<iroha_data_model::domain::DomainId> {
-    use iroha_data_model::{
-        account::Account, prelude::FindAccountsWithAsset, query::iter_query_inner,
-    };
+    use iroha_data_model::prelude::FindAccountsWithAsset;
 
-    if let Some(query_box) = query.query_box() {
-        if let Some(erased) = iter_query_inner::<Account>(query_box)
-            && let Some(query) = decode_query_payload::<FindAccountsWithAsset>(erased.payload())
-        {
-            return resolve_asset_definition_scope(app, query.asset_definition_id()).and_then(
-                |scope| match scope {
-                    SignedQueryScope::TargetDomain(domain_id) => Some(domain_id),
-                    _ => None,
-                },
-            );
-        }
-        return None;
-    }
-
-    query
-        .fast_dsl_parts()
-        .and_then(|(item_kind, _, _, payload)| {
-            (item_kind == iroha_data_model::query::QueryItemKind::Account)
-                .then(|| decode_query_payload::<FindAccountsWithAsset>(payload))
-                .flatten()
-                .and_then(|query| {
-                    resolve_asset_definition_scope(app, query.asset_definition_id()).and_then(
-                        |scope| {
-                            let SignedQueryScope::TargetDomain(domain_id) = scope else {
-                                return None;
-                            };
-                            Some(domain_id)
-                        },
-                    )
-                })
+    (query.item == iroha_data_model::query::QueryItemKind::Account)
+        .then(|| decode_query_payload::<FindAccountsWithAsset>(&query.query_payload))
+        .flatten()
+        .and_then(|query| {
+            resolve_asset_definition_scope(app, query.asset_definition_id()).and_then(|scope| {
+                let SignedQueryScope::TargetDomain(domain_id) = scope else {
+                    return None;
+                };
+                Some(domain_id)
+            })
         })
 }
 
 fn is_authority_routed_iterable_query(query: &iroha_data_model::query::QueryWithParams) -> bool {
-    use iroha_data_model::query::{
-        QueryItemKind, iter_query_inner, transaction::prelude::FindTransactions,
-    };
+    use iroha_data_model::query::{QueryItemKind, transaction::prelude::FindTransactions};
 
-    if let Some(query_box) = query.query_box() {
-        if let Some(erased) =
-            iter_query_inner::<iroha_data_model::query::CommittedTransaction>(query_box)
-        {
-            return payload_matches_query::<FindTransactions>(erased.payload());
-        }
-        return false;
-    }
-
-    query
-        .fast_dsl_parts()
-        .is_some_and(|(item_kind, _, _, payload)| match item_kind {
-            QueryItemKind::CommittedTransaction => {
-                payload_matches_query::<FindTransactions>(payload)
-            }
-            _ => false,
-        })
+    query.item == QueryItemKind::CommittedTransaction
+        && payload_matches_query::<FindTransactions>(&query.query_payload)
 }
 
 trait SignedQueryScopeInput {

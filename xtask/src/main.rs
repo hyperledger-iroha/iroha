@@ -112,7 +112,6 @@ mod soracloud_inrou;
 mod soradns;
 mod sorafs;
 mod soranet;
-mod soranet_billing;
 mod soranet_bug_bounty;
 mod soranet_chaos;
 mod soranet_gar_controller;
@@ -322,9 +321,6 @@ enum CommandKind {
     },
     SoranetGatewayBilling {
         options: soranet_gateway_billing::BillingOptions,
-    },
-    SoranetGatewayBillingM0 {
-        options: soranet_billing::BillingM0Options,
     },
     TaikaiAnchorBundle {
         options: taikai_anchor::AnchorBundleOptions,
@@ -1527,13 +1523,6 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
                 outcome.parquet_path.display(),
                 outcome.ledger_path.display(),
                 outcome.reconciliation_report_path.display()
-            );
-        }
-        CommandKind::SoranetGatewayBillingM0 { options } => {
-            let outcome = soranet_billing::write_billing_m0_pack(options)?;
-            println!(
-                "soranet-gateway-billing-m0 wrote {}",
-                outcome.summary_path.display()
             );
         }
         CommandKind::TaikaiAnchorBundle { options } => {
@@ -5355,45 +5344,6 @@ where
                     treasury,
                     asset_definition: asset,
                     allow_hard_cap,
-                },
-            })
-        }
-        "soranet-gateway-billing-m0" => {
-            let mut output_dir: Option<PathBuf> = None;
-            let mut billing_period = "2026-11".to_string();
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--output-dir" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --output-dir".into());
-                        };
-                        output_dir = Some(normalize_path(Path::new(&path))?);
-                    }
-                    "--billing-period" => {
-                        let Some(value) = pending.next() else {
-                            return Err("expected value after --billing-period".into());
-                        };
-                        billing_period = value;
-                    }
-                    flag => {
-                        return Err(
-                            format!("unknown flag for soranet-gateway-billing-m0: {flag}").into(),
-                        );
-                    }
-                }
-            }
-            let output_dir = output_dir.unwrap_or_else(|| {
-                workspace_root()
-                    .join("configs")
-                    .join("soranet")
-                    .join("gateway_m0")
-                    .join("billing")
-            });
-            Ok(CommandKind::SoranetGatewayBillingM0 {
-                options: soranet_billing::BillingM0Options {
-                    output_dir,
-                    billing_period,
                 },
             })
         }
@@ -9709,7 +9659,7 @@ fn generate_openapi(
             .any(|output| openapi_paths_alias(output, &canonical_spec))
     {
         return Err(format!(
-            "OpenAPI manifests require generating the canonical spec {}",
+            "OpenAPI manifests require emitting the canonical authority {}",
             canonical_spec.display()
         )
         .into());
@@ -9734,7 +9684,7 @@ fn generate_openapi(
             .is_some_and(|provenance| provenance.dirty)
     {
         return Err(
-            "refusing to sign an OpenAPI artifact generated from a dirty source tree; commit or clean the source changes, then regenerate"
+            "refusing to sign an OpenAPI artifact emitted from a dirty source tree; commit or clean the source changes, then replay the authority"
                 .into(),
         );
     }
@@ -9774,8 +9724,8 @@ fn require_release_router_openapi(
     generated: Result<Option<Value>, Box<dyn Error>>,
 ) -> Result<Value, Box<dyn Error>> {
     let spec = generated
-        .map_err(|err| format!("failed to generate OpenAPI from Torii router: {err}"))?
-        .ok_or("Torii did not expose an OpenAPI document; generation failed closed")?;
+        .map_err(|err| format!("failed to load the OpenAPI authority through Torii router: {err}"))?
+        .ok_or("Torii did not expose its OpenAPI authority; replay failed closed")?;
     validate_release_openapi_spec(&spec)?;
     Ok(spec)
 }
@@ -15111,7 +15061,7 @@ fn print_usage() {
         "  cargo xtask openapi [--output <path>|--output-root <dir>] [--signature-envelope <path>|--unsigned-manifest] [--signing-payload <path>]"
     );
     eprintln!(
-        "    Generate the Torii OpenAPI spec from a live Torii router. --output-root binds torii.json and manifest.json to one staging-safe canonical directory. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the external software signer, then attach --signature-envelope. Defaults to artifacts/openapi/torii.json"
+        "    Validate and emit Torii's static OpenAPI authority through a live router. --output-root binds torii.json and manifest.json to one staging-safe canonical directory. Release signing is detached-only: emit the deterministic V2 payload with --unsigned-manifest --signing-payload, sign it with the external software signer, then attach --signature-envelope. Defaults to artifacts/openapi/torii.json"
     );
     eprintln!(
         "  cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]"
@@ -15295,12 +15245,6 @@ fn print_usage() {
     );
     eprintln!(
         "    Rate Gateway usage against the SN15-M0 catalog, exporting JSON/CSV/Parquet invoices plus ledger projection and reconciliation report. Defaults use configs/soranet/gateway_m0/billing_usage_sample.json and configs/soranet/gateway_m0/meter_catalog.json."
-    );
-    eprintln!(
-        "  cargo xtask soranet-gateway-billing-m0 [--output-dir <path>] [--billing-period <period>]"
-    );
-    eprintln!(
-        "    Emit the SN15-M0 billing preview pack (meter catalog + CSV/Parquet exports, rating plan, ledger hooks + projection, guardrails, invoice/dispute/reconciliation templates) with a JSON summary. Defaults to configs/soranet/gateway_m0/billing."
     );
     eprintln!("  cargo xtask sorafs-gateway-fixtures [--out <dir>] [--verify]");
     eprintln!(

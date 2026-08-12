@@ -4,11 +4,10 @@
 
 use std::sync::Arc;
 
-use axum::{Router, extract::connect_info::ConnectInfo, http::Request};
+use axum::{Router, extract::connect_info::ConnectInfo};
 use http::StatusCode;
 use http_body_util::BodyExt as _;
 use iroha_core::{
-    kiso::KisoHandle,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute as _,
@@ -28,7 +27,6 @@ use iroha_data_model::{
     sns::{NameControllerV1, NameRecordV1},
 };
 use iroha_test_samples::ALICE_ID;
-use iroha_torii::Torii;
 use nonzero_ext::nonzero;
 use norito::json::{self, Value};
 use tower::ServiceExt as _;
@@ -46,10 +44,7 @@ async fn accounts_portfolio_endpoint_returns_snapshot() {
         uaid
     });
     let uaid_hex = hex::encode(uaid.as_hash().as_ref());
-    let mut req = Request::builder()
-        .uri(format!("/v1/accounts/uaid:{uaid_hex}/portfolio"))
-        .body(axum::body::Body::empty())
-        .unwrap();
+    let mut req = fixtures::get_request(&(format!("/v1/accounts/uaid:{uaid_hex}/portfolio")));
     req.extensions_mut()
         .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
     let resp = app.oneshot(req).await.unwrap();
@@ -84,10 +79,7 @@ async fn accounts_portfolio_endpoint_returns_snapshot() {
 async fn accounts_portfolio_snapshot_matches_fixture() {
     let (app, uaid) = setup_portfolio_app(seed_fixture_portfolio_accounts);
     let uaid_hex = hex::encode(uaid.as_hash().as_ref());
-    let mut req = Request::builder()
-        .uri(format!("/v1/accounts/uaid:{uaid_hex}/portfolio"))
-        .body(axum::body::Body::empty())
-        .unwrap();
+    let mut req = fixtures::get_request(&(format!("/v1/accounts/uaid:{uaid_hex}/portfolio")));
     req.extensions_mut()
         .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
     let resp = app.oneshot(req).await.unwrap();
@@ -115,14 +107,12 @@ async fn accounts_portfolio_filters_by_asset_id() {
         uaid
     });
     let uaid_hex = hex::encode(uaid.as_hash().as_ref());
-    let mut baseline_req = Request::builder()
-        .uri(format!("/v1/accounts/uaid:{uaid_hex}/portfolio"))
-        .body(axum::body::Body::empty())
-        .unwrap();
+    let mut baseline_req =
+        fixtures::get_request(&(format!("/v1/accounts/uaid:{uaid_hex}/portfolio")));
     baseline_req
         .extensions_mut()
         .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
-    let baseline = app.clone().oneshot(baseline_req).await.unwrap();
+    let baseline = fixtures::request(&app, baseline_req).await.unwrap();
     let baseline_status = baseline.status();
     let baseline_body = baseline.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(
@@ -137,13 +127,12 @@ async fn accounts_portfolio_filters_by_asset_id() {
         .expect("baseline asset id")
         .to_owned();
 
-    let mut req = Request::builder()
-        .uri(format!(
+    let mut req = fixtures::get_request(
+        &(format!(
             "/v1/accounts/uaid:{uaid_hex}/portfolio?asset_id={}",
             urlencoding::encode(&asset_id)
-        ))
-        .body(axum::body::Body::empty())
-        .unwrap();
+        )),
+    );
     req.extensions_mut()
         .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
     let resp = app.oneshot(req).await.unwrap();
@@ -170,7 +159,6 @@ where
     SeedFn: FnOnce(&Arc<State>) -> UniversalAccountId,
 {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
@@ -179,70 +167,8 @@ where
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let uaid = seed_fn(&state);
 
-    let queue_cfg = iroha_config::parameters::actual::Queue::default();
-    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(iroha_core::queue::Queue::from_config(
-        queue_cfg,
-        events_sender,
-    ));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry as core_telemetry;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) =
-            iroha_primitives::time::TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id,
-            ts,
-            false,
-        )
-        .0
-    };
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
-    let app = torii.api_router_for_tests();
+    let torii = fixtures::StandardToriiHarness::from_state(&cfg, &kura, state.clone());
+    let app = torii.router();
     (app, uaid)
 }
 

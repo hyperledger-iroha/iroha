@@ -327,19 +327,6 @@ fn commit_stateful_admission_sequence(
     Ok(())
 }
 
-fn commit_stateful_admission_sequence_to_block(
-    state_block: &mut StateBlock<'_>,
-    admission: &crate::tx::StatefulAdmission,
-) -> Result<(), TransactionRejectionReason> {
-    if admission.sequence_to_commit.is_none() && admission.validation_fee_credit.is_none() {
-        return Ok(());
-    }
-    let mut state_tx = state_block.transaction();
-    commit_stateful_admission_sequence(&mut state_tx, admission)?;
-    state_tx.apply();
-    Ok(())
-}
-
 #[cfg(test)]
 mod overlay_error_tests {
     use iroha_data_model::{
@@ -13884,7 +13871,7 @@ pub(crate) mod valid {
             if state_block.pipeline.parallel_apply {
                 use rayon::prelude::*;
 
-                use crate::state::{DetachedMergeContext, DetachedStateTransactionDelta};
+                use crate::state::DetachedStateTransactionDelta;
 
                 #[derive(Clone)]
                 struct PreparedEntry {
@@ -14370,9 +14357,6 @@ pub(crate) mod valid {
                     let t_layer_merge = Instant::now();
                     let layer_merge_start = timings.as_ref().map(|_| Instant::now());
                     let mut layer_fallback_ms = 0u64;
-                    // Detached metadata merges rely on DetachedStateTransactionDelta's SoA + name
-                    // interning layout to avoid redundant map probes while preserving determinism.
-
                     let mut apply_overlay_sequential =
                         |state_block_mut: &mut StateBlock<'_>,
                          lane_summaries_mut: &mut BTreeMap<LaneId, LaneSummary>,
@@ -14892,82 +14876,18 @@ pub(crate) mod valid {
                                         }
                                         continue;
                                     }
-                                    if admission.validation_fee_credit.is_some() {
-                                        // Validation-fee credits are consensus state that must be
-                                        // committed in the same rollback scope as the signed
-                                        // transfers and all data triggers. The direct detached
-                                        // merge applies its delta before admission facts, so use
-                                        // the ordinary transactional path for fee-bearing work.
-                                        drop(state_tx);
-                                        let result = apply_overlay_sequential(
-                                            state_block,
-                                            &mut lane_summaries,
-                                            p.idx,
-                                        );
-                                        let result_is_err = result.is_err();
-                                        record_result(p.idx, result);
-                                        if result_is_err {
-                                            record_amx_abort(state_block, p.idx, "commit");
-                                        }
-                                        continue;
-                                    }
+                                    // A malformed detached delta cannot be produced by the
+                                    // evaluator, but preserve a deterministic sequential fallback.
                                     drop(state_tx);
-                                    let merge_context = DetachedMergeContext {
-                                        tx_call_hash: Some(iroha_crypto::Hash::from(hash)),
-                                        current_tx_hash: Some(
-                                            prepared_txs[p.idx].metadata.signed_hash,
-                                        ),
-                                        current_lane_id: Some(routing_decisions[p.idx].lane_id),
-                                        current_dataspace_id: Some(
-                                            routing_decisions[p.idx].dataspace_id,
-                                        ),
-                                    };
-                                    match delta.merge_into_with_context(
+                                    let result = apply_overlay_sequential(
                                         state_block,
-                                        &p.authority,
-                                        merge_context,
-                                    ) {
-                                        Ok(trigger_sequence) => {
-                                            let admission_commit =
-                                                commit_stateful_admission_sequence_to_block(
-                                                    state_block,
-                                                    &admission,
-                                                );
-                                            if let Err(reason) = admission_commit {
-                                                record_amx_abort(state_block, p.idx, "commit");
-                                                record_result(p.idx, Err(reason));
-                                                continue;
-                                            }
-                                            record_result(p.idx, Ok(trigger_sequence));
-                                            let lane_id = routing_decisions[p.idx].lane_id;
-                                            let summary =
-                                                lane_summaries.entry(lane_id).or_default();
-                                            summary.detached_merged =
-                                                summary.detached_merged.saturating_add(1);
-                                            if debug_trace_tx_eval {
-                                                let ts = tx.creation_time().as_millis();
-                                                eprintln!(
-                                                    "[core-eval] ok(prepared-merge) hash={} ts={} auth={}",
-                                                    hash, ts, p.authority,
-                                                );
-                                            }
-                                        }
-                                        Err(reason) => {
-                                            record_amx_abort(state_block, p.idx, "commit");
-                                            match reason {
-                                                TransactionRejectionReason::Validation(_) => {
-                                                    let result = apply_overlay_sequential(
-                                                        state_block,
-                                                        &mut lane_summaries,
-                                                        p.idx,
-                                                    );
-                                                    record_result(p.idx, result);
-                                                }
-                                                other => {
-                                                    record_result(p.idx, Err(other));
-                                                }
-                                            }
-                                        }
+                                        &mut lane_summaries,
+                                        p.idx,
+                                    );
+                                    let result_is_err = result.is_err();
+                                    record_result(p.idx, result);
+                                    if result_is_err {
+                                        record_amx_abort(state_block, p.idx, "commit");
                                     }
                                 }
                                 Some(Err(reason)) => {
@@ -17081,6 +17001,27 @@ pub(crate) mod valid {
                 fixture.profile.clone(),
             )
             .expect("exact control-only autonomous anchor must validate");
+        }
+
+        #[test]
+        fn autonomous_anchor_admission_rejects_same_label_different_network() {
+            let mut fixture = autonomous_anchor_fixture(None, 0);
+            let display_name = fixture.state.chain_id.clone();
+            let original_network_id = fixture.state.network_id;
+            fixture.state.network_id = deterministic_test_network_id(0x7A);
+            assert_eq!(fixture.state.chain_id, display_name);
+            assert_ne!(fixture.state.network_id, original_network_id);
+
+            let error =
+                validate_autonomous_anchor_fixture(&fixture, &fixture.block, &fixture.bundle)
+                    .expect_err(
+                        "the same display label must not authorize another genesis lineage",
+                    );
+            assert!(matches!(
+                error,
+                BlockValidationError::ExecutionContextInvalid(message)
+                    if message.contains("autonomous lane payload envelope")
+            ));
         }
 
         #[test]
@@ -29862,6 +29803,12 @@ mod tests {
         .expect("dataspace catalog")
     }
 
+    fn native_amx_test_network_id() -> NetworkId {
+        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+            b"native-amx-test-genesis",
+        )))
+    }
+
     fn native_amx_test_world_with_keys() -> (World, Vec<KeyPair>) {
         let world = World::new();
         let keypairs = (0..4)
@@ -30321,11 +30268,7 @@ mod tests {
                 view: 0,
             },
             epoch: 0,
-            network_id: iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
-                iroha_data_model::block::BlockHeader,
-            >::from_untyped_unchecked(
-                Hash::new(b"native-amx-test-genesis"),
-            )),
+            network_id: native_amx_test_network_id(),
             source_id,
             tx_entrypoint_hash,
             plan_digest,
@@ -30498,11 +30441,7 @@ mod tests {
         NativeAmxReceipt {
             version: 2,
             source_id,
-            network_id: iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
-                iroha_data_model::block::BlockHeader,
-            >::from_untyped_unchecked(
-                Hash::new(b"native-amx-test-genesis"),
-            )),
+            network_id: native_amx_test_network_id(),
             plan_digest: routing_plan.digest(),
             lane_id: coordinator.lane_id,
             dataspace_id: coordinator.dataspace_id,
@@ -30597,11 +30536,7 @@ mod tests {
             .iter()
             .find(|keypair| keypair.public_key() == producer.public_key())
             .expect("fixture retains its producer key");
-        let network_id = iroha_data_model::NetworkId::from_genesis_hash(HashOf::<
-            iroha_data_model::block::BlockHeader,
-        >::from_untyped_unchecked(
-            Hash::new(b"native-amx-test-genesis"),
-        ));
+        let network_id = native_amx_test_network_id();
         let epoch = 0;
         let payload = crate::lane_consensus::LaneExecutablePayloadV1::new_signed_with_reservations(
             network_id,
@@ -31103,7 +31038,7 @@ mod tests {
             tx.hash_as_entrypoint(),
             &routing_plan,
             source_id,
-            Hash::new(b"native-amx-test-chain"),
+            native_amx_test_network_id(),
             &dataspace_catalog,
             &authority,
             Some(expected_native_amx_test_context(42)),
@@ -31180,7 +31115,7 @@ mod tests {
                 entrypoint_hash,
                 &routing_plan,
                 source_id,
-                Hash::new(b"native-amx-test-chain"),
+                native_amx_test_network_id(),
                 &dataspace_catalog,
                 &stale_first_predecessor,
                 Some(expected_native_amx_test_context(42)),
@@ -31193,7 +31128,7 @@ mod tests {
                 entrypoint_hash,
                 &routing_plan,
                 source_id,
-                Hash::new(b"native-amx-test-chain"),
+                native_amx_test_network_id(),
                 None,
                 Some(expected_native_amx_test_context(42)),
             )
@@ -31263,7 +31198,7 @@ mod tests {
                 entrypoint_hash,
                 &routing_plan,
                 source_id,
-                Hash::new(b"native-amx-test-chain"),
+                native_amx_test_network_id(),
                 Some(bindings),
                 Some(expected_native_amx_test_context(42)),
             )
@@ -31295,7 +31230,7 @@ mod tests {
                     entrypoint_hash,
                     &routing_plan,
                     source_id,
-                    Hash::new(b"native-amx-test-chain"),
+                    native_amx_test_network_id(),
                     &native_amx_test_catalog(paynet, cbuae),
                     &drifted,
                     Some(expected_native_amx_test_context(42)),
@@ -31487,7 +31422,7 @@ mod tests {
                 entrypoint_hash,
                 &routing_plan,
                 source_id,
-                Hash::new(b"native-amx-test-chain"),
+                native_amx_test_network_id(),
                 &native_amx_test_catalog(paynet, cbuae),
                 &historical_authority,
                 Some(expected_native_amx_test_context(42)),
@@ -31560,7 +31495,7 @@ mod tests {
             tx.hash_as_entrypoint(),
             &routing_plan,
             source_id,
-            Hash::new(b"native-amx-test-chain"),
+            native_amx_test_network_id(),
             &dataspace_catalog,
             &authority,
             Some(expected_native_amx_test_context(42)),
@@ -31611,7 +31546,7 @@ mod tests {
                 entrypoint_hash,
                 &routing_plan,
                 source_id,
-                Hash::new(b"native-amx-test-chain"),
+                native_amx_test_network_id(),
                 &dataspace_catalog,
                 &authority,
                 Some(expected_native_amx_test_context(42)),
@@ -31824,7 +31759,7 @@ mod tests {
                 entrypoint_hash,
                 &routing_plan,
                 source_id,
-                Hash::new(b"native-amx-test-chain"),
+                native_amx_test_network_id(),
                 &dataspace_catalog,
                 &authority,
                 Some(expected_native_amx_test_context(42)),

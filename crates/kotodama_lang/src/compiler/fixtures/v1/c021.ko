@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main(AccountId account) {
+  ledger::account::add_signatory(account, Name::parse("not_json"));
+}
+
+}

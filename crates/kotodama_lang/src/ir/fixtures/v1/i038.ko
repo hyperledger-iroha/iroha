@@ -1,0 +1,9 @@
+
+            fn main(AccountId account, AssetDefinitionId asset) {
+                ledger::asset::mint(
+                    account: account,
+                    asset_definition: asset,
+                    amount: 1,
+                );
+            }
+        

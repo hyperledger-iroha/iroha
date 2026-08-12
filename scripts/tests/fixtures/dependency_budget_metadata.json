@@ -1,0 +1,96 @@
+{
+  "packages": [
+    {
+      "id": "path+file:///fixture/model#iroha_data_model@1.0.0",
+      "name": "iroha_data_model",
+      "source": null,
+      "version": "1.0.0"
+    },
+    {
+      "id": "path+file:///fixture/crypto#iroha_crypto@1.0.0",
+      "name": "iroha_crypto",
+      "source": null,
+      "version": "1.0.0"
+    },
+    {
+      "id": "path+file:///fixture/daemon#irohad@1.0.0",
+      "name": "irohad",
+      "source": null,
+      "version": "1.0.0"
+    },
+    {
+      "id": "path+file:///fixture/cli#iroha_cli@1.0.0",
+      "name": "iroha_cli",
+      "source": null,
+      "version": "1.0.0"
+    },
+    {
+      "id": "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.0",
+      "name": "serde_json",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.0"
+    },
+    {
+      "id": "registry+https://github.com/rust-lang/crates.io-index#tokio@1.0.0",
+      "name": "tokio",
+      "source": "registry+https://github.com/rust-lang/crates.io-index",
+      "version": "1.0.0"
+    }
+  ],
+  "resolve": {
+    "nodes": [
+      {
+        "deps": [
+          {
+            "name": "iroha_crypto",
+            "pkg": "path+file:///fixture/crypto#iroha_crypto@1.0.0"
+          },
+          {
+            "name": "serde_json",
+            "pkg": "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.0"
+          }
+        ],
+        "id": "path+file:///fixture/model#iroha_data_model@1.0.0"
+      },
+      {
+        "deps": [],
+        "id": "path+file:///fixture/crypto#iroha_crypto@1.0.0"
+      },
+      {
+        "deps": [
+          {
+            "name": "iroha_data_model",
+            "pkg": "path+file:///fixture/model#iroha_data_model@1.0.0"
+          },
+          {
+            "name": "tokio",
+            "pkg": "registry+https://github.com/rust-lang/crates.io-index#tokio@1.0.0"
+          }
+        ],
+        "id": "path+file:///fixture/daemon#irohad@1.0.0"
+      },
+      {
+        "deps": [
+          {
+            "name": "iroha_data_model",
+            "pkg": "path+file:///fixture/model#iroha_data_model@1.0.0"
+          }
+        ],
+        "id": "path+file:///fixture/cli#iroha_cli@1.0.0"
+      },
+      {
+        "deps": [],
+        "id": "registry+https://github.com/rust-lang/crates.io-index#serde_json@1.0.0"
+      },
+      {
+        "deps": [],
+        "id": "registry+https://github.com/rust-lang/crates.io-index#tokio@1.0.0"
+      }
+    ]
+  },
+  "workspace_members": [
+    "path+file:///fixture/model#iroha_data_model@1.0.0",
+    "path+file:///fixture/daemon#irohad@1.0.0",
+    "path+file:///fixture/cli#iroha_cli@1.0.0"
+  ]
+}

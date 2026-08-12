@@ -4,14 +4,9 @@
 
 use std::sync::Arc;
 
-use axum::{
-    Router,
-    body::Body,
-    http::{Request, StatusCode},
-};
+use axum::{Router, body::Body, http::StatusCode};
 use http_body_util::BodyExt as _;
 use iroha_core::{
-    kiso::KisoHandle,
     kura::Kura,
     query::store::LiveQueryStore,
     state::{State, World},
@@ -23,16 +18,10 @@ use iroha_data_model::{
     domain::{Domain, DomainId},
     peer::PeerId,
 };
-#[cfg(feature = "telemetry")]
-use iroha_primitives::time::TimeSource;
 use iroha_telemetry::metrics::Metrics;
-use iroha_torii::{
-    Torii,
-    filter::{FieldPath, FilterExpr, Pagination, QueryEnvelope},
-};
+use iroha_torii::filter::{FieldPath, FilterExpr, Pagination, QueryEnvelope};
 use norito::json;
 use prometheus::core::Collector;
-use tower::ServiceExt as _;
 use urlencoding::encode;
 
 #[path = "fixtures.rs"]
@@ -78,16 +67,7 @@ fn encode_query_value(value: &str) -> String {
 async fn transactions_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
     for segment in accepted_account_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/accounts/{segment}/transactions"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = fixtures::get(&app, &format!("/v1/accounts/{segment}/transactions")).await;
         assert!(
             matches!(
                 resp.status(),
@@ -103,16 +83,7 @@ async fn transactions_endpoint_accepts_encoded_account_segments() {
 async fn transactions_endpoint_rejects_invalid_account_segment() {
     let app = test_router();
     let literal = "not-an-i105@banka.dataspace";
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/accounts/{literal}/transactions"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(&app, &format!("/v1/accounts/{literal}/transactions")).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -120,16 +91,7 @@ async fn transactions_endpoint_rejects_invalid_account_segment() {
 async fn transactions_endpoint_accepts_default_domain_without_suffix() {
     let app = test_router();
     for segment in accepted_default_domain_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/accounts/{segment}/transactions"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = fixtures::get(&app, &format!("/v1/accounts/{segment}/transactions")).await;
         assert!(
             matches!(
                 resp.status(),
@@ -145,18 +107,12 @@ async fn transactions_endpoint_accepts_default_domain_without_suffix() {
 async fn transactions_query_accepts_default_domain_without_suffix() {
     let app = test_router();
     for segment in accepted_default_domain_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/v1/accounts/{segment}/transactions/query"))
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(EMPTY_QUERY_ENVELOPE))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = fixtures::post_json(
+            &app,
+            &format!("/v1/accounts/{segment}/transactions/query"),
+            Body::from(EMPTY_QUERY_ENVELOPE),
+        )
+        .await;
         assert!(
             matches!(
                 resp.status(),
@@ -180,16 +136,7 @@ async fn transactions_endpoint_rejects_public_key_segments() {
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_CTX, reason]);
     let before = counter.get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/accounts/{literal}/transactions"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(&app, &format!("/v1/accounts/{literal}/transactions")).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         counter.get(),
@@ -210,16 +157,7 @@ async fn invalid_account_segments_increment_metric() {
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_CTX, reason])
         .get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/accounts/{literal}/transactions"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(&app, &format!("/v1/accounts/{literal}/transactions")).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let after = metrics
@@ -245,16 +183,7 @@ async fn local8_segments_increment_invalid_metric() {
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_CTX, reason])
         .get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/accounts/{literal}/transactions"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(&app, &format!("/v1/accounts/{literal}/transactions")).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let after_invalid = metrics
@@ -272,18 +201,12 @@ async fn local8_segments_increment_invalid_metric() {
 async fn transactions_query_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
     for segment in accepted_account_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/v1/accounts/{segment}/transactions/query"))
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(EMPTY_QUERY_ENVELOPE))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = fixtures::post_json(
+            &app,
+            &format!("/v1/accounts/{segment}/transactions/query"),
+            Body::from(EMPTY_QUERY_ENVELOPE),
+        )
+        .await;
         assert!(
             matches!(
                 resp.status(),
@@ -299,18 +222,12 @@ async fn transactions_query_endpoint_accepts_encoded_account_segments() {
 async fn transactions_query_endpoint_rejects_invalid_account_segment() {
     let app = test_router();
     let literal = "sorainvalid";
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/v1/accounts/{literal}/transactions/query"))
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(EMPTY_QUERY_ENVELOPE))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::post_json(
+        &app,
+        &format!("/v1/accounts/{literal}/transactions/query"),
+        Body::from(EMPTY_QUERY_ENVELOPE),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -326,18 +243,12 @@ async fn transactions_query_invalid_segments_increment_metric() {
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_QUERY_CTX, reason])
         .get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/v1/accounts/{literal}/transactions/query"))
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(EMPTY_QUERY_ENVELOPE))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::post_json(
+        &app,
+        &format!("/v1/accounts/{literal}/transactions/query"),
+        Body::from(EMPTY_QUERY_ENVELOPE),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let after = metrics
@@ -361,18 +272,12 @@ async fn transactions_query_rejects_checksum_mismatch() {
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_QUERY_CTX, reason]);
     let before = counter.get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/v1/accounts/{bad_literal}/transactions/query"))
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(EMPTY_QUERY_ENVELOPE))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::post_json(
+        &app,
+        &format!("/v1/accounts/{bad_literal}/transactions/query"),
+        Body::from(EMPTY_QUERY_ENVELOPE),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         counter.get(),
@@ -393,18 +298,12 @@ async fn transactions_query_placeholder_literal_rejected_without_shim() {
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_QUERY_CTX, reason]);
     let before = counter.get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/v1/accounts/{literal}/transactions/query"))
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(EMPTY_QUERY_ENVELOPE))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::post_json(
+        &app,
+        &format!("/v1/accounts/{literal}/transactions/query"),
+        Body::from(EMPTY_QUERY_ENVELOPE),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         counter.get(),
@@ -421,18 +320,12 @@ async fn transactions_query_valid_literals_do_not_bump_invalid_metrics() {
     let before = counter_total(&metrics.torii_address_invalid_total);
 
     for segment in [fixtures::TX_QUERY_ACCOUNT.canonical.clone()] {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/v1/accounts/{segment}/transactions/query"))
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(envelope.clone()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = fixtures::post_json(
+            &app,
+            &format!("/v1/accounts/{segment}/transactions/query"),
+            Body::from(envelope.clone()),
+        )
+        .await;
         assert!(
             matches!(
                 resp.status(),
@@ -462,18 +355,12 @@ async fn transactions_query_endpoint_rejects_public_key_segment() {
         .with_label_values(&[ACCOUNTS_TRANSACTIONS_QUERY_CTX, reason]);
     let before = counter.get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/v1/accounts/{literal}/transactions/query"))
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(EMPTY_QUERY_ENVELOPE))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::post_json(
+        &app,
+        &format!("/v1/accounts/{literal}/transactions/query"),
+        Body::from(EMPTY_QUERY_ENVELOPE),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         counter.get(),
@@ -486,16 +373,7 @@ async fn transactions_query_endpoint_rejects_public_key_segment() {
 async fn assets_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
     for segment in accepted_account_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/accounts/{segment}/assets?limit=1"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = fixtures::get(&app, &format!("/v1/accounts/{segment}/assets?limit=1")).await;
         assert!(
             matches!(
                 resp.status(),
@@ -511,16 +389,7 @@ async fn assets_endpoint_accepts_encoded_account_segments() {
 async fn assets_endpoint_accepts_default_domain_without_suffix() {
     let app = test_router();
     for segment in accepted_default_domain_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/accounts/{segment}/assets?limit=1"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = fixtures::get(&app, &format!("/v1/accounts/{segment}/assets?limit=1")).await;
         assert!(
             matches!(
                 resp.status(),
@@ -536,16 +405,7 @@ async fn assets_endpoint_accepts_default_domain_without_suffix() {
 async fn assets_endpoint_rejects_invalid_segment() {
     let app = test_router();
     let literal = "sorainvalid";
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/accounts/{literal}/assets?limit=1"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(&app, &format!("/v1/accounts/{literal}/assets?limit=1")).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -561,16 +421,7 @@ async fn assets_endpoint_invalid_segments_increment_metric() {
         .with_label_values(&[ACCOUNTS_ASSETS_CTX, reason])
         .get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/accounts/{literal}/assets?limit=1"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(&app, &format!("/v1/accounts/{literal}/assets?limit=1")).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let after = metrics
@@ -596,16 +447,7 @@ async fn assets_endpoint_rejects_public_key_segments() {
         .with_label_values(&[ACCOUNTS_ASSETS_CTX, reason]);
     let before = counter.get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/accounts/{literal}/assets?limit=1"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(&app, &format!("/v1/accounts/{literal}/assets?limit=1")).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         counter.get(),
@@ -618,18 +460,12 @@ async fn assets_endpoint_rejects_public_key_segments() {
 async fn assets_query_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
     for segment in accepted_account_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/v1/accounts/{segment}/assets/query"))
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(EMPTY_QUERY_ENVELOPE))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = fixtures::post_json(
+            &app,
+            &format!("/v1/accounts/{segment}/assets/query"),
+            Body::from(EMPTY_QUERY_ENVELOPE),
+        )
+        .await;
         assert!(
             matches!(
                 resp.status(),
@@ -653,18 +489,12 @@ async fn assets_query_endpoint_invalid_segments_increment_metric() {
         .with_label_values(&[ACCOUNTS_ASSETS_QUERY_CTX, reason])
         .get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/v1/accounts/{literal}/assets/query"))
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(EMPTY_QUERY_ENVELOPE))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::post_json(
+        &app,
+        &format!("/v1/accounts/{literal}/assets/query"),
+        Body::from(EMPTY_QUERY_ENVELOPE),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let after = metrics
@@ -690,18 +520,12 @@ async fn assets_query_endpoint_rejects_public_key_segments() {
         .with_label_values(&[ACCOUNTS_ASSETS_QUERY_CTX, reason]);
     let before = counter.get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/v1/accounts/{literal}/assets/query"))
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(EMPTY_QUERY_ENVELOPE))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::post_json(
+        &app,
+        &format!("/v1/accounts/{literal}/assets/query"),
+        Body::from(EMPTY_QUERY_ENVELOPE),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         counter.get(),
@@ -714,16 +538,8 @@ async fn assets_query_endpoint_rejects_public_key_segments() {
 async fn permissions_endpoint_accepts_encoded_account_segments() {
     let app = test_router();
     for segment in accepted_account_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/accounts/{segment}/permissions?limit=1"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp =
+            fixtures::get(&app, &format!("/v1/accounts/{segment}/permissions?limit=1")).await;
         assert!(
             matches!(
                 resp.status(),
@@ -739,16 +555,8 @@ async fn permissions_endpoint_accepts_encoded_account_segments() {
 async fn permissions_endpoint_accepts_default_domain_without_suffix() {
     let app = test_router();
     for segment in accepted_default_domain_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/accounts/{segment}/permissions?limit=1"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp =
+            fixtures::get(&app, &format!("/v1/accounts/{segment}/permissions?limit=1")).await;
         assert!(
             matches!(
                 resp.status(),
@@ -772,16 +580,7 @@ async fn permissions_endpoint_invalid_segments_increment_metric() {
         .with_label_values(&[ACCOUNTS_PERMISSIONS_CTX, reason])
         .get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/accounts/{literal}/permissions?limit=1"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(&app, &format!("/v1/accounts/{literal}/permissions?limit=1")).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let after = metrics
@@ -799,16 +598,11 @@ async fn permissions_endpoint_invalid_segments_increment_metric() {
 async fn explorer_domains_query_accepts_encoded_account_params() {
     let app = test_router();
     for literal in accepted_account_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/explorer/domains?limit=1&owned_by={literal}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = fixtures::get(
+            &app,
+            &format!("/v1/explorer/domains?limit=1&owned_by={literal}"),
+        )
+        .await;
         assert!(
             matches!(
                 resp.status(),
@@ -833,16 +627,11 @@ async fn explorer_domains_query_invalid_account_param_records_metric() {
         .with_label_values(&[context, reason])
         .get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/explorer/domains?limit=1&owned_by={literal}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(
+        &app,
+        &format!("/v1/explorer/domains?limit=1&owned_by={literal}"),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let after = metrics
@@ -860,16 +649,7 @@ async fn explorer_domains_query_invalid_account_param_records_metric() {
 async fn explorer_account_detail_accepts_encoded_account_segments() {
     let app = test_router();
     for literal in accepted_account_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/explorer/accounts/{literal}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = fixtures::get(&app, &format!("/v1/explorer/accounts/{literal}")).await;
         assert!(
             matches!(
                 resp.status(),
@@ -894,16 +674,7 @@ async fn explorer_account_detail_invalid_segments_increment_metric() {
         .with_label_values(&[context, reason])
         .get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/explorer/accounts/{literal}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(&app, &format!("/v1/explorer/accounts/{literal}")).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let after = metrics
@@ -921,16 +692,7 @@ async fn explorer_account_detail_invalid_segments_increment_metric() {
 async fn explorer_account_qr_returns_svg_literal() {
     let app = test_router();
     let (canonical, _) = account_segments();
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/explorer/accounts/{canonical}/qr"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(&app, &format!("/v1/explorer/accounts/{canonical}/qr")).await;
     if resp.status() == StatusCode::TOO_MANY_REQUESTS {
         return;
     }
@@ -962,18 +724,8 @@ async fn repo_agreements_query_filter_accepts_encoded_literals() {
     let app = test_router();
     for literal in accepted_account_segments() {
         let body = query_envelope_with_account_filter("initiator", &literal);
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/repo/agreements/query")
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(body.clone()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp =
+            fixtures::post_json(&app, "/v1/repo/agreements/query", Body::from(body.clone())).await;
         assert!(
             matches!(
                 resp.status(),
@@ -990,18 +742,8 @@ async fn repo_agreements_query_filter_accepts_default_domain_literals() {
     let app = test_router();
     for literal in accepted_default_domain_segments() {
         let body = query_envelope_with_account_filter("initiator", &literal);
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/v1/repo/agreements/query")
-                    .header(axum::http::header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(body.clone()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp =
+            fixtures::post_json(&app, "/v1/repo/agreements/query", Body::from(body.clone())).await;
         assert!(
             matches!(
                 resp.status(),
@@ -1026,18 +768,7 @@ async fn repo_agreements_query_filter_rejects_invalid_literal() {
     let before = counter.get();
     let body = query_envelope_with_account_filter("initiator", literal);
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/repo/agreements/query")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::post_json(&app, "/v1/repo/agreements/query", Body::from(body)).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         counter.get(),
@@ -1059,18 +790,7 @@ async fn repo_agreements_query_filter_rejects_local8_literal() {
     let invalid_before = invalid_counter.get();
     let body = query_envelope_with_account_filter("initiator", literal);
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/v1/repo/agreements/query")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::post_json(&app, "/v1/repo/agreements/query", Body::from(body)).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         invalid_counter.get(),
@@ -1083,16 +803,7 @@ async fn repo_agreements_query_filter_rejects_local8_literal() {
 async fn kaigi_relay_detail_accepts_encoded_segments() {
     let app = test_router();
     for literal in accepted_account_segments() {
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/v1/kaigi/relays/{literal}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = fixtures::get(&app, &format!("/v1/kaigi/relays/{literal}")).await;
         assert!(
             matches!(
                 resp.status(),
@@ -1108,16 +819,7 @@ async fn kaigi_relay_detail_accepts_encoded_segments() {
 async fn kaigi_relay_detail_rejects_invalid_segment() {
     let app = test_router();
     let literal = "sorainvalid";
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/kaigi/relays/{literal}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(&app, &format!("/v1/kaigi/relays/{literal}")).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -1133,16 +835,7 @@ async fn kaigi_relay_detail_invalid_segment_increments_metric() {
         .with_label_values(&[KAIGI_RELAY_DETAIL_CTX, reason]);
     let before = counter.get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/kaigi/relays/{literal}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(&app, &format!("/v1/kaigi/relays/{literal}")).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(counter.get(), before + 1);
 }
@@ -1159,16 +852,7 @@ async fn kaigi_relay_detail_local8_segment_increments_invalid_metric() {
         .with_label_values(&[KAIGI_RELAY_DETAIL_CTX, reason]);
     let invalid_before = invalid_counter.get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/kaigi/relays/{literal}"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(&app, &format!("/v1/kaigi/relays/{literal}")).await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(invalid_counter.get(), invalid_before + 1);
 }
@@ -1178,18 +862,11 @@ async fn nexus_public_lane_stake_accepts_validator_literals() {
     let app = test_router();
     for literal in accepted_account_segments() {
         let encoded = encode_query_value(&literal);
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!(
-                        "/v1/nexus/public-lanes/0/stake?validator={encoded}"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = fixtures::get(
+            &app,
+            &format!("/v1/nexus/public-lanes/0/stake?validator={encoded}"),
+        )
+        .await;
         assert!(
             matches!(
                 resp.status(),
@@ -1205,18 +882,11 @@ async fn nexus_public_lane_stake_accepts_validator_literals() {
 async fn nexus_public_lane_stake_rejects_invalid_validator_literal() {
     let app = test_router();
     let literal = "sorainvalid";
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/nexus/public-lanes/0/stake?validator={literal}"
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(
+        &app,
+        &format!("/v1/nexus/public-lanes/0/stake?validator={literal}"),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -1225,18 +895,11 @@ async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
     let app = test_router();
     for literal in accepted_default_domain_segments() {
         let encoded = encode_query_value(&literal);
-        let resp = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!(
-                        "/v1/nexus/public-lanes/0/stake?validator={encoded}"
-                    ))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+        let resp = fixtures::get(
+            &app,
+            &format!("/v1/nexus/public-lanes/0/stake?validator={encoded}"),
+        )
+        .await;
         assert!(
             matches!(
                 resp.status(),
@@ -1261,18 +924,11 @@ async fn nexus_public_lane_stake_rejects_public_key_validator() {
         .with_label_values(&[NEXUS_PUBLIC_LANE_STAKE_CTX, reason]);
     let before = counter.get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/nexus/public-lanes/0/stake?validator={encoded}"
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(
+        &app,
+        &format!("/v1/nexus/public-lanes/0/stake?validator={encoded}"),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         counter.get(),
@@ -1294,18 +950,11 @@ async fn nexus_public_lane_stake_invalid_literal_increments_metric() {
         .with_label_values(&[NEXUS_PUBLIC_LANE_STAKE_CTX, reason]);
     let before = counter.get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/nexus/public-lanes/0/stake?validator={encoded}"
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(
+        &app,
+        &format!("/v1/nexus/public-lanes/0/stake?validator={encoded}"),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(counter.get(), before + 1);
 }
@@ -1323,18 +972,11 @@ async fn nexus_public_lane_stake_local8_literal_increments_invalid_metric() {
         .with_label_values(&[NEXUS_PUBLIC_LANE_STAKE_CTX, reason]);
     let invalid_before = invalid_counter.get();
 
-    let resp = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/v1/nexus/public-lanes/0/stake?validator={encoded}"
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
+    let resp = fixtures::get(
+        &app,
+        &format!("/v1/nexus/public-lanes/0/stake?validator={encoded}"),
+    )
+    .await;
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     assert_eq!(invalid_counter.get(), invalid_before + 1);
 }
@@ -1351,7 +993,6 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
     use iroha_data_model::Registrable;
 
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
@@ -1375,61 +1016,24 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
         queue_cfg,
         events_sender,
     ));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
     #[cfg(feature = "telemetry")]
     let metrics = fixtures::reset_shared_metrics();
     #[cfg(not(feature = "telemetry"))]
     let metrics = fixtures::reset_shared_metrics();
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry as core_telemetry;
-        let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            Arc::clone(&metrics),
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id,
-            ts,
-            true,
-        )
-        .0
-    };
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    #[cfg(feature = "telemetry")]
-    let torii = Torii::new(
+    let torii = fixtures::ToriiHarness::new(
+        &cfg,
         iroha_data_model::ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
-        kiso,
-        cfg.torii.clone(),
-        queue,
+        &kura,
+        &state,
+        &queue,
+        &local_peer_id,
         tokio::sync::broadcast::channel(1).0,
-        LiveQueryStore::start_test(),
-        kura,
-        state,
-        da_receipt_signer.clone(),
-        iroha_torii::OnlinePeersProvider::new(peers_rx),
-        telemetry,
+        true,
         true,
     );
-    #[cfg(not(feature = "telemetry"))]
-    let torii = Torii::new(
-        iroha_data_model::ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
-        kiso,
-        cfg.torii.clone(),
-        queue,
-        tokio::sync::broadcast::channel(1).0,
-        LiveQueryStore::start_test(),
-        kura,
-        state,
-        da_receipt_signer,
-        iroha_torii::OnlinePeersProvider::new(peers_rx),
-    );
 
-    (torii.api_router_for_tests(), metrics)
+    (torii.router(), metrics)
 }
 
 fn account_segments() -> (String, String) {

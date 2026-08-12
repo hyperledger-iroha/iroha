@@ -2,7 +2,7 @@
 //! Tests for the Nexus public-lane REST endpoints.
 #![cfg(feature = "app_api")]
 
-use std::{collections::HashSet, net::SocketAddr, num::NonZeroU64, str::FromStr, sync::Arc};
+use std::{net::SocketAddr, num::NonZeroU64, str::FromStr, sync::Arc};
 
 use axum::{body::Body, http::Request};
 use http::{Method, StatusCode, header};
@@ -36,10 +36,9 @@ use iroha_data_model::{
     permission::Permission,
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
-use iroha_torii::Torii;
 use iroha_torii_shared::ErrorEnvelope;
 use norito::json::{self, Value};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::broadcast;
 use tower::ServiceExt as _;
 
 #[path = "fixtures.rs"]
@@ -82,28 +81,22 @@ async fn nexus_public_lane_endpoints_exist() {
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
 
-    let resp = router
-        .clone()
-        .oneshot(with_loopback_connect_info(
-            Request::builder()
-                .uri("/v1/nexus/public-lanes/0/validators")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        ))
-        .await
-        .unwrap();
+    let resp = fixtures::request(
+        &router,
+        with_loopback_connect_info(fixtures::get_request(
+            &("/v1/nexus/public-lanes/0/validators"),
+        )),
+    )
+    .await
+    .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let resp = router
-        .clone()
-        .oneshot(with_loopback_connect_info(
-            Request::builder()
-                .uri("/v1/nexus/public-lanes/0/stake")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        ))
-        .await
-        .unwrap();
+    let resp = fixtures::request(
+        &router,
+        with_loopback_connect_info(fixtures::get_request(&("/v1/nexus/public-lanes/0/stake"))),
+    )
+    .await
+    .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -118,16 +111,14 @@ async fn nexus_public_lane_endpoints_list_records() {
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
 
-    let resp = router
-        .clone()
-        .oneshot(with_loopback_connect_info(
-            Request::builder()
-                .uri("/v1/nexus/public-lanes/0/validators")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        ))
-        .await
-        .unwrap();
+    let resp = fixtures::request(
+        &router,
+        with_loopback_connect_info(fixtures::get_request(
+            &("/v1/nexus/public-lanes/0/validators"),
+        )),
+    )
+    .await
+    .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let json = read_json(resp.into_body()).await;
     assert_eq!(json["total"], Value::from(1));
@@ -140,31 +131,23 @@ async fn nexus_public_lane_endpoints_list_records() {
         Value::from("1250".to_string())
     );
 
-    let resp = router
-        .clone()
-        .oneshot(with_loopback_connect_info(
-            Request::builder()
-                .uri("/v1/nexus/public-lanes/0/stake")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        ))
-        .await
-        .unwrap();
+    let resp = fixtures::request(
+        &router,
+        with_loopback_connect_info(fixtures::get_request(&("/v1/nexus/public-lanes/0/stake"))),
+    )
+    .await
+    .unwrap();
     let shares = read_json(resp.into_body()).await;
     assert_eq!(shares["total"], Value::from(2));
 
-    let resp = router
-        .clone()
-        .oneshot(with_loopback_connect_info(
-            Request::builder()
-                .uri(format!(
-                    "/v1/nexus/public-lanes/0/stake?validator={validator}"
-                ))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        ))
-        .await
-        .unwrap();
+    let resp = fixtures::request(
+        &router,
+        with_loopback_connect_info(fixtures::get_request(
+            &(format!("/v1/nexus/public-lanes/0/stake?validator={validator}")),
+        )),
+    )
+    .await
+    .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
 
@@ -176,16 +159,14 @@ async fn nexus_public_lane_endpoints_reject_when_nexus_disabled() {
     let local_peer_id = PeerId::from(validator_keypair.public_key().clone());
     let router = build_test_router(Arc::new(state), &kura, local_peer_id);
 
-    let resp = router
-        .clone()
-        .oneshot(with_loopback_connect_info(
-            Request::builder()
-                .uri("/v1/nexus/public-lanes/0/validators")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        ))
-        .await
-        .unwrap();
+    let resp = fixtures::request(
+        &router,
+        with_loopback_connect_info(fixtures::get_request(
+            &("/v1/nexus/public-lanes/0/validators"),
+        )),
+    )
+    .await
+    .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
     let body = resp.into_body().collect().await.unwrap().to_bytes();
@@ -363,72 +344,22 @@ fn seed_public_lane_state(
 
 fn build_test_router(state: Arc<State>, kura: &Arc<Kura>, local_peer_id: PeerId) -> axum::Router {
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = iroha_core::kiso::KisoHandle::start(cfg.clone());
     let queue_cfg = Queue::default();
     let (events_tx, _events_rx) = broadcast::channel(1);
     let queue = Arc::new(iroha_core::queue::Queue::from_config(queue_cfg, events_tx));
-    let (_peers_tx, peers_rx) = watch::channel(HashSet::default());
-    #[cfg(not(feature = "telemetry"))]
-    let _ = local_peer_id;
-
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry;
-        use iroha_primitives::time::TimeSource;
-
-        let metrics = fixtures::shared_metrics();
-        let (_guard, mock_time) = TimeSource::new_mock(core::time::Duration::default());
-        telemetry::start(
-            metrics,
-            Arc::clone(&state),
-            Arc::clone(kura),
-            Arc::clone(&queue),
-            peers_rx.clone(),
-            local_peer_id,
-            mock_time,
-            false,
-        )
-        .0
-    };
-
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                Arc::clone(kura),
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                iroha_data_model::ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                Arc::clone(kura),
-                state,
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
-    torii.api_router_for_tests()
+    let torii = fixtures::ToriiHarness::new(
+        &cfg,
+        iroha_data_model::ChainId::from("test-chain"),
+        iroha_torii::test_utils::signed_query_network_id(),
+        kura,
+        &state,
+        &queue,
+        &local_peer_id,
+        broadcast::channel(1).0,
+        true,
+        false,
+    );
+    torii.router()
 }
 
 fn block_header(height: u64) -> BlockHeader {

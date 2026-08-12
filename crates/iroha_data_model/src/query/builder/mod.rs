@@ -1,9 +1,8 @@
 //! Contains common types and traits to facilitate building and sending queries,
 //! either from the client or from smart contracts.
 //!
-//! Constructed queries are ultimately converted into [`QueryBox`] trait objects
-//! (`Box<dyn Query + Send + Sync>`) so that they can be executed by any component
-//! expecting a type-erased query.
+//! Constructed iterable queries are encoded into [`QueryWithParams`], which
+//! carries the concrete query, predicate, selector, and pagination components.
 
 mod batch_downcast;
 mod iter;
@@ -14,8 +13,7 @@ pub use self::{batch_downcast::TypedBatchDowncastError, iter::QueryIterator};
 use derive_where::derive_where;
 
 use crate::query::{
-    Query, QueryBox, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryWithFilter,
-    QueryWithParams, SingularQueryBox, SingularQueryOutputBox,
+    Query, QueryOutputBatchBoxTuple, QueryWithParams, SingularQueryBox, SingularQueryOutputBox,
     builder::batch_downcast::HasTypedBatchIter,
     dsl::{
         BaseProjector, CompoundPredicate, HasProjection, HasPrototype, IntoSelectorTuple,
@@ -124,7 +122,7 @@ where
 
     /// Experimental: override the selector tuple directly.
     ///
-    /// Note: In the lightweight DSL, selectors are not evaluated; this method
+    /// Note: In the canonical DSL, selectors are not evaluated; this method
     /// simply forwards the tuple to the server. Once server-side projection is
     /// restored, the selector will take effect. The type parameter `T` remains
     /// `Q::Item` here; when projection starts returning tuples, callers should
@@ -235,50 +233,23 @@ where
         + 'static,
     E: QueryExecutor,
     E::Error: From<TypedBatchDowncastError>,
-    Q::Item: Send + Sync,
+    Q::Item: Send + Sync + crate::query::ItemKindTag,
     T: HasTypedBatchIter + HasProjection<PredicateMarker> + 'static,
-    QueryBox<QueryOutputBatchBox>: From<QueryWithFilter<Q::Item>>,
 {
     /// Execute the query, returning an iterator over its results.
     ///
     /// # Errors
     ///
     /// Returns an error if the query execution fails.
-    #[allow(clippy::too_many_lines, clippy::option_if_let_else)]
-    pub fn execute(self) -> Result<QueryIterator<E, T>, E::Error>
-    where
-        T: crate::query::ItemKindTag,
-    {
-        #[cfg(not(feature = "fast_dsl"))]
-        let boxed: QueryBox<QueryOutputBatchBox> = {
-            use crate::query::ErasedIterQuery;
-            // Preserve the concrete query bytes so the server can reconstruct
-            // variant-specific parameters and callers can inspect the original
-            // iterable query without maintaining a hand-written allowlist.
-            let payload: Vec<u8> = self.query.dyn_encode();
-            let erased = ErasedIterQuery::new(self.filter, self.selector, payload);
-            Box::new(erased)
-        };
-        #[cfg(feature = "fast_dsl")]
-        let item_kind = <T as crate::query::ItemKindTag>::kind();
-
-        // Capture encoded payload of the concrete query variant when possible, so that
-        // fast_dsl builds can reconstruct parameterized queries on the server side.
-        #[cfg(feature = "fast_dsl")]
+    pub fn execute(self) -> Result<QueryIterator<E, T>, E::Error> {
+        let item_kind = self.query.query_item_kind();
         let query_payload: Vec<u8> = self.query.dyn_encode();
 
         let query = QueryWithParams {
-            #[cfg(not(feature = "fast_dsl"))]
-            query: boxed,
-            #[cfg(feature = "fast_dsl")]
             query: (),
-            #[cfg(feature = "fast_dsl")]
             query_payload,
-            #[cfg(feature = "fast_dsl")]
             item: item_kind,
-            #[cfg(feature = "fast_dsl")]
             predicate_bytes: norito::codec::Encode::encode(&self.filter),
-            #[cfg(feature = "fast_dsl")]
             selector_bytes: norito::codec::Encode::encode(&self.selector),
             params: QueryParams {
                 pagination: self.pagination,
@@ -307,8 +278,8 @@ where
         + HasProjection<SelectorMarker, AtomType = ()>
         + norito::codec::Encode
         + 'static,
+    Q::Item: crate::query::ItemKindTag,
     T: HasTypedBatchIter + HasProjection<PredicateMarker> + 'static,
-    QueryBox<QueryOutputBatchBox>: From<QueryWithFilter<Q>>,
 {
     /// Execute the query, returning all the results collected into a vector.
     ///
@@ -342,9 +313,8 @@ where
         + HasProjection<SelectorMarker, AtomType = ()>
         + norito::codec::Encode
         + 'static,
-    Q::Item: Send + Sync,
-    T: HasTypedBatchIter + HasProjection<PredicateMarker> + 'static + crate::query::ItemKindTag,
-    QueryBox<QueryOutputBatchBox>: From<QueryWithFilter<Q::Item>>,
+    Q::Item: Send + Sync + crate::query::ItemKindTag,
+    T: HasTypedBatchIter + HasProjection<PredicateMarker> + 'static,
 {
     fn execute_all(self) -> Result<Vec<T>, E::Error> {
         self.execute()?.collect::<Result<Vec<_>, _>>()
@@ -384,4 +354,143 @@ where
 /// The prelude re-exports most commonly used traits, structs and macros from this crate.
 pub mod prelude {
     pub use super::QueryBuilderExt;
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::*;
+    use crate::{
+        domain::Domain,
+        query::{
+            QueryItemKind, QueryOutputBatchBox, SingularQueryBox, SingularQueryOutputBox,
+            domain::FindDomains,
+        },
+    };
+
+    #[derive(Default)]
+    struct RecordingExecutor {
+        query: RefCell<Option<QueryWithParams>>,
+    }
+
+    impl QueryExecutor for RecordingExecutor {
+        type Cursor = ();
+        type Error = TypedBatchDowncastError;
+
+        fn execute_singular_query(
+            &self,
+            _query: SingularQueryBox,
+        ) -> Result<SingularQueryOutputBox, Self::Error> {
+            unreachable!("iterable-query test executor received a singular query")
+        }
+
+        fn start_query(
+            &self,
+            query: QueryWithParams,
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
+            let batch = match query.item {
+                QueryItemKind::AssetEscrowsBySeller
+                | QueryItemKind::AssetEscrowsByBuyer
+                | QueryItemKind::AssetEscrowsByStatus => {
+                    QueryOutputBatchBox::AssetEscrowRecord(Vec::new())
+                }
+                _ => QueryOutputBatchBox::Domain(Vec::new()),
+            };
+            self.query.replace(Some(query));
+            Ok((QueryOutputBatchBoxTuple::from_batch(batch), Some(0), None))
+        }
+
+        fn continue_query(
+            (): Self::Cursor,
+        ) -> Result<(QueryOutputBatchBoxTuple, Option<u64>, Option<Self::Cursor>), Self::Error>
+        {
+            unreachable!("empty test result cannot have a continuation")
+        }
+    }
+
+    fn assert_domain_iterator(_: QueryIterator<RecordingExecutor, Domain>) {}
+
+    #[test]
+    fn selecting_a_full_tuple_keeps_item_type_and_query_discriminator() {
+        let executor = RecordingExecutor::default();
+        let builder = QueryBuilder::new(&executor, FindDomains)
+            .select_with(|_| SelectorTuple::<Domain>::default());
+        let iterator = builder.execute().expect("execute projected domain query");
+
+        assert_domain_iterator(iterator);
+        assert_eq!(
+            executor
+                .query
+                .borrow()
+                .as_ref()
+                .expect("recorded query")
+                .item,
+            QueryItemKind::Domain
+        );
+    }
+
+    #[test]
+    fn escrow_builders_emit_query_specific_discriminants() {
+        use iroha_crypto::KeyPair;
+
+        use crate::{
+            account::AccountId,
+            escrow::AssetEscrowStatus,
+            query::escrow::prelude::{
+                FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller, FindAssetEscrowsByStatus,
+            },
+        };
+
+        let account = AccountId::new(
+            KeyPair::try_random()
+                .expect("generate escrow query account")
+                .public_key()
+                .clone(),
+        );
+        let executor = RecordingExecutor::default();
+
+        let seller_results = QueryBuilder::new(
+            &executor,
+            FindAssetEscrowsBySeller {
+                seller: account.clone(),
+            },
+        )
+        .execute()
+        .expect("execute seller query builder");
+        assert_eq!(seller_results.count(), 0);
+        assert_eq!(
+            executor.query.borrow().as_ref().expect("seller query").item,
+            QueryItemKind::AssetEscrowsBySeller
+        );
+
+        let buyer_results = QueryBuilder::new(
+            &executor,
+            FindAssetEscrowsByBuyer {
+                buyer: account.clone(),
+            },
+        )
+        .execute()
+        .expect("execute buyer query builder");
+        assert_eq!(buyer_results.count(), 0);
+        assert_eq!(
+            executor.query.borrow().as_ref().expect("buyer query").item,
+            QueryItemKind::AssetEscrowsByBuyer
+        );
+
+        let status_results = QueryBuilder::new(
+            &executor,
+            FindAssetEscrowsByStatus {
+                status: AssetEscrowStatus::Open,
+            },
+        )
+        .execute()
+        .expect("execute status query builder");
+        assert_eq!(status_results.count(), 0);
+        assert_eq!(
+            executor.query.borrow().as_ref().expect("status query").item,
+            QueryItemKind::AssetEscrowsByStatus
+        );
+    }
 }

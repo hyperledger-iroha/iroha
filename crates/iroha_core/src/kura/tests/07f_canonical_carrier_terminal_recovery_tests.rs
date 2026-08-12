@@ -493,7 +493,7 @@ fn lifecycle_release_terminal_outcomes_are_exact_idempotent_and_ordered() {
             assert!(
                 kura.persist_autonomous_lifecycle_release_terminal_outcome_pending(
                     &retirement,
-                    Hash::new(b"wrong terminal-outcome chain"),
+                    test_network_id(b"wrong terminal-outcome chain"),
                     epoch,
                 )
                 .is_err()

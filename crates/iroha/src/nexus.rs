@@ -174,8 +174,7 @@ mod tests {
     use iroha_data_model::{
         block::{
             consensus::{
-                LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata,
-                LaneVolatilityClass,
+                LaneLiquidityProfile, LaneSettlementReceipt, LaneSwapMetadata, LaneVolatilityClass,
             },
             consensus_v2::finality::V2FinalityArtifact,
         },

@@ -20,8 +20,7 @@ use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use norito::{decode_from_bytes, json, to_bytes};
 
-mod common;
-use common::{fixture_update_requested, fixture_update_requested_from};
+use crate::common::{fixture_update_requested, fixture_update_requested_from};
 
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")

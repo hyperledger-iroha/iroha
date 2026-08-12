@@ -17,10 +17,9 @@ unexpected_cfgs = { level = "warn", check-cfg = [
 path = "src/lib.rs"
 
 [features]
-default = ["governance", "bridge", "fast_dsl"]
+default = ["governance", "bridge"]
 governance = []
 bridge = []
-fast_dsl = ["iroha_data_model/fast_dsl"]
 test-support = []
 
 [dependencies]

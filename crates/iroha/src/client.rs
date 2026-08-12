@@ -30457,7 +30457,6 @@ mod tests {
     #[test]
     fn get_sumeragi_status_prefers_norito_and_handles_json() {
         let status = sample_sumeragi_status();
-
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let client = client_with_base_url(base_url());
         let norito_body = norito::to_bytes(&status).expect("serialize status");
@@ -30480,7 +30479,6 @@ mod tests {
         assert_eq!(snapshot.method, HttpMethod::GET);
         assert_eq!(snapshot.url.path(), "/v1/sumeragi/status");
         assert_single_accept_header(&snapshot, ACCEPT_NORITO_PREFERRED);
-
         let json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let json_body =
             norito::json::to_vec(&status).expect("serialize sumeragi status to JSON payload");
@@ -30494,7 +30492,6 @@ mod tests {
         })
         .expect("json call succeeds");
         assert_eq!(decoded_json, status);
-
         for content_type in [
             None,
             Some("application/octet-stream"),
@@ -30532,7 +30529,6 @@ mod tests {
             .body(norito::json::to_vec(&value).expect("encode adversarial status JSON"))
             .unwrap();
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-
         let result = with_mock_http(respond_with(&snapshots, response), || {
             client.get_sumeragi_status()
         });
@@ -30542,7 +30538,6 @@ mod tests {
     #[test]
     fn get_sumeragi_status_rejects_structurally_impossible_norito_and_json() {
         let client = client_with_base_url(base_url());
-
         let mut wrong_protocol = sample_sumeragi_status();
         wrong_protocol.protocol_version += 1;
         let response = Response::builder()
@@ -30556,7 +30551,6 @@ mod tests {
         )
         .expect_err("wrong protocol must be rejected after Norito decode");
         assert!(error.to_string().contains("Invalid Sumeragi v2 status"));
-
         let mut impossible_phase = sample_sumeragi_status();
         impossible_phase.phase = SumeragiV2StatusPhase::PendingApply;
         impossible_phase.body_state = SumeragiV2BodyState::Applied;
@@ -30571,7 +30565,6 @@ mod tests {
         )
         .expect_err("inconsistent commit frontier must be rejected after JSON decode");
         assert!(error.to_string().contains("Invalid Sumeragi v2 status"));
-
         let response = Response::builder()
             .status(StatusCode::OK)
             .header("content-type", APPLICATION_JSON)
@@ -30595,7 +30588,6 @@ mod tests {
         status.last_committed_height = 42;
         let expected_json =
             norito::json::to_value(&status).expect("serialize exact Sumeragi v2 status");
-
         let json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let json_body =
             norito::json::to_vec(&status).expect("serialize sumeragi status endpoint JSON payload");
@@ -30616,7 +30608,6 @@ mod tests {
             .cloned()
             .expect("snapshot captured");
         assert_single_accept_header(&json_snapshot, APPLICATION_JSON);
-
         let rejected_json = norito::json::to_vec(&status).expect("serialize rejected status JSON");
         let rejected_responses = [
             (
@@ -30655,7 +30646,6 @@ mod tests {
             .body(body)
             .unwrap();
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-
         let decoded = with_mock_http(respond_with(&snapshots, response), || {
             client.get_sumeragi_diagnostics()
         })
@@ -30679,7 +30669,6 @@ mod tests {
             .body(body)
             .unwrap();
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-
         let result = with_mock_http(respond_with(&snapshots, response), || {
             client.get_sumeragi_diagnostics()
         });

@@ -55,7 +55,7 @@ dev-tools = []
 # `iroha_test_network` daemon. The default/node feature graph never enables
 # these hooks.
 test-network-native-amx-fault-injection = ["json"]
-runtime = ["json", "bls", "fast_dsl", "proofs-halo2"]
+runtime = ["json", "bls", "proofs-halo2"]
 node = ["runtime", "proofs-stark"]
 proofs-halo2 = ["zk-halo2", "zk-halo2-ipa", "zk-ipa-native", "circuit-params"]
 proofs-stark = ["zk-stark"]
@@ -91,8 +91,6 @@ fastpq-gpu = ["fastpq_prover/fastpq-gpu"]
 bench = []
 # Enable IDs-only query projections
 ids_projection = ["iroha_data_model/ids_projection"]
-# Enable fast DSL payload support when encoding iterable queries.
-fast_dsl = ["iroha_data_model/fast_dsl"]
 # Enable deterministic mock verifier for Kaigi privacy-mode tests.
 kaigi_privacy_mocks = []
 # ZK verifier feature flags ship enabled by default.

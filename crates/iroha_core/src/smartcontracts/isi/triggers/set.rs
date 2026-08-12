@@ -2006,8 +2006,8 @@ mod tests {
         let authority = sample_authority();
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             7,
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,

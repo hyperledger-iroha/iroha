@@ -76,11 +76,9 @@
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_runner.rs",
-            "    for _ in 0..limit.max(1) {\n"
-            "        match executor.step(Instant::now(), services)? {",
-            "    loop {\n"
-            "        match executor.step(Instant::now(), services)? {",
-            "ordinary serialized runtime service must be a finite configured turn",
+            "OuterIngressTurn::Runtime => OuterIngressTurn::Ingress,",
+            "OuterIngressTurn::Runtime => OuterIngressTurn::Completion,",
+            "ordinary ingress must alternate finite Completion, Runtime, and Ingress turns",
         ),
         (
             "crates/iroha_core/src/sumeragi/v2_worker.rs",
@@ -111,7 +109,6 @@ def test_local_runner_service_contract_rejects_production_loop_mutations(
     )
 
     assert any(expected_error in error for error in errors), errors
-
 
 @pytest.mark.parametrize(
     ("old", "new"),
@@ -1549,8 +1546,8 @@ def test_core_next_must_expose_exact_commit_certificate_import_arm(
         ),
         (
             "HistoricalRecoverySourceReady",
-            "       NodeHasApplication(server)",
-            "       TRUE",
+            "  /\\ (AsyncResponsiveAppliedArchiveServers \\ {node}) # {}",
+            "  /\\ TRUE",
             "HistoricalRecoverySourceReady must equal only",
         ),
         (
@@ -1606,19 +1603,19 @@ def test_core_next_must_expose_exact_commit_certificate_import_arm(
             "AsyncSchedulerTypeInvariant",
             "  /\\ AsyncHistoricalRecoveryTypeInvariant\n",
             "",
-            "AsyncSchedulerTypeInvariant omits required production behavior",
+            "AsyncSchedulerTypeInvariant must equal only",
         ),
         (
             "AsyncSchedulerVars",
-            "    asyncIngressLanes, asyncIngressReady, asyncHeldChunks,\n"
-            "    asyncHistoricalRecoveryTargets>>",
-            "    asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>",
+            "    asyncHeldChunks,\n"
+            "    asyncHistoricalRecoveryTargets,\n",
+            "    asyncHeldChunks,\n",
             "AsyncSchedulerVars omits required production behavior",
         ),
         (
             "AsyncSchedulerExceptHistoricalRecoveryTargets",
-            "    asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>",
-            "    asyncIngressLanes, asyncIngressReady>>",
+            "    asyncIngressLanes, asyncIngressReady, asyncLeaderWireLifecycles,\n",
+            "    asyncIngressLanes, asyncIngressReady,\n",
             "historical recovery ownership must be one exact AsyncSchedulerVars component",
         ),
         (
@@ -1693,21 +1690,21 @@ def test_core_next_must_expose_exact_commit_certificate_import_arm(
         ),
         (
             "AsyncTickEnabled",
-            "                       \\cup asyncHistoricalRecoveryTargets:\n",
-            ":\n",
+            "     /\\ \\A node \\in AsyncTimedServiceNodes:\n",
+            "     /\\ \\A node \\in AsyncCurrentResponsiveVoters:\n",
             "AsyncTickEnabled omits required production behavior",
         ),
         (
             "HistoricalRecoveryPacketCorridor",
             "  \\/ /\\ HistoricalRecoveryTarget(source)\n"
-            "        /\\ recipient \\in AsyncCurrentResponsiveVoters",
+            "        /\\ recipient \\in AsyncArchiveIoServiceNodes",
             "",
             "HistoricalRecoveryPacketCorridor must equal only",
         ),
         (
             "CommitCertificateResponseAuthorized",
-            "  /\\ item.source \\in CurrentVoters\n",
-            "",
+            "  /\\ item.source = item.envelope.request.envelope.recipient\n",
+            "  /\\ item.source = AsyncUntrustedSource\n",
             "CommitCertificateResponseAuthorized must equal only",
         ),
         (
@@ -1735,27 +1732,27 @@ def test_core_next_must_expose_exact_commit_certificate_import_arm(
             "CommitCertificateResponseAuthorized must equal only",
         ),
         (
-            "DrainFairIngressSelected",
-            "              /\\ item \\in asyncSentItems\n",
+            "AsyncFairIngressCoreStateTransition",
+            "        /\\ item \\in asyncSentItems\n",
             "",
             "must import only an authorized, sent, not-yet-present Commit-certificate",
         ),
         (
-            "DrainFairIngressSelected",
-            "              /\\ CommitCertificateResponseAuthorized(item)\n",
+            "AsyncFairIngressCoreStateTransition",
+            "        /\\ CommitCertificateResponseAuthorized(item)\n",
             "",
             "must import only an authorized, sent, not-yet-present Commit-certificate",
         ),
         (
-            "DrainFairIngressSelected",
-            "              /\\ item.envelope \\notin qcNetwork\n",
+            "AsyncFairIngressCoreStateTransition",
+            "        /\\ DiscoveredCommitQcItem(item).envelope \\notin qcNetwork\n",
             "",
             "must import only an authorized, sent, not-yet-present Commit-certificate",
         ),
         (
-            "DrainFairIngressSelected",
-            "        THEN ImportAuthenticatedCommitCertificate(item.envelope)\n",
-            "        THEN UNCHANGED vars\n",
+            "AsyncFairIngressCoreStateTransition",
+            "  THEN ImportAuthenticatedCommitCertificate(\n         DiscoveredCommitQcItem(item).envelope)\n",
+            "  THEN UNCHANGED vars\n",
             "must import only an authorized, sent, not-yet-present Commit-certificate",
         ),
         (
@@ -1822,8 +1819,8 @@ def test_core_next_must_expose_exact_commit_certificate_import_arm(
         ),
         (
             "BusyCompletionWitnessInvariant",
-            "      BusyCompletionCandidates(node) # {}",
-            "      BusyCompletionCandidates(node) \\cap AsyncCandidateSet # {}",
+            "      \\/ BusyCompletionCandidates(node) # {}",
+            "      \\/ BusyCompletionCandidates(node) \\cap AsyncCandidateSet # {}",
             "BusyCompletionWitnessInvariant omits required production behavior",
         ),
     ),
@@ -1851,6 +1848,31 @@ def test_async_historical_recovery_and_busy_carrier_mutations_fail_closed(
     errors = module._async_source_fidelity_errors(formal_dir)
 
     assert any(expected_error in error for error in errors), errors
+    if symbol == "CommitCertificateResponseAuthorized" and "request.envelope.recipient" in old:
+        for related_symbol, related_old, related_new in (
+            (
+                "AsyncItemTyped",
+                "            /\\ item.source =\n"
+                "                 item.envelope.request.envelope.recipient\n",
+                "            /\\ item.source = AsyncUntrustedSource\n",
+            ),
+            (
+                "AsyncCommitImportResponseEvidence",
+                "  /\\ candidate.evidence.source =\n"
+                "       candidate.evidence.envelope.request.envelope.recipient\n",
+                "  /\\ candidate.evidence.source = AsyncUntrustedSource\n",
+            ),
+        ):
+            path.write_text(
+                mutate_tla_operator(source, related_symbol, related_old, related_new),
+                encoding="utf-8",
+            )
+            related_errors = module._async_source_fidelity_errors(formal_dir)
+            assert any(
+                f"{related_symbol} must equal only" in error
+                or f"{related_symbol} omits required production behavior" in error
+                for error in related_errors
+            ), related_errors
 
 
 @pytest.mark.parametrize(

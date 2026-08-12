@@ -37,7 +37,7 @@ type ApplyNativeReceiptBuilder =
     fn(
         &ApplyFixture,
         &wire::HeightContext,
-        Hash,
+        iroha_data_model::NetworkId,
         &LaneBlockProposalV1,
         &[TransactionEntrypoint],
         &[crate::queue::LaneQueueReservationKeyV2],

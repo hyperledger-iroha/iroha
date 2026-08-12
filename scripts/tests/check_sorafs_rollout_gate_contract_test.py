@@ -255,7 +255,14 @@ TORII_SHARED_SORAFS_HEDGING_BILLING_API_RS = (
     / "src"
     / "sorafs_hedging_billing_api.rs"
 )
-TORII_OPENAPI_RS = REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs"
+# Route/schema contract checks use the package-local runtime authority. Keep the
+# Rust source separate so source-policy scans still cover the static loader.
+TORII_OPENAPI_SOURCE_RS = (
+    REPO_ROOT / "crates" / "iroha_torii" / "src" / "openapi.rs"
+)
+TORII_OPENAPI_RS = (
+    REPO_ROOT / "crates" / "iroha_torii" / "assets" / "openapi" / "torii.json"
+)
 TORII_ROUTE_CATALOG_RS = (
     REPO_ROOT / "crates" / "iroha_torii_shared" / "src" / "route_catalog.rs"
 )
@@ -522,7 +529,7 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
     REPO_ROOT / "crates" / "irohad" / "src" / "runtime_provider_registry.rs",
     IROHA_CLI_SORAFS_RS,
     SORAFS_CLI_RS,
-    TORII_OPENAPI_RS,
+    TORII_OPENAPI_SOURCE_RS,
     REPO_ROOT / "crates" / "iroha_torii" / "src" / "app_api.rs",
     REPO_ROOT / "crates" / "iroha_torii" / "src" / "lib.rs",
     REPO_ROOT / "crates" / "iroha_torii" / "src" / "mcp.rs",
@@ -14614,9 +14621,7 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
         if matched_unsupported:
             unsupported[str(path.relative_to(REPO_ROOT))] = matched_unsupported
 
-    missing_openapi = [
-        route for route in required_routes if f'"{route}".to_owned()' not in openapi
-    ]
+    missing_openapi = [route for route in required_routes if f'"{route}"' not in openapi]
 
     assert missing_routes == {}
     assert stale == {}
@@ -14626,7 +14631,7 @@ def test_sorafs_node_plan_docs_track_current_storage_routes() -> None:
         'const TELEMETRY_ENDPOINT_POR_SAMPLE: &str = "/v1/sorafs/storage/por-sample";'
         not in torii_sorafs_api
     )
-    assert '"/v1/sorafs/storage/por-sample".to_owned()' not in openapi
+    assert '"/v1/sorafs/storage/por-sample"' not in openapi
     assert '"/v1/sorafs/storage/por/sample"' not in torii_sorafs_api
 
 
@@ -14654,7 +14659,7 @@ def test_public_storage_ingest_surface_cannot_be_resurrected() -> None:
         read(REPO_ROOT / "crates/iroha_torii/src/contract_sources.rs"),
     )
 
-    assert f'"{retired_path}".to_owned()' not in openapi
+    assert f'"{retired_path}"' not in openapi
     assert "capacity_post!(sorafs::STORAGE_PIN" not in torii_lib
     assert "pub const STORAGE_PIN: RouteDescriptor" not in route_catalog
     assert "handle_post_sorafs_storage_pin" not in torii_api
@@ -14794,9 +14799,7 @@ def test_sorafs_node_storage_docs_track_current_readback_routes() -> None:
         if matched_stale:
             stale[str(path.relative_to(REPO_ROOT))] = matched_stale
 
-    missing_openapi = [
-        route for route in required_routes if f'"{route}".to_owned()' not in openapi
-    ]
+    missing_openapi = [route for route in required_routes if f'"{route}"' not in openapi]
 
     assert missing_routes == {}
     assert stale == {}
@@ -15540,12 +15543,21 @@ def pop_credentials_production_surface_errors(
     errors: list[str] = []
     expected_routes = [route for _, route, _, _ in SHIPPED_POP_CREDENTIALS_ROUTES]
     catalog_routes = re.findall(r'"(/v1/sorafs/pop/[^"]+)"', route_catalog)
-    openapi_routes = re.findall(r'"(/v1/sorafs/pop/[^"]+)"', openapi)
+    try:
+        openapi_paths = json.loads(openapi)["paths"]
+    except (KeyError, TypeError, json.JSONDecodeError):
+        errors.append("OpenAPI authority is not a JSON document with paths")
+        openapi_paths = {}
+    openapi_routes = [
+        route for route in openapi_paths if route.startswith("/v1/sorafs/pop/")
+    ]
 
     if catalog_routes != expected_routes:
         errors.append("route catalog does not contain the exact ordered PoP V1 inventory")
-    if openapi_routes != expected_routes:
-        errors.append("OpenAPI does not contain the exact ordered PoP V1 inventory")
+    if len(openapi_routes) != len(expected_routes) or set(openapi_routes) != set(
+        expected_routes
+    ):
+        errors.append("OpenAPI does not contain the exact PoP V1 inventory")
 
     for descriptor, route, _, _ in SHIPPED_POP_CREDENTIALS_ROUTES:
         descriptor_matches = re.findall(
@@ -15592,14 +15604,19 @@ def pop_credentials_production_surface_errors(
                 f"{handler} must have exactly one crate-visible async handler"
             )
 
-    required_openapi_markers = (
-        "pop_authorization_header_parameters(),",
-        '"Sora-PoP-Authorization"',
-        "PopV1 <base64url-no-pad>",
-    )
-    for marker in required_openapi_markers:
-        if marker not in openapi:
-            errors.append(f"OpenAPI is missing {marker}")
+    for route in expected_routes:
+        operation = openapi_paths.get(route, {}).get("post", {})
+        authorization_headers = [
+            parameter
+            for parameter in operation.get("parameters", [])
+            if parameter.get("name") == "Sora-PoP-Authorization"
+            and parameter.get("in") == "header"
+            and parameter.get("required") is True
+            and parameter.get("schema") == {"type": "string"}
+            and "PopV1 <base64url-no-pad>" in parameter.get("description", "")
+        ]
+        if len(authorization_headers) != 1:
+            errors.append(f"OpenAPI {route} is missing its exact PoP authorization header")
 
     required_config_markers = (
         (config_defaults, "pub mod pop_credentials {"),
@@ -15702,8 +15719,8 @@ def test_pop_credentials_production_surface_matcher_has_negative_controls() -> N
     )
     assert validate(
         spec=openapi.replace(
-            '"/v1/sorafs/pop/verify",',
-            '"/v1/sorafs/pop/verify-extra",',
+            '"/v1/sorafs/pop/verify": {',
+            '"/v1/sorafs/pop/verify-extra": {',
             1,
         )
     )
@@ -18883,10 +18900,9 @@ def test_retired_por_mutation_surface_is_absent_from_production_sources_and_docs
             rf"\.route\(\s*\"{re.escape(route)}\"",
             torii_router,
         ), f"retired PoR route is still registered: {route}"
-        assert not re.search(
-            rf"paths\.insert\(\s*\"{re.escape(route)}\"\.to_owned\(\)",
-            openapi,
-        ), f"retired PoR route is still in OpenAPI: {route}"
+        assert route not in json.loads(openapi)["paths"], (
+            f"retired PoR route is still in OpenAPI: {route}"
+        )
 
     for path in (*production_paths, *documentation_paths):
         source = read(path)
@@ -23352,7 +23368,7 @@ def test_production_evidence_viewer_service_surface_is_exposed_once() -> None:
     for route in retired_viewer_routes:
         assert route not in catalog
         assert route not in torii
-        assert f'paths.insert(\n        "{route}".to_owned(),' not in openapi
+        assert route not in json.loads(openapi)["paths"]
 
     authenticated_appeal_finance_publication_routes = (
         "/v1/sorafs/appeals/finance/reports",
@@ -23604,27 +23620,13 @@ def test_commit_reveal_torii_no_show_plan_readback_regressions_are_pinned() -> N
     assert authority_end >= 0
     authority = orchestrator[authority_start:authority_end]
 
-    no_show_openapi_start = openapi.find(
-        '"/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan".to_owned()'
-    )
-    assert no_show_openapi_start >= 0
-    no_show_openapi_end = openapi.find(
-        '"/v1/sorafs/moderation/ballots/commits".to_owned()',
-        no_show_openapi_start,
-    )
-    assert no_show_openapi_end >= 0
-    no_show_openapi = openapi[no_show_openapi_start:no_show_openapi_end]
-    events_openapi_start = openapi.find(
-        '"/v1/sorafs/moderation/ballots/events".to_owned()'
-    )
-    assert events_openapi_start >= 0
-    events_openapi_end = openapi.find(
-        '"/v1/sorafs/moderation/model-registry".to_owned()',
-        events_openapi_start,
-    )
-    assert events_openapi_end >= 0
-    events_openapi = openapi[events_openapi_start:events_openapi_end]
     route = "/v1/sorafs/moderation/ballots/{case_id}/{round_id}/no-show-plan"
+    openapi_paths = json.loads(openapi)["paths"]
+    no_show_openapi = json.dumps(openapi_paths[route]["get"], sort_keys=True)
+    events_openapi = json.dumps(
+        openapi_paths["/v1/sorafs/moderation/ballots/events"]["get"],
+        sort_keys=True,
+    )
 
     handler_requirements = (
         "cached_moderation_snapshot(&state)",
@@ -23724,7 +23726,7 @@ def test_commit_reveal_torii_no_show_plan_readback_regressions_are_pinned() -> N
         "SORAFS_MODERATION_BALLOTS_BY_CASE_ID_BY_ROUND_ID_NO_SHOW_PLAN_GET"
         in router
     )
-    assert f'"{route}".to_owned()' in openapi
+    assert route in openapi_paths
     assert [item for item in handler_requirements if item not in handler] == []
     assert [item for item in retired_local_requirements if item in handler] == []
     assert [item for item in cache_reader_requirements if item not in cache_reader] == []
@@ -26557,13 +26559,12 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     plan = re.sub(r"\s+", " ", read(SORAFS_RELEASE_PIPELINE_PLAN))
     roadmap_source = re.sub(r"\s+", " ", read(REPO_ROOT / "roadmap.md"))
     checker = read(SCRIPTS_DIR / "check_sorafs_production_readiness.py")
-    archive_path_components = read(SCRIPTS_DIR / "sorafs_archive_path_components.py")
     runner = read(SCRIPTS_DIR / "run_sorafs_production_readiness.py")
     helper = read(SCRIPTS_DIR / "sorafs_runner_preflight.py")
+    inventory_helper = read(SCRIPTS_DIR / "sorafs_l1_lane_inventory_integration.py")
+    archive_path_helper = read(SCRIPTS_DIR / "sorafs_archive_path_components.py")
     direct_example = read(EXAMPLES_DIR / "sorafs_production_readiness.args.example")
-    runner_example = read(
-        EXAMPLES_DIR / "sorafs_production_readiness_collection.args.example"
-    )
+    runner_example = read(EXAMPLES_DIR / "sorafs_production_readiness_collection.args.example")
 
     required_markers = (
         "`scripts/check_sorafs_production_readiness.py` is the final aggregate SoraFS promotion gate",
@@ -26928,7 +26929,7 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "test_artifact_generated_at_shape_fails_closed_from_config" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
-    assert "test_artifact_fingerprint_metadata_must_be_payload_free" in read(
+    assert "test_artifact_fingerprint_shape_fails_closed_from_config" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "AGGREGATE_REQUIRED_GATE_ROW_FIELDS" in checker
@@ -26996,8 +26997,8 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "aggregate invalid row {threshold_error}" in checker
     assert "deterministic missing summary diagnostic" in checker
     assert "validate_duplicate_summary_diagnostics" in checker
-    assert "deterministic duplicate summary diagnostic exactly once" in checker
-    assert "duplicate-summary diagnostics must match duplicate summary inputs" in checker
+    assert "deterministic duplicate summary diagnostic exactly once" in inventory_helper
+    assert "duplicate-summary diagnostics must match duplicate summary inputs" in inventory_helper
     assert "test_missing_required_summary_rows_fail_closed_from_config" in read(
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
@@ -27005,8 +27006,8 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
         SCRIPTS_DIR / "tests" / "check_sorafs_production_readiness_test.py"
     )
     assert "validate_disallowed_summary_diagnostics" in checker
-    assert "unknown-schema diagnostics must match discovered unknown summaries" in checker
-    assert "unrequired-gate diagnostics must match explicit unrequired summaries" in checker
+    assert "unknown-schema diagnostics must match discovered unknown summaries" in inventory_helper
+    assert "unrequired-gate diagnostics must match explicit unrequired summaries" in inventory_helper
     assert "validate_aggregate_summary_output" in checker
     assert (
         "from sorafs_path_identity import diagnostic_text_is_canonical, resolve_path_identity"
@@ -27246,8 +27247,8 @@ def test_sorafs_production_readiness_aggregate_gate_is_documented() -> None:
     assert "aggregate_summary_path_label(path, evidence_dirs)" in checker
     assert "path.startswith((\"/\", \"\\\\\"))" in checker
     assert "decoded_text_variants" in checker
-    assert "from html import unescape" in archive_path_components
-    assert "unescape(unquote(current))" in archive_path_components
+    assert "from html import unescape" in archive_path_helper
+    assert "unescape(unquote(current))" in archive_path_helper
     assert "encoded, URI-scheme-like" in checker
     assert "or secret-looking segments" in checker
     assert "aggregate row path must be archive-relative without" in checker

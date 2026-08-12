@@ -173,7 +173,7 @@ use iroha_data_model::{
         Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, TransactionPayload,
         TransactionSubmissionReceipt,
         executable::{ContractArgumentRecord, ContractInvocation},
-        signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
+        signed::{SignedTransaction, TransactionBuilder},
     },
     trigger::{
         Trigger, TriggerId,
@@ -208,8 +208,7 @@ use napi::{
 use napi_derive::napi;
 use norito::{
     codec::{DecodeAll, Encode},
-    core::{self as norito_core, DecodeFromSlice},
-    decode_from_bytes,
+    core as norito_core, decode_from_bytes,
     json::{self, Map, Value},
 };
 use rand_core_06::OsRng;
@@ -19440,13 +19439,9 @@ seiyaku Privacy {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let network_id = test_network_id(b"mixed-batch-network");
-        let contract_address = ContractAddress::derive(
-            &network_id,
-            &authority,
-            9,
-            DataSpaceId::UNIVERSAL,
-        )
-        .expect("contract address");
+        let contract_address =
+            ContractAddress::derive(&network_id, &authority, 9, DataSpaceId::UNIVERSAL)
+                .expect("contract address");
         let expected_code_hash = Hash::new(b"js-host-mixed-batch-code");
         let instruction: InstructionBox = Register::<Domain>::domain(Domain::new(
             DomainId::try_new("mixed-batch", "universal").expect("domain id"),

@@ -138,7 +138,7 @@ POST_DECISION_TIMEOUT_MUTATION_SHA256 = {
         "a045606b2b34d755ab9e5fff0b486562a2193a2085ef24dc7252a55bfb2d9e3d"
     ),
     POST_DECISION_TIMEOUT_MUTATION_RUNNER: (
-        "9e8a9f07e50230929712a84d01abf4a75f134727a254a0fd21b57e19c93a4e8b"
+        "ff5d34f872f1250f98e11945781cc2cc25d17c3870d7fb415d0636dab7a76c1b"
     ),
 }
 
@@ -184,7 +184,7 @@ CERTIFIED_RESPONSE_REGISTRATION_SHA256 = {
         "bd71a1ba2684f95127d4244eb9b45ab63f1c982374c4b258318368f8611df0fe"
     ),
     CERTIFIED_RESPONSE_REGISTRATION_RUNNER: (
-        "166fbeb948d2e05015c6deed7c4d45e512bf9f29b8825f5feccb7608c0ef2eae"
+        "97f30ef35ce90e5a67193da0cdbdcc13c3de2f1c2535fd50ecdd081a697313a5"
     ),
 }
 
@@ -662,8 +662,8 @@ if self.owned_preflight_is_coalesced(tag, &command, preflight, ownership)? {
 let mut tagged = match preflight {
     RuntimeCommandAdmissionPreflight::Admit => TaggedCommand::with_causal_origin(
 """,
-        "owned preflight must coalesce or select exact dormant reuse before "
-        "tagged owner construction",
+        "owned preflight must validate coalescence or select exact dormant "
+        "reuse before tagged owner construction",
         errors,
     )
 

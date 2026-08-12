@@ -99,7 +99,11 @@ fn lifecycle_kura_config(dir: &TempDir) -> KuraConfig {
 fn lifecycle_payload(
     signer: &KeyPair,
     lane_incarnation: Hash,
-) -> (Hash, u64, crate::lane_consensus::LaneExecutablePayloadV1) {
+) -> (
+    iroha_data_model::NetworkId,
+    u64,
+    crate::lane_consensus::LaneExecutablePayloadV1,
+) {
     let context = lifecycle_context(signer);
     lifecycle_payload_for_validators(
         signer,
@@ -114,7 +118,11 @@ fn lifecycle_payload_for_validators(
     context: &wire::HeightContext,
     validator_set: Vec<PeerId>,
     lane_incarnation: Hash,
-) -> (Hash, u64, crate::lane_consensus::LaneExecutablePayloadV1) {
+) -> (
+    iroha_data_model::NetworkId,
+    u64,
+    crate::lane_consensus::LaneExecutablePayloadV1,
+) {
     lifecycle_payload_for_validators_with_count(
         producer_signer,
         context,
@@ -130,7 +138,11 @@ fn lifecycle_payload_for_validators_with_count(
     mut validator_set: Vec<PeerId>,
     lane_incarnation: Hash,
     transaction_count: usize,
-) -> (Hash, u64, crate::lane_consensus::LaneExecutablePayloadV1) {
+) -> (
+    iroha_data_model::NetworkId,
+    u64,
+    crate::lane_consensus::LaneExecutablePayloadV1,
+) {
     assert!((1..=4).contains(&transaction_count));
     validator_set.sort();
     validator_set.dedup();

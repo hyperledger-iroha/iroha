@@ -16,12 +16,7 @@ use axum::http::{
     HeaderValue, Method, Request, StatusCode,
     header::{ACCEPT, CONTENT_TYPE},
 };
-use http_body_util::BodyExt as _;
-use iroha_core::{
-    kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
-};
-use iroha_data_model::{ChainId, peer::PeerId};
-use tower::ServiceExt as _;
+use iroha_core::prelude::World;
 
 #[path = "fixtures.rs"]
 mod fixtures;
@@ -55,100 +50,28 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = mk_minimal_root_cfg();
     cfg.torii.max_content_len = OFFLINE_COMMAND_BODY_LIMIT.into();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
-    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
-    let queue = Arc::new(iroha_core::queue::Queue::from_config(
-        iroha_config::parameters::actual::Queue::default(),
-        events_sender,
-    ));
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
-    let da_receipt_signer = cfg.common.key_pair.clone();
+    let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
 
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            use iroha_core::telemetry as core_telemetry;
-            use iroha_primitives::time::TimeSource;
+    let app = torii.router();
 
-            let metrics = fixtures::shared_metrics();
-            let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
-            let telemetry = core_telemetry::start(
-                metrics,
-                state.clone(),
-                kura.clone(),
-                queue.clone(),
-                peers_rx.clone(),
-                local_peer_id,
-                ts,
-                false,
-            )
-            .0;
-            iroha_torii::Torii::new(
-                ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            iroha_torii::Torii::new(
-                ChainId::from("test-chain"),
-                iroha_torii::test_utils::signed_query_network_id(),
-                kiso,
-                cfg.torii.clone(),
-                queue,
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state,
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
-
-    let app = torii.api_router_for_tests();
-
-    let readiness = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/offline/readiness")
-                .header(ACCEPT, "application/json")
-                .extension(connect_info())
-                .body(axum::body::Body::empty())
-                .expect("readiness request"),
-        )
-        .await
-        .expect("readiness response");
+    let readiness = fixtures::request(
+        &app,
+        Request::builder()
+            .uri("/v1/offline/readiness")
+            .header(ACCEPT, "application/json")
+            .extension(connect_info())
+            .body(axum::body::Body::empty())
+            .expect("readiness request"),
+    )
+    .await
+    .expect("readiness response");
     assert_eq!(readiness.status(), StatusCode::OK);
     assert_eq!(
         readiness.headers().get(CONTENT_TYPE),
         Some(&HeaderValue::from_static("application/json; charset=utf-8"))
     );
-    let readiness_body = readiness
-        .into_body()
-        .collect()
-        .await
-        .expect("collect universal offline capability")
-        .to_bytes();
+    let readiness_body =
+        fixtures::response_body(readiness, "collect universal offline capability").await;
     let capability: iroha_torii_shared::offline_api::OfflineStatus =
         norito::json::from_slice(&readiness_body).expect("decode universal offline capability");
     assert!(!capability.mandatory);
@@ -159,25 +82,23 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
     assert!(capability.assets.is_empty());
     assert!(capability.blockers.is_empty());
 
-    let legacy_selector = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/offline/readiness?asset_definition_id=xor%23wonderland")
-                .header(ACCEPT, "application/json")
-                .extension(connect_info())
-                .body(axum::body::Body::empty())
-                .expect("readiness request"),
-        )
-        .await
-        .expect("legacy selector response");
+    let legacy_selector = fixtures::request(
+        &app,
+        Request::builder()
+            .uri("/v1/offline/readiness?asset_definition_id=xor%23wonderland")
+            .header(ACCEPT, "application/json")
+            .extension(connect_info())
+            .body(axum::body::Body::empty())
+            .expect("readiness request"),
+    )
+    .await
+    .expect("legacy selector response");
     assert_eq!(legacy_selector.status(), StatusCode::OK);
-    let legacy_selector_body = legacy_selector
-        .into_body()
-        .collect()
-        .await
-        .expect("collect selector-neutral offline capability")
-        .to_bytes();
+    let legacy_selector_body = fixtures::response_body(
+        legacy_selector,
+        "collect selector-neutral offline capability",
+    )
+    .await;
     let legacy_selector_capability: iroha_torii_shared::offline_api::OfflineStatus =
         norito::json::from_slice(&legacy_selector_body)
             .expect("decode selector-neutral offline capability");
@@ -241,9 +162,7 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                 }
             }
 
-            let response = app
-                .clone()
-                .oneshot(request)
+            let response = fixtures::request(&app, request)
                 .await
                 .expect("pre-body admission response");
             assert_eq!(response.status(), expected_status, "path={path}");
@@ -252,39 +171,29 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                 0,
                 "body stream was polled before rejecting headers for path={path}"
             );
-            let body = response
-                .into_body()
-                .collect()
-                .await
-                .expect("collect pre-body admission response")
-                .to_bytes();
+            let body =
+                fixtures::response_body(response, "collect pre-body admission response").await;
             let error: iroha_torii_shared::ErrorEnvelope =
                 norito::json::from_slice(&body).expect("decode pre-body admission error");
             assert_eq!(error.code(), expected_code, "path={path}");
         }
 
-        let json = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(path)
-                    .header(CONTENT_TYPE, "application/json")
-                    .header(ACCEPT, "application/json")
-                    .header("idempotency-key", "11".repeat(32))
-                    .extension(connect_info())
-                    .body(axum::body::Body::from("{}"))
-                    .expect("typed JSON request"),
-            )
-            .await
-            .expect("typed JSON response");
+        let json = fixtures::request(
+            &app,
+            Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(CONTENT_TYPE, "application/json")
+                .header(ACCEPT, "application/json")
+                .header("idempotency-key", "11".repeat(32))
+                .extension(connect_info())
+                .body(axum::body::Body::from("{}"))
+                .expect("typed JSON request"),
+        )
+        .await
+        .expect("typed JSON response");
         assert_eq!(json.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
-        let body = json
-            .into_body()
-            .collect()
-            .await
-            .expect("collect JSON media rejection")
-            .to_bytes();
+        let body = fixtures::response_body(json, "collect JSON media rejection").await;
         let error: iroha_torii_shared::ErrorEnvelope =
             norito::json::from_slice(&body).expect("decode JSON media rejection");
         assert_eq!(
@@ -293,39 +202,37 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             "path={path}"
         );
 
-        let norito = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(path)
-                    .header(CONTENT_TYPE, "application/x-norito")
-                    .header(ACCEPT, "application/x-norito")
-                    .header("idempotency-key", "11".repeat(32))
-                    .extension(connect_info())
-                    .body(axum::body::Body::from("not-a-norito-archive"))
-                    .expect("typed Norito request"),
-            )
-            .await
-            .expect("typed Norito response");
+        let norito = fixtures::request(
+            &app,
+            Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(CONTENT_TYPE, "application/x-norito")
+                .header(ACCEPT, "application/x-norito")
+                .header("idempotency-key", "11".repeat(32))
+                .extension(connect_info())
+                .body(axum::body::Body::from("not-a-norito-archive"))
+                .expect("typed Norito request"),
+        )
+        .await
+        .expect("typed Norito response");
         assert_eq!(
             norito.status(),
             StatusCode::BAD_REQUEST,
             "{path} must decode a direct typed Norito archive"
         );
 
-        let missing_content_type = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(path)
-                    .extension(connect_info())
-                    .body(axum::body::Body::from("{}"))
-                    .expect("request without content type"),
-            )
-            .await
-            .expect("missing content type response");
+        let missing_content_type = fixtures::request(
+            &app,
+            Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .extension(connect_info())
+                .body(axum::body::Body::from("{}"))
+                .expect("request without content type"),
+        )
+        .await
+        .expect("missing content type response");
         assert_eq!(
             missing_content_type.status(),
             StatusCode::UNSUPPORTED_MEDIA_TYPE
@@ -353,57 +260,47 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                 "request_content_type_invalid",
             ),
         ] {
-            let response = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method(Method::POST)
-                        .uri(path)
-                        .header(CONTENT_TYPE, content_type)
-                        .header(ACCEPT, "application/json")
-                        .extension(connect_info())
-                        .body(Body::from("{"))
-                        .expect("request with adversarial content type"),
-                )
-                .await
-                .expect("content-type classification response");
+            let response = fixtures::request(
+                &app,
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .header(CONTENT_TYPE, content_type)
+                    .header(ACCEPT, "application/json")
+                    .extension(connect_info())
+                    .body(Body::from("{"))
+                    .expect("request with adversarial content type"),
+            )
+            .await
+            .expect("content-type classification response");
             assert_eq!(response.status(), expected_status, "path={path}");
-            let body = response
-                .into_body()
-                .collect()
-                .await
-                .expect("collect content-type error")
-                .to_bytes();
+            let body = fixtures::response_body(response, "collect content-type error").await;
             let error: iroha_torii_shared::ErrorEnvelope =
                 norito::json::from_slice(&body).expect("decode content-type error");
             assert_eq!(error.code(), expected_code, "path={path}");
         }
 
-        let json_with_charset = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(path)
-                    .header(CONTENT_TYPE, "application/json; charset=\"UTF-8\"")
-                    .header(ACCEPT, "application/json")
-                    .header("idempotency-key", "11".repeat(32))
-                    .extension(connect_info())
-                    .body(Body::from("{}"))
-                    .expect("JSON request with supported charset"),
-            )
-            .await
-            .expect("supported charset response");
+        let json_with_charset = fixtures::request(
+            &app,
+            Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(CONTENT_TYPE, "application/json; charset=\"UTF-8\"")
+                .header(ACCEPT, "application/json")
+                .header("idempotency-key", "11".repeat(32))
+                .extension(connect_info())
+                .body(Body::from("{}"))
+                .expect("JSON request with supported charset"),
+        )
+        .await
+        .expect("supported charset response");
         assert_eq!(
             json_with_charset.status(),
             StatusCode::UNSUPPORTED_MEDIA_TYPE
         );
-        let body = json_with_charset
-            .into_body()
-            .collect()
-            .await
-            .expect("collect supported-charset decode error")
-            .to_bytes();
+        let body =
+            fixtures::response_body(json_with_charset, "collect supported-charset decode error")
+                .await;
         let error: iroha_torii_shared::ErrorEnvelope =
             norito::json::from_slice(&body).expect("decode supported-charset error");
         assert_eq!(
@@ -413,28 +310,22 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
         );
 
         for (content_type, expected_code) in [("application/x-norito", "request_norito_invalid")] {
-            let empty = app
-                .clone()
-                .oneshot(
-                    Request::builder()
-                        .method(Method::POST)
-                        .uri(path)
-                        .header(CONTENT_TYPE, content_type)
-                        .header(ACCEPT, "application/json")
-                        .header("idempotency-key", "11".repeat(32))
-                        .extension(connect_info())
-                        .body(axum::body::Body::empty())
-                        .expect("empty typed request"),
-                )
-                .await
-                .expect("empty typed response");
+            let empty = fixtures::request(
+                &app,
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(path)
+                    .header(CONTENT_TYPE, content_type)
+                    .header(ACCEPT, "application/json")
+                    .header("idempotency-key", "11".repeat(32))
+                    .extension(connect_info())
+                    .body(axum::body::Body::empty())
+                    .expect("empty typed request"),
+            )
+            .await
+            .expect("empty typed response");
             assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
-            let body = empty
-                .into_body()
-                .collect()
-                .await
-                .expect("collect empty-body response")
-                .to_bytes();
+            let body = fixtures::response_body(empty, "collect empty-body response").await;
             let error: iroha_torii_shared::ErrorEnvelope =
                 norito::json::from_slice(&body).expect("decode empty-body error");
             assert_eq!(error.code(), expected_code, "path={path}");
@@ -458,15 +349,14 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             if let Some(content_type) = content_type {
                 request = request.header(CONTENT_TYPE, content_type);
             }
-            let response = app
-                .clone()
-                .oneshot(
-                    request
-                        .body(Body::from(vec![b' '; oversized_len]))
-                        .expect("oversized request with rejected content type"),
-                )
-                .await
-                .expect("content-type rejection response");
+            let response = fixtures::request(
+                &app,
+                request
+                    .body(Body::from(vec![b' '; oversized_len]))
+                    .expect("oversized request with rejected content type"),
+            )
+            .await
+            .expect("content-type rejection response");
             assert_eq!(
                 response.status(),
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
@@ -476,47 +366,37 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                 response.headers().get("x-iroha-reject-code").is_none(),
                 "offline 415 is a transport-media rejection, not an exact application rejection: path={path}"
             );
-            let body = response
-                .into_body()
-                .collect()
-                .await
-                .expect("collect content-type rejection")
-                .to_bytes();
+            let body = fixtures::response_body(response, "collect content-type rejection").await;
             let error: iroha_torii_shared::ErrorEnvelope =
                 norito::json::from_slice(&body).expect("decode typed content-type rejection");
             assert_eq!(error.code(), expected_code, "path={path}");
         }
 
-        let above_axum_default = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(path)
-                    .header(CONTENT_TYPE, "application/x-norito")
-                    .header(ACCEPT, "application/json")
-                    .header("idempotency-key", "11".repeat(32))
-                    .extension(connect_info())
-                    .body(Body::from(vec![
-                        b' ';
-                        usize::try_from(OFFLINE_COMMAND_BODY_LIMIT)
-                            .expect("test limit fits usize")
-                    ]))
-                    .expect("large request within the configured limit"),
-            )
-            .await
-            .expect("large in-limit response");
+        let above_axum_default = fixtures::request(
+            &app,
+            Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(CONTENT_TYPE, "application/x-norito")
+                .header(ACCEPT, "application/json")
+                .header("idempotency-key", "11".repeat(32))
+                .extension(connect_info())
+                .body(Body::from(vec![
+                    b' ';
+                    usize::try_from(OFFLINE_COMMAND_BODY_LIMIT)
+                        .expect("test limit fits usize")
+                ]))
+                .expect("large request within the configured limit"),
+        )
+        .await
+        .expect("large in-limit response");
         assert_eq!(
             above_axum_default.status(),
             StatusCode::BAD_REQUEST,
             "{path} must use Torii's configured limit rather than Axum's 2 MiB default"
         );
-        let body = above_axum_default
-            .into_body()
-            .collect()
-            .await
-            .expect("collect large in-limit response")
-            .to_bytes();
+        let body =
+            fixtures::response_body(above_axum_default, "collect large in-limit response").await;
         let error: iroha_torii_shared::ErrorEnvelope =
             norito::json::from_slice(&body).expect("decode large in-limit error");
         assert_eq!(error.code(), "request_norito_invalid", "path={path}");
@@ -529,21 +409,20 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             ])),
             Ok(Bytes::from_static(b" ")),
         ]);
-        let above_configured_limit = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(Method::POST)
-                    .uri(path)
-                    .header(CONTENT_TYPE, "application/x-norito")
-                    .header(ACCEPT, "application/json")
-                    .header("idempotency-key", "11".repeat(32))
-                    .extension(connect_info())
-                    .body(Body::from_stream(body_chunks))
-                    .expect("request above the configured limit"),
-            )
-            .await
-            .expect("over-limit response");
+        let above_configured_limit = fixtures::request(
+            &app,
+            Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header(CONTENT_TYPE, "application/x-norito")
+                .header(ACCEPT, "application/json")
+                .header("idempotency-key", "11".repeat(32))
+                .extension(connect_info())
+                .body(Body::from_stream(body_chunks))
+                .expect("request above the configured limit"),
+        )
+        .await
+        .expect("over-limit response");
         assert_eq!(
             above_configured_limit.status(),
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -556,43 +435,37 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                 .is_none(),
             "offline 413 is a body-extractor rejection, not an exact application rejection: path={path}"
         );
-        let body = above_configured_limit
-            .into_body()
-            .collect()
-            .await
-            .expect("collect over-limit response")
-            .to_bytes();
+        let body =
+            fixtures::response_body(above_configured_limit, "collect over-limit response").await;
         let error: iroha_torii_shared::ErrorEnvelope =
             norito::json::from_slice(&body).expect("decode typed over-limit error");
         assert_eq!(error.code(), "request_payload_too_large", "path={path}");
     }
 
-    let invalid_operation_id = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/v1/offline/operations/not-hex")
-                .header(ACCEPT, "application/json")
-                .extension(connect_info())
-                .body(axum::body::Body::empty())
-                .expect("operation request"),
-        )
-        .await
-        .expect("operation response");
+    let invalid_operation_id = fixtures::request(
+        &app,
+        Request::builder()
+            .uri("/v1/offline/operations/not-hex")
+            .header(ACCEPT, "application/json")
+            .extension(connect_info())
+            .body(axum::body::Body::empty())
+            .expect("operation request"),
+    )
+    .await
+    .expect("operation response");
     assert_eq!(invalid_operation_id.status(), StatusCode::BAD_REQUEST);
 
-    let missing_operation = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/v1/offline/operations/{}", "11".repeat(32)))
-                .header(ACCEPT, "application/json")
-                .extension(connect_info())
-                .body(axum::body::Body::empty())
-                .expect("operation request"),
-        )
-        .await
-        .expect("operation response");
+    let missing_operation = fixtures::request(
+        &app,
+        Request::builder()
+            .uri(format!("/v1/offline/operations/{}", "11".repeat(32)))
+            .header(ACCEPT, "application/json")
+            .extension(connect_info())
+            .body(axum::body::Body::empty())
+            .expect("operation request"),
+    )
+    .await
+    .expect("operation response");
     assert_eq!(missing_operation.status(), StatusCode::NOT_FOUND);
 
     for (method, path) in [
@@ -604,19 +477,18 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             format!("/v1/offline/operations/{}", "11".repeat(32)),
         ),
     ] {
-        let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method(method.clone())
-                    .uri(path.as_str())
-                    .header(ACCEPT, "application/json")
-                    .extension(connect_info())
-                    .body(axum::body::Body::empty())
-                    .expect("wrong-method request"),
-            )
-            .await
-            .expect("wrong-method response");
+        let response = fixtures::request(
+            &app,
+            Request::builder()
+                .method(method.clone())
+                .uri(path.as_str())
+                .header(ACCEPT, "application/json")
+                .extension(connect_info())
+                .body(axum::body::Body::empty())
+                .expect("wrong-method request"),
+        )
+        .await
+        .expect("wrong-method response");
         assert_eq!(
             response.status(),
             StatusCode::METHOD_NOT_ALLOWED,
@@ -626,12 +498,7 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             response.headers().contains_key(axum::http::header::ALLOW),
             "405 must advertise the allowed method: {method} {path}"
         );
-        let body = response
-            .into_body()
-            .collect()
-            .await
-            .expect("collect wrong-method response")
-            .to_bytes();
+        let body = fixtures::response_body(response, "collect wrong-method response").await;
         let error: iroha_torii_shared::ErrorEnvelope =
             norito::json::from_slice(&body).expect("decode wrong-method error");
         assert_eq!(error.code(), "method_not_allowed");

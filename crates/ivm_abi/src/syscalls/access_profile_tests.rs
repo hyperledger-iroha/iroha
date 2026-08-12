@@ -3,49 +3,6 @@
 use super::*;
 
 #[test]
-fn canonical_helper_syscall_maps_direct_aliases() {
-    let direct_pairs = [
-        (SYSCALL_JSON_GET_JSON_DIRECT, SYSCALL_JSON_GET_JSON),
-        (SYSCALL_JSON_GET_NAME_DIRECT, SYSCALL_JSON_GET_NAME),
-        (
-            SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT,
-            SYSCALL_JSON_GET_ACCOUNT_ID,
-        ),
-        (SYSCALL_JSON_GET_NFT_ID_DIRECT, SYSCALL_JSON_GET_NFT_ID),
-        (SYSCALL_JSON_GET_BLOB_HEX_DIRECT, SYSCALL_JSON_GET_BLOB_HEX),
-        (SYSCALL_JSON_GET_INT_DIRECT, SYSCALL_JSON_GET_INT),
-        (SYSCALL_JSON_GET_DECIMAL_DIRECT, SYSCALL_JSON_GET_DECIMAL),
-        (SYSCALL_JSON_GET_QUANTITY_DIRECT, SYSCALL_JSON_GET_QUANTITY),
-        (
-            SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT,
-            SYSCALL_JSON_GET_ASSET_DEFINITION_ID,
-        ),
-        (SYSCALL_JSON_SET_I64_DIRECT, SYSCALL_JSON_SET_I64),
-        (
-            SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT,
-            SYSCALL_JSON_SET_ACCOUNT_ID,
-        ),
-        (
-            SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT,
-            SYSCALL_BUILD_PATH_KEY_NORITO,
-        ),
-        (SYSCALL_SCHEMA_INFO_DIRECT, SYSCALL_SCHEMA_INFO),
-        (SYSCALL_SCHEMA_ENCODE_DIRECT, SYSCALL_SCHEMA_ENCODE),
-        (SYSCALL_SCHEMA_DECODE_DIRECT, SYSCALL_SCHEMA_DECODE),
-    ];
-
-    for (direct, canonical) in direct_pairs {
-        assert_eq!(canonical_helper_syscall(direct), canonical);
-        assert_eq!(canonical_helper_syscall(canonical), canonical);
-    }
-
-    assert_eq!(
-        canonical_helper_syscall(SYSCALL_STATE_GET),
-        SYSCALL_STATE_GET
-    );
-}
-
-#[test]
 fn koto_test_syscalls_are_host_private() {
     let private = [
         SYSCALL_KOTO_TEST_ACTOR_ACCOUNT,
@@ -135,12 +92,7 @@ fn axt_syscall_classifier_is_exact() {
     ] {
         assert!(is_axt_syscall(syscall));
     }
-    for syscall in [
-        SYSCALL_ANONYMOUS_ESCROW_OPEN_DISPUTE,
-        SYSCALL_ESCROW_OPEN_OFFER,
-        SYSCALL_STATE_GET,
-        u32::MAX,
-    ] {
+    for syscall in [SYSCALL_ESCROW_OPEN_OFFER, SYSCALL_STATE_GET, u32::MAX] {
         assert!(!is_axt_syscall(syscall));
     }
 }

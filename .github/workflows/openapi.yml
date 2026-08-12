@@ -150,7 +150,7 @@ jobs:
             --allow-unsigned=current
 
   canonical-spec:
-    name: Canonical Torii generator parity
+    name: Canonical Torii static-authority parity
     needs: metadata
     runs-on: [self-hosted, Linux, iroha2]
     container:
@@ -179,7 +179,7 @@ jobs:
       - name: Install the deterministic OpenAPI dependency graph
         working-directory: tools/openapi
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Regenerate and verify canonical OpenAPI artifacts
+      - name: Replay and verify canonical OpenAPI authorities
         run: bash ci/check_openapi_spec.sh
       - name: Regenerate Android bindings twice from the pinned commit
         run: bash ci/check_android_codegen.sh

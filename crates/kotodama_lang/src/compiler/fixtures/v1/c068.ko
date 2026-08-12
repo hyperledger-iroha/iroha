@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  ledger::asset::batch::begin(1);
+}
+
+}

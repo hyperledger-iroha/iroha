@@ -1072,6 +1072,15 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
 ) -> None:
     """Shared vote/Commit kernels cannot be bypassed in production or Verus."""
 
+    owners = []
+    for path in checker_source_paths():
+        count = path.read_text(encoding="utf-8").count(
+            "_SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256 = {"
+        )
+        owners.extend([path.relative_to(ROOT_DIR).as_posix()] * count)
+    assert owners == [
+        "scripts/formal/sumeragi_v2_proof_ledger_terminal_discharge_contracts.py"
+    ]
     module = load_checker()
     provider_name = "_SAME_ROUND_SEMANTIC_KERNEL_SOURCE_SHA256"
 
@@ -1585,10 +1594,27 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         path = repo_root / relative
         source = path.read_text(encoding="utf-8")
         marker = f"macro_rules! {item} {{"
-        start = source.find(marker)
-        if start >= 0:
-            assert source.count(old) == 1, (item, old)
-            mutation = source.find(old)
+        physical_matches = []
+        for physical_relative in physical_relatives:
+            candidate = repo_root / physical_relative
+            source = candidate.read_text(encoding="utf-8")
+            start = source.find(marker)
+            if start >= 0 and source.find(old, start) >= 0:
+                physical_matches.append((candidate, source, None, start))
+                continue
+            matching_items = tuple(
+                candidate_item
+                for candidate_item in module.rust_items(source, item)
+                if candidate_item.source.count(old) == 1
+            )
+            physical_matches.extend(
+                (candidate, source, candidate_item, -1)
+                for candidate_item in matching_items
+            )
+        assert len(physical_matches) == 1, (item, old, physical_relatives)
+        path, source, rust_item, start = physical_matches[0]
+        if rust_item is None:
+            mutation = source.find(old, start)
             assert mutation > start, (item, old)
             path.write_text(
                 source[:mutation] + new + source[mutation + len(old) :],

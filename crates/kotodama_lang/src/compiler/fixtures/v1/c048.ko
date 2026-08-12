@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  ledger::trigger::set_enabled(Name::parse("wake"), Json::parse("{}"));
+}
+
+}

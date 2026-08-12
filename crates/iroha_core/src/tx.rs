@@ -6101,8 +6101,8 @@ pub mod tests {
         let deployer = AccountId::new(deployer_keypair.public_key().clone());
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &deployer,
             1,
             iroha_data_model::nexus::DataSpaceId::new(0),
@@ -11290,8 +11290,8 @@ pub mod tests {
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11334,8 +11334,8 @@ pub mod tests {
 
         let old_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11343,8 +11343,8 @@ pub mod tests {
         .expect("old contract address");
         let new_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             1,
             DataSpaceId::UNIVERSAL,
@@ -11449,8 +11449,8 @@ pub mod tests {
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -11867,8 +11867,8 @@ pub mod tests {
 
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             TestDataSpaceId::UNIVERSAL,

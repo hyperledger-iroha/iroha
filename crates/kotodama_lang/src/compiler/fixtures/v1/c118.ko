@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+kotoage fn main() authorize("NftAdmin") {
+  ledger::nft::create_for_all_users();
+}
+
+}

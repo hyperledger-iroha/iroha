@@ -1,0 +1,4 @@
+
+seiyaku CompilerFixture {
+fn main() { let _authority = context::authority(1); }
+}

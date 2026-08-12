@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main(AccountId account) {
+  ledger::domain::transfer(source: account, domain: Json::parse("{}"), destination: account);
+}
+
+}

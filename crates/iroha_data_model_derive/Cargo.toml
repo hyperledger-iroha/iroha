@@ -1,5 +1,6 @@
 [package]
 name = "iroha_data_model_derive"
+autotests = false
 
 edition.workspace = true
 version.workspace = true
@@ -42,3 +43,7 @@ harness = false
 [[test]]
 name = "ui"
 required-features = ["trybuild-tests"]
+
+[[test]]
+name = "derive_integration"
+path = "tests/derive_integration.rs"

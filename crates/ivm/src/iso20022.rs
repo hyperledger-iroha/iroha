@@ -2233,320 +2233,27 @@ struct IbanSpec {
 
 /// Source: IBAN Registry (June 2024). Keep alphabetically sorted so
 /// `iban_length_for_country` can binary-search deterministically.
-const IBAN_SPECS: &[IbanSpec] = &[
-    IbanSpec {
-        code: *b"AD",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"AE",
-        length: 23,
-    },
-    IbanSpec {
-        code: *b"AL",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"AT",
-        length: 20,
-    },
-    IbanSpec {
-        code: *b"AZ",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"BA",
-        length: 20,
-    },
-    IbanSpec {
-        code: *b"BE",
-        length: 16,
-    },
-    IbanSpec {
-        code: *b"BG",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"BH",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"BR",
-        length: 29,
-    },
-    IbanSpec {
-        code: *b"BY",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"CH",
-        length: 21,
-    },
-    IbanSpec {
-        code: *b"CR",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"CY",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"CZ",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"DE",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"DK",
-        length: 18,
-    },
-    IbanSpec {
-        code: *b"DO",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"EE",
-        length: 20,
-    },
-    IbanSpec {
-        code: *b"EG",
-        length: 27,
-    },
-    IbanSpec {
-        code: *b"ES",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"FI",
-        length: 18,
-    },
-    IbanSpec {
-        code: *b"FO",
-        length: 18,
-    },
-    IbanSpec {
-        code: *b"FR",
-        length: 27,
-    },
-    IbanSpec {
-        code: *b"GB",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"GE",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"GI",
-        length: 23,
-    },
-    IbanSpec {
-        code: *b"GL",
-        length: 18,
-    },
-    IbanSpec {
-        code: *b"GR",
-        length: 27,
-    },
-    IbanSpec {
-        code: *b"GT",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"HR",
-        length: 21,
-    },
-    IbanSpec {
-        code: *b"HU",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"IE",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"IL",
-        length: 23,
-    },
-    IbanSpec {
-        code: *b"IQ",
-        length: 23,
-    },
-    IbanSpec {
-        code: *b"IR",
-        length: 26,
-    },
-    IbanSpec {
-        code: *b"IS",
-        length: 26,
-    },
-    IbanSpec {
-        code: *b"IT",
-        length: 27,
-    },
-    IbanSpec {
-        code: *b"JO",
-        length: 30,
-    },
-    IbanSpec {
-        code: *b"KW",
-        length: 30,
-    },
-    IbanSpec {
-        code: *b"KZ",
-        length: 20,
-    },
-    IbanSpec {
-        code: *b"LB",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"LC",
-        length: 32,
-    },
-    IbanSpec {
-        code: *b"LI",
-        length: 21,
-    },
-    IbanSpec {
-        code: *b"LT",
-        length: 20,
-    },
-    IbanSpec {
-        code: *b"LU",
-        length: 20,
-    },
-    IbanSpec {
-        code: *b"LV",
-        length: 21,
-    },
-    IbanSpec {
-        code: *b"MC",
-        length: 27,
-    },
-    IbanSpec {
-        code: *b"MD",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"ME",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"MK",
-        length: 19,
-    },
-    IbanSpec {
-        code: *b"MR",
-        length: 27,
-    },
-    IbanSpec {
-        code: *b"MT",
-        length: 31,
-    },
-    IbanSpec {
-        code: *b"MU",
-        length: 30,
-    },
-    IbanSpec {
-        code: *b"NL",
-        length: 18,
-    },
-    IbanSpec {
-        code: *b"NO",
-        length: 15,
-    },
-    IbanSpec {
-        code: *b"PK",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"PL",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"PS",
-        length: 29,
-    },
-    IbanSpec {
-        code: *b"PT",
-        length: 25,
-    },
-    IbanSpec {
-        code: *b"QA",
-        length: 29,
-    },
-    IbanSpec {
-        code: *b"RO",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"RS",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"SA",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"SC",
-        length: 31,
-    },
-    IbanSpec {
-        code: *b"SE",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"SI",
-        length: 19,
-    },
-    IbanSpec {
-        code: *b"SK",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"SM",
-        length: 27,
-    },
-    IbanSpec {
-        code: *b"ST",
-        length: 25,
-    },
-    IbanSpec {
-        code: *b"SV",
-        length: 28,
-    },
-    IbanSpec {
-        code: *b"TL",
-        length: 23,
-    },
-    IbanSpec {
-        code: *b"TN",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"TR",
-        length: 26,
-    },
-    IbanSpec {
-        code: *b"UA",
-        length: 29,
-    },
-    IbanSpec {
-        code: *b"VA",
-        length: 22,
-    },
-    IbanSpec {
-        code: *b"VG",
-        length: 24,
-    },
-    IbanSpec {
-        code: *b"XK",
-        length: 20,
-    },
-];
+const IBAN_SPEC_BYTES: &[u8; 234] = include_bytes!("assets/iso20022_iban_specs_v1.bin");
+
+const fn decode_iban_specs(bytes: &[u8; 234]) -> [IbanSpec; 78] {
+    let mut specs = [IbanSpec {
+        code: [0_u8; 2],
+        length: 0,
+    }; 78];
+    let mut index = 0;
+    while index < 78 {
+        let offset = index * 3;
+        specs[index] = IbanSpec {
+            code: [bytes[offset], bytes[offset + 1]],
+            length: bytes[offset + 2],
+        };
+        index += 1;
+    }
+    specs
+}
+
+const IBAN_SPEC_VALUES: [IbanSpec; 78] = decode_iban_specs(IBAN_SPEC_BYTES);
+const IBAN_SPECS: &[IbanSpec] = &IBAN_SPEC_VALUES;
 
 fn iban_length_for_country(code: [u8; 2]) -> Option<usize> {
     IBAN_SPECS
@@ -4758,315 +4465,21 @@ mod tests {
 
     const GENERATED_MD: &str = include_str!(r"../../../generatediso20022.md");
 
-    const SAMPLE_PACS008_XML: &str = r#"
-<DataEnvelope xmlns="urn:sample:iso">
-  <Body>
-    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
-      <Fr><FIId><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></Fr>
-      <To><FIId><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></To>
-      <BizMsgIdr>ISO-SAMPLE-008</BizMsgIdr>
-      <MsgDefIdr>pacs.008.001.08</MsgDefIdr>
-      <BizSvc>IPS</BizSvc>
-      <CreDt>2025-11-11T09:34:09Z</CreDt>
-    </AppHdr>
-    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
-      <FIToFICstmrCdtTrf>
-        <GrpHdr>
-          <MsgId>ISO-008-GRP</MsgId>
-          <CreDtTm>2025-11-11T09:34:09</CreDtTm>
-          <BtchBookg>false</BtchBookg>
-          <NbOfTxs>1</NbOfTxs>
-          <SttlmInf><SttlmMtd>CLRG</SttlmMtd></SttlmInf>
-        </GrpHdr>
-        <CdtTrfTxInf>
-          <PmtId>
-            <InstrId>SAMPLE-INSTR-008</InstrId>
-            <EndToEndId>SAMPLE-E2E-008</EndToEndId>
-            <TxId>SAMPLE-TX-008</TxId>
-          </PmtId>
-          <PmtTpInf>
-            <ClrChanl>RTNS</ClrChanl>
-            <SvcLvl><Prtry>0100</Prtry></SvcLvl>
-            <LclInstrm><Prtry>CTAA</Prtry></LclInstrm>
-            <CtgyPurp><Prtry>005</Prtry></CtgyPurp>
-          </PmtTpInf>
-          <IntrBkSttlmAmt Ccy="USD">1400.00</IntrBkSttlmAmt>
-          <IntrBkSttlmDt>2025-11-11</IntrBkSttlmDt>
-          <ChrgBr>SLEV</ChrgBr>
-          <Dbtr><Nm>Example Debtor</Nm></Dbtr>
-          <DbtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></DbtrAcct>
-          <DbtrAgt><FinInstnId><BICFI>ALPHGB2L</BICFI></FinInstnId></DbtrAgt>
-          <CdtrAgt><FinInstnId><ClrSysMmbId><MmbId>OMEGGB2L</MmbId></ClrSysMmbId></FinInstnId></CdtrAgt>
-          <Cdtr><Nm>Example Creditor</Nm></Cdtr>
-          <CdtrAcct><Id><IBAN>GB33BUKB20201555555555</IBAN></Id></CdtrAcct>
-          <InstrForNxtAgt><InstrInf>/INFO/Example note</InstrInf></InstrForNxtAgt>
-        </CdtTrfTxInf>
-      </FIToFICstmrCdtTrf>
-    </Document>
-  </Body>
-</DataEnvelope>
-"#;
+    const SAMPLE_PACS008_XML: &str = include_str!("assets/text_v1/pacs008_sample.xml");
 
-    const SAMPLE_PACS004_XML: &str = r#"
-<DataEnvelope xmlns="urn:sample:iso">
-  <Body>
-    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.004.001.09">
-      <PmtRtr>
-        <GrpHdr>
-          <MsgId>ISO-PACS004-MSG</MsgId>
-          <CreDtTm>2025-11-06T12:42:25.758Z</CreDtTm>
-          <BtchBookg>false</BtchBookg>
-          <NbOfTxs>1</NbOfTxs>
-          <SttlmInf><SttlmMtd>CLRG</SttlmMtd></SttlmInf>
-          <InstdAgt><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></InstdAgt>
-        </GrpHdr>
-        <OrgnlGrpInf>
-          <OrgnlMsgId>ORIGINAL-008</OrgnlMsgId>
-          <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
-          <OrgnlCreDtTm>2025-11-06T12:42:07.770Z</OrgnlCreDtTm>
-        </OrgnlGrpInf>
-        <TxInf>
-          <RtrId>RETURN-5310</RtrId>
-          <OrgnlInstrId>ORIGINAL-INSTR-008</OrgnlInstrId>
-          <OrgnlEndToEndId>ORIGINAL-E2E-008</OrgnlEndToEndId>
-          <OrgnlTxId>ORIGINAL-TX-008</OrgnlTxId>
-          <OrgnlIntrBkSttlmDt>2025-11-06</OrgnlIntrBkSttlmDt>
-          <RtrdIntrBkSttlmAmt Ccy="USD">10.00</RtrdIntrBkSttlmAmt>
-          <IntrBkSttlmDt>2025-11-06</IntrBkSttlmDt>
-          <ChrgBr>SLEV</ChrgBr>
-          <InstgAgt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></InstgAgt>
-          <InstdAgt><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></InstdAgt>
-          <RtrRsnInf><Rsn><Prtry>TechnicalProblem</Prtry></Rsn></RtrRsnInf>
-          <OrgnlTxRef>
-            <IntrBkSttlmAmt Ccy="USD">10.00</IntrBkSttlmAmt>
-            <PmtTpInf>
-              <ClrChanl>RTNS</ClrChanl>
-              <SvcLvl><Prtry>0100</Prtry></SvcLvl>
-              <LclInstrm><Prtry>CTAA</Prtry></LclInstrm>
-              <CtgyPurp><Prtry>001</Prtry></CtgyPurp>
-            </PmtTpInf>
-            <Dbtr><Pty><Nm>Debtor One</Nm></Pty></Dbtr>
-            <DbtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></DbtrAcct>
-            <DbtrAgt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></DbtrAgt>
-            <CdtrAgt><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></CdtrAgt>
-            <Cdtr><Pty><Nm>Creditor One</Nm></Pty></Cdtr>
-            <CdtrAcct><Id><IBAN>GB33BUKB20201555555555</IBAN></Id></CdtrAcct>
-          </OrgnlTxRef>
-        </TxInf>
-      </PmtRtr>
-    </Document>
-    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
-      <Fr><FIId><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></Fr>
-      <To><FIId><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></To>
-      <BizMsgIdr>ISO-PACS004-MSG</BizMsgIdr>
-      <MsgDefIdr>pacs.004.001.09</MsgDefIdr>
-      <BizSvc>IPS</BizSvc>
-      <CreDt>2025-11-06T07:42:25.771Z</CreDt>
-      <Sgntr>
-        <SignedInfo><SignatureMethod>sample</SignatureMethod></SignedInfo>
-        <SignatureValue>ignored</SignatureValue>
-      </Sgntr>
-    </AppHdr>
-  </Body>
-</DataEnvelope>
-"#;
+    const SAMPLE_PACS004_XML: &str = include_str!("assets/text_v1/pacs004_sample.xml");
 
-    const SAMPLE_PACS009_XML: &str = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.009.001.10">
-  <FICdtTrf>
-    <GrpHdr>
-      <MsgId>PACS009-GRP</MsgId>
-      <CreDtTm>2024-01-01T12:00:00Z</CreDtTm>
-      <BizMsgIdr>PACS009-BIZ</BizMsgIdr>
-      <MsgDefIdr>pacs.009.001.10</MsgDefIdr>
-    </GrpHdr>
-    <CdtTrfTxInf>
-      <IntrBkSttlmAmt Ccy="USD">2500</IntrBkSttlmAmt>
-      <IntrBkSttlmDt>2024-01-03</IntrBkSttlmDt>
-      <InstgAgt><FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId></InstgAgt>
-      <InstdAgt><FinInstnId><BICFI>MARKDEFF</BICFI></FinInstnId></InstdAgt>
-      <DbtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></DbtrAcct>
-      <CdtrAcct><Id><IBAN>GB33BUKB20201555555555</IBAN></Id></CdtrAcct>
-      <Purp><Cd>SECU</Cd></Purp>
-    </CdtTrfTxInf>
-  </FICdtTrf>
-</Document>
-"#;
+    const SAMPLE_PACS009_XML: &str = include_str!("assets/text_v1/pacs009_sample.xml");
 
-    const SAMPLE_PACS009_ENVELOPE_XML: &str = r#"
-<DataEnvelope xmlns="urn:sample:iso">
-  <Body>
-    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
-      <BizMsgIdr>BAH-PACS009-1</BizMsgIdr>
-      <MsgDefIdr>pacs.009.001.10</MsgDefIdr>
-      <CreDt>2025-11-12T09:34:09Z</CreDt>
-    </AppHdr>
-    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.009.001.10">
-      <FICdtTrf>
-        <GrpHdr>
-          <InstgAgt><FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId></InstgAgt>
-          <InstdAgt><FinInstnId><BICFI>MARKDEFF</BICFI></FinInstnId></InstdAgt>
-        </GrpHdr>
-        <CdtTrfTxInf>
-          <IntrBkSttlmAmt Ccy="USD">2500</IntrBkSttlmAmt>
-          <IntrBkSttlmDt>2024-01-03</IntrBkSttlmDt>
-          <DbtrAcct><Id><Othr><Id>GB82WEST12345698765432</Id></Othr></Id></DbtrAcct>
-          <CdtrAcct><Id><IBAN>GB33BUKB20201555555555</IBAN></Id></CdtrAcct>
-          <Purp><Cd>SECU</Cd></Purp>
-        </CdtTrfTxInf>
-      </FICdtTrf>
-    </Document>
-  </Body>
-</DataEnvelope>
-"#;
+    const SAMPLE_PACS009_ENVELOPE_XML: &str = include_str!("assets/text_v1/pacs009_envelope.xml");
 
-    const SAMPLE_PACS002_STATUS_XML: &str = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
-  <FIToFIPmtStsRpt>
-    <GrpHdr>
-      <MsgId>ISO-PACS002-STATUS</MsgId>
-      <CreDtTm>2025-11-11T09:35:15.671Z</CreDtTm>
-    </GrpHdr>
-    <OrgnlGrpInfAndSts>
-      <OrgnlMsgId>ISO-SAMPLE-008</OrgnlMsgId>
-      <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
-      <OrgnlCreDtTm>2025-11-11T09:34:09</OrgnlCreDtTm>
-      <OrgnlNbOfTxs>1</OrgnlNbOfTxs>
-      <GrpSts>ACSP</GrpSts>
-    </OrgnlGrpInfAndSts>
-    <TxInfAndSts>
-      <StsId>ISO-PACS002-STATUS</StsId>
-      <OrgnlInstrId>SAMPLE-INSTR-008</OrgnlInstrId>
-      <OrgnlEndToEndId>SAMPLE-E2E-008</OrgnlEndToEndId>
-      <OrgnlTxId>SAMPLE-TX-008</OrgnlTxId>
-      <TxSts>ACSP</TxSts>
-      <AcctSvcrRef>6762</AcctSvcrRef>
-      <InstgAgt><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></InstgAgt>
-      <InstdAgt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></InstdAgt>
-      <OrgnlTxRef>
-        <IntrBkSttlmAmt Ccy="USD">1400</IntrBkSttlmAmt>
-        <IntrBkSttlmDt>2025-11-11</IntrBkSttlmDt>
-        <PmtTpInf>
-          <ClrChanl>RTNS</ClrChanl>
-          <SvcLvl><Prtry>0100</Prtry></SvcLvl>
-          <LclInstrm><Prtry>CTAA</Prtry></LclInstrm>
-          <CtgyPurp><Prtry>005</Prtry></CtgyPurp>
-        </PmtTpInf>
-        <Purp><Prtry>005</Prtry></Purp>
-      </OrgnlTxRef>
-    </TxInfAndSts>
-  </FIToFIPmtStsRpt>
-</Document>
-"#;
+    const SAMPLE_PACS002_STATUS_XML: &str = include_str!("assets/text_v1/pacs002_status.xml");
 
-    const SAMPLE_PACS002_AUTH_XML: &str = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
-  <FIToFIPmtStsRpt>
-    <GrpHdr>
-      <MsgId>ISO-PACS002-AUTH</MsgId>
-      <CreDtTm>2025-11-11T09:35:15.671Z</CreDtTm>
-    </GrpHdr>
-    <OrgnlGrpInfAndSts>
-      <OrgnlMsgId>ISO-SAMPLE-008</OrgnlMsgId>
-      <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
-      <OrgnlCreDtTm>2025-11-11T09:34:09</OrgnlCreDtTm>
-      <OrgnlNbOfTxs>1</OrgnlNbOfTxs>
-    </OrgnlGrpInfAndSts>
-    <TxInfAndSts>
-      <StsId>ISO-PACS002-AUTH</StsId>
-      <OrgnlInstrId>SAMPLE-INSTR-008</OrgnlInstrId>
-      <OrgnlEndToEndId>SAMPLE-E2E-008</OrgnlEndToEndId>
-      <OrgnlTxId>SAMPLE-TX-008</OrgnlTxId>
-      <AcctSvcrRef>7001</AcctSvcrRef>
-      <OrgnlTxRef>
-        <IntrBkSttlmAmt Ccy="USD">1400</IntrBkSttlmAmt>
-        <IntrBkSttlmDt>2025-11-11</IntrBkSttlmDt>
-      </OrgnlTxRef>
-    </TxInfAndSts>
-  </FIToFIPmtStsRpt>
-</Document>
-"#;
+    const SAMPLE_PACS002_AUTH_XML: &str = include_str!("assets/text_v1/pacs002_auth.xml");
 
-    const SAMPLE_CAMT052_XML: &str = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.052.001.08">
-  <BkToCstmrAcctRpt>
-    <GrpHdr>
-      <MsgId>RPT-460052</MsgId>
-      <CreDtTm>2025-11-10T15:17:49.578Z</CreDtTm>
-    </GrpHdr>
-    <Rpt>
-      <Id>RPT-460052</Id>
-      <ElctrncSeqNb>531</ElctrncSeqNb>
-      <CreDtTm>2025-11-10T15:17:49.580Z</CreDtTm>
-      <Acct>
-        <Id><Othr><Id>ALTACCOUNT</Id></Othr></Id>
-        <Ccy>USD</Ccy>
-        <Ownr>
-          <Id><OrgId><Othr><Id>OWNER001</Id><SchmeNm><Prtry>PCOD</Prtry></SchmeNm></Othr></OrgId></Id>
-        </Ownr>
-      </Acct>
-      <Bal>
-        <Tp><CdOrPrtry><Cd>CLBD</Cd></CdOrPrtry></Tp>
-        <Amt Ccy="USD">1000.00</Amt>
-        <CdtDbtInd>DBIT</CdtDbtInd>
-        <Dt><Dt>2025-11-06</Dt></Dt>
-      </Bal>
-      <TxsSummry>
-        <TtlNtries>
-          <NbOfNtries>41</NbOfNtries>
-          <Sum>1011323.14</Sum>
-          <TtlNetNtry><Amt>991491.14</Amt><CdtDbtInd>DBIT</CdtDbtInd></TtlNetNtry>
-        </TtlNtries>
-        <TtlCdtNtries><NbOfNtries>21</NbOfNtries><Sum>9916.00</Sum></TtlCdtNtries>
-        <TtlDbtNtries><NbOfNtries>20</NbOfNtries><Sum>1001407.14</Sum></TtlDbtNtries>
-      </TxsSummry>
-      <AddtlRptInf>/SESSIONID/6761</AddtlRptInf>
-    </Rpt>
-  </BkToCstmrAcctRpt>
-</Document>
-"#;
+    const SAMPLE_CAMT052_XML: &str = include_str!("assets/text_v1/camt052_sample.xml");
 
-    const SAMPLE_CAMT056_XML: &str = r#"
-<DataEnvelope xmlns="urn:sample:iso">
-  <Body>
-    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
-      <Fr><FIId><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></Fr>
-      <To><FIId><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></To>
-      <BizMsgIdr>ISO-CAMT056-ASSIGN</BizMsgIdr>
-      <MsgDefIdr>camt.056.001.08</MsgDefIdr>
-      <BizSvc>IPS</BizSvc>
-      <CreDt>2025-11-07T16:27:33Z</CreDt>
-      <Sgntr><SignedInfo><SignatureMethod>sample</SignatureMethod></SignedInfo><SignatureValue>ignored</SignatureValue></Sgntr>
-    </AppHdr>
-    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.056.001.08">
-      <FIToFIPmtCxlReq>
-        <Assgnmt>
-          <Id>ISO-CAMT056-ASSIGN</Id>
-          <Assgnr><Agt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></Agt></Assgnr>
-          <Assgne><Agt><FinInstnId><ClrSysMmbId><MmbId>PAYFASTX</MmbId></ClrSysMmbId></FinInstnId></Agt></Assgne>
-          <CreDtTm>2025-11-07T16:27:33Z</CreDtTm>
-        </Assgnmt>
-        <Case>
-          <Id>ISO-CAMT056-ASSIGN</Id>
-          <Cretr><Agt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></Agt></Cretr>
-        </Case>
-        <Undrlyg>
-          <TxInf>
-            <OrgnlGrpInf>
-              <OrgnlMsgId>ISO-SAMPLE-008</OrgnlMsgId>
-              <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
-              <OrgnlCreDtTm>2025-11-07T16:13:08.557</OrgnlCreDtTm>
-            </OrgnlGrpInf>
-            <OrgnlIntrBkSttlmDt>2025-11-07</OrgnlIntrBkSttlmDt>
-            <Assgnr><Agt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></Agt></Assgnr>
-            <Assgne><Agt><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></Agt></Assgne>
-          </TxInf>
-        </Undrlyg>
-      </FIToFIPmtCxlReq>
-    </Document>
-  </Body>
-</DataEnvelope>
-"#;
+    const SAMPLE_CAMT056_XML: &str = include_str!("assets/text_v1/camt056_sample.xml");
 
     fn assert_validated(message_type: &str, xml: &str) {
         reset();
@@ -5568,39 +4981,7 @@ mod tests {
     #[test]
     fn parse_head001_envelope_preserves_apphdr_fields() {
         reset();
-        let xml = r#"
-<DataPDU>
-  <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.03">
-    <Fr>
-      <FIId>
-        <FinInstnId>
-          <BICFI>DEUTDEFF</BICFI>
-        </FinInstnId>
-      </FIId>
-    </Fr>
-    <To>
-      <FIId>
-        <FinInstnId>
-          <ClrSysMmbId>
-            <MmbId>654321</MmbId>
-          </ClrSysMmbId>
-        </FinInstnId>
-      </FIId>
-    </To>
-    <BizMsgIdr>HDR-123</BizMsgIdr>
-    <MsgDefIdr>pacs.008.001.08</MsgDefIdr>
-    <BizSvc>swift.cbprplus.02</BizSvc>
-    <CreDt>2025-01-01T12:00:00Z</CreDt>
-  </AppHdr>
-  <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
-    <FIToFICstmrCdtTrf>
-      <CdtTrfTxInf>
-        <IntrBkSttlmAmt Ccy="USD">100</IntrBkSttlmAmt>
-      </CdtTrfTxInf>
-    </FIToFICstmrCdtTrf>
-  </Document>
-</DataPDU>
-        "#;
+        let xml = include_str!("assets/text_v1/head001_envelope.xml");
         let parsed =
             parse_message("head.001.001.03", xml.as_bytes()).expect("header envelope parses");
         assert_eq!(parsed.message_type(), "head.001.001.03");
@@ -5623,43 +5004,7 @@ mod tests {
     #[test]
     fn pacs008_accepts_proxy_accounts_without_iban() {
         reset();
-        let xml = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
-  <FIToFICstmrCdtTrf>
-    <GrpHdr>
-      <MsgId>ISO-PROXY</MsgId>
-    </GrpHdr>
-    <CdtTrfTxInf>
-      <IntrBkSttlmAmt Ccy="USD">42</IntrBkSttlmAmt>
-      <IntrBkSttlmDt>2025-02-02</IntrBkSttlmDt>
-      <DbtrAcct>
-        <Prxy>
-          <Id>proxy-debtor</Id>
-        </Prxy>
-      </DbtrAcct>
-      <CdtrAcct>
-        <Prxy>
-          <Id>proxy-creditor</Id>
-        </Prxy>
-      </CdtrAcct>
-      <DbtrAgt>
-        <FinInstnId>
-          <ClrSysMmbId>
-            <MmbId>DBTRCODE</MmbId>
-          </ClrSysMmbId>
-        </FinInstnId>
-      </DbtrAgt>
-      <CdtrAgt>
-        <FinInstnId>
-          <ClrSysMmbId>
-            <MmbId>CDTRCODE</MmbId>
-          </ClrSysMmbId>
-        </FinInstnId>
-      </CdtrAgt>
-    </CdtTrfTxInf>
-  </FIToFICstmrCdtTrf>
-</Document>
-"#;
+        let xml = include_str!("assets/text_v1/pacs008_proxy.xml");
         let parsed =
             parse_message("pacs.008.001.08", xml.as_bytes()).expect("proxy-only pacs.008 parses");
         assert_eq!(parsed.field_text("DbtrAcct/Prxy/Id"), Some("proxy-debtor"));
@@ -5771,13 +5116,7 @@ mod tests {
     #[test]
     fn parse_real_iso20022_rejects_mismatched_xsd_document_root() {
         reset();
-        let xml = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
-  <FIToFICstmrCdtTrf>
-    <GrpHdr><MsgId>WRONG-ROOT</MsgId></GrpHdr>
-  </FIToFICstmrCdtTrf>
-</Document>
-"#;
+        let xml = include_str!("assets/text_v1/pacs002_wrong_root.xml");
         let err = parse_message("pacs.002.001.10", xml.as_bytes())
             .expect_err("pacs.002 must not accept pacs.008 document root");
         assert!(matches!(err, MsgError::UnknownMessageType));
@@ -5787,10 +5126,7 @@ mod tests {
     #[test]
     fn parse_real_iso20022_rejects_missing_xsd_document_root() {
         reset();
-        let xml = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.002.001.10">
-</Document>
-"#;
+        let xml = include_str!("assets/text_v1/pacs002_missing_root.xml");
         let err = parse_message("pacs.002.001.10", xml.as_bytes())
             .expect_err("real pacs.002 XML must carry its XSD document root");
         assert!(matches!(err, MsgError::InvalidFormat));
@@ -6409,18 +5745,7 @@ mod tests {
 
     #[test]
     fn parse_sese024_status_advice_lifecycle_fields() {
-        let xml = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:sese.024.001.10">
-  <SctiesSttlmTxStsAdvc>
-    <TxId>SETTLEMENT-123</TxId>
-    <SttlmTxSts>
-      <Sts><Cd>SETT</Cd></Sts>
-      <Rsn><Cd>NARR</Cd></Rsn>
-      <AddtlInf>settled in CSD</AddtlInf>
-    </SttlmTxSts>
-  </SctiesSttlmTxStsAdvc>
-</Document>
-"#;
+        let xml = include_str!("assets/text_v1/sese024_status.xml");
         assert_validated("sese.024.001.10", xml);
         assert_eq!(msg_get("TxId").as_deref(), Some(b"SETTLEMENT-123".as_ref()));
         assert_eq!(msg_get("SttlmSts").as_deref(), Some(b"SETT".as_ref()));
@@ -6493,33 +5818,7 @@ mod tests {
 
     #[test]
     fn parse_camt029_resolution_of_investigation() {
-        let xml = r#"
-<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.029.001.09">
-  <RsltnOfInvstgtn>
-    <Assgnmt>
-      <Id>IROHA-CAMT029-ORIGINAL-1</Id>
-      <CreDtTm>2025-11-12T09:34:09Z</CreDtTm>
-    </Assgnmt>
-    <Sts>
-      <Conf>CNCL</Conf>
-    </Sts>
-    <CxlDtls>
-      <OrgnlGrpInf>
-        <OrgnlMsgId>ORIGINAL-1</OrgnlMsgId>
-        <OrgnlMsgNmId>pacs.009</OrgnlMsgNmId>
-      </OrgnlGrpInf>
-      <TxInfAndSts>
-        <OrgnlInstrId>tx-hash-1</OrgnlInstrId>
-        <TxCxlSts>CNCL</TxCxlSts>
-        <CxlStsRsnInf>
-          <Rsn><Prtry>CANCELLED_BY_LEDGER</Prtry></Rsn>
-          <AddtlInf>cancelled by participant request</AddtlInf>
-        </CxlStsRsnInf>
-      </TxInfAndSts>
-    </CxlDtls>
-  </RsltnOfInvstgtn>
-</Document>
-"#;
+        let xml = include_str!("assets/text_v1/camt029_resolution.xml");
         assert_validated("camt.029.001.09", xml);
         assert_eq!(
             msg_get("Assgnmt/Id").as_deref(),
@@ -7108,37 +6407,7 @@ mod tests {
     #[test]
     fn signature_blocks_marked_as_ignored() {
         reset();
-        let xml = r#"
-            <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
-                <FIToFICstmrCdtTrf>
-                    <GrpHdr>
-                        <MsgId>sig-001</MsgId>
-                    </GrpHdr>
-                    <CdtTrfTxInf>
-                        <IntrBkSttlmAmt Ccy="USD">10</IntrBkSttlmAmt>
-                        <IntrBkSttlmDt>2024-01-01</IntrBkSttlmDt>
-                        <DbtrAcct>
-                            <Id><IBAN>GB82WEST12345698765432</IBAN></Id>
-                        </DbtrAcct>
-                        <CdtrAcct>
-                            <Id><IBAN>GB33BUKB20201555555555</IBAN></Id>
-                        </CdtrAcct>
-                        <DbtrAgt>
-                            <FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId>
-                        </DbtrAgt>
-                        <CdtrAgt>
-                            <FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId>
-                        </CdtrAgt>
-                    </CdtTrfTxInf>
-                    <Sgntr>
-                        <SignedInfo>
-                            <SignatureMethod>dummy</SignatureMethod>
-                        </SignedInfo>
-                        <SignatureValue>Zm9vYmFy</SignatureValue>
-                    </Sgntr>
-                </FIToFICstmrCdtTrf>
-            </Document>
-        "#;
+        let xml = include_str!("assets/text_v1/pacs008_signature.xml");
         msg_parse("pacs.008", xml.as_bytes()).expect("parse pacs.008 with signature");
         assert_eq!(
             msg_get("Document/FIToFICstmrCdtTrf/Sgntr/@ignored").as_deref(),

@@ -49,14 +49,14 @@ outputs = [
   "crates/iroha_data_model/non_transparent_api.rs",
   "crates/iroha_data_model/transparent_api.rs",
 ]
-# TODO: Repair the legacy extractor before using it to regenerate this
-# curated public API facade, then replace this exception with a drift check.
-generator = "historical scripts/generate_data_model_api; currently non-authoritative"
+# The obsolete extractor was retired because it could not reproduce this
+# curated public API facade. The crate tests remain the authoritative check.
+generator = "retired legacy extractor; no authoritative generator"
 generator_sources = []
 inputs = []
 check = "cargo test --locked -p iroha_data_model"
 external = true
-provenance = "checked-in public API facade; legacy generator requires repair before regeneration"
+provenance = "checked-in public API facade; obsolete non-authoritative extractor retired"
 
 [[generated]]
 name = "musubi-v1-signed-fixtures"
@@ -710,19 +710,6 @@ inputs = [
   "defaults/*.toml",
 ]
 check = "bash scripts/tests/consistency.sh docker-compose"
-
-# TODO: Restore scripts/etenraku_analysis.py and the licensed reference
-# recording so this historical trace can be reproduced inside the repository.
-[[generated]]
-name = "iroha-monitor-etenraku-reference-trace"
-kind = "file"
-outputs = ["crates/iroha_monitor/src/etenraku_trace.rs"]
-generator = "historical scripts/etenraku_analysis.py reference-recording analysis"
-generator_sources = []
-inputs = []
-check = "cargo test --locked -p iroha_monitor"
-external = true
-provenance = "historical reference trace; the original generator and recording are not tracked"
 
 # Kagami profile generation consumes the ignored/untracked root Cargo.lock at
 # runtime. The fail-closed wrapper authenticates its stable regular-file bytes

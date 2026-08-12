@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "policy_name": "pii.retention.v1",
+  "jurisdiction": "us",
+  "default_retention_days": 2555,
+  "deletion_grace_days": 30,
+  "bindings": [
+    "pii_records",
+    "pii_consent_events"
+  ],
+  "audit_tag": "pii.retention.audit"
+}

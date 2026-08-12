@@ -1,0 +1,261 @@
+{
+  "schema": "iroha_core.ivm_host.alias_contract_cases.v1",
+  "cases": [
+    {
+      "id": "contract_call_transaction_account_id_alias_shorthand_uses_current_binding",
+      "setup": {
+        "kind": "domainless_current",
+        "value": null
+      },
+      "recipient_expression": "AccountId::parse(\"merchant@paynet\")",
+      "direct_source": "\nseiyaku AliasPayout {\n  state AssetDefinitionId SettlementAsset;\n\n  hajimari(AssetDefinitionId settlement_asset) {\n    SettlementAsset = settlement_asset;\n  }\n\n  kotoage fn bind(AssetDefinitionId settlement_asset) authorize(\"AssetOps\") {\n    SettlementAsset = settlement_asset;\n  }\n\n  kotoage fn pay(quantity amount) -> quantity authorize(\"AssetOps\") {\n    ledger::asset::transfer(source: context::authority(), destination: AccountId::parse(\"merchant@paynet\"), asset_definition: SettlementAsset, amount: amount, dataspace: DataSpaceId::parse(\"0\"));\n    return amount;\n  }\n}\n",
+      "setup_seed": null,
+      "transaction_hash_byte": null,
+      "rebind_seed": 178,
+      "messages": []
+    },
+    {
+      "id": "contract_call_transaction_resolve_account_alias_builtin_uses_current_binding",
+      "setup": {
+        "kind": "domainless_current",
+        "value": null
+      },
+      "recipient_expression": "ledger::account::resolve_alias(\"merchant@paynet\")",
+      "direct_source": "\nseiyaku AliasPayout {\n  state AssetDefinitionId SettlementAsset;\n\n  hajimari(AssetDefinitionId settlement_asset) {\n    SettlementAsset = settlement_asset;\n  }\n\n  kotoage fn bind(AssetDefinitionId settlement_asset) authorize(\"AssetOps\") {\n    SettlementAsset = settlement_asset;\n  }\n\n  kotoage fn pay(quantity amount) -> quantity authorize(\"AssetOps\") {\n    let merchant = ledger::account::resolve_alias(\"merchant@paynet\");\n    ledger::asset::transfer(source: context::authority(), destination: merchant, asset_definition: SettlementAsset, amount: amount, dataspace: DataSpaceId::parse(\"0\"));\n    return amount;\n  }\n}\n",
+      "setup_seed": 179,
+      "transaction_hash_byte": null,
+      "rebind_seed": null,
+      "messages": []
+    },
+    {
+      "id": "contract_call_transaction_domain_qualified_resolve_account_alias_builtin_uses_current_binding",
+      "setup": {
+        "kind": "domain_current",
+        "value": null
+      },
+      "recipient_expression": "ledger::account::resolve_alias(\"merchant@bank.paynet\")",
+      "direct_source": null,
+      "setup_seed": 180,
+      "transaction_hash_byte": 244,
+      "rebind_seed": null,
+      "messages": []
+    },
+    {
+      "id": "contract_call_transaction_resolve_account_alias_builtin_without_permission_is_rejected",
+      "setup": {
+        "kind": "domainless_without_permission",
+        "value": null
+      },
+      "recipient_expression": "ledger::account::resolve_alias(\"merchant@paynet\")",
+      "direct_source": null,
+      "setup_seed": null,
+      "transaction_hash_byte": null,
+      "rebind_seed": null,
+      "messages": [
+        "alias resolution without permission should reject the transaction",
+        "failed alias resolution must not mint or transfer to the merchant account"
+      ]
+    },
+    {
+      "id": "contract_call_transaction_resolve_account_alias_builtin_without_binding_is_rejected",
+      "setup": {
+        "kind": "domainless_without_binding",
+        "value": null
+      },
+      "recipient_expression": "ledger::account::resolve_alias(\"merchant@paynet\")",
+      "direct_source": null,
+      "setup_seed": null,
+      "transaction_hash_byte": null,
+      "rebind_seed": null,
+      "messages": [
+        "missing alias binding should reject builtin alias resolution",
+        "missing binding must not transfer to the merchant account"
+      ]
+    },
+    {
+      "id": "contract_call_transaction_resolve_account_alias_builtin_invalid_literal_is_rejected",
+      "setup": {
+        "kind": "invalid",
+        "value": null
+      },
+      "recipient_expression": "ledger::account::resolve_alias(\"merchant@\")",
+      "direct_source": null,
+      "setup_seed": null,
+      "transaction_hash_byte": null,
+      "rebind_seed": null,
+      "messages": [
+        "malformed builtin alias literal should reject the transaction"
+      ]
+    },
+    {
+      "id": "contract_call_transaction_domain_qualified_resolve_account_alias_builtin_without_domain_permission_is_rejected",
+      "setup": {
+        "kind": "domain_without_permission",
+        "value": null
+      },
+      "recipient_expression": "ledger::account::resolve_alias(\"merchant@bank.paynet\")",
+      "direct_source": null,
+      "setup_seed": 209,
+      "transaction_hash_byte": 245,
+      "rebind_seed": null,
+      "messages": [
+        "domain-qualified builtin alias resolution should require domain permission",
+        "failed alias resolution must not mint or transfer to the merchant account"
+      ]
+    },
+    {
+      "id": "contract_call_transaction_account_id_alias_shorthand_without_binding_is_rejected",
+      "setup": {
+        "kind": "domainless_without_binding",
+        "value": null
+      },
+      "recipient_expression": "AccountId::parse(\"merchant@paynet\")",
+      "direct_source": null,
+      "setup_seed": null,
+      "transaction_hash_byte": null,
+      "rebind_seed": null,
+      "messages": [
+        "missing alias binding should reject the transaction",
+        "missing binding must not transfer to the merchant account"
+      ]
+    },
+    {
+      "id": "contract_call_transaction_account_id_alias_shorthand_invalid_literal_is_rejected",
+      "setup": {
+        "kind": "invalid",
+        "value": null
+      },
+      "recipient_expression": "AccountId::parse(\"merchant@\")",
+      "direct_source": null,
+      "setup_seed": null,
+      "transaction_hash_byte": null,
+      "rebind_seed": null,
+      "messages": [
+        "malformed alias literal should reject the transaction"
+      ]
+    },
+    {
+      "id": "contract_call_transaction_domain_qualified_account_id_alias_shorthand_without_domain_permission_is_rejected",
+      "setup": {
+        "kind": "domain_without_permission",
+        "value": null
+      },
+      "recipient_expression": "AccountId::parse(\"merchant@bank.paynet\")",
+      "direct_source": null,
+      "setup_seed": 210,
+      "transaction_hash_byte": 246,
+      "rebind_seed": null,
+      "messages": [
+        "domain-qualified shorthand alias resolution should require domain permission",
+        "failed alias resolution must not mint or transfer to the merchant account"
+      ]
+    },
+    {
+      "id": "contract_call_transaction_domain_qualified_account_id_alias_shorthand_accepts_domain_permission_without_dataspace_permission",
+      "setup": {
+        "kind": "domain_permission_only",
+        "value": null
+      },
+      "recipient_expression": "AccountId::parse(\"merchant@bank.paynet\")",
+      "direct_source": null,
+      "setup_seed": 211,
+      "transaction_hash_byte": 247,
+      "rebind_seed": null,
+      "messages": [
+        "exact domain permission should resolve shorthand without dataspace permission",
+        "domain-scoped shorthand recipient asset"
+      ]
+    },
+    {
+      "id": "contract_call_transaction_domain_qualified_account_id_alias_shorthand_without_binding_is_rejected",
+      "setup": {
+        "kind": "domain_without_binding",
+        "value": null
+      },
+      "recipient_expression": "AccountId::parse(\"merchant@bank.paynet\")",
+      "direct_source": null,
+      "setup_seed": 212,
+      "transaction_hash_byte": 248,
+      "rebind_seed": null,
+      "messages": [
+        "missing domain-qualified alias binding should reject shorthand alias resolution",
+        "missing binding must not transfer to the merchant account"
+      ]
+    },
+    {
+      "id": "contract_call_transaction_domain_qualified_resolve_account_alias_builtin_without_binding_is_rejected",
+      "setup": {
+        "kind": "domain_without_binding",
+        "value": null
+      },
+      "recipient_expression": "ledger::account::resolve_alias(\"merchant@bank.paynet\")",
+      "direct_source": null,
+      "setup_seed": 213,
+      "transaction_hash_byte": 249,
+      "rebind_seed": null,
+      "messages": [
+        "missing domain-qualified alias binding should reject builtin alias resolution",
+        "missing binding must not transfer to the merchant account"
+      ]
+    },
+    {
+      "id": "contract_call_transaction_domain_qualified_resolve_account_alias_builtin_accepts_domain_permission_without_dataspace_permission",
+      "setup": {
+        "kind": "domain_permission_only",
+        "value": null
+      },
+      "recipient_expression": "ledger::account::resolve_alias(\"merchant@bank.paynet\")",
+      "direct_source": null,
+      "setup_seed": 214,
+      "transaction_hash_byte": 250,
+      "rebind_seed": null,
+      "messages": [
+        "exact domain permission should resolve builtin without dataspace permission",
+        "domain-scoped builtin recipient asset"
+      ]
+    },
+    {
+      "id": "contract_call_transaction_domain_qualified_resolve_account_alias_builtin_invalid_literal_is_rejected",
+      "setup": {
+        "kind": "invalid",
+        "value": null
+      },
+      "recipient_expression": "ledger::account::resolve_alias(\"merchant@bank.\")",
+      "direct_source": null,
+      "setup_seed": null,
+      "transaction_hash_byte": null,
+      "rebind_seed": null,
+      "messages": [
+        "malformed domain-qualified builtin alias literal should reject the transaction"
+      ]
+    },
+    {
+      "id": "contract_call_transaction_domain_qualified_account_id_alias_shorthand_invalid_literal_is_rejected",
+      "setup": {
+        "kind": "invalid",
+        "value": null
+      },
+      "recipient_expression": "AccountId::parse(\"merchant@bank.\")",
+      "direct_source": null,
+      "setup_seed": null,
+      "transaction_hash_byte": null,
+      "rebind_seed": null,
+      "messages": [
+        "malformed domain-qualified shorthand alias literal should reject the transaction"
+      ]
+    },
+    {
+      "id": "contract_call_transaction_domain_qualified_account_id_alias_shorthand_uses_current_binding",
+      "setup": {
+        "kind": "domain_current",
+        "value": null
+      },
+      "recipient_expression": "AccountId::parse(\"merchant@bank.paynet\")",
+      "direct_source": "\nseiyaku AliasPayout {\n  state AssetDefinitionId SettlementAsset;\n\n  hajimari(AssetDefinitionId settlement_asset) {\n    SettlementAsset = settlement_asset;\n  }\n\n  kotoage fn bind(AssetDefinitionId settlement_asset) authorize(\"AssetOps\") {\n    SettlementAsset = settlement_asset;\n  }\n\n  kotoage fn pay(quantity amount) -> quantity authorize(\"AssetOps\") {\n    ledger::asset::transfer(source: context::authority(), destination: AccountId::parse(\"merchant@bank.paynet\"), asset_definition: SettlementAsset, amount: amount, dataspace: DataSpaceId::parse(\"0\"));\n    return amount;\n  }\n}\n",
+      "setup_seed": 215,
+      "transaction_hash_byte": 251,
+      "rebind_seed": null,
+      "messages": []
+    }
+  ]
+}

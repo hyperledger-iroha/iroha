@@ -1,0 +1,4 @@
+
+seiyaku CompilerFixture {
+fn main() { let _subject = context::seiyaku_subject(1); }
+}

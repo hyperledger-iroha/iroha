@@ -27,8 +27,16 @@ def load_module():
     return module
 
 
-def init_release_repo(path: Path) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+def init_release_repo(path: Path, *, object_format: str = "sha1") -> None:
+    init = subprocess.run(
+        ["git", "init", "-q", f"--object-format={object_format}"],
+        cwd=path,
+        check=False,
+        stderr=subprocess.PIPE,
+    )
+    if init.returncode != 0 and object_format == "sha256":
+        pytest.skip("installed Git does not support SHA-256 repositories")
+    init.check_returncode()
     subprocess.run(
         ["git", "config", "user.email", "release-test@example.invalid"],
         cwd=path,
@@ -50,6 +58,26 @@ def init_release_repo(path: Path) -> None:
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _git_mutable_state(index: Path, objects: Path) -> tuple[object, ...]:
+    index_metadata = index.lstat()
+    index_state = (
+        index_metadata.st_dev,
+        index_metadata.st_ino,
+        index_metadata.st_mode,
+        index_metadata.st_nlink,
+        index_metadata.st_size,
+        index_metadata.st_mtime_ns,
+        index_metadata.st_ctime_ns,
+        index.read_bytes(),
+    )
+    object_state = {
+        path.relative_to(objects).as_posix(): path.read_bytes()
+        for path in objects.rglob("*")
+        if path.is_file() and not path.is_symlink()
+    }
+    return index_state, object_state
 
 
 def _seal_bytes(module, records: list[tuple[bytes, bytes, int, bytes]]) -> bytes:
@@ -129,6 +157,32 @@ def test_manifest_is_order_independent_and_content_sensitive(tmp_path: Path) -> 
         module.write_source_path_list(path_list, ["a.txt"])
 
 
+def test_source_path_list_rejects_replacement_after_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_module()
+    path_list = tmp_path / "source-paths.bin"
+    replacement = tmp_path / "replacement-source-paths.bin"
+    retained = tmp_path / "retained-source-paths.bin"
+    module.write_source_path_list(path_list, ["a.txt"])
+    module.write_source_path_list(replacement, ["b.txt"])
+    real_lstat = Path.lstat
+    observations = 0
+
+    def replace_before_path_recheck(path: Path):
+        nonlocal observations
+        if path == path_list:
+            observations += 1
+            if observations == 2:
+                path_list.rename(retained)
+                replacement.rename(path_list)
+        return real_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", replace_before_path_recheck)
+    with pytest.raises(module.SourcePathListError, match="replaced while it was read"):
+        module.read_source_path_list(path_list)
+
+
 def test_manifest_distinguishes_deleted_and_symlink_entries(tmp_path: Path) -> None:
     module = load_module()
     (tmp_path / "target-a").write_text("same\n", encoding="utf-8")
@@ -204,6 +258,107 @@ def test_source_seal_is_deterministic_and_round_trips_exact_closure(
         module.workspace_source_manifest_from_path_list(destination, path_list)
         == manifest
     )
+
+
+def test_source_seal_rejects_parent_replacement_during_payload_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_module()
+    root = tmp_path / "root"
+    source = root / "source"
+    retained = root / "retained-source"
+    replacement = root / "replacement-source"
+    source.mkdir(parents=True)
+    replacement.mkdir()
+    (source / "member").write_bytes(b"reviewed payload")
+    (replacement / "member").write_bytes(b"replacement payload")
+    path_list = tmp_path / "paths.bin"
+    module.write_source_path_list(path_list, ["source/member"])
+    manifest = module.workspace_source_manifest_from_path_list(root, path_list)
+    archive = tmp_path / "source.seal"
+    real_open = module.os.open
+    swapped = False
+
+    def replace_parent_during_payload_open(path, flags, *args, **kwargs):
+        nonlocal swapped
+        if path == b"member" and kwargs.get("dir_fd") is not None and not swapped:
+            swapped = True
+            source.rename(retained)
+            replacement.rename(source)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "open", replace_parent_during_payload_open)
+    with pytest.raises(module.SourceSealError, match="source parent changed"):
+        module.create_source_seal(root, path_list, archive, manifest)
+    assert swapped
+    assert not archive.exists()
+
+
+def test_source_seal_rejects_root_replacement_during_payload_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_module()
+    root = tmp_path / "root"
+    retained = tmp_path / "retained-root"
+    replacement = tmp_path / "replacement-root"
+    root.mkdir()
+    replacement.mkdir()
+    (root / "member").write_bytes(b"reviewed payload")
+    (replacement / "member").write_bytes(b"replacement payload")
+    path_list = tmp_path / "paths.bin"
+    module.write_source_path_list(path_list, ["member"])
+    manifest = module.workspace_source_manifest_from_path_list(root, path_list)
+    archive = tmp_path / "source.seal"
+    real_open = module.os.open
+    swapped = False
+
+    def replace_root_during_payload_open(path, flags, *args, **kwargs):
+        nonlocal swapped
+        if path == b"member" and kwargs.get("dir_fd") is not None and not swapped:
+            swapped = True
+            root.rename(retained)
+            replacement.rename(root)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "open", replace_root_during_payload_open)
+    with pytest.raises(module.SourceSealError, match="source root changed"):
+        module.create_source_seal(root, path_list, archive, manifest)
+    assert swapped
+    assert not archive.exists()
+
+
+def test_source_seal_rejects_deleted_member_appearing_during_seal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_module()
+    root = tmp_path / "root"
+    nested = root / "nested"
+    nested.mkdir(parents=True)
+    deleted = nested / "deleted"
+    path_list = tmp_path / "paths.bin"
+    module.write_source_path_list(path_list, ["nested/deleted"])
+    manifest = module.workspace_source_manifest_from_path_list(root, path_list)
+    archive = tmp_path / "source.seal"
+    real_stat = module.os.stat
+    observations = 0
+
+    def appear_after_deleted_revalidation(path, *args, **kwargs):
+        nonlocal observations
+        if path == b"deleted" and kwargs.get("dir_fd") is not None:
+            observations += 1
+            try:
+                return real_stat(path, *args, **kwargs)
+            except FileNotFoundError:
+                if observations == 2:
+                    deleted.write_bytes(b"late source")
+                raise
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "stat", appear_after_deleted_revalidation)
+    with pytest.raises(module.SourceSealError, match="source changed after"):
+        module.create_source_seal(root, path_list, archive, manifest)
+    assert observations >= 2
+    assert not archive.exists()
 
 
 @pytest.mark.parametrize(
@@ -957,16 +1112,44 @@ def test_workspace_manifest_rejects_resolved_but_uncommitted_merge(
         module.workspace_source_manifest(tmp_path)
 
 
-def test_release_identity_binds_clean_head_tree_manifest_and_lock(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("object_format", "object_id_length"), [("sha1", 40), ("sha256", 64)]
+)
+def test_release_identity_binds_clean_head_tree_manifest_and_lock(
+    tmp_path: Path,
+    object_format: str,
+    object_id_length: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     module = load_module()
-    init_release_repo(tmp_path)
+    init_release_repo(tmp_path, object_format=object_format)
+    index = module._git_path(tmp_path, "index")
+    objects = module._git_path(tmp_path, "objects")
+    git_state = _git_mutable_state(index, objects)
+    monkeypatch.setenv("GIT_DIR", str(tmp_path / "hostile-git-dir"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(tmp_path / "hostile-index"))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.fsmonitor")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "true")
+    monkeypatch.setenv("GIT_EXTERNAL_DIFF", str(tmp_path / "hostile-diff"))
+    trace_paths = [
+        tmp_path / "hostile-trace",
+        tmp_path / "hostile-trace2-event",
+        tmp_path / "hostile-trace-curl",
+    ]
+    monkeypatch.setenv("GIT_TRACE", str(trace_paths[0]))
+    monkeypatch.setenv("GIT_TRACE2_EVENT", str(trace_paths[1]))
+    monkeypatch.setenv("GIT_TRACE_CURL", str(trace_paths[2]))
 
     identity = module.release_source_identity(tmp_path)
+    assert _git_mutable_state(index, objects) == git_state
+    assert all(not path.exists() for path in trace_paths)
     assert identity["head_tree"] == identity["index_tree"]
     assert identity["workspace_source_manifest_sha256"] == module.workspace_source_manifest(
         tmp_path
     )
-    assert len(identity["head_commit"]) == 40
+    assert len(identity["head_commit"]) == object_id_length
+    assert len(identity["head_tree"]) == object_id_length
     assert len(identity["cargo_lock_sha256"]) == 64
 
     (tmp_path / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
@@ -980,13 +1163,155 @@ def test_release_identity_binds_clean_head_tree_manifest_and_lock(tmp_path: Path
     )
 
 
-def test_release_identity_rejects_staged_source(tmp_path: Path) -> None:
+def test_release_identity_streams_lock_once_per_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     module = load_module()
     init_release_repo(tmp_path)
-    (tmp_path / "tracked.txt").write_text("staged\n", encoding="utf-8")
-    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
+    real_open = module.os.open
+    lock_opens = 0
+
+    def count_lock_open(path, flags, *args, **kwargs):
+        nonlocal lock_opens
+        if path == b"Cargo.lock" and kwargs.get("dir_fd") is not None:
+            lock_opens += 1
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "open", count_lock_open)
+    identity = module.release_source_identity(tmp_path)
+    assert identity["cargo_lock_sha256"] == _sha256(tmp_path / "Cargo.lock")
+    assert lock_opens == 2
+
+
+@pytest.mark.parametrize("object_format", ["sha1", "sha256"])
+def test_release_identity_rejects_staged_source_without_git_mutation(
+    tmp_path: Path, object_format: str
+) -> None:
+    module = load_module()
+    init_release_repo(tmp_path, object_format=object_format)
+    staged = tmp_path / "staged.rs"
+    staged.write_text("fn staged_source() {}\n", encoding="utf-8")
+    subprocess.run(["git", "add", staged.name], cwd=tmp_path, check=True)
+    index = module._git_path(tmp_path, "index")
+    objects = module._git_path(tmp_path, "objects")
+    git_state = _git_mutable_state(index, objects)
+    worktree_state = staged.read_bytes()
 
     with pytest.raises(module.DirtyReleaseSourceError, match="index is not HEAD"):
+        module.release_source_identity(tmp_path)
+
+    assert _git_mutable_state(index, objects) == git_state
+    assert staged.read_bytes() == worktree_state
+
+
+def test_workspace_manifest_rejects_regular_file_replaced_before_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_module()
+    source = tmp_path / "source.rs"
+    retained = tmp_path / "retained-source.rs"
+    outside = tmp_path / "outside.rs"
+    source.write_text("fn reviewed() {}\n", encoding="utf-8")
+    outside.write_text("fn outside() {}\n", encoding="utf-8")
+    real_open = module.os.open
+    replaced = False
+
+    def replace_before_open(path, flags, *args, **kwargs):
+        nonlocal replaced
+        if (
+            path == os.fsencode(source.name)
+            and kwargs.get("dir_fd") is not None
+            and not replaced
+        ):
+            replaced = True
+            source.rename(retained)
+            source.symlink_to(outside)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "open", replace_before_open)
+    with pytest.raises(module.SourceSealError, match="changed before it was opened"):
+        module._manifest_for_paths(tmp_path, ["source.rs"])
+    assert outside.read_text(encoding="utf-8") == "fn outside() {}\n"
+
+
+def test_workspace_manifest_rejects_parent_directory_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_module()
+    source_parent = tmp_path / "source"
+    retained_parent = tmp_path / "retained-source"
+    replacement_parent = tmp_path / "replacement-source"
+    source_parent.mkdir()
+    replacement_parent.mkdir()
+    (source_parent / "member.rs").write_text(
+        "fn reviewed() {}\n", encoding="utf-8"
+    )
+    (replacement_parent / "member.rs").write_text(
+        "fn outside() {}\n", encoding="utf-8"
+    )
+    real_open = module.os.open
+    replaced = False
+
+    def replace_parent_before_leaf_open(path, flags, *args, **kwargs):
+        nonlocal replaced
+        if (
+            path == b"member.rs"
+            and kwargs.get("dir_fd") is not None
+            and not replaced
+        ):
+            replaced = True
+            source_parent.rename(retained_parent)
+            replacement_parent.rename(source_parent)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "open", replace_parent_before_leaf_open)
+    with pytest.raises(module.SourceSealError, match="source parent changed"):
+        module._manifest_for_paths(tmp_path, ["source/member.rs"])
+
+
+def test_release_identity_repeats_clean_index_after_manifest_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+    real_snapshot = module._release_workspace_snapshot
+    calls = 0
+
+    def stage_after_second_snapshot(root: Path) -> tuple[str, str]:
+        nonlocal calls
+        result = real_snapshot(root)
+        calls += 1
+        if calls == 2:
+            injected = root / "late-staged.rs"
+            injected.write_text("fn late_staged() {}\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", injected.name], cwd=root, check=True
+            )
+        return result
+
+    monkeypatch.setattr(
+        module, "_release_workspace_snapshot", stage_after_second_snapshot
+    )
+    with pytest.raises(
+        module.DirtyReleaseSourceError,
+        match="source changed during identity capture",
+    ):
+        module.release_source_identity(tmp_path)
+
+
+def test_release_identity_rejects_unmerged_before_deriving_a_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_module()
+    monkeypatch.setattr(module, "_reject_active_git_operations", lambda _root: None)
+    monkeypatch.setattr(module, "_git_unmerged_paths", lambda _root: ["conflict.rs"])
+    monkeypatch.setattr(
+        module,
+        "_git_stdout",
+        lambda *_args: pytest.fail("tree derivation reached an unmerged index"),
+    )
+
+    with pytest.raises(module.UnmergedSourceError, match="conflict.rs"):
         module.release_source_identity(tmp_path)
 
 
@@ -999,6 +1324,34 @@ def test_release_identity_rejects_tracked_worktree_drift(tmp_path: Path) -> None
         module.release_source_identity(tmp_path)
 
 
+def test_release_identity_never_executes_repository_clean_filter(tmp_path: Path) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+    marker = tmp_path / "filter-executed"
+    filter_script = tmp_path / ".git" / "evil-clean-filter"
+    filter_script.write_text(
+        "#!/bin/sh\n: >\"$1\"\ncat\n", encoding="utf-8"
+    )
+    filter_script.chmod(0o700)
+    info_attributes = tmp_path / ".git" / "info" / "attributes"
+    info_attributes.write_text("*.txt filter=evil\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "config", "filter.evil.clean", f"{filter_script} {marker}"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "filter.evil.required", "true"],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / "tracked.txt").write_text("dirty\n", encoding="utf-8")
+
+    with pytest.raises(module.DirtyReleaseSourceError, match="tracked changes"):
+        module.release_source_identity(tmp_path)
+    assert not marker.exists()
+
+
 def test_release_identity_rejects_nonignored_untracked_source(tmp_path: Path) -> None:
     module = load_module()
     init_release_repo(tmp_path)
@@ -1007,6 +1360,131 @@ def test_release_identity_rejects_nonignored_untracked_source(tmp_path: Path) ->
     with pytest.raises(
         module.DirtyReleaseSourceError, match="non-ignored untracked paths"
     ):
+        module.release_source_identity(tmp_path)
+
+
+def test_release_identity_ignores_local_untracked_exclusions(tmp_path: Path) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+    external_excludes = tmp_path / ".git" / "external-excludes"
+    external_excludes.write_text("hidden-by-config.rs\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "config", "core.excludesFile", str(external_excludes)],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / ".git" / "info" / "exclude").write_text(
+        "hidden-by-info.rs\n", encoding="utf-8"
+    )
+    (tmp_path / "hidden-by-config.rs").write_text(
+        "fn hidden_by_config() {}\n", encoding="utf-8"
+    )
+    (tmp_path / "hidden-by-info.rs").write_text(
+        "fn hidden_by_info() {}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        module.DirtyReleaseSourceError, match="hidden-by-config.rs"
+    ):
+        module.release_source_identity(tmp_path)
+
+
+def test_release_identity_pins_configured_core_worktree(tmp_path: Path) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+    redirected = tmp_path.parent / f"{tmp_path.name}-redirected-worktree"
+    redirected.mkdir()
+    subprocess.run(
+        ["git", "config", "core.worktree", str(redirected)],
+        cwd=tmp_path,
+        check=True,
+    )
+    (tmp_path / "root-untracked.rs").write_text(
+        "fn root_untracked() {}\n", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        module.DirtyReleaseSourceError, match="root-untracked.rs"
+    ):
+        module.release_source_identity(tmp_path)
+
+
+def test_release_identity_rejects_untracked_ignore_policy(tmp_path: Path) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / ".gitignore").write_text("*\n", encoding="utf-8")
+    (nested / "hidden.rs").write_text("fn hidden() {}\n", encoding="utf-8")
+
+    with pytest.raises(
+        module.DirtyReleaseSourceError, match="untracked ignore policy.*nested/.gitignore"
+    ):
+        module.release_source_identity(tmp_path)
+
+
+def test_release_identity_rejects_populated_gitlink(tmp_path: Path) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    init_release_repo(nested)
+    subprocess.run(["git", "add", "nested"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "track nested gitlink"], cwd=tmp_path, check=True
+    )
+
+    with pytest.raises(module.DirtyReleaseSourceError, match="nested"):
+        module.release_source_identity(tmp_path)
+
+
+def test_release_identity_does_not_ignore_staged_gitlink_change(tmp_path: Path) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+    first = tmp_path / "first-nested"
+    second = tmp_path / "second-nested"
+    first.mkdir()
+    second.mkdir()
+    init_release_repo(first)
+    init_release_repo(second)
+    (second / "tracked.txt").write_text("second revision\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "commit", "-qam", "second revision"], cwd=second, check=True
+    )
+    first_oid = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=first,
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+    second_oid = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=second,
+        check=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", "160000", first_oid, "sub"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-qm", "track gitlink"], cwd=tmp_path, check=True
+    )
+    subprocess.run(
+        ["git", "update-index", "--cacheinfo", "160000", second_oid, "sub"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "submodule.sub.ignore", "all"],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    with pytest.raises(module.DirtyReleaseSourceError, match="index is not HEAD.*sub"):
         module.release_source_identity(tmp_path)
 
 

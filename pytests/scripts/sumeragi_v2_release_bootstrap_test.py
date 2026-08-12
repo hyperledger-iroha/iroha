@@ -1,5 +1,4 @@
 """Adversarial tests for the externally trusted Sumeragi v2 bootstrap."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -17,11 +16,7 @@ import sys
 import time
 
 import pytest
-
-from pytests.scripts.sumeragi_v2_release_bootstrap_tool_manifest_support import (
-    runner_tool_manifest as _runner_tool_manifest,
-)
-
+from pytests.scripts import sumeragi_v2_release_bootstrap_tool_manifest_support as _tool_support
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BOOTSTRAP = REPO_ROOT / "scripts" / "bootstrap_sumeragi_v2_release.py"
@@ -46,8 +41,6 @@ DEFAULT_SCALING_DIGESTS = {
     "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256": "c" * 64,
     "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256": "d" * 64,
 }
-
-
 def _load_bootstrap_module() -> object:
     spec = importlib.util.spec_from_file_location(
         "sumeragi_release_bootstrap_test_module", BOOTSTRAP
@@ -57,11 +50,8 @@ def _load_bootstrap_module() -> object:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
-
-
 def test_release_trust_inputs_are_the_only_new_runner_environment_names() -> None:
     module = _load_bootstrap_module()
-
     preexisting_allowlist = {
         "CARGO_HOME",
         "CARGO_NET_GIT_FETCH_WITH_CLI",
@@ -79,8 +69,6 @@ def test_release_trust_inputs_are_the_only_new_runner_environment_names() -> Non
     assert module._RUNNER_ENV_ALLOWLIST == preexisting_allowlist | set(
         expected_release_environment
     )
-
-
 def test_release_runner_waits_for_natural_completion(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1192,6 +1180,7 @@ class Fixture:
     verifier: Path
     receipt_validator: Path
     receipt_validator_support: Path
+    runtime_helper: Path
     tool_manifest: Path
     git: Path
     ssh: Path
@@ -1223,6 +1212,8 @@ class Fixture:
             "--receipt-validator-support", str(self.receipt_validator_support),
             "--expected-receipt-validator-support-sha256",
             _sha256(self.receipt_validator_support),
+            "--runtime-helper", str(self.runtime_helper),
+            "--expected-runtime-helper-sha256", _sha256(self.runtime_helper),
             "--runner-tool-manifest", str(self.tool_manifest),
             "--expected-runner-tool-manifest-sha256", _sha256(self.tool_manifest),
             "--bash-bin", str(self.bash),
@@ -1272,6 +1263,7 @@ def release_fixture(tmp_path: Path) -> Fixture:
     trust.mkdir()
     launch_count = root / "launch-count"
     evidence = root / "evidence"
+    _tool_support.provision_future_archived_python_runtime(PYTHON, root)
     _write(candidate / "Cargo.lock", b"locked\n")
     _write(candidate / "payload", b"candidate\n")
     manifest = _write(trust / "manifest.py", _manifest_helper(), 0o500)
@@ -1284,8 +1276,13 @@ def release_fixture(tmp_path: Path) -> Fixture:
         RECEIPT_VALIDATOR_SUPPORT.read_bytes(),
         0o400,
     )
+    runtime_helper = _write(
+        trust / "runtime-helper.py",
+        (REPO_ROOT / "scripts" / "copy_sumeragi_v2_release_cargo_cache.py").read_bytes(),
+        0o400,
+    )
     tool_manifest = _write(
-        trust / "runner-tool-manifest.json", _runner_tool_manifest(), 0o400
+        trust / "runner-tool-manifest.json", _tool_support.runner_tool_manifest(trust), 0o400
     )
     git = _write(trust / "git", "#!/bin/sh\nexit 0\n", 0o500)
     ssh = _write(trust / "ssh-keygen", "#!/bin/sh\nexit 0\n", 0o500)
@@ -1315,6 +1312,7 @@ def release_fixture(tmp_path: Path) -> Fixture:
         verifier,
         receipt_validator,
         receipt_validator_support,
+        runtime_helper,
         tool_manifest,
         git,
         ssh,
@@ -1386,6 +1384,7 @@ def _rebind_bootstrap_trusted_input(
         source.read_bytes(),
         archive_mode,
     )
+    _tool_support.provision_rebound_archived_python_runtime(label, source, archive)
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
     digest = _sha256(source)
     marker["trusted_inputs"][label] = {
@@ -1971,6 +1970,7 @@ def test_terminal_receipt_rejects_g12_seed_soak_root_alias(
         "--expected-identity-verifier-sha256",
         "--expected-receipt-validator-sha256",
         "--expected-receipt-validator-support-sha256",
+        "--expected-runtime-helper-sha256",
         "--expected-runner-tool-manifest-sha256",
         "--expected-bash-sha256",
         "--expected-ssh-allowed-signers-sha256",

@@ -406,7 +406,7 @@ if [[ "$RUN_SCOPE" == "nexus" ]]; then
     --
     "${TEST_ARGS[@]}"
   )
-  echo "Command: ${ENV_VARS[*]} cargo +1.93.1 ${CMD[0]} -j1 ${CMD[*]:1}"
+  echo "Command: ${ENV_VARS[*]} ${IROHA_RELEASE_CARGO_BIN} ${CMD[0]} -j1 ${CMD[*]:1}"
   (
     export "${ENV_VARS[@]}"
     run_cargo "${CMD[@]}"
@@ -457,7 +457,7 @@ if [[ "$RUN_SCOPE" == "native-amx" ]]; then
     return "$status"
   }
   trap cleanup_native_amx_run_log EXIT
-  echo "Command: ${ENV_VARS[*]} IROHA_RUN_IGNORED=1 cargo +1.93.1 ${CMD[0]} -j1 ${CMD[*]:1}"
+  echo "Command: ${ENV_VARS[*]} IROHA_RUN_IGNORED=1 ${IROHA_RELEASE_CARGO_BIN} ${CMD[0]} -j1 ${CMD[*]:1}"
   set +e
   (
     export "${ENV_VARS[@]}"
@@ -549,7 +549,7 @@ if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
       --show-output
       "${TEST_ARGS[@]}"
     )
-    echo "Command: ${ENV_VARS[*]} IROHA_MULTILANE_RELEASE_MODE=1 cargo +1.93.1 ${CMD[0]} -j1 ${CMD[*]:1}"
+    echo "Command: ${ENV_VARS[*]} IROHA_MULTILANE_RELEASE_MODE=1 ${IROHA_RELEASE_CARGO_BIN} ${CMD[0]} -j1 ${CMD[*]:1}"
     set +e
     (
       export "${ENV_VARS[@]}"
@@ -646,7 +646,7 @@ if [[ "$RUN_SCOPE" == "case" ]]; then
       --exact
       "${TEST_ARGS[@]}"
     )
-    echo "Command: ${RUN_ENV[*]} cargo +1.93.1 ${CMD[0]} -j1 ${CMD[*]:1}"
+    echo "Command: ${RUN_ENV[*]} ${IROHA_RELEASE_CARGO_BIN} ${CMD[0]} -j1 ${CMD[*]:1}"
     set +e
     (
       export "${RUN_ENV[@]}"
@@ -710,7 +710,7 @@ CMD=(
   --ignored
   "${TEST_ARGS[@]}"
 )
-echo "Command: ${RUN_ENV[*]} cargo +1.93.1 ${CMD[0]} -j1 ${CMD[*]:1}"
+echo "Command: ${RUN_ENV[*]} ${IROHA_RELEASE_CARGO_BIN} ${CMD[0]} -j1 ${CMD[*]:1}"
 set +e
 (
   export "${RUN_ENV[@]}"

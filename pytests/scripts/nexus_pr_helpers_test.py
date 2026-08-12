@@ -249,6 +249,7 @@ printf '%s\t%s\t%s\t%s\n' \
   >>"$NEXUS_HELPER_CAPTURE"
 """,
     )
+    env["IROHA_RELEASE_CARGO_BIN"] = str(cargo)
 
     result = _run(helper, env)
 
@@ -259,7 +260,7 @@ printf '%s\t%s\t%s\t%s\n' \
     ]
     assert len(rows) == 4
     assert all(
-        row[0].startswith("+1.93.1 test -j1 --locked --offline ")
+        row[0].startswith("test -j1 --locked --offline ")
         for row in rows
     )
     assert [

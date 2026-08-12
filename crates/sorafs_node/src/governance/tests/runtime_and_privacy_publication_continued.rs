@@ -354,12 +354,9 @@ fn filesystem_publisher_writes_moderation_ballot_event_files_and_runtime_dag() {
     validate_governance_dag_head_against_chain_v1(&head, &blocks)
         .expect("runtime head validates against signed blocks");
     assert_eq!(blocks.len(), 1);
-    let expected_provenance =
-        test_submission_provenance(crate::GovernanceSubmissionOriginV1::AppealFinanceReport)
-            .to_dag_provenance();
-    assert_eq!(
-        blocks[0].node.submission_provenance.as_ref(),
-        Some(&expected_provenance)
+    assert!(
+        blocks[0].node.submission_provenance.is_none(),
+        "moderation ballot events have no authenticated-submission provenance input"
     );
     match &blocks[0].node.payload {
         GovernanceLogPayloadV1::ModerationBallotEvent(value) => {
@@ -1500,7 +1497,7 @@ fn authenticated_submission_identity_participates_in_publication_idempotency() {
     let (report, encoded) = sample_appeal_finance_report();
     let first =
         test_submission_provenance(crate::GovernanceSubmissionOriginV1::AppealFinanceReport);
-    let other_key = PublicKey::from_bytes(Algorithm::Ed25519, &[0xA6; 32])
+    let other_key = PublicKey::from_bytes(Algorithm::Ed25519, &[0x97; 32])
         .expect("fixed second publisher key must be valid");
     let second = GovernanceSubmissionProvenanceV1::new(
         AccountId::new(other_key),

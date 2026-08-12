@@ -19,9 +19,10 @@ if [[ "$#" == 1 && ( "$1" == "-h" || "$1" == "--help" ) ]]; then
   cat <<'EOF'
 Usage: scripts/sumeragi_v2_release_cargo_proxy.sh <cargo-subcommand> <arguments...>
 
-Run one supported Cargo command through the shared +1.93.1,
+Run one supported Cargo command through the authenticated Cargo 1.93.1 binary,
 --locked/--offline/-j1 and no-interference release policy. The caller must set
-CARGO_TARGET_DIR to a fresh owner-private directory below /private/tmp and
+CARGO_TARGET_DIR to a fresh owner-private directory below /private/tmp,
+IROHA_RELEASE_CARGO_BIN to its absolute canonical executable, and keep both
 outside this source tree.
 EOF
   exit 0

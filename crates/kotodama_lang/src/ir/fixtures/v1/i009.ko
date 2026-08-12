@@ -1,0 +1,8 @@
+
+            fn project(Option<int> value) -> int {
+                match value {
+                    Option::some(item) => item,
+                    Option::none => 0,
+                }
+            }
+        

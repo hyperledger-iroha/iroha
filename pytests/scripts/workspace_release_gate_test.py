@@ -26,6 +26,16 @@ COMPILE_UNIT_GUARD_COMMAND = (
     "--json-out target/ci/iroha-data-model-compile-units.json"
 )
 COMPILE_UNIT_REPORT = "target/ci/iroha-data-model-compile-units.json"
+COMPILE_UNIT_ARTIFACT_IDENTITY = "cargo-package-target-features-profile-v2"
+REQUIRED_NUMERIC_TEST_COMMANDS = (
+    "cargo test --locked -p ivm --test ivm_group_06 numeric_",
+    "cargo test --locked -p ivm --test ivm_group_01 abi_hash_versions::",
+    "cargo test --locked -p ivm --test ivm_group_03 gas_schedule_hash",
+    "cargo test --locked -p ivm --test ivm_group_05 "
+    "kotodama_checked_arithmetic::",
+    "cargo test --locked -p iroha_primitives "
+    "randomized_decimal_arithmetic_matches_independent_rational_reference",
+)
 
 
 def _job_block(workflow: str, name: str) -> str:
@@ -227,6 +237,11 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         normalized_affected = _normalized(affected_job)
         affected_requirements = (
             "matrix: ${{ fromJSON(needs.rust_changes.outputs.matrix) }}",
+            "uses: actions-rust-lang/setup-rust-toolchain@"
+            f"{SETUP_RUST_TOOLCHAIN_COMMIT}",
+            'cache: "false"',
+            f"toolchain: {PINNED_RUST}",
+            f"shared-key: rust-lane-{PINNED_RUST}-${{{{ matrix.lane }}}}",
             "if: matrix.lane == 'execution'",
             COMPILE_UNIT_GUARD_COMMAND,
             "if: always() && matrix.lane == 'execution'",
@@ -278,8 +293,12 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         for line in numeric_job.splitlines()
         if line.strip().startswith("cargo test ")
     ]
-    if len(numeric_commands) != 4:
-        errors.append("PR numeric parity must retain all four consensus test commands")
+    for required_command in REQUIRED_NUMERIC_TEST_COMMANDS:
+        if required_command not in numeric_commands:
+            errors.append(
+                "PR numeric parity is missing required command: "
+                f"{required_command}"
+            )
     for command in numeric_commands:
         if not command.startswith("cargo test --locked "):
             errors.append(f"PR numeric parity command is not locked: {command}")
@@ -304,15 +323,17 @@ def test_compile_unit_baseline_pins_the_cross_platform_measurement_scope() -> No
     """The checked-in ratchet describes exactly the graph enforced in CI."""
 
     payload = json.loads(COMPILE_UNIT_BASELINE.read_text(encoding="utf-8"))
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     baseline = payload["iroha_data_model_lib"]
     assert baseline["compile_units"] > 0
+    assert baseline["artifact_identity"] == COMPILE_UNIT_ARTIFACT_IDENTITY
     assert baseline["manifest_path"] == "Cargo.toml"
     assert baseline["packages"] == ["iroha_data_model"]
     assert baseline["target"] == "lib"
     assert baseline["artifact_scope"] == "workspace"
     assert baseline["cargo_locked"] is True
     assert baseline["toolchain"] == PINNED_RUST
+    assert baseline["workspace"] is False
     assert baseline["budget_percent"] == 2
     assert baseline["budget_min_growth"] == 3
 
@@ -513,6 +534,15 @@ def test_release_workflow_guard_rejects_weakening(
             lambda workflow: _replace_once_in_job(
                 workflow,
                 "rust_affected",
+                f"toolchain: {PINNED_RUST}",
+                "toolchain: stable",
+            ),
+            "PR affected Rust job is missing required behavior",
+        ),
+        (
+            lambda workflow: _replace_once_in_job(
+                workflow,
+                "rust_affected",
                 "if: matrix.lane == 'execution'",
                 "if: false",
             ),
@@ -554,6 +584,14 @@ def test_release_workflow_guard_rejects_weakening(
                 "cargo test -p ivm --test ivm_group_06 numeric_",
             ),
             "PR numeric parity command is not locked",
+        ),
+        (
+            lambda workflow: _replace_once(
+                workflow,
+                "cargo test --locked -p ivm --test ivm_group_03 gas_schedule_hash",
+                "true # numeric gas schedule coverage removed",
+            ),
+            "PR numeric parity is missing required command",
         ),
     ),
 )

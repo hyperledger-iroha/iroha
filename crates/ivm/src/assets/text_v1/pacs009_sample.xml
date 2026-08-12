@@ -1,0 +1,20 @@
+
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.009.001.10">
+  <FICdtTrf>
+    <GrpHdr>
+      <MsgId>PACS009-GRP</MsgId>
+      <CreDtTm>2024-01-01T12:00:00Z</CreDtTm>
+      <BizMsgIdr>PACS009-BIZ</BizMsgIdr>
+      <MsgDefIdr>pacs.009.001.10</MsgDefIdr>
+    </GrpHdr>
+    <CdtTrfTxInf>
+      <IntrBkSttlmAmt Ccy="USD">2500</IntrBkSttlmAmt>
+      <IntrBkSttlmDt>2024-01-03</IntrBkSttlmDt>
+      <InstgAgt><FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId></InstgAgt>
+      <InstdAgt><FinInstnId><BICFI>MARKDEFF</BICFI></FinInstnId></InstdAgt>
+      <DbtrAcct><Id><IBAN>GB82WEST12345698765432</IBAN></Id></DbtrAcct>
+      <CdtrAcct><Id><IBAN>GB33BUKB20201555555555</IBAN></Id></CdtrAcct>
+      <Purp><Cd>SECU</Cd></Purp>
+    </CdtTrfTxInf>
+  </FICdtTrf>
+</Document>

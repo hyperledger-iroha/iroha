@@ -14,6 +14,7 @@ impl LifecycleCoordinator {
 
     /// Settle a Certified-Serve terminal from one sealed post-fsync replay
     /// family replacement.
+    #[cfg(test)]
     pub(super) fn settle_turn_with_durable_serve_terminal(
         &mut self,
         lease: TurnLease,

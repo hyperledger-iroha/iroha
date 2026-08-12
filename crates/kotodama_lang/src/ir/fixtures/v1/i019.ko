@@ -1,0 +1,7 @@
+
+            seiyaku ScalarState {
+                state int counter;
+                hajimari() { counter = 0; }
+                fn read() -> int { return counter; }
+            }
+        

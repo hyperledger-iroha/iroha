@@ -4585,7 +4585,8 @@ fn qc_signers(qc: &LaneBlockQcV1) -> Vec<PeerId> {
 
 #[cfg(test)]
 fn session_proposal_height(session: &LaneBlockSession) -> Option<u64> {
-    session.proposal
+    session
+        .proposal
         .as_ref()
         .map(|proposal| proposal.descriptor.proposal_height)
         .or_else(|| {
@@ -5659,7 +5660,7 @@ mod tests {
                 version: 1,
                 intent: LaneDrainIntentV1 {
                     version: 1,
-                    network_id: network_id(b"lane-drain-genesis"),
+                    network_id: crate::sumeragi::synthetic_network_id("lane-drain-genesis"),
                     lane_id: LaneId::new(7),
                     dataspace_id: DataSpaceId::new(9),
                     lane_incarnation: Hash::new(b"lane-drain-incarnation"),
@@ -5737,7 +5738,6 @@ mod tests {
         let (mut body, _) = lane_drain_fixture(&keys);
         body.final_frontier = native_drain_frontier_fixture();
         validate_lane_drain_certificate_body(&body).expect("valid Native-derived drain frontier");
-
         let without_native = {
             let mut changed = body.clone();
             changed.final_frontier.native_application = None;
@@ -6053,7 +6053,8 @@ mod tests {
 
         let mut forged_bodies = Vec::new();
         let mut forged = certificate.clone();
-        forged.body.intent.network_id = network_id(b"foreign-drain-genesis");
+        forged.body.intent.network_id =
+            crate::sumeragi::synthetic_network_id("foreign-drain-genesis");
         forged_bodies.push(forged);
         let mut forged = certificate.clone();
         forged.body.intent.lane_id = LaneId::new(8);

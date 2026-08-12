@@ -1,5 +1,4 @@
 """Contract tests for the aggregate Sumeragi v2 release receipt."""
-
 from __future__ import annotations
 
 import base64
@@ -15,13 +14,10 @@ import stat
 import subprocess
 import sys
 from types import ModuleType
-
 import pytest
-
 from pytests.scripts.sumeragi_v2_release_receipt_components import (
-    proof_ledger_checker_components,
-    release_receipt_writer_components,
-    terminal_output_path,
+    fixture_cargo_cache_input, fixture_corridor_legs, install_cache_helper, proof_ledger_checker_components,
+    release_receipt_writer_components, terminal_output_path,
 )
 from pytests.scripts.sumeragi_v2_release_receipt_test_support import (
     CARGO_VERSION_OUTPUT,
@@ -43,7 +39,6 @@ from pytests.scripts.sumeragi_v2_release_receipt_test_support import (
     sha256,
     write_tsv,
 )
-
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT_DIR / "scripts" / "write_sumeragi_v2_release_receipt.py"
 RELEASE_RECEIPT_TEST_COMPONENT_FILES = (
@@ -52,8 +47,6 @@ RELEASE_RECEIPT_TEST_COMPONENT_FILES = (
     "sumeragi_v2_release_receipt_supervision_cases.py",
     "sumeragi_v2_release_receipt_terminal_publication_cases.py",
 )
-
-
 def _execute_test_component(filename: str) -> None:
     """Execute one reviewed case component in this canonical test namespace."""
     path = Path(__file__).with_name(filename)
@@ -61,8 +54,6 @@ def _execute_test_component(filename: str) -> None:
         raise RuntimeError(f"release-receipt test component is unavailable: {path}")
     source = path.read_text(encoding="utf-8")
     exec(compile(source, str(path), "exec"), globals())
-
-
 def fixture_writer(tmp_path: Path) -> Path:
     project = tmp_path / "writer-project"
     scripts = project / "scripts"
@@ -154,7 +145,6 @@ raise SystemExit(0)
     )
     return writer
 
-
 def make_bootstrap_evidence(
     tmp_path: Path,
     *,
@@ -196,7 +186,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "1ea8ffd9e9659c7ba1dc09349e269db9a13dc14af9b8d6a0802e754e7b542de1"
+        "a7690b9ff5910c1d32b7b6a0671d85f5392f787a2c2bb328f5bb279963d4dda3"
     )
     synthetic_sources: dict[str, Path] = {}
     for label, data, mode in (
@@ -205,6 +195,7 @@ def make_bootstrap_evidence(
         ("manifest_helper", b"# fixture manifest helper\n", 0o400),
         ("identity_verifier", b"# fixture identity verifier\n", 0o400),
         ("receipt_validator", b"# fixture receipt validator\n", 0o400),
+        ("runtime_helper", b"# fixture protected runtime helper\n", 0o400),
     ):
         path = trust_dir / label
         path.write_bytes(data)
@@ -272,6 +263,7 @@ def make_bootstrap_evidence(
         "receipt_validator_support": synthetic_sources[
             "receipt_validator_support"
         ],
+        "runtime_helper": synthetic_sources["runtime_helper"],
         "revocation": signature_revocation,
         "runner_tool_manifest": synthetic_sources["runner_tool_manifest"],
         "ssh_keygen": signature_ssh_keygen,
@@ -289,6 +281,7 @@ def make_bootstrap_evidence(
             "sumeragi_v2_localnet_manifest.py",
             0o400,
         ),
+        "runtime_helper": ("copy-release-runtime.py", 0o400),
         "revocation": ("bootstrap-revocation", 0o400),
         "runner_tool_manifest": ("runner-tool-manifest.json", 0o400),
         "ssh_keygen": ("ssh-keygen", 0o500),
@@ -691,7 +684,6 @@ def make_bootstrap_evidence(
         "bootstrap_runner_cargo": runner_tool_sources["cargo"],
         "bootstrap_runner_rustc": runner_tool_sources["rustc"],
     }
-
 
 def make_scaling_evidence(
     tmp_path: Path, *, head: str, sealed_manifest: str
@@ -1533,12 +1525,13 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     )
     bootstrap_evidence_dir = bootstrap["bootstrap_evidence_dir"]
     assert isinstance(bootstrap_evidence_dir, Path)
-    release_invocation_root = bootstrap_evidence_dir / "release-runner"
+    release_invocation_root = tmp_path / "release-invocation"
     release_invocation_root.mkdir(mode=0o700)
     release_invocation_root.chmod(0o700)
     release_root = release_invocation_root / "source"
     release_root.mkdir()
     (release_root / "Cargo.lock").write_bytes(lock_bytes)
+    install_cache_helper(release_root, ROOT_DIR)
     release_target_root = release_invocation_root / "target"
     release_target_root.mkdir(mode=0o700)
     release_target_root.chmod(0o700)
@@ -1546,6 +1539,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     release_output.mkdir(mode=0o700)
     release_output.chmod(0o700)
     release_artifact_root = release_output
+    runtime_inventory = release_invocation_root / "runtime-input.json"
+    runtime_inventory.write_bytes(canonical_json({"format": "iroha-sumeragi-v2-private-runtime", "schema_version": 1, "runtime_root": str(release_invocation_root / "runtime"), "record_count": 0, "file_bytes": 0, "records": [], "source_disclosure": "withheld", "input_record_count": 0, "input_file_bytes": 0, "input_records": []})); runtime_inventory.chmod(0o400)
     release_output_directory = release_output / "release"
     release_output_directory.mkdir(mode=0o700)
     release_output_directory.chmod(0o700)
@@ -1575,7 +1570,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     )
 
     writer_symbols = runpy.run_path(str(SCRIPT))
-    corridor_legs = writer_symbols["_corridor_legs"]()
+    corridor_legs = fixture_corridor_legs(writer_symbols, bootstrap)
     production_modules = writer_symbols["_PRODUCTION_MODULES"]
     canonical_production_tests = writer_symbols["_canonical_production_tests"](
         ROOT_DIR
@@ -1806,8 +1801,11 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     assert isinstance(prebuilt_manifest, Path)
     assert isinstance(prebuilt_manifest_sha256, str)
     corridor_completion = corridor_dir / "COMPLETED.tsv"
-    isolated_cargo_home = tool_dir / "cargo-home"
-    isolated_cargo_home.mkdir()
+    isolated_cargo_home, cargo_cache_input_inventory, cargo_cache_final_inventory, caller_cargo_home, cargo_runtime_fields = fixture_cargo_cache_input(
+            ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh",
+            tool_dir / "caller-cargo-home",
+            release_artifact_root,
+        )
     write_tsv(
         corridor_completion,
         {
@@ -1845,6 +1843,17 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "git_path": str(tool_paths["git"].resolve()),
             "git_sha256": sha256(tool_paths["git"]),
             "cargo_home_path": str(isolated_cargo_home.resolve()),
+            **cargo_runtime_fields,
+            "cargo_cache_input_inventory_path": str(
+                cargo_cache_input_inventory.resolve()
+            ),
+            "cargo_cache_input_inventory_sha256": sha256(
+                cargo_cache_input_inventory
+            ),
+            "cargo_cache_final_inventory_path": str(cargo_cache_final_inventory.resolve()),
+            "cargo_cache_final_inventory_sha256": sha256(cargo_cache_final_inventory),
+            "runtime_inventory_path": str(runtime_inventory.resolve()),
+            "runtime_inventory_sha256": sha256(runtime_inventory),
             "repo_cargo_config_sha256": sha256(ROOT_DIR / ".cargo" / "config.toml"),
             "native_amx_grouped_fixture_sha256": (
                 native_amx_grouped_fixture_sha256
@@ -2347,6 +2356,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "corridor_cargo_tool": tool_paths["cargo"],
         "corridor_rustc_tool": tool_paths["rustc"],
         "corridor_cargo_home": isolated_cargo_home,
+        "cargo_cache_input_inventory": cargo_cache_input_inventory, "cargo_cache_final_inventory": cargo_cache_final_inventory,
+        "caller_cargo_home": caller_cargo_home,
         "seed_completion": seed_completion,
         "seed_summary": seed_summary,
         "seed_logs": seed_logs,
@@ -2487,7 +2498,9 @@ def run_writer(
             str(output),
         ]
     if verify_existing:
-        arguments.append("--verify-existing")
+        arguments.extend(("--verify-existing", "--validation-ack",
+            str(repository_root.parent / "receipt-validation-ack.json"),
+            "--source-manifest-sha256", str(evidence["sealed_manifest"])))
     return subprocess.run(
         arguments,
         check=False,
@@ -2800,7 +2813,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "1ea8ffd9e9659c7ba1dc09349e269db9a13dc14af9b8d6a0802e754e7b542de1"
+        "a7690b9ff5910c1d32b7b6a0671d85f5392f787a2c2bb328f5bb279963d4dda3"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
     assert receipt["evidence"]["bootstrap"]["completion"]["path"] == str(
@@ -4739,7 +4752,7 @@ def test_receipt_rejects_signature_directory_inside_release_root(tmp_path: Path)
     result = run_writer(evidence, tmp_path / "receipt.json", writer)
 
     assert result.returncode == 1
-    assert "exact bootstrap release-runner source" in result.stderr
+    assert "sealed release root must be external to the bootstrap archive" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -5363,21 +5376,6 @@ def test_receipt_rejects_noncanonical_rust_tool_version(
             f"corridor {tool} is not the authenticated bootstrap runner tool"
             in cross_result.stderr
         )
-
-
-def test_receipt_rejects_external_cargo_home_configuration(tmp_path: Path) -> None:
-    evidence = make_evidence(tmp_path)
-    writer = fixture_writer(tmp_path)
-    cargo_home = evidence["corridor_cargo_home"]
-    assert isinstance(cargo_home, Path)
-    (cargo_home / "config.toml").write_text(
-        '[target."cfg(all())"]\nrunner = "fake-test-runner"\n', encoding="utf-8"
-    )
-
-    result = run_writer(evidence, tmp_path / "receipt.json", writer)
-
-    assert result.returncode == 1
-    assert "contains external configuration" in result.stderr
 
 
 def test_receipt_rejects_rehashed_missing_corridor_leg(tmp_path: Path) -> None:

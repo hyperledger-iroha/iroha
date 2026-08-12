@@ -21,6 +21,14 @@ def _timeout_vote_episode_source_fidelity_errors(
     }
     sources: dict[str, str] = {}
     for role, path in paths.items():
+        if role == "ingress" and path.is_file() and not path.is_symlink():
+            _reviewed_path, sources[role] = _read_reviewed_rust_source(
+                repo_root,
+                path.relative_to(repo_root).as_posix(),
+                errors,
+                "timeout-vote episode ingress source",
+            )
+            continue
         if not path.is_file() or path.is_symlink():
             errors.append(
                 f"{path}: timeout-vote episode {role} source must be a regular file"
@@ -153,6 +161,14 @@ def _timeout_vote_episode_source_fidelity_errors(
             ),
         )
 
+    queue_gate = bind_item(
+        "ingress::fair_v2_ingress_queue_gate_verdict",
+        "ingress",
+        "fair_v2_ingress_queue_gate_verdict",
+        (),
+        "queue-local timeout-vote barrier verdict",
+    )
+
     run_inner = bind_item(
         "runner::run_inner",
         "runner",
@@ -247,6 +263,7 @@ def _timeout_vote_episode_source_fidelity_errors(
         "ingress::try_recv_if_checked_retiring_obsolete_with_barrier_bypass",
         "ingress::try_recv_if_at_checked",
         "ingress::try_recv_if_at_checked_classified",
+        "ingress::fair_v2_ingress_queue_gate_verdict",
         "runner::run_inner",
         "runner::drain_v2_ingress",
         "runtime::RuntimeTimeoutVoteEpisodeOwner::validate_against",
@@ -366,20 +383,15 @@ fair_v2_ingress_is_timeout_vote(&entry.inbound)
     selector = items["ingress::try_recv_if_at_checked_classified"]
     _require_rust_token_sequence(
         ingress_path,
-        selector,
+        queue_gate,
         """
-let timeout_vote_episode_dependency =
-    barrier_bypass
-        == FairV2IngressBarrierBypass::TimeoutVoteEpisode
-        && fair_v2_ingress_is_direct_validator_timeout_vote_owner(
-            source, entry,
-        )
-        && (leader_wire_barrier.as_ref().is_some_and(|owner| {
-            owner.token.identity.phase
-                == FairV2IngressLeaderWirePhase::CertifiedResponse
-        }) || (leader_wire_barrier.is_none()
-            && (selected_serve_barrier.is_some()
-                || certified_body_request_cutoff.is_some())));
+let timeout_vote_episode_dependency = barrier_bypass
+    == FairV2IngressBarrierBypass::TimeoutVoteEpisode
+    && fair_v2_ingress_is_direct_validator_timeout_vote_owner(source, entry)
+    && (leader_wire_barrier.is_some_and(|owner| {
+        owner.token.identity.phase == FairV2IngressLeaderWirePhase::CertifiedResponse
+    }) || (leader_wire_barrier.is_none()
+        && (selected_serve_barrier.is_some() || certified_body_request_cutoff.is_some())));
 let dependency_bypass = !ingress_barrier_allows
     && (serve_fence_escape_dependency
         || timeout_vote_episode_dependency

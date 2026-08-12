@@ -2968,8 +2968,8 @@ mod tests {
         );
         let contract = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &adjacent_owner,
             77,
             DataSpaceId::UNIVERSAL,
@@ -3031,8 +3031,8 @@ mod tests {
         let raw = PermissionObject::from(CanInvokeContractEntrypoint {
             contract: ContractAddress::derive(
                 &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                    .parse()
+                    .expect("canonical test network id"),
                 &make_other_account_id(),
                 88,
                 DataSpaceId::UNIVERSAL,

@@ -524,6 +524,8 @@ include!("kura/certified_bundle_capacity_reservation_types.rs");
 /// global state checkpoints into storage.
 #[derive(Debug)]
 pub struct Kura {
+    /// Process-local identity shared with sealed lifecycle storage authority.
+    instance_identity: Arc<KuraInstanceIdentityMarker>,
     /// The block storage
     block_store: Mutex<BlockStore>,
     /// Serializes destructive canonical-chain changes with finality association and lane relabels.
@@ -839,6 +841,29 @@ pub struct Kura {
     _store_root_lock_file: Option<std::fs::File>,
     /// Retains the temporary storage directory used by isolated Kura instances.
     _temp_store_dir: Option<tempfile::TempDir>,
+}
+
+#[derive(Debug)]
+struct KuraInstanceIdentityMarker;
+
+/// Comparison-only identity for one exact live Kura instance.
+///
+/// This seal carries no storage path and cannot reopen Kura. Lifecycle startup
+/// retains it solely to prevent a canonical owner built under one Kura from
+/// launching its workers against another.
+#[derive(Clone, Debug)]
+pub(crate) struct KuraInstanceIdentity(Arc<KuraInstanceIdentityMarker>);
+
+impl KuraInstanceIdentity {
+    /// Return whether this seal came from the exact supplied Kura instance.
+    pub(crate) fn matches(&self, kura: &Kura) -> bool {
+        Arc::ptr_eq(&self.0, &kura.instance_identity)
+    }
+
+    /// Return whether two seals name the same live Kura instance.
+    pub(crate) fn same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 include!("kura/prune_commit_merge_support.rs");
@@ -2649,6 +2674,7 @@ impl Kura {
         }
 
         let kura = Arc::new(Self {
+            instance_identity: Arc::new(KuraInstanceIdentityMarker),
             _store_root_lock_file: Some(store_root_lock_file),
             block_store: Mutex::new(block_store),
             canonical_chain_lock: Mutex::new(()),
@@ -3002,6 +3028,7 @@ impl Kura {
             )
             .expect("default Native AMX prune-intent bound is valid");
         Arc::new(Self {
+            instance_identity: Arc::new(KuraInstanceIdentityMarker),
             _store_root_lock_file: None,
             block_store: Mutex::new(block_store),
             canonical_chain_lock: Mutex::new(()),
@@ -15229,6 +15256,11 @@ impl Kura {
     /// deliberately does not create this path as a side effect of lookup.
     pub(crate) fn sumeragi_v2_storage_root(&self) -> PathBuf {
         self.store_root.join("sumeragi_v2")
+    }
+
+    /// Project a comparison-only identity for this exact live Kura owner.
+    pub(crate) fn instance_identity(&self) -> KuraInstanceIdentity {
+        KuraInstanceIdentity(Arc::clone(&self.instance_identity))
     }
 
     fn canonical_header_for_v2_finality(
@@ -43844,7 +43876,6 @@ impl BlockStore {
         }
 
         self.recover_canonical_storage_stages()?;
-
         self.invalidate_data_mmap();
         debug!(
             start_height,
@@ -43876,12 +43907,10 @@ impl BlockStore {
             start_height,
             start_location_in_data_file, "append_block_batch computed start location"
         );
-
         let mut frames = Vec::with_capacity(blocks.len());
         let mut lengths = Vec::with_capacity(blocks.len());
         let mut offsets = Vec::with_capacity(blocks.len());
         let mut hashes = Vec::with_capacity(blocks.len());
-
         for (idx, block) in blocks.iter().enumerate() {
             debug!(
                 start_height,
@@ -43902,7 +43931,6 @@ impl BlockStore {
                 "append_block_batch encoded block"
             );
         }
-
         debug!(
             start_height,
             frames = frames.len(),
@@ -43953,7 +43981,6 @@ impl BlockStore {
             &lengths,
             &hashes,
         )?;
-
         let journal_result = (|| -> Result<()> {
             let data_file = self.ensure_data_file()?;
             data_file.try_io(|file| {
@@ -43983,7 +44010,6 @@ impl BlockStore {
                 file.seek(SeekFrom::Start(end_pos))?;
                 file.set_len(end_pos)
             })?;
-
             let hashes_file = self.ensure_hashes_file()?;
             let start_location = start_height * SIZE_OF_BLOCK_HASH;
             let new_hashes_len = start_location + SIZE_OF_BLOCK_HASH * u64::try_from(blocks.len())?;
@@ -44000,7 +44026,6 @@ impl BlockStore {
                 start_height,
                 new_hashes_len, "append_block_batch wrote hashes"
             );
-
             // Write the index after data + hashes so the commit marker can safely advance.
             let index_file = self.ensure_index_file()?;
             let new_index_len = (start_height + blocks.len() as u64) * BlockIndex::SIZE;
@@ -44431,6 +44456,18 @@ include!("kura/file_error_support.rs");
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn instance_identity_names_only_the_exact_live_kura() {
+        let first = super::Kura::blank_kura_for_testing();
+        let second = super::Kura::blank_kura_for_testing();
+        let first_identity = first.instance_identity();
+
+        assert!(first_identity.matches(first.as_ref()));
+        assert!(first_identity.same_instance(&first.instance_identity()));
+        assert!(!first_identity.matches(second.as_ref()));
+        assert!(!first_identity.same_instance(&second.instance_identity()));
+    }
+
     // Textual includes preserve every test in the existing `kura::tests` namespace.
     include!("kura/tests/01_support_snapshot_bootstrap_and_rewrite.rs");
     include!("kura/tests/01_prune_capacity_support.rs");

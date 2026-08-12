@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main() {
+  let _payload = context::public_input(1);
+}
+
+}

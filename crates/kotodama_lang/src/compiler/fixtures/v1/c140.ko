@@ -1,0 +1,9 @@
+
+seiyaku ZeroScanNoOp {
+  state StateMap<int, int> Entries;
+
+  view fn scan() -> int {
+    var int total = 0;
+    return total;
+  }
+}

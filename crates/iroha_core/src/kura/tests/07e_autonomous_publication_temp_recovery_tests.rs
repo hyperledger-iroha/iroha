@@ -377,7 +377,7 @@ fn process_generation_atomic_temp_recovery_uses_the_real_writer_boundary() {
     assert!(!stable_path.exists());
 
     let conflicting_initial = AutonomousLifecycleProcessGenerationRecordV1::new(
-        Hash::new(b"conflicting-retained-initial-chain"),
+        test_network_id(b"conflicting-retained-initial-chain"),
         local_peer.clone(),
         1,
     )
@@ -552,8 +552,8 @@ fn retained_initial_process_generation_quarantine_constrains_first_durable_claim
     let authority_peer = PeerId::new(authority_signer.public_key().clone());
     let conflicting_signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let conflicting_peer = PeerId::new(conflicting_signer.public_key().clone());
-    let authority_chain = Hash::new(b"retained-initial-process-generation-authority");
-    let conflicting_chain = Hash::new(b"conflicting-initial-process-generation-chain");
+    let authority_chain = test_network_id(b"retained-initial-process-generation-authority");
+    let conflicting_chain = test_network_id(b"conflicting-initial-process-generation-chain");
     let retained_record = AutonomousLifecycleProcessGenerationRecordV1::new(
         authority_chain,
         authority_peer.clone(),

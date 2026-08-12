@@ -1,0 +1,6 @@
+
+seiyaku CompilerFixture {
+    view fn length(bytes value) -> int {
+        return bytes::len(value);
+    }
+}

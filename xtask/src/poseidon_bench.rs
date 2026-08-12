@@ -91,7 +91,7 @@ pub fn run_poseidon_bench(
             .unwrap_or_else(|_| std::env::consts::ARCH.to_string()),
         os: std::env::var("CARGO_CFG_TARGET_OS")
             .unwrap_or_else(|_| std::env::consts::OS.to_string()),
-        cuda_feature: cfg!(feature = "cuda"),
+        cuda_feature: false,
         cuda_available: ivm::cuda_available(),
         cuda_disabled: ivm::cuda_disabled(),
         cuda_last_error: runtime_errors.cuda,
@@ -406,15 +406,11 @@ fn write_markdown(
 fn metal_runtime_status() -> (bool, bool, bool) {
     #[cfg(target_os = "macos")]
     {
-        (
-            cfg!(feature = "metal"),
-            ivm::metal_available(),
-            ivm::metal_disabled(),
-        )
+        (false, ivm::metal_available(), ivm::metal_disabled())
     }
     #[cfg(not(target_os = "macos"))]
     {
-        (cfg!(feature = "metal"), false, true)
+        (false, false, true)
     }
 }
 

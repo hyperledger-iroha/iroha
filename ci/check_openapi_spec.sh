@@ -115,7 +115,7 @@ resolve_allowed_signers_path() {
 
 require_clean_checkout() {
   if [[ -n "$(git -C "${REPO_ROOT}" status --porcelain=v1 --untracked-files=all)" ]]; then
-    echo "error: Torii OpenAPI release generation requires a clean checkout." >&2
+    echo "error: Torii OpenAPI authority replay requires a clean checkout." >&2
     echo "Commit or remove every tracked and untracked source change, then rerun from the pinned commit." >&2
     exit 1
   fi
@@ -368,7 +368,8 @@ GENERATED_RELEASE_ARTIFACTS=(
 
 print_refresh_help() {
   cat >&2 <<'EOF'
-Refresh the canonical manifest before syncing snapshots:
+Update artifacts/openapi/torii.json and its package-local mirror together, then
+replay the authority to refresh the canonical manifest and current alias:
   development: bash ci/run_openapi_generator.sh \
                  --output-dir <absolute-private-tmp>/openapi \
                  --unsigned-manifest
@@ -398,8 +399,9 @@ For an operator release, set OPENAPI_REQUIRE_SIGNED=1 and
 OPENAPI_ALLOWED_SIGNERS_FILE=<absolute-operator-allowlist-path> when running this gate.
 The checked-in allowlist is intentionally empty. Signed mode requires the
 root/latest/current release artifacts to be signed.
-This gate always requires a clean checkout and clean mutable generator
-provenance. generator_commit must resolve to a real ancestor of HEAD, and
+This gate always requires a clean checkout and clean mutable release
+provenance (the manifest retains its V2 generator_* field names).
+generator_commit must resolve to a real ancestor of HEAD, and
 generator_source_sha256_hex must match the canonical release-input inventory at
 both that pinned commit and the output-bearing HEAD. --allow-unsigned relaxes
 only the detached-signature requirement; it never permits generator_dirty.
@@ -417,12 +419,32 @@ require_clean_checkout
 OPENAPI_DIR="${REPLAY_SOURCE_FIRST}/artifacts/openapi"
 SPEC_PATH="${OPENAPI_DIR}/torii.json"
 CURRENT_SPEC_PATH="${OPENAPI_DIR}/versions/current/torii.json"
+PACKAGE_SPEC_PATH="${REPLAY_SOURCE_FIRST}/crates/iroha_torii/assets/openapi/torii.json"
 MANIFEST_PATH="${OPENAPI_DIR}/manifest.json"
 CURRENT_MANIFEST_PATH="${OPENAPI_DIR}/versions/current/manifest.json"
 ALLOWED_SIGNERS_PATH="$(resolve_allowed_signers_path "${REPLAY_SOURCE_FIRST}")"
 
+# The release authority, current alias, and package-local runtime mirror are one
+# byte identity. Reject drift before paying for either live-router replay.
+if [[ ! -f "${SPEC_PATH}" || -L "${SPEC_PATH}" ]]; then
+  echo "error: canonical Torii OpenAPI authority must be a regular file: ${SPEC_PATH}" >&2
+  exit 1
+fi
+for authority in "${CURRENT_SPEC_PATH}" "${PACKAGE_SPEC_PATH}"; do
+  if [[ ! -f "${authority}" || -L "${authority}" ]]; then
+    echo "error: checked-in Torii OpenAPI authority must be a regular file: ${authority}" >&2
+    exit 1
+  fi
+  if ! cmp -s "${SPEC_PATH}" "${authority}"; then
+    diff -u "${SPEC_PATH}" "${authority}" || true
+    echo "error: checked-in Torii OpenAPI authorities are not byte-identical." >&2
+    print_refresh_help
+    exit 1
+  fi
+done
+
 # Reject a stale first-release Musubi route/model contract before paying for
-# two complete Cargo generator replays. The read-only check runs from the same
+# two complete live-router replays. The read-only check runs from the same
 # sealed candidate mirror used by every Cargo gate below.
 (
   cd "${REPLAY_SOURCE_FIRST}"
@@ -445,8 +467,8 @@ fi
   GIT_OPTIONAL_LOCKS=0 node tools/openapi/scripts/verify-openapi-versions.mjs
 )
 
-# Generate from two independent, hard-link-free, sealed candidate clones into
-# private out-of-tree staging directories. Assemble both replays from the same
+# Load the static authority through live Torii routers in two independent,
+# hard-link-free, sealed candidate clones. Assemble both replays from the same
 # immutable checked-in baseline; the caller's checkout remains read-only.
 mkdir -m 700 "${REPLAY_BASELINE}"
 cp -R "${OPENAPI_DIR}/." "${REPLAY_BASELINE}/"
@@ -483,7 +505,7 @@ fi
 
 if ! diff -u "${SPEC_PATH}" "${GENERATED_SPEC_FIRST}" >/dev/null; then
   diff -u "${SPEC_PATH}" "${GENERATED_SPEC_FIRST}" || true
-  echo "error: artifacts/openapi/torii.json is stale." >&2
+  echo "error: the live Torii router did not serve the checked-in static authority." >&2
   print_refresh_help
   exit 1
 fi

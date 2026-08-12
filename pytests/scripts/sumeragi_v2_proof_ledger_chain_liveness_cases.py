@@ -12,6 +12,14 @@ def test_historical_body_response_phase_authority_is_exact(
         "wire::GlobalPhase::Commit => {}",
         "build_historical_body_response must preserve exact production order",
     )
+    test_successor_production_source_mapping_mutations_fail_closed(
+        tmp_path,
+        "crates/iroha_core/src/sumeragi/v2_block_sync.rs",
+        "fn build_historical_body_response(",
+        "authenticate_certified_body_request_with_validator_pops(",
+        "authenticate_certified_body_request(",
+        "build_historical_body_response must preserve exact production order",
+    )
 
 def test_async_historical_recovery_rejects_constants_and_endpoint_theorems(
     tmp_path: Path,

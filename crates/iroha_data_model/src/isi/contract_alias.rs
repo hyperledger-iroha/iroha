@@ -113,8 +113,8 @@ mod tests {
     fn contract_address() -> ContractAddress {
         ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &account(0xC1),
             7,
             DataSpaceId::UNIVERSAL,

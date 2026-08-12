@@ -64,16 +64,16 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
     footer = "=============================================================================\n"
 
     assert checker.ASYNC_LIVENESS_SHARD_MAX_THEOREMS == 150
-    assert recovery not in checker.ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS
+    assert checker.ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS[recovery] == 158
     assert continuation not in checker.ASYNC_LIVENESS_SHARD_REVIEWED_MAX_THEOREMS
     assert sum(
         kind == "theorem"
         for _, kind, _, _ in checker._top_level_declarations(sources[recovery])
-    ) == 150
+    ) == 158
     assert sum(
         kind == "theorem"
         for _, kind, _, _ in checker._top_level_declarations(sources[continuation])
-    ) == 24
+    ) == 47
     continuation_theorems = [
         name
         for name, kind, _, _ in checker._top_level_declarations(
@@ -96,12 +96,16 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
         + sources[continuation][len(continuation_header) : -len(footer)]
     )
     assert hashlib.sha256(combined_body.encode("utf-8")).hexdigest() == (
-        "47b2d3c026f34d25c09134f4afc7c1f06e2fe0f240cbfc86f10d6ee6b1ffb431"
+        "890905af5a1709778d0d5c1c34be35fec5e90895cd03484aba220644181a0bd4"
     )
 
     errors, providers = checker._async_liveness_shard_contract(sources)
     assert errors == []
     for theorem in (
+        "AsyncNextPreservesCandidateLifecycleSchedulerCoverage",
+        "AsyncNextPreservesStrongTypeInvariant",
+        "AsyncBracketNextPreservesStrongTypeInvariant",
+        "RetainedBodyRebindCandidateIsTypedAndOwned",
         "HistoricalVoteAdmissionIsExactLockedCommit",
         "HistoricalCommitFormationIsExactLockedRound",
         "HistoricalLockedCommitUsesProgressReserve",
@@ -110,6 +114,16 @@ def test_recovery_vote_epoch_boundary_is_exact_and_provider_safe() -> None:
         assert providers[theorem] == continuation
     assert checker._module_extends(sources[continuation]) == (recovery,)
     assert checker._module_extends(sources[fair_service]) == (continuation,)
+    sources[recovery] = sources[recovery].replace(
+        footer,
+        "THEOREM ReviewedRecoveryCeilingMutation == TRUE\nBY PTL\n\n" + footer,
+        1,
+    )
+    errors, _ = checker._async_liveness_shard_contract(sources)
+    assert any(
+        f"{recovery}.tla exceeds 158 top-level theorems: found 159" in error
+        for error in errors
+    ), errors
 
 
 def test_deadlock_shard_exact_finite_runner_dependency_is_acyclic() -> None:
@@ -186,7 +200,7 @@ def test_global_mechanical_body_reconstruction_is_exact() -> None:
         checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256
     )
     assert checker.ASYNC_LIVENESS_PRE_SPLIT_BODY_SHA256 == (
-        "946223a56f68896ae0484ec2d46acc7d3337e17beeb1409f3167d39ab294a52a"
+        "4038baf8706294252436e6dc8cf8934556c4553fb234df6a22e578f7f802a6ae"
     )
 
 

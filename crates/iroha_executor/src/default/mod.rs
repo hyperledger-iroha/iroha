@@ -541,8 +541,8 @@ mod contract_deployment_bootstrap_tests {
         let code_hash = Hash::new(b"executor lifecycle dispatch code");
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -722,8 +722,8 @@ mod contract_deployment_bootstrap_tests {
                 expected_deploy_nonce: 0,
                 contract_address: ContractAddress::derive(
                     &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                        .parse()
+                        .expect("canonical test network id"),
                     &authority,
                     0,
                     DataSpaceId::UNIVERSAL,

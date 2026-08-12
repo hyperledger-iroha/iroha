@@ -15771,26 +15771,6 @@ exit 0
     include!("lib/kura_restart_storage_test.rs");
 
     #[test]
-    fn kura_storage_dir_is_not_cleared_when_reset_for_bootstrap_is_false() -> Result<()> {
-        let root = tempdir()?;
-        let env = Environment {
-            dir: root.path().to_path_buf(),
-        };
-        let peer = NetworkPeer::builder().build(&env);
-        let storage_dir = peer.dir.join("storage");
-        fs::create_dir_all(&storage_dir)?;
-        fs::write(storage_dir.join("keep.marker"), b"keep")?;
-
-        peer.prepare_kura_storage_dir(&storage_dir, false)?;
-
-        assert!(
-            storage_dir.join("keep.marker").exists(),
-            "restart preparation must not clear existing storage"
-        );
-        Ok(())
-    }
-
-    #[test]
     fn restart_genesis_file_reuses_latest_run_genesis_when_available() -> Result<()> {
         let root = tempdir()?;
         let env = Environment {

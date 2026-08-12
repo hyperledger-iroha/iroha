@@ -18,14 +18,13 @@ use iroha_config::parameters::actual::Sumeragi as SumeragiConfig;
 #[cfg(test)]
 use iroha_crypto::HashOf;
 pub use iroha_data_model::block::consensus::{
-    BlockSubject, CertPhase, Certificate, ConsensusBlockHeader, ConsensusGenesisModeParams,
-    ConsensusGenesisParams, Evidence, EvidenceKind, EvidencePayload, ExecKv, ExecWitness,
-    ExecWitnessMsg, Height, LaneBlockCertificateV1, LaneBlockDescriptorV1,
-    LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1, LaneBlockVoteBodyV1,
-    NposGenesisParams, PayloadRequest, PayloadResponse, Proposal, Qc, QcAggregate, QcRef, QcVote,
-    QuorumPolicy, RbcChunk, RbcChunkRequest, RbcDeliver, RbcInit, RbcInitRequest, RbcReady,
-    RbcReadySignature, Reconfig, RoundId, ValidatorIndex, ValidatorSetId, View, VrfCommit,
-    VrfReveal, default_chain_order_hash,
+    CertPhase, ConsensusBlockHeader, ConsensusGenesisModeParams, ConsensusGenesisParams, Evidence,
+    EvidenceKind, EvidencePayload, ExecKv, ExecWitness, ExecWitnessMsg, Height,
+    LaneBlockCertificateV1, LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1,
+    LaneBlockProposalV1, LaneBlockQcV1, LaneBlockVoteBodyV1, NposGenesisParams, Proposal, Qc,
+    QcAggregate, QcRef, QcVote, RbcChunk, RbcChunkRequest, RbcDeliver, RbcInit, RbcInitRequest,
+    RbcReady, RbcReadySignature, Reconfig, ValidatorIndex, View, VrfCommit, VrfReveal,
+    default_chain_order_hash,
 };
 /// Live consensus protocol revision.
 pub const PROTO_VERSION: u32 = iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as u32;
@@ -53,9 +52,6 @@ pub fn qc_signer_count(qc: &Qc) -> usize {
         .map(|byte| byte.count_ones() as usize)
         .sum()
 }
-
-#[cfg(feature = "sumeragi-multiproof")]
-pub use iroha_data_model::block::consensus::{BlockMultiproof, ReadNode, TxReadSpan, WriteEntry};
 
 /// Build the canonical preimage for a QC vote signature under the given chain and mode tag.
 pub fn vote_preimage(network_id: &NetworkId, mode_tag: &str, v: &Vote) -> Vec<u8> {

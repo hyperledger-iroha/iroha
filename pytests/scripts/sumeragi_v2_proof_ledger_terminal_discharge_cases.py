@@ -255,8 +255,8 @@ _SERVE_TERMINAL_EFFECT_CONTEXT = (
             Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
             "fully_authenticate_persisted_certified_serve_request",
             (),
-            "verify_quorum_certificate_with_validator_pops(",
-            "verify_quorum_certificate(",
+            "authenticate_certified_body_request_with_validator_pops(",
+            "authenticate_certified_body_request(",
         ),
         (
             Path("crates/iroha_core/src/sumeragi/v2_worker.rs"),
@@ -1783,7 +1783,7 @@ def test_liveness_ownership_source_seal_rejects_skipped_ci_invocation(
     )
     ci_gate = repo_root / "ci" / "check_sumeragi_formal.sh"
     invocation = (
-        "bash scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh\n"
+        "run_formal_script scripts/formal/run_sumeragi_v2_liveness_ownership_mutations.sh\n"
     )
     source = ci_gate.read_text(encoding="utf-8")
     assert source.count(invocation) == 1

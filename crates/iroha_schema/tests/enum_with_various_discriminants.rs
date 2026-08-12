@@ -1,4 +1,8 @@
 //! Enum discriminant schema tests.
+
+mod common;
+
+use common::{assert_schema, entry};
 use iroha_schema::prelude::*;
 use norito::{
     Decode, Encode,
@@ -17,42 +21,7 @@ enum Foo {
 
 #[test]
 fn discriminant() {
-    use std::collections::BTreeMap;
-
-    let expected_meta = vec![(
-        core::any::TypeId::of::<Foo>(),
-        MetaMapEntry {
-            type_id: "Foo".to_owned(),
-            type_name: "Foo".to_owned(),
-            metadata: Metadata::Enum(EnumMeta {
-                variants: vec![
-                    EnumVariant {
-                        tag: "A".to_owned(),
-                        discriminant: 10,
-                        ty: None,
-                    },
-                    EnumVariant {
-                        tag: "B".to_owned(),
-                        discriminant: 11,
-                        ty: None,
-                    },
-                    EnumVariant {
-                        tag: "C".to_owned(),
-                        discriminant: 300,
-                        ty: None,
-                    },
-                    EnumVariant {
-                        tag: "D".to_owned(),
-                        discriminant: 999,
-                        ty: None,
-                    },
-                ],
-            }),
-        },
-    )]
-    .into_iter()
-    .collect::<BTreeMap<_, _>>();
-    assert_eq!(Foo::schema(), expected_meta);
+    assert_schema::<Foo>("enum_various.discriminant", &[entry::<Foo>("Foo")]);
 }
 
 #[test]

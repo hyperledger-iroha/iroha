@@ -1,0 +1,6 @@
+
+seiyaku CompilerFixture {
+fn apply() {
+  ledger::account::recovery::cancel("alias@domain", "extra");
+}
+}

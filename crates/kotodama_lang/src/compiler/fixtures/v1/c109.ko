@@ -1,0 +1,4 @@
+
+seiyaku CompilerFixture {
+fn main() { let _chain = context::chain_id(1); }
+}

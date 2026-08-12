@@ -3,7 +3,7 @@
 
 #[path = "common/sora_runtime_governance.rs"]
 #[allow(dead_code)]
-mod sora_runtime_governance;
+pub(super) mod sora_runtime_governance;
 
 use std::{
     collections::BTreeSet,

@@ -17122,11 +17122,7 @@ mod tests {
             "builtin `crypto::private_input` requires ZK mode in compiler build configuration"
         );
 
-        let source = r#"
-            seiyaku ZkContract {
-                fn read() -> Secret<int> { return crypto::private_input(0); }
-            }
-            "#;
+        let source = include_str!("semantic/fixtures/v1/s001.ko");
         let program = parse(source).expect("ZK-enabled source should parse");
         SemanticContext::with_zk_enabled(true)
             .analyze(&program)

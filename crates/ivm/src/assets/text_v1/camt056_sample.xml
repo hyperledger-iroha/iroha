@@ -1,0 +1,40 @@
+
+<DataEnvelope xmlns="urn:sample:iso">
+  <Body>
+    <AppHdr xmlns="urn:iso:std:iso:20022:tech:xsd:head.001.001.01">
+      <Fr><FIId><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></Fr>
+      <To><FIId><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></FIId></To>
+      <BizMsgIdr>ISO-CAMT056-ASSIGN</BizMsgIdr>
+      <MsgDefIdr>camt.056.001.08</MsgDefIdr>
+      <BizSvc>IPS</BizSvc>
+      <CreDt>2025-11-07T16:27:33Z</CreDt>
+      <Sgntr><SignedInfo><SignatureMethod>sample</SignatureMethod></SignedInfo><SignatureValue>ignored</SignatureValue></Sgntr>
+    </AppHdr>
+    <Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.056.001.08">
+      <FIToFIPmtCxlReq>
+        <Assgnmt>
+          <Id>ISO-CAMT056-ASSIGN</Id>
+          <Assgnr><Agt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></Agt></Assgnr>
+          <Assgne><Agt><FinInstnId><ClrSysMmbId><MmbId>PAYFASTX</MmbId></ClrSysMmbId></FinInstnId></Agt></Assgne>
+          <CreDtTm>2025-11-07T16:27:33Z</CreDtTm>
+        </Assgnmt>
+        <Case>
+          <Id>ISO-CAMT056-ASSIGN</Id>
+          <Cretr><Agt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></Agt></Cretr>
+        </Case>
+        <Undrlyg>
+          <TxInf>
+            <OrgnlGrpInf>
+              <OrgnlMsgId>ISO-SAMPLE-008</OrgnlMsgId>
+              <OrgnlMsgNmId>pacs.008.001.08</OrgnlMsgNmId>
+              <OrgnlCreDtTm>2025-11-07T16:13:08.557</OrgnlCreDtTm>
+            </OrgnlGrpInf>
+            <OrgnlIntrBkSttlmDt>2025-11-07</OrgnlIntrBkSttlmDt>
+            <Assgnr><Agt><FinInstnId><ClrSysMmbId><MmbId>ALPHBANK</MmbId></ClrSysMmbId></FinInstnId></Agt></Assgnr>
+            <Assgne><Agt><FinInstnId><ClrSysMmbId><MmbId>OMEGBANK</MmbId></ClrSysMmbId></FinInstnId></Agt></Assgne>
+          </TxInf>
+        </Undrlyg>
+      </FIToFIPmtCxlReq>
+    </Document>
+  </Body>
+</DataEnvelope>

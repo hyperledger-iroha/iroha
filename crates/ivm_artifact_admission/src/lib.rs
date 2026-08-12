@@ -40,8 +40,6 @@ mod policy;
 
 /// Maximum executable-image bytes admitted by IVM code memory.
 pub const MAX_CONTRACT_IMAGE_BYTES: u64 = 0x0010_0000;
-/// Maximum browser input accepted by the exported WebAssembly boundary.
-pub const MAX_BROWSER_ARTIFACT_BYTES: usize = 4 * 1024 * 1024;
 
 /// One fixed-width decoded instruction in the executable stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1056,71 +1054,5 @@ mod tests {
 
     fn encoded_value<T: NoritoSerialize>(value: &T) -> Vec<u8> {
         norito::to_bytes(value).expect("encode canonical capability value")
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-mod wasm {
-    use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    static INPUT: OnceLock<Mutex<Box<[u8; MAX_BROWSER_ARTIFACT_BYTES]>>> = OnceLock::new();
-    static OUTPUT: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
-
-    fn input() -> &'static Mutex<Box<[u8; MAX_BROWSER_ARTIFACT_BYTES]>> {
-        INPUT.get_or_init(|| Mutex::new(Box::new([0; MAX_BROWSER_ARTIFACT_BYTES])))
-    }
-
-    fn output() -> &'static Mutex<Vec<u8>> {
-        OUTPUT.get_or_init(|| Mutex::new(Vec::new()))
-    }
-
-    /// Address of the fixed browser input buffer in exported linear memory.
-    #[unsafe(no_mangle)]
-    pub extern "C" fn iroha_ivm_artifact_admission_input_ptr() -> *mut u8 {
-        input()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_mut_ptr()
-    }
-
-    /// Verify the first `len` input bytes and retain deterministic JSON output.
-    #[unsafe(no_mangle)]
-    pub extern "C" fn iroha_ivm_artifact_admission_verify(len: u32) -> u32 {
-        let len = usize::try_from(len).unwrap_or(usize::MAX);
-        let result = if len == 0 || len > MAX_BROWSER_ARTIFACT_BYTES {
-            "{\"ok\":false,\"error\":\"invalid contract artifact: browser input length is outside 1..=4194304\"}".to_owned()
-        } else {
-            let input = input()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            verify_contract_artifact_json(&input[..len])
-        };
-        let success = result.starts_with("{\"ok\":true,");
-        *output()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = result.into_bytes();
-        u32::from(success)
-    }
-
-    /// Address of the retained JSON result in exported linear memory.
-    #[unsafe(no_mangle)]
-    pub extern "C" fn iroha_ivm_artifact_admission_output_ptr() -> *const u8 {
-        output()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ptr()
-    }
-
-    /// Byte length of the retained JSON result.
-    #[unsafe(no_mangle)]
-    pub extern "C" fn iroha_ivm_artifact_admission_output_len() -> u32 {
-        u32::try_from(
-            output()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .len(),
-        )
-        .expect("bounded admission JSON fits u32")
     }
 }

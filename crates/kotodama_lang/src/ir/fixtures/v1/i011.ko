@@ -1,0 +1,6 @@
+
+            fn propagate(Result<int, bool> value) -> Result<int, bool> {
+                let payload = value?;
+                Result::ok(payload)
+            }
+        

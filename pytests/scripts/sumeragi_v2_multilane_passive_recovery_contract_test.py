@@ -103,6 +103,33 @@ def test_passive_recovery_contract_rejects_repairing_state_projection(
     ), errors
 
 
+def test_passive_recovery_contract_rejects_duplicate_externalized_state_provider(
+    tmp_path: Path,
+) -> None:
+    """A duplicated reviewed child declaration fails without any digest seal."""
+
+    support = load_support()
+    module = support.load_checker()
+    models = copy_fixture(tmp_path, support, module)
+    path = (
+        tmp_path
+        / "crates/iroha_core/src/state/passive_lane_diagnostic_methods.rs"
+    )
+    source = path.read_text(encoding="utf-8")
+    symbol = "durable_lane_diagnostic_execution_status"
+    items = module._extract_rust_binding_items(source, "fn", symbol)
+    assert len(items) == 1
+    duplicate = items[0] + "\n" + items[0]
+    path.write_text(source.replace(items[0], duplicate, 1), encoding="utf-8")
+
+    errors = validate_fixture(tmp_path, module, models)
+
+    assert any(
+        symbol in error and "must have one fn declaration, found 2" in error
+        for error in errors
+    ), errors
+
+
 def test_passive_recovery_contract_rejects_repairing_torii_projection(
     tmp_path: Path,
 ) -> None:
@@ -282,5 +309,28 @@ def test_passive_recovery_contract_rejects_lost_local_completion_control(
         "historical_missing_canonical_block_schedules_authenticated_retry_then_completes"
         in error
         and "local completion is never gated" in error
+        for error in errors
+    ), errors
+
+
+def test_passive_recovery_contract_rejects_externalized_quiet_tick_regression_drift(
+    tmp_path: Path,
+) -> None:
+    """The reviewed runner-test facade must expose the exact quiet-tick fixture."""
+
+    support = load_support()
+    module = support.load_checker()
+    models = copy_fixture(tmp_path, support, module)
+    support.replace_once_after(
+        tmp_path
+        / "crates/iroha_core/src/sumeragi/tests/v2_runner_upstream_recovery.rs",
+        "fn quiet_retransmission_tick_services_one_retained_historical_session()",
+        "CanonicalBlockPending",
+        "CanonicalBlockComplete",
+    )
+    errors = validate_fixture(tmp_path, module, models)
+    assert any(
+        "quiet_retransmission_tick_services_one_retained_historical_session" in error
+        and "CanonicalBlockPending" in error
         for error in errors
     ), errors

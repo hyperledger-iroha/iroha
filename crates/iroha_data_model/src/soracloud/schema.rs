@@ -520,10 +520,6 @@ pub struct SoraInrouManifestV1 {
     /// Guest userspace contract expected by the runtime.
     pub guest_os: SoraInrouGuestOsV1,
     /// Admitted guest image assets keyed by guest ISA. Both `x86_64` and `aarch64` are required.
-    #[cfg_attr(
-        feature = "json",
-        norito(with = "crate::json_helpers::sora_inrou_guest_images_map")
-    )]
     pub guest_images: BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
     /// Optional user-data overlay path copied into the bootstrap seed drive.
     #[norito(default)]

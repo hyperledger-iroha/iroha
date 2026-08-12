@@ -13,7 +13,6 @@ use http::StatusCode;
 use iroha_core::{
     block::BlockBuilder,
     governance::manifest::LaneManifestRegistry,
-    kiso::KisoHandle,
     kura::Kura,
     query::store::LiveQueryStore,
     queue::Queue,
@@ -43,14 +42,13 @@ use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
-use iroha_torii::{Torii, json_entry, json_object};
+use iroha_torii::{json_entry, json_object};
 use iroha_torii_shared::route_catalog::{
     AuthenticationPolicy, CATALOGED_ROUTES,
     application_api::{
         ACCOUNTS_ONBOARD_PLAN_POST, ACCOUNTS_ONBOARD_POST, ACCOUNTS_ONBOARDING_READINESS_GET,
     },
 };
-use tower::ServiceExt as _;
 
 #[path = "fixtures.rs"]
 mod fixtures;
@@ -136,7 +134,6 @@ fn build_onboarding_test_context_with(
     onboarding_signer_seed: u8,
 ) -> OnboardingTestContext {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
@@ -241,66 +238,21 @@ fn build_onboarding_test_context_with(
         events_sender,
     ));
     queue.install_lane_manifests_with_state(&lane_manifests, &state);
-    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let _ = peers_tx;
-    #[cfg(feature = "telemetry")]
-    let telemetry = {
-        use iroha_core::telemetry as core_telemetry;
-        let metrics = fixtures::shared_metrics();
-        let (_mh, ts) =
-            iroha_primitives::time::TimeSource::new_mock(core::time::Duration::default());
-        core_telemetry::start(
-            metrics,
-            state.clone(),
-            kura.clone(),
-            queue.clone(),
-            peers_rx.clone(),
-            local_peer_id,
-            ts,
-            false,
-        )
-        .0
-    };
-    let da_receipt_signer = cfg.common.key_pair.clone();
-    let torii = {
-        #[cfg(feature = "telemetry")]
-        {
-            Torii::new(
-                chain_id.clone(),
-                network_id,
-                kiso,
-                cfg.torii.clone(),
-                queue.clone(),
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state.clone(),
-                da_receipt_signer.clone(),
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-                telemetry,
-                true,
-            )
-        }
-        #[cfg(not(feature = "telemetry"))]
-        {
-            Torii::new(
-                chain_id.clone(),
-                network_id,
-                kiso,
-                cfg.torii.clone(),
-                queue.clone(),
-                tokio::sync::broadcast::channel(1).0,
-                LiveQueryStore::start_test(),
-                kura,
-                state.clone(),
-                da_receipt_signer,
-                iroha_torii::OnlinePeersProvider::new(peers_rx),
-            )
-        }
-    };
+    let torii = fixtures::ToriiHarness::new(
+        &cfg,
+        chain_id.clone(),
+        network_id,
+        &kura,
+        &state,
+        &queue,
+        &local_peer_id,
+        tokio::sync::broadcast::channel(1).0,
+        true,
+        false,
+    );
 
     OnboardingTestContext {
-        app: torii.api_router_for_tests(),
+        app: torii.router(),
         state,
         queue,
         chain_id,
@@ -355,15 +307,12 @@ async fn send_onboarding_request(
     path: &str,
     payload: &norito::json::Value,
 ) -> JsonResponse {
-    let response = app
-        .clone()
-        .oneshot(onboarding_http_request(
-            path,
-            payload,
-            Some(ONBOARDING_API_TOKEN),
-        ))
-        .await
-        .expect("onboarding route response");
+    let response = fixtures::request(
+        app,
+        onboarding_http_request(path, payload, Some(ONBOARDING_API_TOKEN)),
+    )
+    .await
+    .expect("onboarding route response");
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX)
         .await
@@ -869,16 +818,12 @@ async fn sponsored_onboarding_stale_create_receipt_returns_redacted_conflict() {
         "/v1/accounts/onboard/auto-renew",
     ] {
         let empty_body = norito::json::Value::Object(norito::json::Map::new());
-        let response = context
-            .app
-            .clone()
-            .oneshot(onboarding_http_request(
-                removed,
-                &empty_body,
-                Some(ONBOARDING_API_TOKEN),
-            ))
-            .await
-            .expect("removed onboarding route response");
+        let response = fixtures::request(
+            &context.app,
+            onboarding_http_request(removed, &empty_body, Some(ONBOARDING_API_TOKEN)),
+        )
+        .await
+        .expect("removed onboarding route response");
         assert_eq!(
             response.status(),
             StatusCode::NOT_FOUND,

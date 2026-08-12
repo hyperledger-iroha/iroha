@@ -103,7 +103,7 @@ use iroha_data_model::{
     nft::NftId,
     parameter::Parameter,
     permission::Permission,
-    prelude::{AccountId, ChainId},
+    prelude::AccountId,
     privacy::{
         IrohaZkAmsProofV1, IrohaZkAmsStatementV1, IrohaZkX509StarkP256StatementV1,
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1,
@@ -121,8 +121,8 @@ use iroha_data_model::{
         proof_box_max_proof_bytes_v1, verifying_key_id_field_is_portable,
     },
     query::{
-        CommittedTransaction, ErasedIterQuery, QueryBox, QueryOutputBatchBox, QueryRequest,
-        QueryResponse, QueryWithParams, SingularQueryBox,
+        CommittedTransaction, QueryItemKind, QueryOutputBatchBox, QueryRequest, QueryResponse,
+        QueryWithParams, SingularQueryBox,
         block::prelude::FindBlocks,
         dsl::{CommittedTxPredicate, CompoundPredicate, SelectorTuple},
         escrow::prelude::{FindAssetEscrowById, FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller},
@@ -459,11 +459,6 @@ fn keypair_to_py(py: Python<'_>, key_pair: KeyPair) -> PyResult<(Py<PyBytes>, Py
     let private = Py::from(PyBytes::new(py, private_bytes.as_slice()));
     private_bytes.fill(0);
     Ok((private, public))
-}
-
-fn parse_chain_id(value: &str) -> PyResult<ChainId> {
-    ChainId::from_str(value)
-        .map_err(|err| PyValueError::new_err(format!("invalid chain id: {err}")))
 }
 
 fn require_non_blank_unpadded(value: &str, field: &str) -> PyResult<()> {
@@ -12796,15 +12791,21 @@ fn build_find_asset_escrows_by_party_query(
     authority: &str,
     private_key: &[u8],
     network_id: &PyNetworkId,
+    item: QueryItemKind,
     query_payload: Vec<u8>,
 ) -> PyResult<Py<PyBytes>> {
-    let erased = ErasedIterQuery::<AssetEscrowRecord>::new(
-        CompoundPredicate::PASS,
-        SelectorTuple::default(),
+    let request = QueryRequest::Start(QueryWithParams {
+        query: (),
         query_payload,
-    );
-    let query_box: QueryBox<QueryOutputBatchBox> = Box::new(erased);
-    let request = QueryRequest::Start(QueryWithParams::new(&query_box, QueryParams::default()));
+        item,
+        predicate_bytes: norito::codec::Encode::encode(
+            &CompoundPredicate::<AssetEscrowRecord>::PASS,
+        ),
+        selector_bytes: norito::codec::Encode::encode(
+            &SelectorTuple::<AssetEscrowRecord>::default(),
+        ),
+        params: QueryParams::default(),
+    });
     let signed = sign_query_request(authority, private_key, network_id.as_inner(), request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
@@ -12827,6 +12828,7 @@ fn build_find_asset_escrows_by_seller_query_py(
         authority,
         private_key,
         network_id,
+        QueryItemKind::AssetEscrowsBySeller,
         norito::codec::Encode::encode(&query),
     )
 }
@@ -12849,6 +12851,7 @@ fn build_find_asset_escrows_by_buyer_query_py(
         authority,
         private_key,
         network_id,
+        QueryItemKind::AssetEscrowsByBuyer,
         norito::codec::Encode::encode(&query),
     )
 }
@@ -12868,13 +12871,16 @@ fn build_find_committed_transaction_query_py(
     let predicate = CompoundPredicate::<CommittedTransaction>::from_committed_tx_predicate(
         CommittedTxPredicate::EntryEq(transaction_hash),
     );
-    let erased = ErasedIterQuery::<CommittedTransaction>::new(
-        predicate,
-        SelectorTuple::default(),
-        norito::codec::Encode::encode(&FindTransactions),
-    );
-    let query_box: QueryBox<QueryOutputBatchBox> = Box::new(erased);
-    let request = QueryRequest::Start(QueryWithParams::new(&query_box, QueryParams::default()));
+    let request = QueryRequest::Start(QueryWithParams {
+        query: (),
+        query_payload: norito::codec::Encode::encode(&FindTransactions),
+        item: QueryItemKind::CommittedTransaction,
+        predicate_bytes: norito::codec::Encode::encode(&predicate),
+        selector_bytes: norito::codec::Encode::encode(
+            &SelectorTuple::<CommittedTransaction>::default(),
+        ),
+        params: QueryParams::default(),
+    });
     let signed = sign_query_request(authority, private_key, network_id.as_inner(), request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }
@@ -12892,13 +12898,14 @@ fn build_find_block_by_hash_query_py(
     let block_hash = parse_typed_hash::<BlockHeader>(block_hash, "block hash")?;
     let predicate =
         CompoundPredicate::<SignedBlock>::build(|prototype| prototype.equals("hash", block_hash));
-    let erased = ErasedIterQuery::<SignedBlock>::new(
-        predicate,
-        SelectorTuple::default(),
-        norito::codec::Encode::encode(&FindBlocks),
-    );
-    let query_box: QueryBox<QueryOutputBatchBox> = Box::new(erased);
-    let request = QueryRequest::Start(QueryWithParams::new(&query_box, QueryParams::default()));
+    let request = QueryRequest::Start(QueryWithParams {
+        query: (),
+        query_payload: norito::codec::Encode::encode(&FindBlocks),
+        item: QueryItemKind::SignedBlock,
+        predicate_bytes: norito::codec::Encode::encode(&predicate),
+        selector_bytes: norito::codec::Encode::encode(&SelectorTuple::<SignedBlock>::default()),
+        params: QueryParams::default(),
+    });
     let signed = sign_query_request(authority, private_key, network_id.as_inner(), request)?;
     Ok(Py::from(PyBytes::new(py, &signed)))
 }

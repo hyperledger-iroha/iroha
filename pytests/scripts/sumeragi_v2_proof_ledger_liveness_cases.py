@@ -149,6 +149,86 @@ def async_liveness_symbol_path(
     return providers[0]
 
 
+def _assert_extended_strong_type_induction_mutations(tmp_path: Path, module) -> None:
+    mutations = (
+        (
+            "operator",
+            "AsyncStrongTypeInvariant",
+            "  /\\ AsyncProducerTypeInvariant\n",
+            "",
+            "AsyncStrongTypeInvariant must include the exact recovery execution premise",
+        ),
+        (
+            "theorem",
+            "AsyncInitEstablishesStrongTypeInvariant",
+            "    <2>3f. AsyncProducerTypeInvariant\n"
+            "      BY <1>1, AsyncInitEstablishesProducerTypeInvariant\n",
+            "",
+            "must establish every producer-journal, one-shot Serve producer, and timeout-recovery boundary conjunct",
+        ),
+        (
+            "theorem",
+            "AsyncAllVarsStutterPreservesStrongTypeInvariant",
+            "    <2>4e. AsyncProducerTypeInvariant'\n"
+            "      BY <1>1, <2>1, AsyncProducerVarsFramePreservesTypeInvariant\n"
+            "         DEF AsyncAllVars\n",
+            "",
+            "must prime every producer and timeout-boundary conjunct",
+        ),
+        (
+            "theorem",
+            "AsyncNextPreservesStrongTypeInvariant",
+            "    <2>2m. /\\ AsyncProducerTypeInvariant\n"
+            "            /\\ AsyncServeProducerEpisodeTypeInvariant\n"
+            "            /\\ AsyncServeProducerEpisodeOwnershipInvariant\n"
+            "            /\\ AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant\n"
+            "      BY <1>1 DEF AsyncStrongTypeInvariant\n",
+            "",
+            "must project every producer and timeout-recovery boundary conjunct before priming it",
+        ),
+        (
+            "theorem",
+            "AsyncNextPreservesStrongTypeInvariant",
+            "    <2>4d. /\\ AsyncServeProducerEpisodeTypeInvariant'\n"
+            "             /\\ AsyncServeProducerEpisodeOwnershipInvariant'\n",
+            "    <2>4d. /\\ AsyncServeProducerEpisodeTypeInvariant'\n"
+            "             /\\ TRUE\n",
+            "must prime AsyncServeProducerEpisodeOwnershipInvariant through the reviewed admission, retirement, and reset cases",
+        ),
+        (
+            "theorem",
+            "AsyncNextPreservesStrongTypeInvariant",
+            "    <2>4e. AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant'\n",
+            "    <2>4e. TRUE\n",
+            "must prime AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant through retained, created, and vote-updated episodes",
+        ),
+        (
+            "theorem",
+            "AsyncNextPreservesStrongTypeInvariant",
+            "      BY <1>1, AsyncNextPreservesServeProducerEpisodeInvariants\n",
+            "",
+            "must prime AsyncServeProducerEpisodeOwnershipInvariant through the reviewed admission, retirement, and reset cases",
+        ),
+        (
+            "theorem",
+            "AsyncNextPreservesStrongTypeInvariant",
+            "         AsyncNextPreservesTimeoutRecoveryCurrentBoundaryInvariant\n",
+            "",
+            "must prime AsyncTimeoutRecoveryEpisodeCurrentBoundaryInvariant through retained, created, and vote-updated episodes",
+        ),
+    )
+    for index, (kind, symbol, old, new, diagnostic) in enumerate(mutations):
+        fixture_root = tmp_path / f"extended-induction-{index}"
+        fixture_root.mkdir()
+        formal_dir = copy_async_liveness_shard_fixture(fixture_root, module)
+        path = async_liveness_symbol_path(formal_dir, module, symbol)
+        source = path.read_text(encoding="utf-8")
+        mutator = mutate_tla_operator if kind == "operator" else mutate_tla_theorem
+        path.write_text(mutator(source, symbol, old, new), encoding="utf-8")
+        errors = module._async_proof_architecture_errors(formal_dir)
+        assert any(diagnostic in error for error in errors), errors
+
+
 @pytest.mark.parametrize(
     ("relative", "kind", "symbol", "old", "new", "expected_error"),
     (
@@ -572,11 +652,11 @@ def test_serve_scheduler_gate_proof_mutations_fail_closed(
         (
             "theorem",
             "AsyncInitEstablishesStrongTypeInvariant",
-            "    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3bb, <2>3c, <2>3d, <2>3e, <2>4,\n"
-            "                <2>5, <2>6, <2>7\n",
-            "    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3c, <2>3d, <2>4,\n"
-            "                <2>5, <2>6, <2>7\n",
-            "must retain the exact candidate/Serve/leader/ordinary "
+            "    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3bb, <2>3c, <2>3d, <2>3e,\n"
+            "                <2>3f, <2>3p, <2>3t, <2>4, <2>5, <2>6, <2>7\n",
+            "    <2> QED BY <2>1, <2>3, <2>3a, <2>3b, <2>3bb, <2>3c, <2>3d, <2>3e,\n"
+            "                <2>3p, <2>3t, <2>4, <2>5, <2>6, <2>7\n",
+            "must retain the exact candidate/Serve/producer/timeout/leader/ordinary "
             "scheduler-coverage QED dependency set",
         ),
         (
@@ -656,6 +736,8 @@ def test_async_service_activation_pair_proof_mutations_fail_closed(
     errors = module._async_proof_architecture_errors(formal_dir)
 
     assert any(expected_error in error for error in errors), errors
+    if symbol == "AsyncInitEstablishesStrongTypeInvariant" and "<2> QED BY" in old:
+        _assert_extended_strong_type_induction_mutations(tmp_path, module)
 
 
 @pytest.mark.parametrize(
@@ -858,11 +940,13 @@ def test_async_recovery_type_premise_mutations_fail_closed(
         (
             "theorem",
             "AsyncNextPreservesStrongTypeInvariant",
-            "    <2> QED BY <2>2l, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>5, <2>6, <2>7,\n"
-            "                <2>8, <2>9, <2>10, <2>11, <2>12, <2>13\n"
+            "    <2> QED BY <2>2l, <2>2m, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>5,\n"
+            "                <2>6, <2>7, <2>8, <2>9, <2>10, <2>11, <2>12, <2>13,\n"
+            "                <2>14, <2>15, <2>16, <2>17\n"
             "         DEF AsyncStrongTypeInvariant",
-            "    <2> QED BY <2>2l, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>5, <2>6,\n"
-            "                <2>8, <2>9, <2>10, <2>11, <2>12, <2>13\n"
+            "    <2> QED BY <2>2l, <2>2m, <2>3, <2>4, <2>4a, <2>4b, <2>4c, <2>5,\n"
+            "                <2>6, <2>7, <2>8, <2>9, <2>10, <2>11, <2>12, <2>13,\n"
+            "                <2>14, <2>15, <2>16\n"
             "         DEF AsyncStrongTypeInvariant",
             "make the service-activation pair, control-service",
         ),
@@ -1335,20 +1419,63 @@ def test_nightly_chaos_cold_cache_is_offline_shared_policy_and_fail_closed(
         ),
         (
             policy,
+            "acquire_invocation_cargo_lock() {",
+            "acquire_cargo_lock() {",
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            "release_invocation_cargo_lock() {",
+            "release_cargo_lock() {",
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            "# This file must be sourced. It never observes, signals, reprioritizes, or",
+            "# Mutant reintroduces ambient process observation.\n"
             "ps -axo pid,etime,command",
-            "ps -axo pid,command",
+            "observes or polls ambient processes",
+        ),
+        (
+            policy,
+            "lock.mkdir(mode=0o700)",
+            "lock.mkdir(mode=0o755)",
             "shared process policy lacks exact required token",
         ),
         (
             policy,
-            'executable == "rustfmt"',
-            'executable == "rustdoc"',
+            'pinned_arguments=("$@")',
+            'pinned_arguments=("$subcommand")',
             "shared process policy lacks exact required token",
         ),
         (
             policy,
-            'command cargo +1.93.1 "${pinned_arguments[@]}"',
+            'pinned_arguments=("$subcommand" -j1)',
+            'pinned_arguments=(-j1 "$@")',
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            'pinned_arguments+=("$@")',
+            'pinned_arguments+=("--locked")',
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            '"$IROHA_RELEASE_CARGO_BIN" "${pinned_arguments[@]}"',
             'command cargo "${pinned_arguments[@]}"',
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            'if ((cargo_prefix)) && [[ "$argument" == "--" ]]; then',
+            'if [[ "$argument" == "--" ]]; then',
+            "shared process policy lacks exact required token",
+        ),
+        (
+            policy,
+            '--target-dir|--target-dir=*|--manifest-path|--manifest-path=*|--config|--config=*',
+            '--target-dir|--target-dir=*',
             "shared process policy lacks exact required token",
         ),
         (
@@ -1372,6 +1499,12 @@ def test_nightly_chaos_cold_cache_is_offline_shared_policy_and_fail_closed(
             harness,
             'cp -- "$HARNESS_LOCK" Cargo.lock\n',
             'cp -- "$REPO_ROOT/Cargo.lock" Cargo.lock\n',
+            "verified standalone lock must be copied",
+        ),
+        (
+            harness,
+            'cp -- "$HARNESS_LOCK" Cargo.lock\ncase "$1" in\n',
+            'cp -- "$HARNESS_LOCK" Cargo.lock\ncase "$mode" in\n',
             "verified standalone lock must be copied",
         ),
         (

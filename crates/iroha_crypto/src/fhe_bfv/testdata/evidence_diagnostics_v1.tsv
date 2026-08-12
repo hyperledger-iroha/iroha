@@ -1,0 +1,800 @@
+iroha-bfv-diagnostics-v1
+0	N		S	release audit evidence byte derivation must match typed artifact derivation
+1	N		S	release audit evidence byte derivation must return decoded artifacts
+2	N		S	release audit evidence byte derivation must return decoded evidence
+3	N		S	release audit evidence byte digest derivation must return decoded artifacts
+4	N		S	release audit evidence byte digest derivation must return decoded evidence
+5	N		S	release audit evidence byte digest derivation must return the digest of the derived evidence
+6	N		S	release audit evidence all-digest byte derivation must return decoded artifacts
+7	N		S	release audit evidence all-digest byte derivation must return decoded evidence
+8	N		S	release audit evidence all-digest byte derivation must return the digest of the admitted artifact-bundle bytes
+9	N		S	release audit evidence all-digest byte derivation must return the digest of the derived evidence
+10	N		S	release audit evidence byte digesting must match typed evidence digesting
+11	N		S	release audit evidence byte-pair validation must return the canonical decoded evidence
+12	N		S	release audit evidence raw-byte admission must return decoded artifacts
+13	N		S	release audit evidence raw-byte admission must return decoded evidence
+14	N		S	release audit evidence raw-byte digest admission must return decoded artifacts
+15	N		S	release audit evidence raw-byte digest admission must return decoded evidence
+16	N		S	release audit evidence raw-byte digest admission must return the digest of the admitted evidence bytes
+17	N		S	release audit evidence raw-byte all-digest admission must return decoded artifacts
+18	N		S	release audit evidence raw-byte all-digest admission must return decoded evidence
+19	N		S	release audit evidence raw-byte all-digest admission must return the digest of the admitted artifact-bundle bytes
+20	N		S	release audit evidence raw-byte all-digest admission must return the digest of the admitted evidence bytes
+21	S	canonical v1 bytes	S	release audit evidence byte derivation must reject compressed artifact-bundle framing
+22	S	canonical v1 bytes	S	release audit evidence decoded byte derivation must reject compressed artifact-bundle framing
+23	S	canonical v1 bytes	S	release audit evidence byte validation must reject compressed artifact-bundle framing
+24	S	canonical v1 bytes	S	release audit evidence byte digesting must reject compressed artifact-bundle framing
+25	S	canonical v1 bytes	S	release audit decoded evidence digesting must reject compressed artifact-bundle framing
+26	S	canonical v1 bytes	S	release audit decoded evidence all-digest derivation must reject compressed artifact-bundle framing
+27	S	canonical v1 bytes	S	release audit evidence byte-pair validation must reject compressed artifact-bundle framing
+28	S	canonical v1 bytes	S	release audit evidence raw-byte admission must reject compressed artifact-bundle framing
+29	S	canonical v1 bytes	S	release audit evidence raw-byte digest admission must reject compressed artifact-bundle framing
+30	S	canonical v1 bytes	S	release audit evidence raw-byte all-digest admission must reject compressed artifact-bundle framing
+31	N		S	compressed release audit evidence bytes must be a structurally equivalent alternate framing
+32	S	canonical v1 bytes	S	release audit evidence byte-pair validation must reject compressed evidence framing
+33	S	canonical v1 bytes	S	release audit evidence raw-byte admission must reject compressed evidence framing
+34	S	canonical v1 bytes	S	release audit evidence raw-byte digest admission must reject compressed evidence framing
+35	S	canonical v1 bytes	S	release audit evidence raw-byte all-digest admission must reject compressed evidence framing
+36	S	Norito-encoded BFV material	S	release audit evidence byte derivation must reject non-Norito artifact-bundle bytes
+37	S	Norito-encoded BFV material	S	release audit evidence decoded byte derivation must reject non-Norito artifact-bundle bytes
+38	S	Norito-encoded BFV material	S	release audit decoded evidence digesting must reject non-Norito artifact-bundle bytes
+39	S	Norito-encoded BFV material	S	release audit decoded evidence all-digest derivation must reject non-Norito artifact-bundle bytes
+40	S	Norito-encoded BFV material	S	release audit evidence byte-pair validation must reject non-Norito artifact-bundle bytes
+41	S	Norito-encoded BFV material	S	release audit evidence raw-byte admission must reject non-Norito artifact-bundle bytes
+42	S	Norito-encoded BFV material	S	release audit evidence raw-byte digest admission must reject non-Norito artifact-bundle bytes
+43	S	Norito-encoded BFV material	S	release audit evidence raw-byte all-digest admission must reject non-Norito artifact-bundle bytes
+44	S	Norito-encoded release-audit object	S	release audit evidence byte-pair validation must reject non-Norito evidence bytes
+45	S	Norito-encoded release-audit object	S	release audit evidence raw-byte admission must reject non-Norito evidence bytes
+46	S	Norito-encoded release-audit object	S	release audit evidence raw-byte digest admission must reject non-Norito evidence bytes
+47	S	Norito-encoded release-audit object	S	release audit evidence raw-byte all-digest admission must reject non-Norito evidence bytes
+48	S	artifact bundle digest mismatch	S	release audit evidence byte validation must reject stale supplied evidence before byte comparison
+49	S	artifact bundle digest mismatch	S	release audit evidence byte-pair validation must reject stale canonical evidence bytes
+50	S	artifact bundle digest mismatch	S	release audit evidence raw-byte admission must reject stale canonical evidence bytes
+51	S	artifact bundle digest mismatch	S	release audit evidence raw-byte digest admission must reject stale canonical evidence bytes
+52	S	artifact bundle digest mismatch	S	release audit evidence raw-byte all-digest admission must reject stale canonical evidence bytes
+53	S	Merkle path root validation	S	release audit evidence derivation must reject proof-key verifier obligation downgrades
+54	S	placeholder text	S	release audit evidence must reject placeholder circuit ids before canonical mismatch
+55	S	canonical	S	release audit evidence must reject wrong-circuit ids before commitment checks
+56	S	placeholder	D	runtime context retained in Rust
+57	S	must be distinct	S	release audit evidence must reject reused top-level artifact digests
+58	S	evaluator artifact set digest must be distinct from artifact bundle digest	S	release audit evidence must reject aggregate digest aliasing before recomputation
+59	S	evaluator artifact set digest mismatch	S	release audit evidence must reject stale evaluator artifact-set digests
+60	S	artifact bundle digest mismatch	S	release audit evidence must reject stale artifact bundle digests
+61	S	placeholder	S	release audit evidence must reject pending proof-key pair placeholder digests
+62	S	placeholder	S	release audit evidence must reject proof-key material placeholder digests
+63	S	placeholder	S	release audit evidence must reject not-for-production proof-key digest sentinels
+64	S	placeholder	S	release audit evidence must reject delayed placeholder artifact-bundle digests
+65	S	parameter digest does not match registered parameters	S	release audit evidence must reject registered BFV parameter digest drift
+66	D	runtime expected retained in Rust	D	runtime context retained in Rust
+67	D	runtime expected retained in Rust	D	runtime context retained in Rust
+68	S	proof public-input schema artifact digest	S	release audit evidence must reject proof-schema artifact digest drift
+69	S	arithmetic AIR artifact digest	S	release audit evidence must reject arithmetic AIR artifact digest drift
+70	N		S	BFV equality assertion at source line 22127
+71	N		S	BFV equality assertion at source line 22131
+72	N		S	BFV equality assertion at source line 22135
+73	N		S	BFV equality assertion at source line 22136
+74	N		S	BFV equality assertion at source line 22137
+75	N		S	BFV equality assertion at source line 22142
+76	N		S	BFV equality assertion at source line 22147
+77	N		S	BFV equality assertion at source line 22151
+78	N		S	BFV equality assertion at source line 22159
+79	N		S	BFV equality assertion at source line 22164
+80	N		S	BFV equality assertion at source line 22169
+81	N		S	BFV equality assertion at source line 22177
+82	N		S	BFV equality assertion at source line 22181
+83	N		S	BFV equality assertion at source line 22185
+84	N		S	BFV equality assertion at source line 22189
+85	N		S	BFV equality assertion at source line 22193
+86	N		S	BFV equality assertion at source line 22197
+87	N		S	BFV equality assertion at source line 22201
+88	N		S	release audit evidence must bind the same generated circuit body for prover and verifier keys
+89	N		S	release audit evidence must bind the canonical generated circuit body digest
+90	S	generated circuit body digest	S	release audit evidence must reject prover/verifier generated circuit body drift
+91	S	generated circuit body digest mismatch	S	release audit evidence must reject matched stale generated circuit body digests
+92	S	generated circuit body digest mismatch	S	release audit evidence digesting must reject matched stale generated circuit body digests
+93	S	native payload digest mismatch	S	release audit evidence must reject stale canonical native prover payload digests
+94	S	native payload digest mismatch	S	release audit evidence digesting must reject stale canonical native prover payload digests
+95	S	native payload digest mismatch	S	release audit evidence must reject stale canonical native verifier payload digests
+96	N		S	BFV equality assertion at source line 22288
+97	N		S	BFV equality assertion at source line 22292
+98	N		S	BFV equality assertion at source line 22296
+99	N		S	BFV equality assertion at source line 22300
+100	N		S	BFV equality assertion at source line 22304
+101	N		S	BFV equality assertion at source line 22311
+102	N		S	BFV equality assertion at source line 22318
+103	N		S	BFV equality assertion at source line 22325
+104	N		S	BFV equality assertion at source line 22332
+105	N		S	BFV equality assertion at source line 22344
+106	N		S	BFV equality assertion at source line 22351
+107	N		S	BFV equality assertion at source line 22422
+108	N		S	BFV equality assertion at source line 22426
+109	N		S	release audit evidence digest must hash self-describing typed evidence
+110	N		S	BFV equality assertion at source line 22437
+111	N		S	BFV equality assertion at source line 22442
+112	N		S	safe byte digesting must hash the canonical release audit evidence
+113	N		S	BFV equality assertion at source line 22464
+114	S	canonical v1 bytes	S	safe release audit evidence byte admission must reject noncanonical compressed Norito framing
+115	S	canonical v1 bytes	S	safe release audit evidence byte digesting must reject noncanonical compressed Norito framing before hashing
+116	S	Norito-encoded release-audit object	S	safe release audit evidence byte admission must reject non-Norito evidence bytes
+117	S	Norito-encoded release-audit object	S	safe release audit evidence byte digesting must reject non-Norito evidence bytes
+118	N		S	BFV equality assertion at source line 22501
+119	N		S	BFV equality assertion at source line 22512
+120	N		S	BFV equality assertion at source line 22525
+121	S	Ed25519	S	release audit signoff payloads must reject non-Ed25519 reviewer public keys
+122	S	Ed25519	S	release audit signing must reject non-Ed25519 reviewer private keys before producing signatures
+123	S	all zero	S	release audit signing must reject all-zero reviewer private-key payloads before public-key derivation
+124	S	placeholder text	S	release audit signoff payloads must reject placeholder circuit ids before signature verification
+125	N		S	release audit signoff payload must bind the generated circuit body digest
+126	N		S	release audit signoff payload must bind the centered source-chain digest
+127	N		S	release audit signoff payload generated-body digest must match verifier-key evidence
+128	N		S	release audit signoff payload must bind the native prover payload digest
+129	N		S	release audit signoff payload must bind the native verifier payload digest
+130	S	centered scale-round source-chain digest	S	release audit signoff payloads must reject source-chain digest drift against evidence
+131	S	centered scale-round source-chain digest	S	standalone release audit signoffs must reject stale source-chain payloads before evidence binding
+132	S	centered scale-round source-chain digest	S	release audit signoff/evidence binding must reject well-signed source-chain digest drift
+133	S	generated circuit body digest mismatch	S	release audit signoff payloads must reject generated-body digest drift against evidence
+134	S	generated circuit body digest mismatch	S	standalone release audit signoffs must reject stale generated-body payloads before evidence binding
+135	S	generated circuit body digest mismatch	S	release audit signoff/evidence binding must reject well-signed generated-body digest drift
+136	S	prover native payload digest mismatch	S	release audit signoff payloads must reject native prover payload digest drift against evidence
+137	S	prover native payload digest mismatch	S	release audit signoff/evidence binding must reject well-signed native payload digest drift
+138	S	all zero	S	release audit trusted reviewer inputs must reject inert all-zero public keys
+139	S	all zero	S	public trusted reviewer key preflight must reject inert all-zero public keys
+140	S	all zero	S	release audit signoff payloads must reject inert all-zero reviewer public keys before signature verification
+141	S	payload must not be empty	S	release audit trusted reviewer inputs must reject empty public-key payloads
+142	S	payload must not be empty	S	public trusted reviewer key preflight must reject empty public-key payloads
+143	S	placeholder	D	runtime context retained in Rust
+144	S	placeholder	D	runtime context retained in Rust
+145	S	placeholder	D	runtime context retained in Rust
+146	S	native circuit fingerprint mismatch	S	release audit signoff payloads must reject stale native circuit fingerprints
+147	S	placeholder	S	release audit signoff payloads must reject placeholder proof-key pair commitments before signature checks
+148	S	zero hash	S	release audit signoff payloads must reject zero generated circuit body digests
+149	S	placeholder	D	runtime context retained in Rust
+150	S	placeholder	D	runtime context retained in Rust
+151	N		S	BFV equality assertion at source line 23080
+152	N		S	BFV equality assertion at source line 23084
+153	N		S	release audit signoff digest must hash self-describing typed signoff bytes
+154	N		S	safe byte digesting must hash the canonical release audit signoff
+155	N		S	signoff byte digest helper must return the decoded signoff
+156	N		S	signoff byte digest helper must return the digest of the admitted signoff bytes
+157	N		S	release audit signoff byte-pair validation must return the decoded evidence
+158	N		S	release audit signoff byte-pair validation must return the decoded signoff
+159	N		S	release audit signoff byte-pair digest validation must return decoded evidence
+160	N		S	release audit signoff byte-pair digest validation must return decoded signoff
+161	N		S	release audit signoff byte-pair digest validation must return the admitted signoff digest
+162	N		S	release audit signoff byte-pair digests validation must return decoded evidence
+163	N		S	release audit signoff byte-pair digests validation must return decoded signoff
+164	N		S	release audit signoff byte-pair digests validation must return the admitted evidence digest
+165	N		S	release audit signoff byte-pair digests validation must return the admitted signoff digest
+166	N		S	BFV equality assertion at source line 23180
+167	N		S	BFV equality assertion at source line 23181
+168	N		S	BFV equality assertion at source line 23190
+169	N		S	BFV equality assertion at source line 23191
+170	N		S	BFV equality assertion at source line 23192
+171	N		S	BFV equality assertion at source line 23205
+172	N		S	BFV equality assertion at source line 23206
+173	N		S	BFV equality assertion at source line 23207
+174	N		S	BFV equality assertion at source line 23208
+175	N		S	BFV equality assertion at source line 23220
+176	S	canonical v1 bytes	S	safe release audit signoff byte admission must reject noncanonical compressed Norito framing
+177	S	canonical v1 bytes	S	safe release audit signoff byte digesting must reject compressed Norito framing before hashing
+178	S	canonical v1 bytes	S	release audit signoff byte-pair validation must reject compressed signoff framing
+179	S	canonical v1 bytes	S	release audit signoff byte-pair digest validation must reject compressed signoff framing
+180	S	canonical v1 bytes	S	release audit signoff byte-pair digests validation must reject compressed signoff framing
+181	N		S	BFV equality assertion at source line 23264
+182	S	canonical v1 bytes	S	release audit signoff byte-pair validation must reject compressed evidence framing
+183	S	canonical v1 bytes	S	release audit signoff byte-pair digest validation must reject compressed evidence framing
+184	S	canonical v1 bytes	S	release audit signoff byte-pair digests validation must reject compressed evidence framing
+185	S	Norito-encoded release-audit object	S	safe release audit signoff byte admission must reject non-Norito signoff bytes
+186	S	Norito-encoded release-audit object	S	safe release audit signoff byte digesting must reject non-Norito signoff bytes
+187	S	Norito-encoded release-audit object	S	release audit signoff byte-pair validation must reject non-Norito signoff bytes
+188	S	Norito-encoded release-audit object	S	release audit signoff byte-pair digest validation must reject non-Norito signoff bytes
+189	S	Norito-encoded release-audit object	S	release audit signoff byte-pair digests validation must reject non-Norito signoff bytes
+190	S	canonical	S	trusted release audit signoff byte-pair validation must reject malformed caller reviewer id before signoff byte admission
+191	S	all zero	S	trusted release audit signoff byte-pair validation must reject all-zero caller reviewer keys before signoff byte admission
+192	S	canonical	S	trusted release audit signoff byte-pair digest validation must reject malformed caller reviewer id before signoff byte admission
+193	S	all zero	S	trusted release audit signoff byte-pair digest validation must reject all-zero caller reviewer keys before signoff byte admission
+194	S	canonical	S	trusted release audit signoff byte-pair digests validation must reject malformed caller reviewer id before signoff byte admission
+195	S	all zero	S	trusted release audit signoff byte-pair digests validation must reject all-zero caller reviewer keys before signoff byte admission
+196	S	Norito-encoded release-audit object	S	release audit signoff byte-pair validation must reject non-Norito evidence bytes
+197	S	Norito-encoded release-audit object	S	release audit signoff byte-pair digest validation must reject non-Norito evidence bytes
+198	S	Norito-encoded release-audit object	S	release audit signoff byte-pair digests validation must reject non-Norito evidence bytes
+199	S	artifact bundle digest mismatch	S	release audit signoff byte-pair validation must reject stale canonical evidence bytes
+200	S	artifact bundle digest mismatch	S	release audit signoff byte-pair digest validation must reject stale canonical evidence bytes
+201	S	artifact bundle digest mismatch	S	release audit signoff byte-pair digests validation must reject stale canonical evidence bytes
+202	S	reviewer id does not match trusted reviewer	S	trusted release audit signoff byte-pair validation must reject reviewer-id drift
+203	S	reviewer id does not match trusted reviewer	S	trusted release audit signoff byte-pair digest validation must reject reviewer-id drift
+204	S	reviewer id does not match trusted reviewer	S	trusted release audit signoff byte-pair digests validation must reject reviewer-id drift
+205	N		S	BFV equality assertion at source line 23492
+206	S	generated circuit body digest mismatch	S	release audit records must reject well-signed generated-body digest drift against packaged evidence
+207	S	canonical	S	release audit record construction must reject malformed reviewer ids before evidence derivation
+208	S	zero hash	S	release audit record construction must reject malformed report digests before evidence derivation
+209	S	private-key algorithm	S	release audit record construction must reject non-Ed25519 reviewer private keys before evidence derivation
+210	S	all zero	S	release audit record construction must reject all-zero reviewer private-key payloads before evidence derivation
+211	N		S	BFV equality assertion at source line 23567
+212	N		S	BFV equality assertion at source line 23571
+213	N		S	release audit record digest must hash self-describing typed record
+214	N		S	release audit record digest must survive canonical roundtrip
+215	N		S	safe byte digesting must hash the canonical release audit record
+216	N		S	release audit record byte admission must return the canonical decoded record
+217	N		S	release audit record raw-byte admission must return decoded artifacts
+218	N		S	release audit record raw-byte admission must return decoded record
+219	N		S	release audit record byte builder must return decoded artifacts
+220	N		S	release audit record byte builder must construct the same signed record
+221	N		S	release audit record byte builder must return the record digest
+222	S	canonical v1 bytes	S	release audit record raw-byte admission must reject compressed artifact-bundle framing
+223	S	canonical	S	release audit record artifact-byte builder must reject malformed reviewer ids before artifact-byte decoding
+224	S	all zero	S	release audit record byte builder must reject all-zero reviewer keys before artifact-byte decoding
+225	S	zero hash	S	release audit record byte builder with all digests must reject zero audit report digests before artifact-byte decoding
+226	S	canonical v1 bytes	S	release audit record byte builder must reject compressed artifact-bundle framing before signing
+227	N		S	BFV equality assertion at source line 23735
+228	S	canonical v1 bytes	S	safe release audit record byte admission must reject noncanonical compressed Norito framing
+229	S	canonical v1 bytes	S	safe release audit record byte digesting must reject noncanonical compressed Norito framing before hashing
+230	S	canonical v1 bytes	S	release audit record byte admission must reject compressed record framing
+231	S	canonical v1 bytes	S	release audit record raw-byte admission must reject compressed record framing
+232	S	Norito-encoded release-audit object	S	safe release audit record byte admission must reject non-Norito record bytes
+233	S	Norito-encoded release-audit object	S	safe release audit record byte digesting must reject non-Norito record bytes
+234	S	Norito-encoded release-audit object	S	release audit record byte admission must reject non-Norito record bytes
+235	S	Norito-encoded BFV material	S	release audit record raw-byte admission must reject non-Norito artifact-bundle bytes
+236	S	Norito-encoded BFV material	S	release audit record byte builder must reject non-Norito artifact-bundle bytes before signing
+237	S	generated circuit body digest mismatch	S	release audit record byte admission must reject stale canonical record bytes
+238	N		S	external-review builder must preserve the structural package bytes
+239	S	signed reviewer id	S	production-pinned release audit packages must reject generic external-review marker statements that omit the signed reviewer id
+240	S	signed reviewer id	S	external-review package builder must reject marker statements that omit the signed reviewer id
+241	N		S	report/archive byte builder must return the decoded artifact bundle
+242	N		S	artifact-byte report/archive builder must produce the same report bytes
+243	N		S	artifact-byte report/archive builder must produce the same archive bytes
+244	S	canonical v1 bytes	S	report/archive byte builder must reject compressed artifact-bundle framing
+245	S	Norito-encoded BFV material	S	report/archive byte builder must reject non-Norito artifact-bundle bytes before inventory generation
+246	S	governed artifact bytes	S	artifact-aware release audit validation must reject archive prover-key bytes that do not exactly match governed artifacts
+247	S	governed artifact bytes	S	artifact-aware release audit validation must reject archive proof-schema bytes that do not exactly match governed artifacts
+248	S	governed artifact bytes	S	artifact-aware release audit validation must reject archive arithmetic-AIR bytes that do not exactly match governed artifacts
+249	S	governed artifact bytes	S	artifact-aware release audit validation must reject archive accumulator bytes that do not exactly match governed artifacts
+250	S	machine-generated	S	external-review package builder must reject deterministic machine-generated report/archive bodies
+251	N		S	one-shot package builder must use canonical generated report bytes
+252	N		S	one-shot package builder must use canonical generated archive bytes
+253	N		S	package-and-digest builder must use canonical generated package bytes
+254	N		S	package-and-digest builder must return the digest of the generated package
+255	N		S	deterministic package byte builder must return the decoded artifact bundle
+256	N		S	deterministic package byte builder must produce the canonical generated package
+257	N		S	deterministic package byte builder must return the generated package digest
+258	N		S	deterministic package byte builder with digests must return the decoded artifact bundle
+259	N		S	deterministic package byte builder with digests must produce the canonical generated package
+260	N		S	deterministic package byte builder with digests must return the admitted artifact-bundle digest
+261	N		S	deterministic package byte builder with digests must return the generated package digest
+262	S	canonical	S	deterministic package byte builder must reject malformed reviewer ids before artifact-byte decoding
+263	S	all zero	S	deterministic package byte builder must reject all-zero reviewer keys before artifact-byte decoding
+264	S	canonical	S	deterministic package byte builder with all digests must reject malformed reviewer ids before artifact-byte decoding
+265	S	canonical v1 bytes	S	deterministic package byte builder must reject compressed artifact-bundle framing
+266	S	canonical v1 bytes	S	deterministic package byte builder with digests must reject compressed artifact-bundle framing
+267	S	canonical v1 bytes	S	deterministic package byte builder with all digests must reject compressed artifact-bundle framing
+268	S	Norito-encoded BFV material	S	deterministic package byte builder must reject non-Norito artifact-bundle bytes before signing
+269	S	Norito-encoded BFV material	S	deterministic package byte builder with digests must reject non-Norito artifact-bundle bytes before signing
+270	S	Norito-encoded BFV material	S	deterministic package byte builder with all digests must reject non-Norito artifact-bundle bytes before signing
+271	S	machine-generated	S	production-pinned release audit packages must reject deterministic machine-generated report/archive bodies
+272	S	statements must be distinct	S	production-pinned release audit packages must reject copied report/archive external-review statements
+273	S	review text	S	production-pinned release audit packages must reject report markers with only the reviewer id
+274	S	review text	S	production-pinned release audit packages must reject archive markers with only the reviewer id
+275	S	must start with external-review-approved	S	production-pinned release audit packages must reject report markers copied into prose
+276	S	must start with external-review-approved	S	production-pinned release audit packages must reject uppercase report markers
+277	S	must start with external-review-approved	S	production-pinned release audit packages must reject whitespace-prefixed report markers
+278	S	must start with external-review-approved	S	production-pinned release audit packages must reject report markers without a colon separator
+279	S	exactly one external-review-approved	S	production-pinned release audit packages must reject duplicate report external-review markers
+280	S	external-review statement	S	production-pinned release audit packages must reject report markers with no review statement before the signed fields
+281	S	external-review statement must contain the signed reviewer id	S	production-pinned release audit packages must reject bare report reviewer-id prose
+282	S	exactly one signed reviewer id label	S	production-pinned release audit packages must reject conflicting report reviewer-id labels
+283	S	lowercase signed reviewer id labels	S	production-pinned release audit packages must reject case-drifted conflicting report reviewer-id labels
+284	S	canonical lowercase signed reviewer id labels	S	production-pinned release audit packages must reject separator-alias conflicting report reviewer-id labels
+285	S	machine-generated	S	production-pinned release audit packages must reject separator-spelled machine-generated report markers
+286	S	machine-generated	S	external-review package builder must reject separator-spelled machine-generated report markers before returning caller-pinnable packages
+287	S	machine-generated	S	production-pinned release audit packages must reject underscore machine-generated archive markers
+288	S	machine-generated	S	external-review package builder must reject underscore machine-generated archive markers before returning caller-pinnable packages
+289	S	must start with external-review-evidence-archive	S	production-pinned release audit packages must reject uppercase archive markers
+290	S	must start with external-review-evidence-archive	S	production-pinned release audit packages must reject whitespace-prefixed archive markers
+291	S	must start with external-review-evidence-archive	S	production-pinned release audit packages must reject archive markers without a colon separator
+292	S	exactly one external-review-evidence-archive	S	production-pinned release audit packages must reject duplicate archive external-review markers
+293	S	external-review statement	S	production-pinned release audit packages must reject archive markers with no review statement before the signed fields
+294	S	external-review statement must contain the signed reviewer id	S	production-pinned release audit packages must reject bare archive reviewer-id prose
+295	S	exactly one signed reviewer id label	S	production-pinned release audit packages must reject duplicate archive reviewer-id labels
+296	S	lowercase signed reviewer id labels	S	production-pinned release audit packages must reject case-drifted duplicate archive reviewer-id labels
+297	S	canonical lowercase signed reviewer id labels	S	production-pinned release audit packages must reject separator-alias duplicate archive reviewer-id labels
+298	S	must start with external-review-evidence-archive	S	production-pinned release audit packages must reject archive markers copied into prose
+299	S	release evidence digest	S	release audit packages must reject signed reports that omit the release evidence digest
+300	N		S	release-audit fixture must contain `{from}` exactly once
+301	S	proof profile field count	S	release audit packages must reject signed reports that omit the proof-profile field count
+302	S	proof profile field count	S	release audit packages must reject signed reports with stale proof-profile field counts
+303	S	public opening material version	S	release audit packages must reject signed reports that omit the proof-profile public-opening material version
+304	S	public opening material field count	S	release audit packages must reject signed reports with stale proof-profile public-opening material field counts
+305	S	STARK hash selector	S	release audit packages must reject signed reports with stale proof-profile STARK hash selectors
+306	S	FRI query count	S	release audit packages must reject signed reports with stale proof-profile FRI query counts
+307	S	canonical base transcript-label	S	release audit packages must reject signed reports with downgraded canonical base transcript-label obligations
+308	S	suffixed transcript-label	S	release audit packages must reject signed reports with downgraded suffixed transcript-label obligations
+309	S	verifier-owned trace-material digest	S	release audit packages must reject signed reports with downgraded verifier-owned trace-material digest obligations
+310	S	transcript public-opening material	S	release audit packages must reject signed reports with downgraded public-opening material obligations
+311	S	FRI query-chain	S	release audit packages must reject signed reports with downgraded FRI query-chain validation obligations
+312	S	prover input material digest domain	S	release audit packages must reject signed reports that omit proof-profile release-prover digest domains
+313	S	prover input material digest domain	S	release audit packages must reject signed reports with stale proof-profile release-prover digest domains
+314	S	public opening material digest domain	S	release audit packages must reject signed reports with stale proof-profile public opening material domains
+315	S	proof-key pair commitment domain	S	release audit packages must reject signed reports with stale proof-profile proof-key commitment domains
+316	S	release evidence digest	S	release audit packages must reject uppercase report release evidence digest hex
+317	S	release evidence digest	S	release audit packages must reject uppercase report release evidence digest labels
+318	S	release evidence digest	S	release audit packages must reject raw report release evidence digest bytes
+319	S	release evidence digest	S	release audit packages must reject colon-separated report release evidence digest fields
+320	S	generated circuit body digest	S	release audit packages must reject signed reports that omit the generated circuit body digest
+321	S	proof-key pair commitment	S	release audit packages must reject signed reports that carry stale proof-key pair commitments
+322	S	release evidence digest	S	release audit packages must reject report evidence digests copied under unrelated report keys
+323	S	release evidence digest	S	release audit packages must reject release evidence digest labels hidden inside prefixed report keys
+324	S	release evidence digest	S	release audit packages must reject spaced release evidence digest labels hidden inside prose
+325	S	release evidence digest	S	release audit packages must reject report evidence digests copied into the next field
+326	S	release evidence digest	S	release audit packages must reject report evidence digests copied into the next CRLF-delimited field
+327	S	release evidence digest	S	release audit packages must reject report evidence digests embedded after a leading hex nibble
+328	S	release evidence digest	S	release audit packages must reject report evidence digests embedded before a trailing hex nibble
+329	S	release evidence digest	S	release audit packages must reject report evidence digests followed by same-field punctuation suffixes
+330	S	release evidence digest	S	release audit packages must reject reports with conflicting duplicate release evidence labels
+331	S	release evidence digest	S	release audit packages must reject reports with same-value duplicate release evidence labels
+332	S	proof profile field count	S	release audit packages must reject signed evidence archives that omit the proof-profile field count
+333	S	proof profile field count	S	release audit packages must reject signed evidence archives with stale proof-profile field counts
+334	S	public opening material version	S	release audit packages must reject signed evidence archives with stale proof-profile public-opening material versions
+335	S	public opening material field count	S	release audit packages must reject signed evidence archives that omit the proof-profile public-opening material field count
+336	S	STARK n_log2	S	release audit packages must reject signed evidence archives that omit proof-profile STARK domain size
+337	S	STARK blowup log2	S	release audit packages must reject signed evidence archives with stale proof-profile STARK blowup factors
+338	S	FRI fold arity	S	release audit packages must reject signed evidence archives with stale proof-profile FRI fold arities
+339	S	Merkle arity	S	release audit packages must reject signed evidence archives with stale proof-profile Merkle arities
+340	S	canonical base transcript-label	S	release audit packages must reject signed evidence archives with downgraded canonical base transcript-label obligations
+341	S	suffixed transcript-label	S	release audit packages must reject signed evidence archives with downgraded suffixed transcript-label obligations
+342	S	verifier-owned trace-material digest	S	release audit packages must reject signed evidence archives with downgraded verifier-owned trace-material digest obligations
+343	S	transcript public-opening material	S	release audit packages must reject signed evidence archives with downgraded public-opening material obligations
+344	S	Merkle path root	S	release audit packages must reject signed evidence archives with downgraded Merkle path root validation obligations
+345	S	arithmetic AIR constraint-system digest domain	S	release audit packages must reject signed evidence archives that omit proof-profile release-prover digest domains
+346	S	public opening material digest domain	S	release audit packages must reject signed evidence archives with stale proof-profile public opening material domains
+347	S	release-prover domain-separation	S	release audit packages must reject signed evidence archives with downgraded proof-profile release-prover domain separation
+348	S	arithmetic trace profile digest	S	release audit packages must reject signed evidence archives that omit the arithmetic trace-profile digest
+349	S	arithmetic trace profile digest	S	release audit packages must reject signed evidence archives with stale arithmetic trace-profile digests
+350	S	arithmetic AIR constraint-system digest	S	release audit packages must reject signed evidence archives that omit the arithmetic AIR constraint-system digest
+351	S	arithmetic AIR constraint-system digest	S	release audit packages must reject signed evidence archives with stale arithmetic AIR constraint-system digests
+352	S	artifact bundle digest	S	release audit packages must reject uppercase archive artifact bundle digest hex
+353	S	artifact bundle digest	S	release audit packages must reject uppercase archive artifact bundle digest labels
+354	S	artifact bundle digest	S	release audit packages must reject raw archive artifact bundle digest bytes
+355	S	artifact bundle digest	S	release audit packages must reject colon-separated archive artifact bundle digest fields
+356	S	generated circuit body byte length	S	release audit packages must reject signed evidence archives that omit generated body byte length evidence
+357	S	generated circuit body byte length	S	release audit packages must reject signed evidence archives with stale generated body byte length evidence
+358	S	generated circuit body hex	S	release audit packages must reject signed evidence archives that omit generated body byte evidence
+359	S	generated circuit body hex	S	release audit packages must reject signed evidence archives with stale generated body byte evidence
+360	S	native prover payload hex	S	release audit packages must reject signed evidence archives that omit native prover payload bytes
+361	S	native prover payload hex	S	release audit packages must reject uppercase native prover payload hex labels
+362	S	native prover payload hex	S	release audit packages must reject signed evidence archives with stale native prover payload bytes
+363	S	native prover payload hex	S	release audit packages must reject uppercase native prover payload hex
+364	S	native verifier payload hex	S	release audit packages must reject signed evidence archives that omit native verifier payload bytes
+365	S	native verifier payload hex	S	release audit packages must reject colon-separated native verifier payload hex labels
+366	S	native verifier payload hex	S	release audit packages must reject signed evidence archives with stale native verifier payload bytes
+367	S	native verifier payload hex	S	release audit packages must reject raw native verifier payload bytes in hex fields
+368	S	prover-key artifact hex	S	release audit packages must reject signed evidence archives that omit prover-key artifact bytes
+369	S	prover-key artifact hex	S	release audit packages must reject signed evidence archives with stale prover-key artifact bytes
+370	S	prover-key artifact hex	S	release audit packages must reject uppercase prover-key artifact hex labels
+371	S	verifier-key artifact hex	S	release audit packages must reject signed evidence archives that omit verifier-key artifact bytes
+372	S	verifier-key artifact hex	S	release audit packages must reject signed evidence archives with stale verifier-key artifact bytes
+373	S	prover-key artifact hex	S	release audit packages must reject archives with same-value duplicate prover-key artifact hex labels
+374	S	verifier-key artifact hex	S	release audit packages must reject archives with same-value duplicate verifier-key artifact hex labels
+375	S	generated circuit body hex	S	release audit packages must reject archives with same-value duplicate generated-circuit body hex labels
+376	S	native prover payload hex	S	release audit packages must reject archives with same-value duplicate native prover payload hex labels
+377	S	native verifier payload hex	S	release audit packages must reject archives with same-value duplicate native verifier payload hex labels
+378	S	prover native payload digest	S	release audit packages must reject evidence archives that omit the signed prover native payload digest
+379	S	verifier native payload digest	S	release audit packages must reject evidence archives with stale verifier native payload digests
+380	S	artifact bundle digest	S	release audit packages must reject signed evidence archives that omit the artifact bundle digest
+381	S	artifact bundle digest	S	release audit packages must reject artifact-bundle digests copied into the next archive field
+382	S	artifact bundle digest	S	release audit packages must reject artifact-bundle digests copied into the next CRLF-delimited archive field
+383	S	artifact bundle digest	S	release audit packages must reject archives with conflicting duplicate artifact-bundle labels
+384	S	artifact bundle digest	S	release audit packages must reject archives with same-value duplicate artifact-bundle labels
+385	S	evaluator artifact set digest	S	release audit packages must reject signed evidence archives that omit the evaluator artifact set digest
+386	S	evaluator artifact set digest	S	release audit packages must reject evaluator artifact-set digests copied into the next archive field
+387	S	evaluator artifact set digest	S	release audit packages must reject evaluator artifact-set digests copied into the next CRLF-delimited archive field
+388	S	generated circuit body digest	S	release audit packages must reject signed evidence archives that omit the generated circuit body digest
+389	S	generated circuit body digest	S	release audit packages must reject generated-body digests copied under unrelated archive keys
+390	S	generated circuit body digest	S	release audit packages must reject generated-body labels hidden inside prefixed archive keys
+391	S	generated circuit body digest	S	release audit packages must reject generated-body digests copied into the next archive field
+392	S	generated circuit body digest	S	release audit packages must reject generated-body digests copied into the next CRLF-delimited archive field
+393	S	generated circuit body digest	S	release audit packages must reject generated-body digests embedded after a leading hex nibble
+394	S	generated circuit body digest	S	release audit packages must reject generated-body digests embedded before a trailing hex nibble
+395	S	generated circuit body digest	S	release audit packages must reject generated-body digests followed by same-field punctuation suffixes
+396	S	centered scale-round source-chain digest	S	release audit packages must reject signed evidence archives that omit the centered source-chain digest
+397	S	centered scale-round source-chain digest	S	release audit packages must reject centered source-chain digests copied under unrelated archive keys
+398	S	centered scale-round source-chain digest	S	release audit packages must reject centered source-chain digests copied into the next archive field
+399	S	centered scale-round source-chain digest	S	release audit packages must reject centered source-chain digests copied into the next CRLF-delimited archive field
+400	S	native circuit fingerprint	S	release audit packages must reject signed evidence archives that omit the native circuit fingerprint
+401	S	native circuit fingerprint	S	release audit packages must reject native circuit fingerprints copied into the next archive field
+402	S	native circuit fingerprint	S	release audit packages must reject native circuit fingerprints copied into the next CRLF-delimited archive field
+403	S	proof-key pair commitment	S	release audit packages must reject signed evidence archives that omit the proof-key pair commitment
+404	S	proof-key pair commitment	S	release audit packages must reject proof-key pair commitments copied into the next archive field
+405	S	proof-key pair commitment	S	release audit packages must reject proof-key pair commitments copied into the next CRLF-delimited archive field
+406	S	prover-key digest	S	release audit packages must reject signed evidence archives that omit the prover-key digest
+407	S	verifier-key digest	S	release audit packages must reject signed evidence archives that omit the verifier-key digest
+408	S	prover-key digest	S	release audit packages must reject prover-key digest labels hidden inside prefixed archive keys
+409	S	prover-key digest	S	release audit packages must reject spaced prover-key digest labels hidden inside archive prose
+410	S	prover-key digest	S	release audit packages must reject prover-key digests copied into the next archive field
+411	S	prover-key digest	S	release audit packages must reject prover-key digests copied into the next CRLF-delimited archive field
+412	S	verifier-key digest	S	release audit packages must reject verifier-key digests copied into the next archive field
+413	S	verifier-key digest	S	release audit packages must reject verifier-key digests copied into the next CRLF-delimited archive field
+414	S	canonical	S	release audit package construction must reject malformed reviewer ids before audit byte validation
+415	S	private-key algorithm	S	release audit package construction must reject non-Ed25519 reviewer private keys before audit byte validation
+416	S	private-key algorithm	S	release audit package construction must reject non-Ed25519 reviewer private keys before audit byte validation or evidence derivation
+417	S	all zero	S	release audit package construction must reject all-zero reviewer private-key payloads before audit byte validation or evidence derivation
+418	N		S	BFV equality assertion at source line 28830
+419	N		S	BFV equality assertion at source line 28833
+420	N		S	release audit manifest must bind the generated circuit body digest
+421	N		S	release audit manifest generated-body digest must match verifier-key evidence
+422	N		S	release audit manifest must bind the native prover payload digest
+423	N		S	release audit manifest must bind the native verifier payload digest
+424	N		S	release audit manifest must bind the centered source-chain digest
+425	S	placeholder text	S	release audit manifests must reject placeholder circuit ids before canonical mismatch
+426	N		S	BFV equality assertion at source line 28875
+427	N		S	BFV equality assertion at source line 28879
+428	N		S	release audit manifest byte-pair validation must return the decoded manifest
+429	N		S	release audit manifest byte-pair validation must return the decoded record
+430	N		S	BFV equality assertion at source line 28904
+431	N		S	BFV equality assertion at source line 28905
+432	S	verifier native payload digest mismatch	S	release audit manifest/record binding must reject native verifier payload digest drift
+433	D	runtime expected retained in Rust	D	runtime context retained in Rust
+434	D	runtime expected retained in Rust	D	runtime context retained in Rust
+435	S	placeholder	S	release audit manifests must reject placeholder proof-key digest commitments
+436	S	placeholder	D	runtime context retained in Rust
+437	S	placeholder	D	runtime context retained in Rust
+438	S	placeholder	D	runtime context retained in Rust
+439	S	placeholder	D	runtime context retained in Rust
+440	N		S	release audit manifest digest must hash self-describing typed manifest
+441	N		S	release audit package must carry the canonical manifest digest
+442	N		S	release audit manifest digest must survive canonical roundtrip
+443	N		S	safe byte digesting must hash the canonical release audit manifest
+444	N		S	release audit manifest record-byte builder must return the decoded record
+445	N		S	release audit manifest record-byte builder must construct the same manifest
+446	N		S	release audit manifest record-byte builder must return the manifest digest
+447	N		S	release audit manifest artifact-byte builder must return decoded artifacts
+448	N		S	release audit manifest artifact-byte builder must construct the same signed record
+449	N		S	release audit manifest artifact-byte builder must construct the same manifest
+450	N		S	release audit manifest artifact-byte builder must return the manifest digest
+451	N		S	release audit manifest artifact-byte all-digests builder must return decoded artifacts
+452	N		S	release audit manifest artifact-byte all-digests builder must construct the same signed record
+453	N		S	release audit manifest artifact-byte all-digests builder must construct the same manifest
+454	N		S	release audit manifest artifact-byte all-digests builder must return the admitted artifact-bundle digest
+455	N		S	release audit manifest artifact-byte all-digests builder must return the generated record digest
+456	N		S	release audit manifest artifact-byte all-digests builder must return the manifest digest
+457	S	canonical	S	release audit manifest artifact-byte builder must reject malformed reviewer ids before artifact-byte decoding
+458	S	all zero	S	release audit manifest artifact-byte builder must reject all-zero reviewer keys before artifact-byte decoding
+459	S	zero hash	S	release audit manifest artifact-byte all-digests builder must reject zero audit archive digests before artifact-byte decoding
+460	S	canonical v1 bytes	S	release audit manifest artifact-byte builder must reject compressed artifact-bundle framing before signing
+461	S	canonical v1 bytes	S	release audit manifest artifact-byte all-digests builder must reject compressed artifact-bundle framing before signing
+462	S	Norito-encoded BFV material	S	release audit manifest artifact-byte builder must reject non-Norito artifact-bundle bytes before signing
+463	S	Norito-encoded BFV material	S	release audit manifest artifact-byte all-digests builder must reject non-Norito artifact-bundle bytes before signing
+464	N		S	BFV equality assertion at source line 29259
+465	S	canonical v1 bytes	S	safe release audit manifest byte admission must reject noncanonical compressed Norito framing
+466	S	canonical v1 bytes	S	safe release audit manifest byte digesting must reject noncanonical compressed Norito framing before hashing
+467	S	canonical v1 bytes	S	release audit manifest byte-pair validation must reject compressed manifest framing
+468	S	canonical v1 bytes	S	release audit manifest byte-pair validation must reject compressed record framing
+469	S	canonical v1 bytes	S	release audit manifest record-byte builder must reject compressed record framing before manifest construction
+470	S	Norito-encoded release-audit object	S	safe release audit manifest byte admission must reject non-Norito manifest bytes
+471	S	Norito-encoded release-audit object	S	safe release audit manifest byte digesting must reject non-Norito manifest bytes
+472	S	Norito-encoded release-audit object	S	release audit manifest byte-pair validation must reject non-Norito manifest bytes
+473	S	Norito-encoded release-audit object	S	release audit manifest byte-pair validation must reject non-Norito record bytes
+474	S	Norito-encoded release-audit object	S	release audit manifest record-byte builder must reject non-Norito record bytes before manifest construction
+475	S	verifier native payload digest mismatch	S	release audit manifest byte-pair validation must reject stale canonical manifest bytes
+476	S	reviewer id does not match trusted reviewer	S	trusted release audit manifest byte-pair validation must reject reviewer-id drift
+477	N		S	BFV equality assertion at source line 29366
+478	N		S	BFV equality assertion at source line 29370
+479	N		S	release audit package digest must hash self-describing typed package
+480	N		S	release audit package digest must survive canonical roundtrip
+481	N		S	safe byte digesting must hash the canonical release audit package
+482	N		S	BFV equality assertion at source line 29411
+483	S	canonical v1 bytes	S	safe release audit package byte admission must reject noncanonical compressed Norito framing
+484	S	canonical v1 bytes	S	safe release audit package byte digesting must reject noncanonical compressed Norito framing before hashing
+485	S	Norito-encoded package	S	safe release audit package byte admission must reject non-Norito package bytes
+486	S	Norito-encoded package	S	safe release audit package byte digesting must reject non-Norito package bytes
+487	S	placeholder	S	release audit packages must reject placeholder record digests before recomputing canonical record digests
+488	S	placeholder	S	release audit package digesting must reject placeholder record digests before canonical package encoding
+489	S	placeholder	S	release audit packages must reject placeholder manifest digests before recomputing canonical manifest digests
+490	S	placeholder	S	release audit package digesting must reject placeholder manifest digests before canonical package encoding
+491	S	placeholder	S	release audit packages must reject placeholder record digests before nested record validation
+492	S	placeholder	S	release audit package digesting must reject placeholder record digests before nested record validation
+493	S	placeholder	S	release audit packages must reject placeholder manifest digests before nested manifest validation
+494	S	placeholder	S	release audit package digesting must reject placeholder manifest digests before nested manifest validation
+495	S	placeholder	S	release audit packages must reject delayed placeholder record digests before recomputing canonical record digests
+496	S	placeholder	S	release audit package digesting must reject delayed placeholder record digests before canonical package encoding
+497	S	placeholder	S	release audit packages must reject delayed placeholder manifest digests before recomputing canonical manifest digests
+498	S	placeholder	S	release audit package digesting must reject delayed placeholder manifest digests before canonical package encoding
+499	S	canonical	S	trusted reviewer id preflight must reject malformed caller trust inputs before signoff validation
+500	S	all zero	S	trusted reviewer public-key preflight must reject all-zero caller trust inputs before signoff validation
+501	S	canonical	S	trusted reviewer id preflight must reject malformed caller trust inputs before record validation
+502	S	all zero	S	trusted reviewer public-key preflight must reject all-zero caller trust inputs before record validation
+503	S	canonical	S	trusted reviewer id preflight must reject malformed caller trust inputs before manifest validation
+504	S	all zero	S	trusted reviewer public-key preflight must reject all-zero caller trust inputs before manifest validation
+505	S	canonical	S	trusted reviewer id preflight must reject malformed caller trust inputs before package validation
+506	S	all zero	S	trusted reviewer public-key preflight must reject all-zero caller trust inputs before package validation
+507	S	canonical	S	trusted reviewer id preflight must reject malformed caller trust inputs before package validation
+508	S	all zero	S	trusted reviewer public-key preflight must reject all-zero caller trust inputs before package/artifact validation
+509	S	all zero	S	trusted reviewer public-key preflight must reject all-zero caller trust inputs before pinned-digest package/artifact validation
+510	S	zero hash	S	release audit packages must reject zero caller-pinned package digests before package comparison
+511	S	placeholder	S	release audit packages must reject placeholder caller-pinned package digests before package comparison
+512	S	placeholder	S	release audit packages must reject delayed placeholder caller-pinned package digests before package comparison
+513	S	package digest mismatch	S	release audit packages must reject stale caller-pinned package digests at the crypto boundary
+514	S	distinct from package record digest	S	release audit packages must reject caller-pinned record digests as package digest aliases
+515	S	distinct from package record digest	S	caller-pinned record-digest aliases must fail before stale package validation can mask the trust-anchor diagnostic
+516	S	distinct from package manifest digest	S	release audit packages must reject caller-pinned manifest digests as package digest aliases
+517	S	distinct from package manifest digest	S	caller-pinned manifest-digest aliases must fail before stale package validation can mask the trust-anchor diagnostic
+518	D	runtime expected retained in Rust	S	release audit packages must reject caller-pinned signed commitment digests as package digest aliases
+519	S	signed release evidence digest	S	caller-pinned signed-commitment aliases must fail before stale package validation can mask the package-digest diagnostic
+520	S	reviewer id	S	release audit packages must reject unexpected trusted reviewer ids
+521	S	reviewer public key	S	release audit packages must reject unexpected trusted reviewer keys
+522	S	reviewer public key	S	trusted reviewer validation must reject self-consistent packages signed by an untrusted key
+523	S	scope	S	release audit manifests must reject whitespace-padded scope ids
+524	S	scope	S	release audit manifest digesting must reject whitespace-padded scope ids
+525	S	scope	S	release audit packages must reject whitespace-padded manifest scope ids
+526	S	scope	S	release audit package digesting must reject whitespace-padded manifest scope ids
+527	S	version	S	release audit manifests must reject stale manifest versions
+528	S	version	S	release audit manifest digesting must reject stale manifest versions
+529	S	version	S	release audit packages must reject stale manifest versions
+530	S	version	S	release audit package digesting must reject stale manifest versions
+531	S	field count	S	release audit manifests must reject stale manifest field counts
+532	S	field count	S	release audit manifest digesting must reject stale manifest field counts
+533	S	field count	S	release audit packages must reject stale manifest field counts
+534	S	field count	S	release audit package digesting must reject stale manifest field counts
+535	S	approved for release	S	release audit manifests must reject non-approving verdicts
+536	S	approved for release	S	release audit manifest digesting must reject non-approving verdicts
+537	S	approved for release	S	release audit packages must reject non-approving manifest verdicts
+538	S	approved for release	S	release audit package digesting must reject non-approving manifest verdicts
+539	S	package version	S	release audit manifests must reject stale authorized package versions
+540	S	package version	S	release audit manifest digesting must reject stale authorized package versions
+541	S	package version	S	release audit packages must reject manifests authorizing stale package versions
+542	S	package version	S	release audit package digesting must reject manifests authorizing stale package versions
+543	S	package field count	S	release audit manifests must reject stale package field counts
+544	S	package field count	S	release audit manifest digesting must reject stale package field counts
+545	S	package field count	S	release audit packages must reject manifests authorizing stale package field counts
+546	S	package field count	S	release audit package digesting must reject manifests authorizing stale package field counts
+547	S	zero hash	S	release audit manifests must reject zero record digests
+548	S	zero hash	S	release audit manifests must reject zero generated circuit body digests
+549	S	manifest digest mismatch	S	release audit packages must reject stale manifest digests
+550	S	manifest digest mismatch	S	release audit package digesting must reject stale manifest digests
+551	S	manifest record digest mismatch	S	release audit packages must reject stale manifest record digests
+552	S	manifest evidence digest mismatch	S	release audit packages must reject manifest/evidence digest drift
+553	S	does not match canonical BFV centered scale-round source chain	S	release audit packages must reject stale manifest source-chain digests
+554	S	does not match canonical BFV centered scale-round source chain	S	release audit manifest digesting must reject stale source-chain digests
+555	S	manifest report digest mismatch	S	release audit packages must reject manifest/report digest drift
+556	S	manifest evidence archive digest mismatch	S	release audit packages must reject manifest/evidence-archive digest drift
+557	S	manifest artifact bundle digest mismatch	S	release audit packages must reject manifest/artifact digest drift
+558	S	manifest evaluator artifact set digest mismatch	S	release audit packages must reject manifest/evaluator-artifact digest drift
+559	S	manifest proof-key pair commitment mismatch	S	release audit packages must reject manifest/proof-key commitment drift
+560	S	manifest prover-key digest mismatch	S	release audit packages must reject manifest/prover-key digest drift
+561	S	manifest verifier-key digest mismatch	S	release audit packages must reject manifest/verifier-key digest drift
+562	S	generated circuit body digest mismatch	S	release audit manifests must reject stale generated circuit body digests before record comparison
+563	S	generated circuit body digest mismatch	S	release audit manifest digesting must reject stale generated circuit body digests before canonical encoding
+564	S	generated circuit body digest mismatch	S	release audit packages must reject manifest/generated-circuit-body digest drift
+565	S	native circuit fingerprint mismatch	S	release audit manifests must reject stale native circuit fingerprints
+566	S	native circuit fingerprint mismatch	S	release audit manifest digesting must reject stale native circuit fingerprints
+567	S	native circuit fingerprint mismatch	S	release audit packages must reject manifest/native-circuit fingerprint drift
+568	S	evidence archive digest must be distinct from proof-key pair commitment	S	release audit manifests must reject external audit digest aliasing with signed proof-key commitments
+569	S	evidence archive digest must be distinct from proof-key pair commitment	S	release audit manifest digesting must reject external audit digest aliasing with signed proof-key commitments
+570	S	audit report digest must be distinct from release evidence digest	S	release audit manifests must reject report digests that alias signed release evidence
+571	S	audit report digest must be distinct from release evidence digest	S	release audit manifest digesting must reject report digests that alias signed release evidence
+572	S	evidence archive digest must be distinct from release evidence digest	S	release audit manifests must reject archive digests that alias signed release evidence
+573	S	evidence archive digest must be distinct from release evidence digest	S	release audit manifest digesting must reject archive digests that alias signed release evidence
+574	D	runtime expected retained in Rust	D	runtime context retained in Rust
+575	D	runtime expected retained in Rust	D	runtime context retained in Rust
+576	D	runtime expected retained in Rust	D	runtime context retained in Rust
+577	D	runtime expected retained in Rust	D	runtime context retained in Rust
+578	S	manifest reviewer id mismatch	S	release audit packages must reject manifest reviewer-id drift
+579	S	manifest reviewer public key mismatch	S	release audit packages must reject manifest reviewer-key drift
+580	S	canonical	S	release audit signoff payloads must reject malformed reviewer ids before evidence validation
+581	S	zero hash	S	release audit signoff payloads must reject zero report digests before evidence validation
+582	S	distinct	S	release audit signoff payloads must reject reused report/archive digests before evidence validation
+583	S	canonical	S	release audit signoff payloads must reject whitespace-padded reviewer ids
+584	S	distinct	S	release audit signoff payloads must reject reused report/archive digests
+585	S	audit report digest must be distinct from release evidence digest	S	release audit signoff payloads must reject report digests that alias signed release evidence
+586	S	evidence archive digest must be distinct from release evidence digest	S	release audit signoff payloads must reject archive digests that alias signed release evidence
+587	S	audit report digest must be distinct from artifact bundle digest	S	release audit signoffs must reject external audit digest aliasing with signed artifact commitments
+588	S	evidence archive digest must be distinct from artifact bundle digest	S	release audit signoffs must reject archive digest aliasing with signed artifact commitments
+589	D	runtime expected retained in Rust	D	runtime context retained in Rust
+590	D	runtime expected retained in Rust	D	runtime context retained in Rust
+591	D	runtime expected retained in Rust	D	runtime context retained in Rust
+592	D	runtime expected retained in Rust	D	runtime context retained in Rust
+593	S	zero hash	S	release audit records must reject zero external audit report digests
+594	S	must not be empty	S	release audit packages must reject empty audit report bytes
+595	S	must not be all zero	S	release audit package builder must reject all-zero audit report bytes
+596	S	must not be all zero	S	release audit package builder must reject all-zero evidence archive bytes
+597	S	non-empty body	S	release audit package builder must reject header-only audit report bytes
+598	S	header-only	S	release audit records must reject header-only audit report digests
+599	S	header-only	S	release audit signoffs must reject header-only audit report digests
+600	S	nested-header	S	release audit records must reject nested-header audit report digests
+601	S	nested-header	S	release audit signoffs must reject nested-header audit report digests
+602	S	whitespace-prefixed nested-header	S	release audit records must reject whitespace-prefixed nested-header audit report digests
+603	S	whitespace-prefixed nested-header	S	release audit signoffs must reject whitespace-prefixed nested-header audit report digests
+604	S	zero-body audit artifact	S	release audit records must reject known zero-body audit report digests
+605	S	zero-body audit artifact	S	release audit signoffs must reject known zero-body audit report digests
+606	S	zero-body audit artifact	S	release audit signoffs must reject padded zero-body audit report digests
+607	S	blank-body audit artifact	S	release audit records must reject known blank-body audit report digests
+608	S	blank-body audit artifact	S	release audit signoffs must reject known blank-body audit report digests
+609	S	placeholder audit artifact	S	release audit signoffs must reject known placeholder audit report digests
+610	S	placeholder audit artifact	S	release audit signoffs must reject known draft audit report digests
+611	S	placeholder audit artifact	S	release audit signoffs must reject known not-production-ready audit report digests
+612	S	placeholder audit artifact	S	release audit signoffs must reject known long placeholder audit report digests
+613	S	placeholder audit artifact	S	release audit signoffs must reject known whitespace-padded placeholder audit report digests
+614	S	placeholder audit artifact	S	release audit records must reject known delayed placeholder audit report digests
+615	S	placeholder audit artifact	S	release audit signoffs must reject known delayed placeholder audit report digests
+616	S	placeholder audit artifact	S	release audit signoffs must reject known binary-decorated placeholder audit report digests
+617	S	placeholder audit artifact	S	release audit records must reject uppercase placeholder audit report digests
+618	S	placeholder audit artifact	S	release audit signoffs must reject uppercase placeholder audit report digests
+619	S	placeholder audit artifact	S	release audit records must reject whitespace-prefixed uppercase placeholder audit report digests
+620	S	placeholder audit artifact	S	release audit signoffs must reject whitespace-prefixed uppercase placeholder audit report digests
+621	S	non-empty body	S	release audit package builder must reject header-only evidence archive bytes
+622	S	header-only	S	release audit records must reject header-only evidence archive digests
+623	S	header-only	S	release audit manifests must reject header-only evidence archive digests
+624	S	nested-header	S	release audit records must reject nested-header evidence archive digests
+625	S	nested-header	S	release audit manifests must reject nested-header evidence archive digests
+626	S	whitespace-prefixed nested-header	S	release audit records must reject whitespace-prefixed nested-header evidence archive digests
+627	S	whitespace-prefixed nested-header	S	release audit manifests must reject whitespace-prefixed nested-header evidence archive digests
+628	S	zero-body audit artifact	S	release audit records must reject known zero-body evidence archive digests
+629	S	zero-body audit artifact	S	release audit manifests must reject known zero-body evidence archive digests
+630	S	blank-body audit artifact	S	release audit records must reject known blank-body evidence archive digests
+631	S	blank-body audit artifact	S	release audit manifests must reject known blank-body evidence archive digests
+632	S	blank-body audit artifact	S	release audit manifests must reject padded blank-body evidence archive digests
+633	S	placeholder audit artifact	S	release audit manifests must reject known placeholder evidence archive digests
+634	S	placeholder audit artifact	S	release audit manifests must reject known long placeholder evidence archive digests
+635	S	placeholder audit artifact	S	release audit manifests must reject known whitespace-padded placeholder evidence archive digests
+636	S	placeholder audit artifact	S	release audit records must reject known delayed placeholder evidence archive digests
+637	S	placeholder audit artifact	S	release audit manifests must reject known delayed placeholder evidence archive digests
+638	S	placeholder audit artifact	S	release audit manifests must reject known binary-decorated placeholder evidence archive digests
+639	S	placeholder audit artifact	S	release audit records must reject uppercase placeholder evidence archive digests
+640	S	placeholder audit artifact	S	release audit manifests must reject uppercase placeholder evidence archive digests
+641	S	placeholder audit artifact	S	release audit records must reject whitespace-prefixed uppercase placeholder evidence archive digests
+642	S	placeholder audit artifact	S	release audit manifests must reject whitespace-prefixed uppercase placeholder evidence archive digests
+643	S	body must not be all zero	S	release audit package builder must reject zero-body audit report bytes
+644	S	body must not be all zero	S	release audit package builder must reject zero-body evidence archive bytes
+645	S	below minimum	S	release audit package builder must reject short audit report bodies
+646	S	body must not be blank	S	release audit package builder must reject blank evidence archive bodies
+647	S	audit artifact header	S	release audit package builder must reject whitespace-prefixed nested audit report bodies
+648	S	distinct from evidence archive body	S	release audit package builder must reject copied report/archive bodies
+649	S	distinct from evidence archive body	S	release audit package construction must reject copied report/archive bodies before evidence derivation
+650	S	edge-whitespace normalization	S	release audit package builder must reject whitespace-decorated copied report/archive bodies
+651	S	whitespace normalization	S	release audit package builder must reject internally whitespace-decorated copied report/archive bodies
+652	S	alphanumeric normalization	S	release audit package builder must reject separator-decorated copied report/archive bodies
+653	S	whitespace normalization	S	release audit packages must reject signed internally whitespace-decorated copied report/archive bodies
+654	S	whitespace normalization	S	release audit package digesting must reject signed internally whitespace-decorated copied report/archive bodies
+655	S	alphanumeric normalization	S	release audit packages must reject signed separator-decorated copied report/archive bodies
+656	S	alphanumeric normalization	S	release audit package digesting must reject signed separator-decorated copied report/archive bodies
+657	S	placeholder audit artifact	S	release audit packages must reject delayed placeholder report bodies
+658	S	placeholder audit artifact	S	release audit package digesting must reject delayed placeholder report bodies
+659	S	placeholder audit artifact	S	release audit packages must reject delayed placeholder archive bodies
+660	S	placeholder audit artifact	S	release audit package digesting must reject delayed placeholder archive bodies
+661	S	placeholder audit artifact	S	release audit packages must reject signed placeholder audit report bodies
+662	S	placeholder audit artifact	S	release audit package digesting must reject signed placeholder audit report bodies
+663	S	placeholder audit artifact	S	release audit packages must reject signed placeholder evidence archive bodies
+664	S	placeholder audit artifact	S	release audit package digesting must reject signed placeholder evidence archive bodies
+665	S	placeholder audit artifact	S	release audit packages must reject signed draft/not-for-production audit report bodies
+666	S	placeholder audit artifact	S	release audit package digesting must reject signed draft/not-for-production audit report bodies
+667	S	placeholder audit artifact	S	release audit packages must reject signed spaced replace-before-production archive bodies
+668	S	placeholder audit artifact	S	release audit package digesting must reject signed spaced replace-before-production archive bodies
+669	S	placeholder audit artifact	S	release audit packages must reject signed not-production-ready audit report bodies
+670	S	placeholder audit artifact	S	release audit package digesting must reject signed not-production-ready audit report bodies
+671	S	placeholder audit artifact	S	release audit packages must reject signed underscore replace-before-production archive bodies
+672	S	placeholder audit artifact	S	release audit package digesting must reject signed underscore replace-before-production archive bodies
+673	S	placeholder audit artifact	S	release audit report byte builder must reject long placeholder bodies
+674	S	placeholder audit artifact	S	release audit packages must reject signed long placeholder audit report bodies
+675	S	placeholder audit artifact	S	release audit archive byte builder must reject long placeholder bodies
+676	S	placeholder audit artifact	S	release audit packages must reject signed long placeholder evidence archive bodies
+677	S	placeholder audit artifact	S	release audit report byte builder must reject whitespace-padded placeholder bodies
+678	S	placeholder audit artifact	S	release audit packages must reject signed whitespace-padded placeholder audit report bodies
+679	S	placeholder audit artifact	S	release audit packages must reject signed whitespace-padded placeholder evidence archive bodies
+680	S	placeholder audit artifact	S	release audit report byte builder must reject binary-decorated placeholder bodies
+681	S	placeholder audit artifact	S	release audit packages must reject signed binary-decorated placeholder audit report bodies
+682	S	placeholder audit artifact	S	release audit packages must reject signed binary-decorated placeholder evidence archive bodies
+683	S	placeholder audit artifact	S	release audit report byte builder must reject binary-fragmented placeholder bodies
+684	S	placeholder audit artifact	S	release audit packages must reject signed binary-fragmented placeholder audit report bodies
+685	S	placeholder audit artifact	S	release audit package digesting must reject signed binary-fragmented placeholder audit report bodies
+686	S	placeholder audit artifact	S	release audit report byte builder must reject binary-split placeholder marker bodies
+687	S	placeholder audit artifact	S	release audit packages must reject signed binary-split placeholder audit report bodies
+688	S	placeholder audit artifact	S	release audit package digesting must reject signed binary-split placeholder audit report bodies
+689	S	placeholder audit artifact	S	release audit packages must reject signed binary-fragmented placeholder evidence archive bodies
+690	S	placeholder audit artifact	S	release audit package digesting must reject signed binary-fragmented placeholder evidence archive bodies
+691	S	placeholder audit artifact	S	release audit packages must reject signed binary-split placeholder evidence archive bodies
+692	S	placeholder audit artifact	S	release audit package digesting must reject signed binary-split placeholder evidence archive bodies
+693	S	below minimum	S	release audit packages must reject signed short audit report bodies
+694	S	below minimum	S	release audit package digesting must reject signed short audit report bodies
+695	S	body must not be blank	S	release audit packages must reject signed blank evidence archive bodies
+696	S	body must not be blank	S	release audit package digesting must reject signed blank evidence archive bodies
+697	S	audit artifact header	S	release audit packages must reject signed whitespace-prefixed nested audit report bodies
+698	S	audit artifact header	S	release audit package digesting must reject signed whitespace-prefixed nested audit report bodies
+699	S	non-empty body	S	release audit packages must reject signed header-only audit report bytes
+700	S	non-empty body	S	release audit package digesting must reject signed header-only audit report bytes
+701	S	non-empty body	S	release audit packages must reject signed header-only evidence archive bytes
+702	S	non-empty body	S	release audit package digesting must reject signed header-only evidence archive bytes
+703	S	body must not be all zero	S	release audit packages must reject signed zero-body audit report bytes
+704	S	body must not be all zero	S	release audit package digesting must reject signed zero-body audit report bytes
+705	S	body must not be all zero	S	release audit packages must reject signed zero-body evidence archive bytes
+706	S	body must not be all zero	S	release audit package digesting must reject signed zero-body evidence archive bytes
+707	S	distinct from evidence archive body	S	release audit packages must reject signed copied report/archive bodies
+708	S	distinct from evidence archive body	S	release audit package digesting must reject signed copied report/archive bodies
+709	S	canonical v1 header	S	release audit package builder must reject unheadered audit report bytes
+710	S	canonical v1 header	S	release audit packages must reject signed unheadered audit report bytes
+711	S	canonical v1 header	S	release audit package builder must reject unheadered evidence archive bytes
+712	S	canonical v1 header	S	release audit packages must reject signed unheadered evidence archive bytes
+713	S	must not be all zero	S	release audit packages must reject signed all-zero audit report bytes
+714	S	must not be all zero	S	release audit package digesting must reject signed all-zero audit report bytes
+715	S	must not be all zero	S	release audit packages must reject signed all-zero evidence archive bytes
+716	S	must not be all zero	S	release audit package digesting must reject signed all-zero evidence archive bytes
+717	S	version	S	release audit signoff validation must reject stale envelope versions
+718	S	version	S	release audit record validation must reject stale record versions
+719	S	version	S	release audit record digesting must reject stale record versions
+720	S	field count	S	release audit record validation must reject stale record field counts
+721	S	field count	S	release audit record digesting must reject stale record field counts
+722	S	version	S	release audit package validation must reject stale package versions
+723	S	field count	S	release audit package validation must reject stale package field counts
+724	S	field count	S	release audit package digesting must reject stale package field counts
+725	S	record digest mismatch	S	release audit package validation must reject stale record digests
+726	S	record digest mismatch	S	release audit package digesting must reject stale record digests
+727	S	manifest digest must be distinct from record digest	S	release audit package validation must reject record/manifest digest aliases before nested record validation
+728	S	manifest digest must be distinct from record digest	S	release audit package digesting must reject record/manifest digest aliases before nested record validation
+729	S	report bytes digest mismatch	S	release audit package validation must reject tampered audit report bytes
+730	S	report bytes digest mismatch	S	release audit package digesting must reject tampered audit report bytes
+731	S	evidence archive bytes digest mismatch	S	release audit package validation must reject tampered evidence archive bytes
+732	S	evidence archive bytes digest mismatch	S	release audit package digesting must reject tampered evidence archive bytes
+733	S	signature verification failed	S	release audit signoff validation must reject unsigned payload mutation
+734	S	signature verification failed	S	release audit signoff validation must reject signatures from the wrong reviewer key
+735	S	evidence digest mismatch	S	release audit signoffs must not validate against a different evidence record
+736	S	evidence digest mismatch	S	release audit signoffs must not validate against a different valid artifact set
+737	S	does not match governed artifacts	S	release audit records must not validate against a different governed artifact set
+738	S	evidence digest mismatch	S	release audit records must reject signoffs for a different evidence record
+739	S	evidence digest mismatch	S	release audit packages must reject records with mismatched evidence/signoff pairs
+740	S	digest does not match	S	release audit evidence must reject stale governed proof-key digests
+741	S	digest does not match	S	release audit signoff artifact validation must reject stale governed proof-key digests
+742	S	digest does not match	S	release audit record artifact validation must reject stale governed proof-key digests
+743	S	digest does not match	S	release audit package artifact validation must reject stale governed proof-key digests
+744	S	does not match registered parameters	D	runtime context retained in Rust
+745	S	does not match registered parameters	D	runtime context retained in Rust
+746	S	does not match registered parameters	D	runtime context retained in Rust
+747	S	does not match registered parameters	D	runtime context retained in Rust
+748	S	digest does not match	S	release audit evidence must reject stale concrete artifacts
+749	S	digest does not match	S	release audit signoff artifact validation must reject stale concrete artifacts
+750	S	digest does not match	S	release audit record artifact validation must reject stale concrete artifacts
+751	S	governed artifact bytes	S	release audit package artifact validation must reject stale concrete artifacts before digest-only acceptance
+752	S	queries	S	release audit evidence digesting must reject stale proof profile metadata
+753	S	SHA-256	S	release audit evidence validation must reject proof profile hash-function drift
+754	S	exceeds n_log2	S	release audit evidence validation must reject impossible STARK blowup/domain geometry
+755	S	public-input layout mismatch	S	release audit evidence validation must reject proof profile public-input layout downgrades
+756	S	AIR evaluation material layout mismatch	S	release audit evidence validation must reject proof profile AIR evaluation layout downgrades
+757	S	prover input material digest domain	S	release audit evidence validation must reject proof profile release-prover digest-domain drift
+758	S	placeholder text	S	release audit evidence validation must reject placeholder proof profile digest domains
+759	S	separate release-prover material digest domains	S	release audit evidence validation must require release-prover digest-domain separation
+760	S	proof-key pair commitment domain	S	release audit evidence validation must reject proof-key commitment-domain drift
+761	S	separate proof-key material and pair commitment domains	S	release audit evidence validation must require proof-key commitment-domain separation
+762	S	exact and bounded-noise	S	release audit evidence validation must reject proof profile claim-support downgrades
+763	S	stale replay rejection	D	runtime context retained in Rust
+764	S	transcript-bound opening schedule	D	runtime context retained in Rust
+765	S	native Merkle/FRI verifier replay	D	runtime context retained in Rust
+766	S	AIR evaluation material digest binding	D	runtime context retained in Rust
+767	S	zero hash	S	release audit evidence validation must reject zero artifact bundle digests
+768	S	greater than zero	S	release audit evidence validation must reject zero bootstrap depth
+769	S	field count	S	release audit evidence validation must reject stale proof-key evidence field counts
+770	S	centered scale-round source-chain	S	release audit evidence validation must reject stale proof-key source-chain digests
+771	S	placeholder	S	release audit key evidence shape must reject placeholder proof-key digests
+772	S	placeholder	S	release audit key evidence shape must reject placeholder proof-key material commitments
+773	S	placeholder	S	release audit evidence validation must reject placeholder native circuit fingerprints before mismatch checks
+774	S	payload kind	S	release audit evidence validation must reject native payload kind drift
+775	S	fingerprint	S	release audit evidence validation must reject native circuit fingerprint drift
+776	S	fingerprint mismatch	S	release audit evidence validation must reject matched stale native circuit fingerprints
+777	S	verifier-key native payload digest must be distinct from prover-key native payload digest	S	release audit evidence validation must reject duplicated native payload digests before canonical role replay
+778	S	verifier-key native payload digest must be distinct from prover-key native payload digest	S	release audit evidence digesting must reject duplicated native payload digests before canonical role replay
+779	S	prover-key native payload digest must be distinct from proof-key pair commitment	S	release audit evidence validation must reject native payload digest aliasing with signed evidence commitments before canonical role replay
+780	S	prover-key native payload digest must be distinct from proof-key pair commitment	S	release audit evidence digesting must reject native payload digest aliasing with signed evidence commitments before canonical role replay
+781	S	inert native payload digest	S	release audit evidence validation must reject empty native-payload digest sentinels
+782	S	inert native payload digest	S	release audit evidence validation must reject all-zero native-payload digest sentinels
+783	S	inert native payload digest	D	runtime context retained in Rust
+784	S	inert native payload digest	S	release audit evidence validation must reject placeholder native-payload digest sentinels
+785	S	inert native payload digest	S	release audit evidence validation must reject generic proof-key native-payload placeholder digests
+786	S	inert native payload digest	S	release audit evidence validation must reject non-production native-payload digest sentinels
+787	S	inert native payload digest	S	release audit evidence validation must reject whitespace-prefixed non-production native-payload digest sentinels
+788	S	inert native payload digest	S	release audit evidence validation must reject draft native-payload digest sentinels
+789	S	inert native payload digest	S	release audit evidence validation must reject not-for-production native-payload digest sentinels
+790	S	inert native payload digest	S	release audit evidence validation must reject spaced replace-before-production native-payload digest sentinels
+791	S	inert native payload digest	S	release audit evidence validation must reject underscore replace-before-production native-payload digest sentinels
+792	S	inert native payload digest	S	release audit evidence validation must reject not-production-ready native-payload digest sentinels
+793	S	inert native payload digest	S	release audit evidence validation must reject whitespace-prefixed placeholder native-payload digest sentinels
+794	S	inert native payload digest	S	release audit evidence validation must reject padded placeholder native-payload digest sentinels
+795	S	inert native payload digest	S	release audit evidence digesting must reject delayed placeholder native-payload digest sentinels
+796	S	inert native payload digest	S	release audit evidence validation must reject leading-whitespace delayed placeholder native-payload digest sentinels
+797	S	inert native payload digest	S	release audit evidence validation must reject binary-decorated placeholder native-payload digest sentinels
+798	S	role	S	release audit evidence digesting must reject proof-key role drift

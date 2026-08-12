@@ -1,0 +1,8 @@
+
+seiyaku CompilerFixture {
+
+fn main(NftId nft) {
+  ledger::nft::set_metadata(nft: nft, key: 1, value: Json::parse("{}"));
+}
+
+}

@@ -1,0 +1,31 @@
+
+            <Document xmlns="urn:iso:std:iso:20022:tech:xsd:pacs.008.001.08">
+                <FIToFICstmrCdtTrf>
+                    <GrpHdr>
+                        <MsgId>sig-001</MsgId>
+                    </GrpHdr>
+                    <CdtTrfTxInf>
+                        <IntrBkSttlmAmt Ccy="USD">10</IntrBkSttlmAmt>
+                        <IntrBkSttlmDt>2024-01-01</IntrBkSttlmDt>
+                        <DbtrAcct>
+                            <Id><IBAN>GB82WEST12345698765432</IBAN></Id>
+                        </DbtrAcct>
+                        <CdtrAcct>
+                            <Id><IBAN>GB33BUKB20201555555555</IBAN></Id>
+                        </CdtrAcct>
+                        <DbtrAgt>
+                            <FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId>
+                        </DbtrAgt>
+                        <CdtrAgt>
+                            <FinInstnId><BICFI>DEUTDEFF</BICFI></FinInstnId>
+                        </CdtrAgt>
+                    </CdtTrfTxInf>
+                    <Sgntr>
+                        <SignedInfo>
+                            <SignatureMethod>dummy</SignatureMethod>
+                        </SignedInfo>
+                        <SignatureValue>Zm9vYmFy</SignatureValue>
+                    </Sgntr>
+                </FIToFICstmrCdtTrf>
+            </Document>
+        

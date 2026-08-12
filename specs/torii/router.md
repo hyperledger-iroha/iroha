@@ -41,11 +41,17 @@ This approach guarantees that:
 
 The integration test `crates/iroha_torii/tests/router_feature_matrix.rs`
 constructs Torii with a minimal in-memory stack and ensures the router builds
-under the active feature set. When the schema/OpenAPI endpoint is compiled in,
-the test optionally diffs a generated specification against a snapshot:
+under the active feature set. Torii embeds the package-local mirror at
+`crates/iroha_torii/assets/openapi/torii.json`, parses it once with Norito JSON,
+and caches both the document and response. The complete release feature profile
+serves those exact bytes; reduced profiles remove only path/method operations
+disabled by the compiled route catalog and serialize the pruned document once.
+
+When the schema/OpenAPI endpoint is compiled in, the test can compare the
+served static authority against an expected file:
 
 - Set `IROHA_TORII_OPENAPI_EXPECTED=/path/to/openapi.json` to assert the
-  generated document matches the snapshot.
+  served document matches the expected authority.
 - Optionally set `IROHA_TORII_OPENAPI_ACTUAL=/tmp/iroha-openapi.json` to write
   the current output for manual inspection or diff tooling.
 

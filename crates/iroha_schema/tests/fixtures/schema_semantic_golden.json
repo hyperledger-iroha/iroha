@@ -1,0 +1,191 @@
+{
+  "enum_default.default_discriminants": {
+    "Foo": {
+      "Enum": [
+        { "discriminant": 0, "tag": "Variant1", "type": "bool" },
+        { "discriminant": 1, "tag": "Variant2", "type": "String" },
+        { "discriminant": 2, "tag": "Variant3", "type": "Result<bool, String>" },
+        { "discriminant": 4, "tag": "Variant5", "type": "i32" }
+      ]
+    },
+    "Result<bool, String>": { "Result": { "err": "String", "ok": "bool" } },
+    "String": "String",
+    "bool": "bool",
+    "i32": { "Int": "FixedWidth" }
+  },
+  "enum_various.discriminant": {
+    "Foo": {
+      "Enum": [
+        { "discriminant": 10, "tag": "A" },
+        { "discriminant": 11, "tag": "B" },
+        { "discriminant": 300, "tag": "C" },
+        { "discriminant": 999, "tag": "D" }
+      ]
+    }
+  },
+  "enum_fieldless.discriminant": {
+    "Foo": {
+      "Enum": [
+        { "discriminant": 0, "tag": "A" },
+        { "discriminant": 1, "tag": "B" },
+        { "discriminant": 2, "tag": "C" },
+        { "discriminant": 3, "tag": "D" }
+      ]
+    }
+  },
+  "floats.float_primitives_have_explicit_schema_metadata": {
+    "FloatFields": {
+      "Struct": [
+        { "name": "sample32", "type": "f32" },
+        { "name": "sample64", "type": "f64" }
+      ]
+    },
+    "f32": { "Float": "Binary32" },
+    "f64": { "Float": "Binary64" }
+  },
+  "compact_fixed.compact": {
+    "Compact<u128>": { "Int": "Compact" },
+    "Compact<u16>": { "Int": "Compact" },
+    "Compact<u32>": { "Int": "Compact" },
+    "Compact<u64>": { "Int": "Compact" },
+    "Compact<u8>": { "Int": "Compact" },
+    "Foo": {
+      "Struct": [
+        { "name": "u8_compact", "type": "Compact<u8>" },
+        { "name": "u8_fixed", "type": "u8" },
+        { "name": "u16_compact", "type": "Compact<u16>" },
+        { "name": "u16_fixed", "type": "u16" },
+        { "name": "u32_compact", "type": "Compact<u32>" },
+        { "name": "u32_fixed", "type": "u32" },
+        { "name": "u64_compact", "type": "Compact<u64>" },
+        { "name": "u64_fixed", "type": "u64" },
+        { "name": "u128_compact", "type": "Compact<u128>" },
+        { "name": "u128_fixed", "type": "u128" }
+      ]
+    },
+    "u128": { "Int": "FixedWidth" },
+    "u16": { "Int": "FixedWidth" },
+    "u32": { "Int": "FixedWidth" },
+    "u64": { "Int": "FixedWidth" },
+    "u8": { "Int": "FixedWidth" }
+  },
+  "generic.check_generic": {
+    "Foo<bool>": { "Struct": [{ "name": "_value", "type": "Option<bool>" }] },
+    "Option<bool>": { "Option": "bool" },
+    "bool": "bool"
+  },
+  "named.named_fields": {
+    "Command": {
+      "Struct": [
+        { "name": "executable", "type": "String" },
+        { "name": "args", "type": "Vec<String>" },
+        { "name": "num", "type": "i32" }
+      ]
+    },
+    "String": "String",
+    "Vec<String>": { "Vec": "String" },
+    "i32": { "Int": "FixedWidth" }
+  },
+  "unnamed.unnamed": {
+    "Command": { "Tuple": ["String", "Vec<String>"] },
+    "String": "String",
+    "Vec<String>": { "Vec": "String" }
+  },
+  "transparent.transparent_types": {
+    "String": "String",
+    "u32": { "Int": "FixedWidth" }
+  },
+  "schema_json.test_struct.empty_named": {
+    "EmptyNamedStruct": { "Struct": [] }
+  },
+  "schema_json.test_struct.empty_tuple": {
+    "EmptyTupleStruct": null
+  },
+  "schema_json.test_struct.unit": {
+    "UnitStruct": null
+  },
+  "schema_json.test_struct.normal": {
+    "NormalStruct": {
+      "Struct": [
+        { "name": "normal_field_1", "type": "u32" },
+        { "name": "normal_field_2", "type": "u32" }
+      ]
+    },
+    "u32": { "Int": "FixedWidth" }
+  },
+  "schema_json.test_struct.newtype": {
+    "NewtypeStruct": "u32",
+    "u32": { "Int": "FixedWidth" }
+  },
+  "schema_json.test_struct.tuple": {
+    "TupleStruct": { "Tuple": ["u32", "u32"] },
+    "u32": { "Int": "FixedWidth" }
+  },
+  "schema_json.test_struct_codec_attr.skip": {
+    "SkipField": { "Struct": [{ "name": "normal_field", "type": "u32" }] },
+    "u32": { "Int": "FixedWidth" }
+  },
+  "schema_json.test_struct_codec_attr.compact": {
+    "CompactField": { "Struct": [{ "name": "compact_field", "type": "Compact<u32>" }] },
+    "Compact<u32>": { "Int": "Compact" }
+  },
+  "schema_json.test_transparent.inferred": {
+    "u32": { "Int": "FixedWidth" }
+  },
+  "schema_json.test_transparent.explicit_int": {
+    "u32": { "Int": "FixedWidth" }
+  },
+  "schema_json.test_transparent.explicit_string": {
+    "String": "String"
+  },
+  "schema_json.test_transparent.enum": {
+    "String": "String"
+  },
+  "schema_json.test_enum.empty": {
+    "EmptyEnum": { "Enum": [] }
+  },
+  "schema_json.test_enum.dataless": {
+    "DatalessEnum": {
+      "Enum": [
+        { "discriminant": 0, "tag": "Variant1" },
+        { "discriminant": 1, "tag": "Variant2" }
+      ]
+    }
+  },
+  "schema_json.test_enum.data": {
+    "DataEnum": {
+      "Enum": [
+        { "discriminant": 0, "tag": "Variant1", "type": "u32" },
+        { "discriminant": 1, "tag": "Variant3", "type": "String" }
+      ]
+    },
+    "String": "String",
+    "u32": { "Int": "FixedWidth" }
+  },
+  "schema_json.test_enum_with_norito_rename_all": {
+    "BackendTag": {
+      "Enum": [
+        { "discriminant": 0, "tag": "halo2-ipa-pasta" },
+        { "discriminant": 1, "tag": "halo2-bn254" },
+        { "discriminant": 2, "tag": "unsupported" }
+      ]
+    }
+  },
+  "schema_json.test_enum_codec_attr.skip": {
+    "SkipEnum": { "Enum": [{ "discriminant": 1, "tag": "Variant2" }] }
+  },
+  "schema_json.test_enum_codec_attr.index": {
+    "IndexEnum": {
+      "Enum": [
+        { "discriminant": 12, "tag": "Variant1" },
+        { "discriminant": 42, "tag": "Variant2" }
+      ]
+    }
+  },
+  "schema_json.test_enum_codec_attr.index_data": {
+    "IndexDataEnum": {
+      "Enum": [{ "discriminant": 42, "tag": "Variant2", "type": "u32" }]
+    },
+    "u32": { "Int": "FixedWidth" }
+  }
+}

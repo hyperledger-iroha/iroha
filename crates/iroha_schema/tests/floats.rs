@@ -1,7 +1,8 @@
 //! Schema metadata tests for floating-point primitives.
 
-use std::any::TypeId;
+mod common;
 
+use common::{assert_schema, entry};
 use iroha_schema::prelude::*;
 
 #[derive(IntoSchema)]
@@ -13,29 +14,12 @@ struct FloatFields {
 
 #[test]
 fn float_primitives_have_explicit_schema_metadata() {
-    let schema = FloatFields::schema();
-
-    assert_eq!(
-        schema.get::<f32>(),
-        Some(&Metadata::Float(FloatMode::Binary32))
-    );
-    assert_eq!(
-        schema.get::<f64>(),
-        Some(&Metadata::Float(FloatMode::Binary64))
-    );
-    assert_eq!(
-        schema.get::<FloatFields>(),
-        Some(&Metadata::Struct(NamedFieldsMeta {
-            declarations: vec![
-                Declaration {
-                    name: "sample32".to_owned(),
-                    ty: TypeId::of::<f32>(),
-                },
-                Declaration {
-                    name: "sample64".to_owned(),
-                    ty: TypeId::of::<f64>(),
-                },
-            ],
-        }))
+    assert_schema::<FloatFields>(
+        "floats.float_primitives_have_explicit_schema_metadata",
+        &[
+            entry::<f32>("f32"),
+            entry::<f64>("f64"),
+            entry::<FloatFields>("FloatFields"),
+        ],
     );
 }

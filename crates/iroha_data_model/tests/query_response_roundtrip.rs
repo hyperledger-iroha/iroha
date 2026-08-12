@@ -21,16 +21,10 @@ use iroha_data_model::{
 };
 use nonzero_ext::nonzero;
 
-fn checked_da_authorization(
-    lane_id: LaneId,
-    epoch: u64,
-    sequence: u64,
-) -> DaIngestAuthorizationV1 {
-    let key_pair = iroha_crypto::KeyPair::try_from_seed(
-        vec![0xE1; 32],
-        iroha_crypto::Algorithm::Ed25519,
-    )
-    .expect("valid deterministic query-response DA key");
+fn checked_da_authorization(lane_id: LaneId, epoch: u64, sequence: u64) -> DaIngestAuthorizationV1 {
+    let key_pair =
+        iroha_crypto::KeyPair::try_from_seed(vec![0xE1; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("valid deterministic query-response DA key");
     let mut authorization = DaIngestAuthorizationV1 {
         network_id: NetworkId::from_genesis_hash(
             iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(

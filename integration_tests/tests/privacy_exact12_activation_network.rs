@@ -486,11 +486,8 @@ async fn wait_for_identical_zk_ams_unavailable(
         last_observed.clear();
         for (index, client) in clients.iter().enumerate() {
             match client.get_privacy_capabilities() {
-                Ok(snapshot) => match assert_zk_ams_unavailable(
-                    &snapshot,
-                    minimum_height,
-                    context,
-                ) {
+                Ok(snapshot) => match assert_zk_ams_unavailable(&snapshot, minimum_height, context)
+                {
                     Ok(()) => {
                         last_observed.push(format!(
                             "peer {index}: unavailable at height {}",

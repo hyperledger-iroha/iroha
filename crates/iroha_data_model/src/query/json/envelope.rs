@@ -18,41 +18,14 @@ use thiserror::Error;
 use crate::{
     name::Name,
     query::{
-        QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithFilter, QueryWithParams,
-        SingularQueryBox,
+        ItemKindTag, QueryRequest, QueryWithParams, SingularQueryBox,
         dsl::{CompoundPredicate, HasProjection, PredicateMarker, SelectorMarker, SelectorTuple},
         json::predicate::{PredicateJson, PredicateParseError},
         parameters::{FetchSize, Pagination, QueryParams, Sorting},
     },
 };
 
-fn build_query_with_filter<T, F>(
-    predicate: CompoundPredicate<T>,
-    selector: SelectorTuple<T>,
-    builder: F,
-) -> QueryBox<QueryOutputBatchBox>
-where
-    T: HasProjection<PredicateMarker>
-        + HasProjection<SelectorMarker, AtomType = ()>
-        + Send
-        + Sync
-        + 'static,
-    F: FnOnce() -> Box<dyn crate::query::Query<Item = T> + Send + Sync + 'static>,
-{
-    #[cfg(not(feature = "fast_dsl"))]
-    {
-        let qwf = QueryWithFilter::new_with_query(builder(), predicate, selector);
-        QueryBox::from(qwf)
-    }
-    #[cfg(feature = "fast_dsl")]
-    {
-        let _ = builder;
-        let qwf = QueryWithFilter::new_with_query((), predicate, selector);
-        QueryBox::from(qwf)
-    }
-}
-
-fn build_query_with_params<T, F>(
+fn build_query_with_params<T, Q, F>(
     predicate: CompoundPredicate<T>,
     selector: SelectorTuple<T>,
     params: QueryParams,
@@ -63,19 +36,19 @@ where
         + HasProjection<SelectorMarker, AtomType = ()>
         + Send
         + Sync
+        + ItemKindTag
         + 'static,
-    F: FnOnce() -> Box<dyn crate::query::Query<Item = T> + Send + Sync + 'static>,
+    Q: crate::query::Query<Item = T> + norito::codec::Encode,
+    F: FnOnce() -> Q,
 {
-    let query_box = build_query_with_filter::<T, _>(predicate, selector, builder);
-    #[cfg(not(feature = "fast_dsl"))]
-    {
-        QueryWithParams::new(query_box, params)
-    }
-    #[cfg(feature = "fast_dsl")]
-    {
-        let result = QueryWithParams::new(&query_box, params);
-        drop(query_box);
-        result
+    let query = builder();
+    QueryWithParams {
+        query: (),
+        query_payload: query.dyn_encode(),
+        item: query.query_item_kind(),
+        predicate_bytes: norito::codec::Encode::encode(&predicate),
+        selector_bytes: norito::codec::Encode::encode(&selector),
+        params,
     }
 }
 
@@ -856,7 +829,7 @@ impl IterableQueryJson {
         }
     }
 
-    fn build_for_kind<Item, F>(
+    fn build_for_kind<Item, Q, F>(
         &self,
         params: QueryParams,
         constructor: F,
@@ -866,15 +839,17 @@ impl IterableQueryJson {
             + HasProjection<SelectorMarker, AtomType = ()>
             + Send
             + Sync
+            + ItemKindTag
             + 'static,
-        F: FnOnce() -> Box<dyn crate::query::Query<Item = Item> + Send + Sync + 'static>,
+        Q: crate::query::Query<Item = Item> + norito::codec::Encode,
+        F: FnOnce() -> Q,
     {
         let predicate = self.predicate_or_pass::<Item>()?;
         #[cfg(not(feature = "ids_projection"))]
         let selector = self.selector::<Item>()?;
         #[cfg(feature = "ids_projection")]
         let selector = self.selector::<Item>();
-        Ok(build_query_with_params::<Item, _>(
+        Ok(build_query_with_params::<Item, Q, _>(
             predicate,
             selector,
             params,
@@ -888,80 +863,80 @@ impl IterableQueryJson {
         match self.kind {
             IterableQueryKind::FindPeers => {
                 type Item = crate::peer::PeerId;
-                self.build_for_kind::<Item, _>(params.clone(), || {
-                    Box::new(crate::query::peer::prelude::FindPeers)
+                self.build_for_kind::<Item, _, _>(params.clone(), || {
+                    crate::query::peer::prelude::FindPeers
                 })
             }
             IterableQueryKind::FindDomains => {
                 type Item = crate::domain::Domain;
-                self.build_for_kind::<Item, _>(params.clone(), || {
-                    Box::new(crate::query::domain::prelude::FindDomains)
+                self.build_for_kind::<Item, _, _>(params.clone(), || {
+                    crate::query::domain::prelude::FindDomains
                 })
             }
             IterableQueryKind::FindAccounts => {
                 type Item = crate::account::Account;
-                self.build_for_kind::<Item, _>(params.clone(), || {
-                    Box::new(crate::query::account::prelude::FindAccounts)
+                self.build_for_kind::<Item, _, _>(params.clone(), || {
+                    crate::query::account::prelude::FindAccounts
                 })
             }
             IterableQueryKind::FindAccountIds => {
                 type Item = crate::account::AccountId;
-                self.build_for_kind::<Item, _>(params.clone(), || {
-                    Box::new(crate::query::account::prelude::FindAccountIds)
+                self.build_for_kind::<Item, _, _>(params.clone(), || {
+                    crate::query::account::prelude::FindAccountIds
                 })
             }
             IterableQueryKind::FindAssetsDefinitions => {
                 type Item = crate::asset::definition::AssetDefinition;
-                self.build_for_kind::<Item, _>(params.clone(), || {
-                    Box::new(crate::query::asset::prelude::FindAssetsDefinitions)
+                self.build_for_kind::<Item, _, _>(params.clone(), || {
+                    crate::query::asset::prelude::FindAssetsDefinitions
                 })
             }
             IterableQueryKind::FindAssetEscrows => {
                 type Item = crate::escrow::AssetEscrowRecord;
-                self.build_for_kind::<Item, _>(params.clone(), || {
-                    Box::new(crate::query::escrow::prelude::FindAssetEscrows)
+                self.build_for_kind::<Item, _, _>(params.clone(), || {
+                    crate::query::escrow::prelude::FindAssetEscrows
                 })
             }
             IterableQueryKind::FindRepoAgreements => {
                 type Item = crate::repo::RepoAgreement;
-                self.build_for_kind::<Item, _>(params.clone(), || {
-                    Box::new(crate::query::repo::prelude::FindRepoAgreements)
+                self.build_for_kind::<Item, _, _>(params.clone(), || {
+                    crate::query::repo::prelude::FindRepoAgreements
                 })
             }
             IterableQueryKind::FindNfts => {
                 type Item = crate::nft::Nft;
-                self.build_for_kind::<Item, _>(params.clone(), || {
-                    Box::new(crate::query::nft::prelude::FindNfts)
+                self.build_for_kind::<Item, _, _>(params.clone(), || {
+                    crate::query::nft::prelude::FindNfts
                 })
             }
             IterableQueryKind::FindRwas => {
                 type Item = crate::rwa::Rwa;
-                self.build_for_kind::<Item, _>(params.clone(), || {
-                    Box::new(crate::query::rwa::prelude::FindRwas)
+                self.build_for_kind::<Item, _, _>(params.clone(), || {
+                    crate::query::rwa::prelude::FindRwas
                 })
             }
             IterableQueryKind::FindRoles => {
                 type Item = crate::role::Role;
-                self.build_for_kind::<Item, _>(params.clone(), || {
-                    Box::new(crate::query::role::prelude::FindRoles)
+                self.build_for_kind::<Item, _, _>(params.clone(), || {
+                    crate::query::role::prelude::FindRoles
                 })
             }
             IterableQueryKind::FindRoleIds => {
                 type Item = crate::role::RoleId;
-                self.build_for_kind::<Item, _>(params, || {
-                    Box::new(crate::query::role::prelude::FindRoleIds)
+                self.build_for_kind::<Item, _, _>(params, || {
+                    crate::query::role::prelude::FindRoleIds
                 })
             }
             IterableQueryKind::FindFeeSponsorPrograms => {
                 type Item = crate::nexus::FeeSponsorProgram;
-                self.build_for_kind::<Item, _>(params.clone(), || {
-                    Box::new(crate::query::nexus::prelude::FindFeeSponsorPrograms)
+                self.build_for_kind::<Item, _, _>(params.clone(), || {
+                    crate::query::nexus::prelude::FindFeeSponsorPrograms
                 })
             }
             IterableQueryKind::FindFeeSponsorProgramIds => {
                 type Item = crate::nexus::FeeSponsorProgramId;
-                self.build_for_kind::<Item, _>(params, || {
-                    Box::new(crate::query::nexus::prelude::FindFeeSponsorProgramIds)
+                self.build_for_kind::<Item, _, _>(params, || {
+                    crate::query::nexus::prelude::FindFeeSponsorProgramIds
                 })
             }
         }
@@ -1752,6 +1727,36 @@ mod tests {
             .into_box()
             .expect_err("invalid program id must be rejected");
         assert_eq!(err, QueryJsonError::InvalidField("payload", "id"));
+    }
+
+    #[test]
+    fn iterable_json_builds_canonical_query_components() {
+        let iterable = IterableQueryJson {
+            kind: IterableQueryKind::FindAssetEscrows,
+            params: IterableQueryParamsJson::default(),
+            predicate: None,
+        };
+
+        let query = iterable
+            .into_query_with_params()
+            .expect("build canonical asset-escrow iterable query");
+        assert_eq!(query.item, crate::query::QueryItemKind::AssetEscrowRecord);
+        assert_eq!(
+            query.query_payload,
+            norito::codec::Encode::encode(&crate::query::escrow::prelude::FindAssetEscrows)
+        );
+        assert_eq!(
+            query.predicate_bytes,
+            norito::codec::Encode::encode(
+                &CompoundPredicate::<crate::escrow::AssetEscrowRecord>::PASS,
+            )
+        );
+        assert_eq!(
+            query.selector_bytes,
+            norito::codec::Encode::encode(
+                &SelectorTuple::<crate::escrow::AssetEscrowRecord>::default(),
+            )
+        );
     }
 
     #[test]

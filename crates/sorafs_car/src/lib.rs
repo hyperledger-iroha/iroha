@@ -7036,18 +7036,14 @@ pub struct FileEntry {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        cell::Cell,
-        collections::{BTreeMap, HashSet},
-        fs,
-        io::Cursor,
-        rc::Rc,
-    };
+    use std::{cell::Cell, collections::HashSet, fs, io::Cursor, rc::Rc};
 
     use sorafs_chunker::fixtures::FixtureProfile;
     use tempfile::tempdir;
 
     use super::*;
+
+    include!("lib/decode_test_helpers.rs");
 
     #[derive(Debug)]
     struct StoreSnapshot {

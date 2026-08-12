@@ -35,7 +35,10 @@ python3 -m pytest -q \
   scripts/tests/check_sorafs_production_readiness_test.py \
   scripts/tests/run_sorafs_production_readiness_test.py \
   scripts/tests/run_sorafs_production_readiness_negative_archive_test.py \
+  scripts/tests/sorafs_evidence_json_test.py \
   scripts/tests/sorafs_l1_lane_evidence_inventory_test.py \
+  scripts/tests/sorafs_response_args_test.py \
+  scripts/tests/sorafs_topology_qualification_test.py \
   scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py \
   scripts/tests/release_profile_validation_test.py \
   scripts/tests/release_manifest_signing_test.py \

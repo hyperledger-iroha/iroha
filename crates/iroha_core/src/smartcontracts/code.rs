@@ -950,8 +950,8 @@ mod tests {
         register_manifest(&authority, manifest.clone(), &mut stx).expect("register manifest");
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             0,
             DataSpaceId::UNIVERSAL,
@@ -1056,8 +1056,8 @@ mod tests {
         register_manifest(&authority, manifest, &mut stx).expect("register manifest");
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             1,
             DataSpaceId::UNIVERSAL,
@@ -1080,8 +1080,8 @@ mod tests {
         let mut transaction = block.transaction();
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -1298,8 +1298,8 @@ seiyaku LifecycleTwo {
         transaction.tx_call_hash = Some(Hash::new(b"one-execution-two-lifecycle-transitions"));
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             80,
             DataSpaceId::UNIVERSAL,
@@ -1335,8 +1335,8 @@ seiyaku LifecycleTwo {
         let (state, authority, keypair) = test_state();
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             81,
             DataSpaceId::UNIVERSAL,
@@ -1436,8 +1436,8 @@ seiyaku LifecycleAba {
         let mut transaction = block.transaction();
         let contract_address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             8,
             DataSpaceId::UNIVERSAL,
@@ -1623,8 +1623,8 @@ seiyaku LifecycleAba {
         let authority = AccountId::new(checked_keypair().public_key().clone());
         let address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             7,
             DataSpaceId::UNIVERSAL,
@@ -1655,8 +1655,8 @@ seiyaku LifecycleAba {
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let address = ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-            .parse()
-            .expect("canonical test network id"),
+                .parse()
+                .expect("canonical test network id"),
             &authority,
             8,
             DataSpaceId::UNIVERSAL,

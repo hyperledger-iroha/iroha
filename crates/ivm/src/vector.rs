@@ -599,16 +599,7 @@ impl MetalState {
         let device = discover_metal_device()?;
         let queue = device.newCommandQueue()?;
 
-        let src = r#"
-            #include <metal_stdlib>
-            using namespace metal;
-            kernel void vadd64(device const ulong2* a [[buffer(0)]],
-                               device const ulong2* b [[buffer(1)]],
-                               device ulong2* out [[buffer(2)]],
-                               uint id [[thread_position_in_grid]]) {
-                out[id] = a[id] + b[id];
-            }
-        "#;
+        let src = include_str!("assets/text_v1/metal_vadd64.metal");
         let lib = device
             .newLibraryWithSource_options_error(&NSString::from_str(src), None)
             .ok()?;
@@ -617,16 +608,7 @@ impl MetalState {
             .newComputePipelineStateWithFunction_error(&func)
             .ok()?;
 
-        let src = r#"
-            #include <metal_stdlib>
-            using namespace metal;
-            kernel void vadd32(device const uint4* a [[buffer(0)]],
-                               device const uint4* b [[buffer(1)]],
-                               device uint4* out [[buffer(2)]],
-                               uint id [[thread_position_in_grid]]) {
-                out[id] = a[id] + b[id];
-            }
-        "#;
+        let src = include_str!("assets/text_v1/metal_vadd32.metal");
         let lib = device
             .newLibraryWithSource_options_error(&NSString::from_str(src), None)
             .ok()?;
@@ -663,72 +645,7 @@ impl MetalState {
         let vxor = compile_bit(&device, "^", "vxor")?;
         let vor = compile_bit(&device, "|", "vor")?;
 
-        let src = r#"
-            #include <metal_stdlib>
-            using namespace metal;
-            inline uint rotr(uint x, uint n) {
-                return (x >> n) | (x << (32 - n));
-            }
-            constant uint K[64] = {
-                0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
-                0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
-                0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
-                0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-                0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
-                0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
-                0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
-                0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-                0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
-                0xc67178f2,
-            };
-            kernel void sha256_compress(device uint* state [[buffer(0)]],
-                                         device const uchar* block [[buffer(1)]],
-                                         uint id [[thread_position_in_grid]]) {
-                uint w[64];
-                for (uint t = 0; t < 16; ++t) {
-                    uint i = t * 4;
-                    w[t] = (uint(block[i]) << 24) | (uint(block[i+1]) << 16) |
-                           (uint(block[i+2]) << 8) | uint(block[i+3]);
-                }
-                for (uint t = 16; t < 64; ++t) {
-                    uint s0 = rotr(w[t-15],7) ^ rotr(w[t-15],18) ^ (w[t-15] >> 3);
-                    uint s1 = rotr(w[t-2],17) ^ rotr(w[t-2],19) ^ (w[t-2] >> 10);
-                    w[t] = w[t-16] + s0 + w[t-7] + s1;
-                }
-                uint a = state[0];
-                uint b = state[1];
-                uint c = state[2];
-                uint d = state[3];
-                uint e = state[4];
-                uint f = state[5];
-                uint g = state[6];
-                uint h = state[7];
-                for (uint t = 0; t < 64; ++t) {
-                    uint s1 = rotr(e,6) ^ rotr(e,11) ^ rotr(e,25);
-                    uint ch = (e & f) ^ ((~e) & g);
-                    uint temp1 = h + s1 + ch + K[t] + w[t];
-                    uint s0 = rotr(a,2) ^ rotr(a,13) ^ rotr(a,22);
-                    uint maj = (a & b) ^ (a & c) ^ (b & c);
-                    uint temp2 = s0 + maj;
-                    h = g;
-                    g = f;
-                    f = e;
-                    e = d + temp1;
-                    d = c;
-                    c = b;
-                    b = a;
-                    a = temp1 + temp2;
-                }
-                state[0] += a;
-                state[1] += b;
-                state[2] += c;
-                state[3] += d;
-                state[4] += e;
-                state[5] += f;
-                state[6] += g;
-                state[7] += h;
-            }
-        "#;
+        let src = include_str!("assets/text_v1/metal_sha256_compress.metal");
         let lib = device
             .newLibraryWithSource_options_error(&NSString::from_str(src), None)
             .ok()?;
@@ -738,62 +655,7 @@ impl MetalState {
             .ok()?;
 
         // Batch SHA-256 leaves kernel: one 64-byte block per thread
-        let src = r#"
-            #include <metal_stdlib>
-            using namespace metal;
-            inline uint rotr(uint x, uint n) { return (x >> n) | (x << (32 - n)); }
-            constant uint K[64] = {
-                0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-                0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-                0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-                0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-                0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-                0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-                0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-                0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
-            };
-            constant uint H0[8] = {
-                0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
-                0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19
-            };
-            kernel void sha256_leaves(device const uchar* blocks [[buffer(0)]],
-                                      device uint* out_states [[buffer(1)]],
-                                      uint id [[thread_position_in_grid]]) {
-                const device uchar* block = blocks + (id * 64);
-                uint w[64];
-                for (uint t = 0; t < 16; ++t) {
-                    uint i = t * 4;
-                    w[t] = (uint(block[i]) << 24) | (uint(block[i+1]) << 16) |
-                           (uint(block[i+2]) << 8) | uint(block[i+3]);
-                }
-                for (uint t = 16; t < 64; ++t) {
-                    uint s0 = rotr(w[t-15],7) ^ rotr(w[t-15],18) ^ (w[t-15] >> 3);
-                    uint s1 = rotr(w[t-2],17) ^ rotr(w[t-2],19) ^ (w[t-2] >> 10);
-                    w[t] = w[t-16] + s0 + w[t-7] + s1;
-                }
-                uint a=H0[0], b=H0[1], c=H0[2], d=H0[3], e=H0[4], f=H0[5], g=H0[6], h=H0[7];
-                for (uint t = 0; t < 64; ++t) {
-                    uint s1 = rotr(e,6) ^ rotr(e,11) ^ rotr(e,25);
-                    uint ch = (e & f) ^ ((~e) & g);
-                    uint temp1 = h + s1 + ch + K[t] + w[t];
-                    uint s0 = rotr(a,2) ^ rotr(a,13) ^ rotr(a,22);
-                    uint maj = (a & b) ^ (a & c) ^ (b & c);
-                    uint temp2 = s0 + maj;
-                    h = g; g = f; f = e; e = d + temp1; d = c; c = b; b = a; a = temp1 + temp2;
-                }
-                uint out0 = H0[0] + a;
-                uint out1 = H0[1] + b;
-                uint out2 = H0[2] + c;
-                uint out3 = H0[3] + d;
-                uint out4 = H0[4] + e;
-                uint out5 = H0[5] + f;
-                uint out6 = H0[6] + g;
-                uint out7 = H0[7] + h;
-                device uint* dst = out_states + (id * 8);
-                dst[0]=out0; dst[1]=out1; dst[2]=out2; dst[3]=out3;
-                dst[4]=out4; dst[5]=out5; dst[6]=out6; dst[7]=out7;
-            }
-        "#;
+        let src = include_str!("assets/text_v1/metal_sha256_leaves.metal");
         let lib = device
             .newLibraryWithSource_options_error(&NSString::from_str(src), None)
             .ok()?;
@@ -802,92 +664,7 @@ impl MetalState {
             .newComputePipelineStateWithFunction_error(&func)
             .ok()?;
 
-        let src = r#"
-            #include <metal_stdlib>
-            using namespace metal;
-            inline uint rotr(uint x, uint n) { return (x >> n) | (x << (32 - n)); }
-            constant uint K[64] = {
-                0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-                0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-                0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-                0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-                0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-                0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-                0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-                0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
-            };
-            constant uint H0[8] = {
-                0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
-                0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19
-            };
-            kernel void sha256_pairs_reduce(device const uchar* digests [[buffer(0)]],
-                                            device uint* out_states [[buffer(1)]],
-                                            uint id [[thread_position_in_grid]]) {
-                const device uchar* left = digests + (id * 64);
-                const device uchar* right = left + 32;
-                uint w[64];
-                for (uint t = 0; t < 16; ++t) {
-                    const device uchar* p = (t < 8) ? (left + t * 4) : (right + (t - 8) * 4);
-                    w[t] = (uint(p[0]) << 24) | (uint(p[1]) << 16) | (uint(p[2]) << 8) | uint(p[3]);
-                }
-                for (uint t = 16; t < 64; ++t) {
-                    uint s0 = rotr(w[t-15],7) ^ rotr(w[t-15],18) ^ (w[t-15] >> 3);
-                    uint s1 = rotr(w[t-2],17) ^ rotr(w[t-2],19) ^ (w[t-2] >> 10);
-                    w[t] = w[t-16] + s0 + w[t-7] + s1;
-                }
-                uint a=H0[0], b=H0[1], c=H0[2], d=H0[3], e=H0[4], f=H0[5], g=H0[6], h=H0[7];
-                for (uint t = 0; t < 64; ++t) {
-                    uint s1 = rotr(e,6) ^ rotr(e,11) ^ rotr(e,25);
-                    uint ch = (e & f) ^ ((~e) & g);
-                    uint temp1 = h + s1 + ch + K[t] + w[t];
-                    uint s0 = rotr(a,2) ^ rotr(a,13) ^ rotr(a,22);
-                    uint maj = (a & b) ^ (a & c) ^ (b & c);
-                    uint temp2 = s0 + maj;
-                    h = g; g = f; f = e; e = d + temp1; d = c; c = b; b = a; a = temp1 + temp2;
-                }
-                uint st0 = H0[0] + a;
-                uint st1 = H0[1] + b;
-                uint st2 = H0[2] + c;
-                uint st3 = H0[3] + d;
-                uint st4 = H0[4] + e;
-                uint st5 = H0[5] + f;
-                uint st6 = H0[6] + g;
-                uint st7 = H0[7] + h;
-
-                uint wp[64];
-                wp[0] = 0x80000000u;
-                for (uint i = 1; i < 15; ++i) {
-                    wp[i] = 0;
-                }
-                wp[15] = 512u;
-                for (uint t = 16; t < 64; ++t) {
-                    uint s0 = rotr(wp[t-15],7) ^ rotr(wp[t-15],18) ^ (wp[t-15] >> 3);
-                    uint s1 = rotr(wp[t-2],17) ^ rotr(wp[t-2],19) ^ (wp[t-2] >> 10);
-                    wp[t] = wp[t-16] + s0 + wp[t-7] + s1;
-                }
-                a = st0; b = st1; c = st2; d = st3; e = st4; f = st5; g = st6; h = st7;
-                for (uint t = 0; t < 64; ++t) {
-                    uint s1 = rotr(e,6) ^ rotr(e,11) ^ rotr(e,25);
-                    uint ch = (e & f) ^ ((~e) & g);
-                    uint temp1 = h + s1 + ch + K[t] + wp[t];
-                    uint s0 = rotr(a,2) ^ rotr(a,13) ^ rotr(a,22);
-                    uint maj = (a & b) ^ (a & c) ^ (b & c);
-                    uint temp2 = s0 + maj;
-                    h = g; g = f; f = e; e = d + temp1; d = c; c = b; b = a; a = temp1 + temp2;
-                }
-                uint out0 = st0 + a;
-                uint out1 = st1 + b;
-                uint out2 = st2 + c;
-                uint out3 = st3 + d;
-                uint out4 = st4 + e;
-                uint out5 = st5 + f;
-                uint out6 = st6 + g;
-                uint out7 = st7 + h;
-                device uint* dst = out_states + (id * 8);
-                dst[0] = out0; dst[1] = out1; dst[2] = out2; dst[3] = out3;
-                dst[4] = out4; dst[5] = out5; dst[6] = out6; dst[7] = out7;
-            }
-        "#;
+        let src = include_str!("assets/text_v1/metal_sha256_pairs_reduce.metal");
         let lib = device
             .newLibraryWithSource_options_error(&NSString::from_str(src), None)
             .ok()?;
@@ -896,69 +673,7 @@ impl MetalState {
             .newComputePipelineStateWithFunction_error(&func)
             .ok()?;
 
-        let src = r#"
-            #include <metal_stdlib>
-            using namespace metal;
-            inline ulong rotl64(ulong x, uint n) { return (x << n) | (x >> (64 - n)); }
-            constant ulong RC[24] = {
-                0x0000000000000001ull, 0x0000000000008082ull, 0x800000000000808aull, 0x8000000080008000ull,
-                0x000000000000808bull, 0x0000000080000001ull, 0x8000000080008081ull, 0x8000000000008009ull,
-                0x000000000000008aull, 0x0000000000000088ull, 0x0000000080008009ull, 0x000000008000000aull,
-                0x000000008000808bull, 0x800000000000008bull, 0x8000000000008089ull, 0x8000000000008003ull,
-                0x8000000000008002ull, 0x8000000000000080ull, 0x000000000000800aull, 0x800000008000000aull,
-                0x8000000080008081ull, 0x8000000000008080ull, 0x0000000080000001ull, 0x8000000080008008ull
-            };
-            constant ushort ROT[5][5] = {
-                {0, 36, 3, 41, 18},
-                {1, 44, 10, 45, 2},
-                {62, 6, 43, 15, 61},
-                {28, 55, 25, 21, 56},
-                {27, 20, 39, 8, 14}
-            };
-            kernel void keccak_f1600(device ulong* state [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
-                if (tid != 0) { return; }
-                ulong a[25];
-                for (uint i = 0; i < 25; ++i) { a[i] = state[i]; }
-                for (uint round = 0; round < 24; ++round) {
-                    ulong c[5];
-                    for (uint x = 0; x < 5; ++x) {
-                        c[x] = a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20];
-                    }
-                    ulong d[5];
-                    for (uint x = 0; x < 5; ++x) {
-                        d[x] = c[(x + 4) % 5] ^ rotl64(c[(x + 1) % 5], 1);
-                    }
-                    for (uint x = 0; x < 5; ++x) {
-                        for (uint y = 0; y < 5; ++y) {
-                            a[x + 5 * y] ^= d[x];
-                        }
-                    }
-                    ulong b[25];
-                    for (uint x = 0; x < 5; ++x) {
-                        for (uint y = 0; y < 5; ++y) {
-                            uint rot = ROT[x][y];
-                            ulong val = a[x + 5 * y];
-                            ulong rotated = rot ? rotl64(val, rot) : val;
-                            uint new_x = y;
-                            uint new_y = (2 * x + 3 * y) % 5;
-                            b[new_x + 5 * new_y] = rotated;
-                        }
-                    }
-                    for (uint y = 0; y < 5; ++y) {
-                        for (uint x = 0; x < 5; ++x) {
-                            ulong current = b[x + 5 * y];
-                            ulong next1 = b[((x + 1) % 5) + 5 * y];
-                            ulong next2 = b[((x + 2) % 5) + 5 * y];
-                            a[x + 5 * y] = current ^ ((~next1) & next2);
-                        }
-                    }
-                    a[0] ^= RC[round];
-                }
-                for (uint i = 0; i < 25; ++i) {
-                    state[i] = a[i];
-                }
-            }
-        "#;
+        let src = include_str!("assets/text_v1/metal_keccak_f1600.metal");
         let lib = device
             .newLibraryWithSource_options_error(&NSString::from_str(src), None)
             .ok()?;
@@ -968,182 +683,7 @@ impl MetalState {
             .ok()?;
 
         // AES round kernels (enc/dec)
-        let src = r#"
-            #include <metal_stdlib>
-            using namespace metal;
-            constant uchar SBOX[256] = {
-                0x63,0x7c,0x77,0x7b,0xf2,0x6b,0x6f,0xc5,0x30,0x01,0x67,0x2b,0xfe,0xd7,0xab,0x76,
-                0xca,0x82,0xc9,0x7d,0xfa,0x59,0x47,0xf0,0xad,0xd4,0xa2,0xaf,0x9c,0xa4,0x72,0xc0,
-                0xb7,0xfd,0x93,0x26,0x36,0x3f,0xf7,0xcc,0x34,0xa5,0xe5,0xf1,0x71,0xd8,0x31,0x15,
-                0x04,0xc7,0x23,0xc3,0x18,0x96,0x05,0x9a,0x07,0x12,0x80,0xe2,0xeb,0x27,0xb2,0x75,
-                0x09,0x83,0x2c,0x1a,0x1b,0x6e,0x5a,0xa0,0x52,0x3b,0xd6,0xb3,0x29,0xe3,0x2f,0x84,
-                0x53,0xd1,0x00,0xed,0x20,0xfc,0xb1,0x5b,0x6a,0xcb,0xbe,0x39,0x4a,0x4c,0x58,0xcf,
-                0xd0,0xef,0xaa,0xfb,0x43,0x4d,0x33,0x85,0x45,0xf9,0x02,0x7f,0x50,0x3c,0x9f,0xa8,
-                0x51,0xa3,0x40,0x8f,0x92,0x9d,0x38,0xf5,0xbc,0xb6,0xda,0x21,0x10,0xff,0xf3,0xd2,
-                0xcd,0x0c,0x13,0xec,0x5f,0x97,0x44,0x17,0xc4,0xa7,0x7e,0x3d,0x64,0x5d,0x19,0x73,
-                0x60,0x81,0x4f,0xdc,0x22,0x2a,0x90,0x88,0x46,0xee,0xb8,0x14,0xde,0x5e,0x0b,0xdb,
-                0xe0,0x32,0x3a,0x0a,0x49,0x06,0x24,0x5c,0xc2,0xd3,0xac,0x62,0x91,0x95,0xe4,0x79,
-                0xe7,0xc8,0x37,0x6d,0x8d,0xd5,0x4e,0xa9,0x6c,0x56,0xf4,0xea,0x65,0x7a,0xae,0x08,
-                0xba,0x78,0x25,0x2e,0x1c,0xa6,0xb4,0xc6,0xe8,0xdd,0x74,0x1f,0x4b,0xbd,0x8b,0x8a,
-                0x70,0x3e,0xb5,0x66,0x48,0x03,0xf6,0x0e,0x61,0x35,0x57,0xb9,0x86,0xc1,0x1d,0x9e,
-                0xe1,0xf8,0x98,0x11,0x69,0xd9,0x8e,0x94,0x9b,0x1e,0x87,0xe9,0xce,0x55,0x28,0xdf,
-                0x8c,0xa1,0x89,0x0d,0xbf,0xe6,0x42,0x68,0x41,0x99,0x2d,0x0f,0xb0,0x54,0xbb,0x16
-            };
-            inline uchar gmul(uchar a, uchar b) {
-                uchar res = 0;
-                for (int i = 0; i < 8; ++i) {
-                    if (b & 1) res ^= a;
-                    uchar hi = a & 0x80; a <<= 1; if (hi) a ^= 0x1B; b >>= 1;
-                }
-                return res;
-            }
-            kernel void aesenc_round(device const uchar* state [[buffer(0)]],
-                                    device const uchar* rk [[buffer(1)]],
-                                    device uchar* out [[buffer(2)]],
-                                    uint id [[thread_position_in_grid]]) {
-                uchar s[16];
-                for (int i=0;i<16;++i) s[i]=state[i];
-                // SubBytes
-                for (int i=0;i<16;++i) s[i] = SBOX[s[i]];
-                // ShiftRows
-                uchar t[16]; for (int i=0;i<16;++i) t[i]=s[i];
-                s[1]=t[5]; s[5]=t[9]; s[9]=t[13]; s[13]=t[1];
-                s[2]=t[10]; s[6]=t[14]; s[10]=t[2]; s[14]=t[6];
-                s[3]=t[15]; s[7]=t[3]; s[11]=t[7]; s[15]=t[11];
-                // MixColumns
-                for (int c=0;c<4;++c){ int i=c*4; uchar a0=s[i],a1=s[i+1],a2=s[i+2],a3=s[i+3];
-                    s[i]=gmul(a0,2)^gmul(a1,3)^a2^a3;
-                    s[i+1]=a0^gmul(a1,2)^gmul(a2,3)^a3;
-                    s[i+2]=a0^a1^gmul(a2,2)^gmul(a3,3);
-                    s[i+3]=gmul(a0,3)^a1^a2^gmul(a3,2);
-                }
-                // AddRoundKey
-                for (int i=0;i<16;++i) out[i] = s[i] ^ rk[i];
-            }
-
-            kernel void aesdec_round(device const uchar* state [[buffer(0)]],
-                                    device const uchar* rk [[buffer(1)]],
-                                    device uchar* out [[buffer(2)]],
-                                    uint id [[thread_position_in_grid]]) {
-                uchar s[16]; for (int i=0;i<16;++i) s[i]=state[i];
-                // AddRoundKey
-                for (int i=0;i<16;++i) s[i] ^= rk[i];
-                // InvMixColumns
-                for (int c=0;c<4;++c){ int i=c*4; uchar a0=s[i],a1=s[i+1],a2=s[i+2],a3=s[i+3];
-                    s[i]=gmul(a0,14)^gmul(a1,11)^gmul(a2,13)^gmul(a3,9);
-                    s[i+1]=gmul(a0,9)^gmul(a1,14)^gmul(a2,11)^gmul(a3,13);
-                    s[i+2]=gmul(a0,13)^gmul(a1,9)^gmul(a2,14)^gmul(a3,11);
-                    s[i+3]=gmul(a0,11)^gmul(a1,13)^gmul(a2,9)^gmul(a3,14);
-                }
-                // InvShiftRows
-                uchar t[16]; for (int i=0;i<16;++i) t[i]=s[i];
-                s[5]=t[1]; s[9]=t[5]; s[13]=t[9]; s[1]=t[13];
-                s[10]=t[2]; s[14]=t[6]; s[2]=t[10]; s[6]=t[14];
-                s[15]=t[3]; s[3]=t[7]; s[7]=t[11]; s[11]=t[15];
-                // InvSubBytes
-                // For brevity, reuse SBOX inverse would be needed; here we reconstruct via search.
-                for (int i=0;i<16;++i){ uchar v=s[i];
-                    for (int j=0;j<256;++j){ if (SBOX[j]==v){ s[i]=(uchar)j; break; } }
-                }
-                for (int i=0;i<16;++i) out[i]=s[i];
-            }
-            kernel void aesenc_round_batch(device const uchar* states [[buffer(0)]],
-                                           device const uchar* rk [[buffer(1)]],
-                                           device uchar* out [[buffer(2)]],
-                                           uint id [[thread_position_in_grid]]) {
-                const device uchar* state = states + id * 16;
-                device uchar* dst = out + id * 16;
-                uchar s[16]; for (int i=0;i<16;++i) s[i]=state[i];
-                for (int i=0;i<16;++i) s[i] = SBOX[s[i]];
-                uchar t[16]; for (int i=0;i<16;++i) t[i]=s[i];
-                s[1]=t[5]; s[5]=t[9]; s[9]=t[13]; s[13]=t[1];
-                s[2]=t[10]; s[6]=t[14]; s[10]=t[2]; s[14]=t[6];
-                s[3]=t[15]; s[7]=t[3]; s[11]=t[7]; s[15]=t[11];
-                for (int c=0;c<4;++c){ int i=c*4; uchar a0=s[i],a1=s[i+1],a2=s[i+2],a3=s[i+3];
-                    s[i]=gmul(a0,2)^gmul(a1,3)^a2^a3;
-                    s[i+1]=a0^gmul(a1,2)^gmul(a2,3)^a3;
-                    s[i+2]=a0^a1^gmul(a2,2)^gmul(a3,3);
-                    s[i+3]=gmul(a0,3)^a1^a2^gmul(a3,2);
-                }
-                for (int i=0;i<16;++i) dst[i] = s[i] ^ rk[i];
-            }
-            kernel void aesdec_round_batch(device const uchar* states [[buffer(0)]],
-                                           device const uchar* rk [[buffer(1)]],
-                                           device uchar* out [[buffer(2)]],
-                                           uint id [[thread_position_in_grid]]) {
-                const device uchar* state = states + id * 16;
-                device uchar* dst = out + id * 16;
-                uchar s[16]; for (int i=0;i<16;++i) s[i]=state[i];
-                for (int i=0;i<16;++i) s[i] ^= rk[i];
-                for (int c=0;c<4;++c){ int i=c*4; uchar a0=s[i],a1=s[i+1],a2=s[i+2],a3=s[i+3];
-                    s[i]=gmul(a0,14)^gmul(a1,11)^gmul(a2,13)^gmul(a3,9);
-                    s[i+1]=gmul(a0,9)^gmul(a1,14)^gmul(a2,11)^gmul(a3,13);
-                    s[i+2]=gmul(a0,13)^gmul(a1,9)^gmul(a2,14)^gmul(a3,11);
-                    s[i+3]=gmul(a0,11)^gmul(a1,13)^gmul(a2,9)^gmul(a3,14);
-                }
-                uchar t[16]; for (int i=0;i<16;++i) t[i]=s[i];
-                s[5]=t[1]; s[9]=t[5]; s[13]=t[9]; s[1]=t[13];
-                s[10]=t[2]; s[14]=t[6]; s[2]=t[10]; s[6]=t[14];
-                s[15]=t[3]; s[3]=t[7]; s[7]=t[11]; s[11]=t[15];
-                for (int i=0;i<16;++i){ uchar v=s[i];
-                    for (int j=0;j<256;++j){ if (SBOX[j]==v){ s[i]=(uchar)j; break; } }
-                }
-                for (int i=0;i<16;++i) dst[i]=s[i];
-            }
-            // Fused N-round batch: round_keys is a contiguous array of nrounds*16 bytes
-            kernel void aesenc_rounds_batch(device const uchar* states [[buffer(0)]],
-                                           device const uchar* round_keys [[buffer(1)]],
-                                           constant uint& nrounds [[buffer(3)]],
-                                           device uchar* out [[buffer(2)]],
-                                           uint id [[thread_position_in_grid]]) {
-                const device uchar* state = states + id * 16;
-                device uchar* dst = out + id * 16;
-                uchar s[16]; for (int i=0;i<16;++i) s[i]=state[i];
-                for (uint r=0;r<nrounds;++r){
-                    const device uchar* rk = round_keys + r * 16;
-                    for (int i=0;i<16;++i) s[i] = SBOX[s[i]];
-                    uchar t[16]; for (int i=0;i<16;++i) t[i]=s[i];
-                    s[1]=t[5]; s[5]=t[9]; s[9]=t[13]; s[13]=t[1];
-                    s[2]=t[10]; s[6]=t[14]; s[10]=t[2]; s[14]=t[6];
-                    s[3]=t[15]; s[7]=t[3]; s[11]=t[7]; s[15]=t[11];
-                    for (int c=0;c<4;++c){ int i=c*4; uchar a0=s[i],a1=s[i+1],a2=s[i+2],a3=s[i+3];
-                        s[i]=gmul(a0,2)^gmul(a1,3)^a2^a3;
-                        s[i+1]=a0^gmul(a1,2)^gmul(a2,3)^a3;
-                        s[i+2]=a0^a1^gmul(a2,2)^gmul(a3,3);
-                        s[i+3]=gmul(a0,3)^a1^a2^gmul(a3,2);
-                    }
-                    for (int i=0;i<16;++i) s[i] ^= rk[i];
-                }
-                for (int i=0;i<16;++i) dst[i]=s[i];
-            }
-            kernel void aesdec_rounds_batch(device const uchar* states [[buffer(0)]],
-                                           device const uchar* round_keys [[buffer(1)]],
-                                           constant uint& nrounds [[buffer(3)]],
-                                           device uchar* out [[buffer(2)]],
-                                           uint id [[thread_position_in_grid]]) {
-                const device uchar* state = states + id * 16;
-                device uchar* dst = out + id * 16;
-                uchar s[16]; for (int i=0;i<16;++i) s[i]=state[i];
-                for (uint r=0;r<nrounds;++r){
-                    const device uchar* rk = round_keys + r * 16;
-                    for (int i=0;i<16;++i) s[i] ^= rk[i];
-                    for (int c=0;c<4;++c){ int i=c*4; uchar a0=s[i],a1=s[i+1],a2=s[i+2],a3=s[i+3];
-                        s[i]=gmul(a0,14)^gmul(a1,11)^gmul(a2,13)^gmul(a3,9);
-                        s[i+1]=gmul(a0,9)^gmul(a1,14)^gmul(a2,11)^gmul(a3,13);
-                        s[i+2]=gmul(a0,13)^gmul(a1,9)^gmul(a2,14)^gmul(a3,11);
-                        s[i+3]=gmul(a0,11)^gmul(a1,13)^gmul(a2,9)^gmul(a3,14);
-                    }
-                    uchar t[16]; for (int i=0;i<16;++i) t[i]=s[i];
-                    s[5]=t[1]; s[9]=t[5]; s[13]=t[9]; s[1]=t[13];
-                    s[10]=t[2]; s[14]=t[6]; s[2]=t[10]; s[6]=t[14];
-                    s[15]=t[3]; s[3]=t[7]; s[7]=t[11]; s[11]=t[15];
-                    for (int i=0;i<16;++i){ uchar v=s[i];
-                        for (int j=0;j<256;++j){ if (SBOX[j]==v){ s[i]=(uchar)j; break; } }
-                    }
-                }
-                for (int i=0;i<16;++i) dst[i]=s[i];
-            }
-        "#;
+        let src = include_str!("assets/text_v1/metal_aes_rounds.metal");
         let lib = device
             .newLibraryWithSource_options_error(&NSString::from_str(src), None)
             .ok()?;

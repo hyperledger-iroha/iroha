@@ -4218,7 +4218,7 @@ PROOF
                SelectedIngressLaneIndex
     <2>5. /\ AsyncItemTyped(DrainItem)
            /\ DrainItem.envelope.recipient = node
-           /\ IngressResourceSource(DrainItem) = DrainSource
+           /\ AsyncIngressItemSourceBinding(DrainItem, DrainSource)
       BY <1>1, <2>1, <2>4, SelectedIngressItemIsTyped,
          SelectedIngressItemHasLaneOwnership
          DEF DrainItem, SelectedIngressItemAt, DrainLaneIndex,

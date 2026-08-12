@@ -1,0 +1,8 @@
+
+            fn project(Result<int, (int, int)> value) -> int {
+                match value {
+                    Result::ok(item) => item,
+                    Result::err(pair) => pair.0,
+                }
+            }
+        

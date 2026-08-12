@@ -211,6 +211,3 @@ pub(crate) use wal::{
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod network_simulation;

@@ -1,0 +1,9 @@
+
+seiyaku Test {
+  state StateMap<Name, int> Foo;
+
+  kotoage fn main()  authorize("Entry") {
+    Foo[Name::parse("alice")] = 2;
+    let _x = Foo.get(Name::parse("alice"));
+  }
+}

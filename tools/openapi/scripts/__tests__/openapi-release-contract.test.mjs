@@ -156,12 +156,17 @@ test('OpenAPI Cargo paths use the shared no-interference policy', async () => {
     const source = await readFile(join(repoRoot, relativePath), 'utf8');
     assert.deepEqual(forbiddenProcessControls(source), [], relativePath);
   }
-  assert.match(policy, /process_snapshot="\$\(ps -axo pid,etime,command\)"/);
+  assert.match(policy, /acquire_invocation_cargo_lock\(\) \{/);
+  assert.match(policy, /release_invocation_cargo_lock\(\) \{/);
+  assert.match(policy, /lock\.mkdir\(mode=0o700\)/);
+  assert.doesNotMatch(
+    policy,
+    /wait_for_external_cargo|\bps\s+-|pgrep|\/proc\/|process_snapshot|\bsleep\s+/,
+  );
   assert.match(
     policy,
-    /executable == "cargo" \|\| executable == "rustc" \|\| executable == "rustfmt"/,
+    /"\$IROHA_RELEASE_CARGO_BIN" "\$\{pinned_arguments\[@\]\}"/,
   );
-  assert.match(policy, /command cargo \+1\.93\.1 "\$\{pinned_arguments\[@\]\}"/);
   assert.match(policy, /pinned_arguments=\("\$subcommand" -j1\)/);
   assert.match(policy, /pinned_arguments\+=\("\$@"\)/);
   assert.doesNotMatch(policy, /local status/);

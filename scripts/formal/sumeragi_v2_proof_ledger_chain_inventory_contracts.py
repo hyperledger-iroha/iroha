@@ -3296,25 +3296,56 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
         errors.append(
             f"{harness_path}: harness must source the shared process policy exactly once"
         )
-    for local_definition in ("wait_for_external_cargo() {", "run_cargo() {"):
+    for local_definition in (
+        "acquire_invocation_cargo_lock() {",
+        "release_invocation_cargo_lock() {",
+        "run_cargo() {",
+    ):
         if local_definition in harness:
             errors.append(
                 f"{harness_path}: harness must not shadow shared policy definition "
                 f"{local_definition!r}"
             )
     for token in (
-        "wait_for_external_cargo() {",
+        "acquire_invocation_cargo_lock() {",
+        "release_invocation_cargo_lock() {",
         "run_cargo() {",
-        "ps -axo pid,etime,command",
-        'executable == "cargo"',
-        'executable == "rustc"',
-        'executable == "rustfmt"',
-        'pinned_arguments=(-j1 "$@")',
-        'command cargo +1.93.1 "${pinned_arguments[@]}"',
+        "lock.mkdir(mode=0o700)",
+        "acquire_invocation_cargo_lock || return $?",
+        'pinned_arguments=("$@")',
+        'pinned_arguments=("$subcommand" -j1)',
+        'pinned_arguments+=("$@")',
+        'run_cargo requires IROHA_RELEASE_CARGO_BIN',
+        '"$IROHA_RELEASE_CARGO_BIN" "${pinned_arguments[@]}"',
+        'if ((cargo_prefix)) && [[ "$argument" == "--" ]]; then',
+        '--target-dir|--target-dir=*|--manifest-path|--manifest-path=*|--config|--config=*',
     ):
         if policy.count(token) != 1:
             errors.append(
                 f"{policy_path}: shared process policy lacks exact required token {token!r}"
+            )
+    for token, count in (
+        ('lock_path="${artifact_root}/.sumeragi-v2-cargo.lock"', 2),
+        ("lock.rmdir()", 2),
+        ("release_invocation_cargo_lock || return $?", 2),
+    ):
+        if policy.count(token) != count:
+            errors.append(
+                f"{policy_path}: shared process policy lacks exact required token "
+                f"{token!r} x{count}"
+            )
+    for forbidden_observation in (
+        "wait_for_external_cargo",
+        "ps -",
+        "pgrep",
+        "/proc/",
+        "process_snapshot",
+        "sleep ",
+    ):
+        if forbidden_observation in policy:
+            errors.append(
+                f"{policy_path}: shared process policy observes or polls ambient "
+                f"processes via {forbidden_observation!r}"
             )
     if harness.count("export CARGO_NET_OFFLINE=true") != 1:
         errors.append(
@@ -3426,7 +3457,7 @@ def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
             )
 
     lock_copy = harness.find('cp -- "$HARNESS_LOCK" Cargo.lock')
-    case_start = harness.find('case "$1" in')
+    case_start = harness.find('case "$1" in', lock_copy)
     unit_start = harness.find("  --unit)", case_start)
     fast_network_start = harness.find("  --fast-network)", unit_start)
     if not (0 <= lock_copy < case_start < unit_start < fast_network_start):
@@ -3596,7 +3627,6 @@ def _production_liveness_release_inventory_guard_errors(
         "sumeragi::serviced_candidate_store::tests",
         "sumeragi::v2_effects::tests",
         "sumeragi::v2::tests",
-        "sumeragi::v2_core::network_simulation",
         "sumeragi::v2_runtime::tests",
         "merge_sidecar::tests",
         "state::tests",

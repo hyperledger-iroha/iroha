@@ -690,8 +690,8 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} G-UNIT"
         )
 
-    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 443:
-        errors.append("internal release-regression seal must contain exactly 443 names")
+    if len(_PRODUCTION_LIVENESS_NEW_REGRESSIONS) != 436:
+        errors.append("internal release-regression seal must contain exactly 436 names")
     for test_name in _PRODUCTION_LIVENESS_NEW_REGRESSIONS:
         occurrences = inventory.count(test_name)
         if occurrences != 1:
@@ -1380,24 +1380,24 @@ def _production_liveness_release_inventory_errors(
     source_sealed_commands = (
         (
             "source-sealed-workspace-build",
-            "cargo +1.93.1 build -j1 --locked --offline --workspace",
+            "${IROHA_RELEASE_CARGO_BIN} build -j1 --locked --offline --workspace",
             "run_cargo build --locked --offline --workspace",
         ),
         (
             "source-sealed-workspace-tests",
-            "cargo +1.93.1 test -j1 --locked --offline --workspace",
+            "${IROHA_RELEASE_CARGO_BIN} test -j1 --locked --offline --workspace",
             "run_cargo test --locked --offline --workspace",
         ),
         (
             "source-sealed-workspace-clippy",
-            "cargo +1.93.1 clippy -j1 --locked --offline --workspace "
+            "${IROHA_RELEASE_CARGO_BIN} clippy -j1 --locked --offline --workspace "
             "--all-targets -- -D warnings",
             "run_cargo clippy --locked --offline --workspace --all-targets "
             "-- -D warnings",
         ),
         (
             "source-sealed-workspace-format",
-            "cargo +1.93.1 fmt --all -- --check",
+            "${IROHA_RELEASE_CARGO_BIN} fmt --all -- --check",
             "run_cargo fmt --all -- --check",
         ),
         (
@@ -1608,11 +1608,26 @@ def _production_liveness_release_inventory_errors(
                     "_formal_artifacts",
                 ),
                 "write_sumeragi_v2_release_receipt_corridor_log.py": (
+                    "_cargo_cache_relative_path",
+                    "_cargo_cache_final_relative_path",
+                    "_cargo_cache_octal_mode",
+                    "_cargo_cache_integer",
+                    "_cargo_cache_unchanged",
+                    "_cargo_cache_names",
+                    "_cargo_cache_stat",
+                    "_cargo_cache_open_regular",
+                    "_cargo_cache_tree",
+                    "_validate_cargo_cache_input",
                     "_sdk_suite_source_manifest",
                     "_test_count_from_log",
                     "_prebuilt_artifact_root",
                     "_prebuilt_release_roots",
                     "_prebuilt_directory",
+                    "_publish_receipt_validation_ack",
+                    "_receipt_validation_ack_arguments",
+                    "_receipt_validation_ack",
+                    "_owned_unlink_name",
+                    "_corridor_legs",
                 ),
             }
             expected_parent_component_symbols = frozenset(
@@ -1691,21 +1706,21 @@ def _production_liveness_release_inventory_errors(
 
     documentation_claims = {
         repo_root / "formal" / "sumeragi_v2" / "README.md": (
-            "current\ninventory to 861 tests across 41 modules.\n"
+            "current\ninventory to 854 tests across 40 modules.\n"
             "Together with the source-sealed command and tooling legs, the pre-network\n"
             f"corridor contains {_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "formal" / "sumeragi_v2" / "PROOF.md": (
-            "current 861-test, 41-module inventory. The complete source-sealed\n"
+            "current 854-test, 40-module inventory. The complete source-sealed\n"
             "pre-network corridor\ncontains "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} legs.",
             "canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
         ),
         repo_root / "specs" / "sumeragi_v2_liveness.md": (
-            "current\nsource-bound inventory to 861 exact tests across 41 modules and "
+            "current\nsource-bound inventory to 854 exact tests across 40 modules and "
             f"{_PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT} pre-network\nlegs.",
             "Its canonical module/test TSV inventory SHA-256 is\n"
             f"`{_PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256}`",
@@ -1720,7 +1735,7 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-test `G-UNIT` receipt",
             "contain exactly "
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} unique required\n"
-            "tests: 318 core, 143 queue-journal, 13 configuration, eight data-model, "
+            "tests: 319 core, 143 queue-journal, 13 configuration, eight data-model, "
             "39\nTorii, one Torii-shared, and two integration.",
             "both require that exact\n"
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-row shape",
@@ -1729,10 +1744,11 @@ def _production_liveness_release_inventory_errors(
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}` source consistency",
             "execution of all "
             f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT} required tests",
-            "remain open even though the exact "
-            f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-row\n  inventory",
-            "no complete\n  "
-            f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-test execution",
+            "remains Open until the exact no-skip suites run through the compliant "
+            "isolated\nwrapper",
+            "no complete "
+            f"{_PRODUCTION_MULTILANE_FOCUS_TEST_COUNT}-test execution from an "
+            "immutable candidate is\n  claimed by this reconciliation.",
         ),
     }
     for path, claims in documentation_claims.items():

@@ -22,7 +22,7 @@ RuntimeInvocationDebt(node) ==
   IF asyncRunnerPhase[node] = "Runtime" THEN 1 ELSE 0
 
 LocalRunnerServiceContractDebt(node) ==
-  IF node \in LocalRunnerServiceOwners
+  IF node \in AsyncTimedServiceNodes
        /\ asyncNodeServiceDeadlines[node] <= asyncNow
   THEN 1
   ELSE 0
@@ -130,35 +130,34 @@ HistoricalProducerContinuationReplayLocalWorkDecreaseStep ==
 
 ResponsivePacketPairAt(initialContext, recipient, source) ==
   \/ /\ recipient \in AsyncVotersAt(initialContext)
-        /\ source \in AsyncVotersAt(initialContext)
+                         \cup AsyncArchiveIoServiceNodes
+        /\ source \in AsyncIngressSources
   \/ HistoricalRecoveryPacketCorridor(recipient, source)
 
-DueIngressPacketCanCoalesce(item) ==
-  /\ IngressHasCoalescingOwner(item)
+DueIngressPacketCanCoalesce(item, authenticatedSource) ==
+  /\ IngressHasCoalescingOwnerVia(item, authenticatedSource)
   /\ \/ item.kind # "CertifiedResponse"
      \/ CertifiedResponseClaimMatches(item)
 
 DueIngressPacketCanEnter(recipient, source) ==
   LET item == OldestDueSourcePacket(recipient, source).item
-  IN \/ DueIngressPacketCanCoalesce(item)
-     \/ /\ ~IngressHasCoalescingOwner(item)
-           /\ CanAdmitIngressItem(item)
+  IN \/ DueIngressPacketCanCoalesce(item, source)
+     \/ /\ ~IngressHasCoalescingOwnerVia(item, source)
+           /\ CanAdmitIngressItemVia(item, source)
 
 IoDepthLocalWorkDecreaseStep ==
-  \E node \in AsyncCurrentResponsiveVoters
-                 \cup asyncHistoricalRecoveryTargets:
+  \E node \in AsyncTimedServiceNodes:
     AsyncIoQueueDepth(node)' < AsyncIoQueueDepth(node)
 
 IngressDepthLocalWorkDecreaseStep ==
-  \E node \in AsyncCurrentResponsiveVoters
-                 \cup asyncHistoricalRecoveryTargets:
+  \E node \in AsyncTimedServiceNodes:
     IngressDepth(node)' < IngressDepth(node)
 
 TransportOutstandingLocalWorkDecreaseStep ==
   Cardinality(asyncTransport') < Cardinality(asyncTransport)
 
 LocalRunnerServiceContractDecreaseStep ==
-  \E node \in LocalRunnerServiceOwners:
+  \E node \in AsyncTimedServiceNodes:
     LocalRunnerServiceContractDebt(node)'
       < LocalRunnerServiceContractDebt(node)
 
@@ -322,15 +321,14 @@ THEOREM RunnerServiceStrictlyClearsDueGate ==
     => LocalRunnerServiceContractDecreaseStep
 BY SMT
    DEF LocalRunnerServiceContractDecreaseStep,
-       LocalRunnerServiceContractDebt, LocalRunnerServiceOwners,
+       LocalRunnerServiceContractDebt, AsyncTimedServiceNodes,
        RunNode, RunHistoricalRecoveryNode,
        RunNodeWork, RunHistoricalServer, AsyncConfiguration
 
 THEOREM IoWorkerStrictlyDecreasesLocalWork ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
-    /\ node \in AsyncCurrentResponsiveVoters
-                   \cup asyncHistoricalRecoveryTargets
+    /\ node \in AsyncTimedServiceNodes
     /\ ServiceIoWorkerWork(node)
     => IoDepthLocalWorkDecreaseStep
 BY ServiceIoWorkerDropsQueueDepth, SMT
@@ -340,8 +338,7 @@ BY ServiceIoWorkerDropsQueueDepth, SMT
 THEOREM IngressDrainStrictlyDecreasesLocalWork ==
   \A node \in ValidatorIds:
     /\ AsyncTypeInvariant
-    /\ node \in AsyncCurrentResponsiveVoters
-                   \cup asyncHistoricalRecoveryTargets
+    /\ node \in AsyncTimedServiceNodes
     /\ (DrainFairIngressSelected(node)
           \/ DrainHistoricalIngressSelected(node))
     => IngressDepthLocalWorkDecreaseStep
@@ -446,39 +443,54 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM FirstIngressItemConsumesOneProtectedSlot ==
-  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+  \A recipient \in ValidatorIds,
+     authenticatedSource \in AsyncIngressSources:
     \A item:
       /\ AsyncTypeInvariant
       /\ AsyncItemTyped(item)
       /\ item.envelope.recipient = recipient
-      /\ item.source = source
-      /\ IngressLane(recipient, source) = <<>>
-      => IngressProtectedSlotCountAfterAdmission(item) + 1 =
+      /\ IngressLane(
+           recipient,
+           IngressResourceSourceVia(item, authenticatedSource)) = <<>>
+      => IngressProtectedSlotCountAfterAdmissionVia(
+           item, authenticatedSource) + 1 =
            IngressProtectedSlotCountFor(asyncIngressLanes, recipient)
 PROOF
   <1>1. ASSUME NEW recipient \in ValidatorIds,
-                NEW source \in AsyncIngressSources,
+                NEW authenticatedSource \in AsyncIngressSources,
                 NEW item,
                 AsyncTypeInvariant,
                 AsyncItemTyped(item),
                 item.envelope.recipient = recipient,
-                item.source = source,
-                IngressLane(recipient, source) = <<>>
-         PROVE IngressProtectedSlotCountAfterAdmission(item) + 1 =
+                IngressLane(
+                  recipient,
+                  IngressResourceSourceVia(
+                    item, authenticatedSource)) = <<>>
+         PROVE IngressProtectedSlotCountAfterAdmissionVia(
+                   item, authenticatedSource) + 1 =
                  IngressProtectedSlotCountFor(
                    asyncIngressLanes, recipient)
-    <2> DEFINE After == IngressLanesAfterAdmission(item)
+    <2> DEFINE ResourceSource ==
+           IngressResourceSourceVia(item, authenticatedSource)
+    <2> DEFINE After ==
+           IngressLanesAfterAdmissionVia(item, authenticatedSource)
     <2>1. /\ AsyncConfiguration
            /\ ModelConfiguration
       BY <1>1 DEF AsyncTypeInvariant, TypeInvariant
-    <2>2. /\ After[recipient][source] = <<item>>
-           /\ \A otherSource \in AsyncIngressSources \ {source}:
+    <2>1a. ResourceSource \in AsyncIngressSources
+      BY <1>1, Isa
+         DEF ResourceSource, IngressResourceSourceVia,
+             IngressResourceSource, AsyncItemTyped, AsyncIngressSources
+    <2>2. /\ After[recipient][ResourceSource] = <<item>>
+           /\ \A otherSource \in AsyncIngressSources \ {ResourceSource}:
                 After[recipient][otherSource] =
                   asyncIngressLanes[recipient][otherSource]
       BY <1>1, AppendSequenceFacts, Isa
-         DEF After, IngressLanesAfterAdmission, IngressLane
-    <2>3. IngressSourceProtectionPotential(source, <<item>>) + 1 =
-             IngressSourceProtectionPotential(source, <<>>)
+         DEF After, ResourceSource, IngressLanesAfterAdmissionVia,
+             IngressLane
+    <2>3. IngressSourceProtectionPotential(
+             ResourceSource, <<item>>) + 1 =
+             IngressSourceProtectionPotential(ResourceSource, <<>>)
       BY <1>1, EmptySequenceFacts, SMT
          DEF IngressSourceProtectionPotential,
              IngressSequenceHasNonTimeoutProgress,
@@ -487,70 +499,83 @@ PROOF
              IngressItemIsNonTimeoutProgress,
              IngressItemIsTimeoutVote,
              IngressItemIsTransportCompletion,
+             AsyncCertifiedFenceEscapeItem,
+             AsyncCertifiedFenceEscapeKinds,
+             IngressUsesPhysicalCompletionOwner,
              IngressAdmissionClass, IngressProgressKinds,
              IngressTransportCompletionKinds, SequenceSet
     <2>4. IngressProtectedSlotCountWithoutSourceFor(
-             After, recipient, source) =
+             After, recipient, ResourceSource) =
            IngressProtectedSlotCountWithoutSourceFor(
-             asyncIngressLanes, recipient, source)
+             asyncIngressLanes, recipient, ResourceSource)
       BY <2>2, IngressProtectedSlotsWithoutSourceAreLocal
     <2>5. /\ IngressProtectedSlotCountFor(After, recipient) =
                   IngressProtectedSlotCountWithoutSourceFor(
-                    After, recipient, source)
+                    After, recipient, ResourceSource)
                     + IngressSourceProtectionPotential(
-                        source, After[recipient][source])
+                        ResourceSource,
+                        After[recipient][ResourceSource])
            /\ IngressProtectedSlotCountFor(
                   asyncIngressLanes, recipient) =
                   IngressProtectedSlotCountWithoutSourceFor(
-                    asyncIngressLanes, recipient, source)
+                    asyncIngressLanes, recipient, ResourceSource)
                     + IngressSourceProtectionPotential(
-                        source,
-                        asyncIngressLanes[recipient][source])
-      BY <1>1, <2>1, IngressProtectedSlotCountDecomposesAtSource
+                        ResourceSource,
+                        asyncIngressLanes[recipient][ResourceSource])
+      BY <1>1, <2>1, <2>1a,
+         IngressProtectedSlotCountDecomposesAtSource
     <2>6. IngressProtectedSlotCountFor(After, recipient) + 1 =
              IngressProtectedSlotCountFor(
                asyncIngressLanes, recipient)
       BY <1>1, <2>2, <2>3, <2>4, <2>5, SMT
          DEF IngressLane
     <2> QED BY <1>1, <2>6
-         DEF After, IngressProtectedSlotCountAfterAdmission
+         DEF After, IngressProtectedSlotCountAfterAdmissionVia
   <1> QED BY <1>1
 
-IngressAdmissionPolicyAndOwnershipGatesAllow(item) ==
+IngressAdmissionPolicyAndOwnershipGatesAllow(item, authenticatedSource) ==
   /\ ~AsyncControlServiceAdmissionCoalesced(item)
   /\ ~AsyncControlServiceAdmissionBlockedByLivePredecessor(item)
   /\ ~AsyncCandidateServicePacketRetired(item)
   /\ ~AsyncCandidateStageRetired(item)
   /\ AsyncLeaderWireAtomicAdmissionAllows(item)
-  /\ AsyncServeTransportAdmissionGateAllows(
-       item.envelope.recipient, item)
+  /\ AsyncServeTransportAdmissionGateAllowsVia(
+       item.envelope.recipient, item, authenticatedSource)
   /\ CertifiedResponseFreshClaimGateAllows(item)
   /\ AsyncUntrustedGenericCompletionGateAllows(item)
 
 THEOREM EmptyIngressAdmitsTypedPacket ==
-  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+  \A recipient \in ValidatorIds,
+     authenticatedSource \in AsyncIngressSources:
     \A item:
       /\ AsyncTypeInvariant
       /\ AsyncItemTyped(item)
       /\ item.envelope.recipient = recipient
-      /\ item.source = source
       /\ IngressDepth(recipient) = 0
-      /\ IngressAdmissionPolicyAndOwnershipGatesAllow(item)
-      => CanAdmitIngressItem(item)
+      /\ IngressAdmissionPolicyAndOwnershipGatesAllow(
+           item, authenticatedSource)
+      => CanAdmitIngressItemVia(item, authenticatedSource)
 PROOF
   <1>1. ASSUME NEW recipient \in ValidatorIds,
-                NEW source \in AsyncIngressSources,
+                NEW authenticatedSource \in AsyncIngressSources,
                 NEW item,
                 AsyncTypeInvariant,
                 AsyncItemTyped(item),
                 item.envelope.recipient = recipient,
-                item.source = source,
                 IngressDepth(recipient) = 0,
-                IngressAdmissionPolicyAndOwnershipGatesAllow(item)
-         PROVE CanAdmitIngressItem(item)
-    <2>1. IngressLane(recipient, source) = <<>>
-      BY <1>1, ZeroIngressDepthMeansEveryLaneEmpty
-    <2>2. IngressProtectedSlotCountAfterAdmission(item) + 1 =
+                IngressAdmissionPolicyAndOwnershipGatesAllow(
+                  item, authenticatedSource)
+         PROVE CanAdmitIngressItemVia(item, authenticatedSource)
+    <2> DEFINE ResourceSource ==
+           IngressResourceSourceVia(item, authenticatedSource)
+    <2>1a. ResourceSource \in AsyncIngressSources
+      BY <1>1, Isa
+         DEF ResourceSource, IngressResourceSourceVia,
+             IngressResourceSource, AsyncItemTyped, AsyncIngressSources
+    <2>1. IngressLane(recipient, ResourceSource) = <<>>
+      BY <1>1, <2>1a, ZeroIngressDepthMeansEveryLaneEmpty
+    <2>2. IngressProtectedSlotCountAfterAdmissionVia(
+             item, authenticatedSource) + 1 =
              IngressProtectedSlotCountFor(
                asyncIngressLanes, recipient)
       BY <1>1, <2>1, FirstIngressItemConsumesOneProtectedSlot
@@ -559,41 +584,52 @@ PROOF
                       asyncIngressLanes, recipient)
                     <= AsyncIngressCapacity
            /\ AsyncIngressCapacity \in Nat \ {0}
-           /\ IngressProtectedSlotCountAfterAdmission(item) \in Nat
+           /\ IngressProtectedSlotCountAfterAdmissionVia(
+                item, authenticatedSource) \in Nat
       BY <1>1, IngressProtectedSlotCountWithoutSourceIsNatural,
          IngressSourceProtectionPotentialIsNatural, SMT
          DEF AsyncTypeInvariant, TypeInvariant,
              AsyncSchedulerTypeInvariant, AsyncIngressTypeInvariant,
              AsyncIngressCapacityTypeInvariant, AsyncConfiguration,
-             IngressProtectedSlotCountAfterAdmission,
+             IngressProtectedSlotCountAfterAdmissionVia,
              IngressProtectedSlotCountFor
     <2>4. IngressDepth(item.envelope.recipient) <
-             IngressUsableCapacityAfterAdmission(item)
+             IngressUsableCapacityAfterAdmissionVia(
+               item, authenticatedSource)
       BY <1>1, <2>2, <2>3, SMT
-         DEF IngressUsableCapacityAfterAdmission
+         DEF IngressUsableCapacityAfterAdmissionVia
     <2>5. /\ AsyncTimeoutVoteByteGateAllows(item)
+           /\ AsyncCertifiedFenceEscapeOwnerGateAllowsVia(
+                item, authenticatedSource)
            /\ AsyncTransportCompletionOwnerGateAllows(item)
       BY <1>1, <2>1, Isa
          DEF AsyncTimeoutVoteByteGateAllows,
+             AsyncCertifiedFenceEscapeOwnerGateAllowsVia,
              AsyncTransportCompletionOwnerGateAllows,
+             IngressLaneHasCertifiedFenceEscapeIn,
              IngressLaneHasTimeoutVoteIn,
              IngressLaneHasTransportCompletionIn,
-             IngressLane, SequenceSet
+             ResourceSource, IngressResourceSourceVia,
+             IngressResourceSource, IngressLane, SequenceSet
     <2> QED BY <1>1, <2>4, <2>5
-         DEF CanAdmitIngressItem,
+         DEF CanAdmitIngressItemVia,
              IngressAdmissionPolicyAndOwnershipGatesAllow
   <1> QED BY <1>1
 
 THEOREM RejectedFreshPacketWitnessesExistingIngress ==
-  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+  \A recipient \in ValidatorIds,
+     authenticatedSource \in AsyncIngressSources:
     \A item:
       /\ AsyncTypeInvariant
       /\ AsyncItemTyped(item)
       /\ item.envelope.recipient = recipient
-      /\ item.source = source
-      /\ item \notin SequenceSet(IngressLane(recipient, source))
-      /\ IngressAdmissionPolicyAndOwnershipGatesAllow(item)
-      /\ ~CanAdmitIngressItem(item)
+      /\ item \notin SequenceSet(
+           IngressLane(
+             recipient,
+             IngressResourceSourceVia(item, authenticatedSource)))
+      /\ IngressAdmissionPolicyAndOwnershipGatesAllow(
+           item, authenticatedSource)
+      /\ ~CanAdmitIngressItemVia(item, authenticatedSource)
       => IngressDepth(recipient) > 0
 BY EmptyIngressAdmitsTypedPacket, SMT
 
@@ -665,11 +701,12 @@ THEOREM OverdueResponsivePacketUsesFairIngressPair ==
     /\ AsyncTypeInvariant
     /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
     => LET recipient == packet.item.envelope.recipient
-           source == packet.item.source
+           source == packet.authenticatedSource
        IN /\ recipient \in ValidatorIds
           /\ source \in AsyncIngressSources
           /\ DueSourcePackets(recipient, source) # {}
           /\ ResponsivePacketPairAt(initialContext, recipient, source)
+          /\ recipient \in AsyncTimedServiceNodes
 PROOF
   <1>1. ASSUME NEW initialContext \in ContextRecords,
                 NEW packet \in OverdueResponsivePackets,
@@ -677,12 +714,13 @@ PROOF
                 AsyncCurrentResponsiveVoters =
                   AsyncVotersAt(initialContext)
          PROVE LET recipient == packet.item.envelope.recipient
-                   source == packet.item.source
+                   source == packet.authenticatedSource
                IN /\ recipient \in ValidatorIds
                   /\ source \in AsyncIngressSources
                   /\ DueSourcePackets(recipient, source) # {}
                   /\ ResponsivePacketPairAt(
                        initialContext, recipient, source)
+                  /\ recipient \in AsyncTimedServiceNodes
     <2>1. /\ packet \in asyncTransport
            /\ AsyncPacketTyped(packet)
       BY <1>1
@@ -692,7 +730,7 @@ PROOF
              AsyncTransportContentTypeInvariant,
              AsyncPacketContentTypeInvariant
     <2>2. LET recipient == packet.item.envelope.recipient
-               source == packet.item.source
+               source == packet.authenticatedSource
            IN /\ recipient \in ValidatorIds
               /\ source \in AsyncIngressSources
               /\ packet \in DueSourcePackets(recipient, source)
@@ -701,14 +739,15 @@ PROOF
              OverdueResponsivePackets, AsyncPacketOwnsClockDeadline,
              DueSourcePackets
     <2>3. LET recipient == packet.item.envelope.recipient
-               source == packet.item.source
-           IN ResponsivePacketPairAt(
-                initialContext, recipient, source)
+               source == packet.authenticatedSource
+           IN /\ ResponsivePacketPairAt(
+                    initialContext, recipient, source)
+              /\ recipient \in AsyncTimedServiceNodes
       BY <1>1, SMT
          DEF OverdueResponsivePackets, AsyncPacketOwnsClockDeadline,
              ResponsivePacketPairAt,
              HistoricalRecoveryPacketCorridor,
-             HistoricalRecoveryTarget
+             HistoricalRecoveryTarget, AsyncTimedServiceNodes
     <2> QED BY <2>2, <2>3
   <1> QED BY <1>1
 
@@ -1051,8 +1090,7 @@ THEOREM DueIngressPacketAdmissionIsEnabled ==
     /\ PostGstReplayQuarantineExcluded
     /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
     /\ gst
-    /\ recipient \in AsyncCurrentResponsiveVoters
-                    \cup asyncHistoricalRecoveryTargets
+    /\ recipient \in AsyncTimedServiceNodes
     /\ ResponsivePacketPairAt(initialContext, recipient, source)
     /\ DueSourcePackets(recipient, source) # {}
     /\ DueIngressPacketCanEnter(recipient, source)
@@ -1068,8 +1106,7 @@ PROOF
                 AsyncCurrentResponsiveVoters =
                   AsyncVotersAt(initialContext),
                 gst,
-                recipient \in AsyncCurrentResponsiveVoters
-                                \cup asyncHistoricalRecoveryTargets,
+                recipient \in AsyncTimedServiceNodes,
                 ResponsivePacketPairAt(
                   initialContext, recipient, source),
                 DueSourcePackets(recipient, source) # {},
@@ -1082,14 +1119,20 @@ PROOF
            /\ recipient \in up
            /\ ~ResponsiveReplayQuarantined(recipient)
            /\ Item.envelope.recipient = recipient
-           /\ Item.source = source
+           /\ (OldestDueSourcePacket(recipient, source))
+                .authenticatedSource = source
       BY <1>1, AsyncStrongTypeProjectsAsyncType,
          OldestDueSourcePacketFacts, Isa
          DEF Item, PostGstReplayQuarantineExcluded,
              AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncHistoricalRecoveryTypeInvariant,
-             AsyncRecoveryTypeInvariant, AsyncCurrentResponsiveVoters
-    <2>2. CASE DueIngressPacketCanCoalesce(Item)
+             AsyncRecoveryTypeInvariant, AsyncCurrentResponsiveVoters,
+             AsyncTimedServiceNodes,
+             AsyncArchiveIoServiceNodes,
+             AsyncResponsiveAppliedArchiveServers,
+             AsyncResponsiveOnlineArchiveServers,
+             AsyncResponsiveArchiveServers
+    <2>2. CASE DueIngressPacketCanCoalesce(Item, source)
       <3>1. ENABLED
                RetainedHistoricalLockRestartCoalescingIngressWitness(
                  recipient, source)
@@ -1112,9 +1155,9 @@ PROOF
         BY <3>1,
            EnabledRetainedHistoricalLockRestartCoalescingIngressWitnessRefinesExact
       <3> QED BY <3>2
-    <2>3. CASE ~DueIngressPacketCanCoalesce(Item)
-      <3>1. /\ ~IngressHasCoalescingOwner(Item)
-             /\ CanAdmitIngressItem(Item)
+    <2>3. CASE ~DueIngressPacketCanCoalesce(Item, source)
+      <3>1. /\ ~IngressHasCoalescingOwnerVia(Item, source)
+             /\ CanAdmitIngressItemVia(Item, source)
         BY <1>1, <2>3
            DEF DueIngressPacketCanEnter, DueIngressPacketCanCoalesce,
                Item
@@ -1144,14 +1187,14 @@ PROOF
   <1> QED BY <1>1
 
 THEOREM AppliedResponsiveHistoricalServerEnabledAfterGst ==
-  \A node \in AsyncCurrentResponsiveVoters:
+  \A node \in AsyncArchiveIoServiceNodes:
     /\ AsyncStrongTypeInvariant
     /\ PostGstReplayQuarantineExcluded
     /\ gst
     /\ NodeHasApplication(node)
     => ENABLED PostGstRunHistoricalServer(node)
 PROOF
-  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+  <1>1. ASSUME NEW node \in AsyncArchiveIoServiceNodes,
                 AsyncStrongTypeInvariant,
                 PostGstReplayQuarantineExcluded,
                 gst,
@@ -1160,17 +1203,21 @@ PROOF
     <2>1a. AsyncTypeInvariant
       BY <1>1, AsyncStrongTypeProjectsAsyncType
     <2>1b. node \in ValidatorIds
-      BY <1>1, <2>1a, AsyncCurrentResponsiveVotersAreValidators
+      BY <1>1, <2>1a, AsyncArchiveIoServiceNodesAreValidators
     <2>1c. node \in up
       BY <1>1, GstResponsiveNodesAreUp
-         DEF AsyncStrongTypeInvariant
+         DEF AsyncStrongTypeInvariant, AsyncArchiveIoServiceNodes,
+             AsyncCurrentResponsiveVoters,
+             AsyncResponsiveAppliedArchiveServers,
+             AsyncResponsiveOnlineArchiveServers,
+             AsyncResponsiveArchiveServers
     <2>1d. ~ResponsiveReplayQuarantined(node)
       BY <1>1, <2>1b
          DEF PostGstReplayQuarantineExcluded
     <2>1. /\ node \in AsyncResponsiveAppliedArchiveServers
            /\ ~ResponsiveReplayQuarantined(node)
       BY <1>1, <2>1b, <2>1c, <2>1d, Isa
-         DEF AsyncCurrentResponsiveVoters,
+         DEF AsyncArchiveIoServiceNodes, AsyncCurrentResponsiveVoters,
              AsyncResponsiveAppliedArchiveServers,
              AsyncResponsiveOnlineArchiveServers,
              AsyncResponsiveArchiveServers, AsyncArchiveServerIds
@@ -2616,8 +2663,7 @@ THEOREM AdmissibleResponsivePacketEnablesConcreteProgress ==
     /\ PostGstReplayQuarantineExcluded
     /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
     /\ gst
-    /\ recipient \in AsyncCurrentResponsiveVoters
-                    \cup asyncHistoricalRecoveryTargets
+    /\ recipient \in AsyncTimedServiceNodes
     /\ ResponsivePacketPairAt(initialContext, recipient, source)
     /\ DueSourcePackets(recipient, source) # {}
     /\ DueIngressPacketCanEnter(recipient, source)
@@ -2632,8 +2678,7 @@ PROOF
                 AsyncCurrentResponsiveVoters =
                   AsyncVotersAt(initialContext),
                 gst,
-                recipient \in AsyncCurrentResponsiveVoters
-                                \cup asyncHistoricalRecoveryTargets,
+                recipient \in AsyncTimedServiceNodes,
                 ResponsivePacketPairAt(
                   initialContext, recipient, source),
                 DueSourcePackets(recipient, source) # {},
@@ -2797,8 +2842,7 @@ THEOREM UnappliedPacketRecipientEnablesConcreteRunnerProgress ==
     /\ AsyncCandidateProducerContinuationLocalReplayCapacityInvariant
     /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
     /\ gst
-    /\ recipient \in AsyncCurrentResponsiveVoters
-                    \cup asyncHistoricalRecoveryTargets
+    /\ recipient \in AsyncTimedServiceNodes
     /\ DueSourcePackets(recipient, source) # {}
     /\ ~NodeHasApplication(recipient)
     => ENABLED PostGstProductiveStepWith(
@@ -2813,8 +2857,7 @@ PROOF
                 AsyncCurrentResponsiveVoters =
                   AsyncVotersAt(initialContext),
                 gst,
-                recipient \in AsyncCurrentResponsiveVoters
-                                \cup asyncHistoricalRecoveryTargets,
+                recipient \in AsyncTimedServiceNodes,
                 DueSourcePackets(recipient, source) # {},
                 ~NodeHasApplication(recipient)
          PROVE ENABLED PostGstProductiveStepWith(
@@ -2840,7 +2883,11 @@ PROOF
       <3> QED BY <3>1, <3>2, <3>3, ENABLEDaxioms
     <2>3. CASE recipient \notin asyncHistoricalRecoveryTargets
       <3>1. recipient \in AsyncCurrentResponsiveVoters
-        BY <1>1, <2>3
+        BY <1>1, <2>3, Isa
+           DEF AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
+               AsyncResponsiveAppliedArchiveServers,
+               AsyncResponsiveOnlineArchiveServers,
+               AsyncResponsiveArchiveServers
       <3>2. ENABLED RunNode(recipient)
         BY <2>1, <3>1, <1>1,
            ResponsiveUnappliedRunNodeIsEnabled,
@@ -2900,8 +2947,14 @@ PROOF
          DEF AsyncFairActionAt, PostGstRunNode,
              PostGstRunHistoricalRecoveryNode,
              PostGstRunHistoricalServer,
+             RunHistoricalServer,
              RunHistoricalRecoveryNode,
              HistoricalRecoveryTarget,
+             AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
+             AsyncCurrentResponsiveVoters,
+             AsyncResponsiveAppliedArchiveServers,
+             AsyncResponsiveOnlineArchiveServers,
+             AsyncResponsiveArchiveServers,
              AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncHistoricalRecoveryTypeInvariant
     <2> QED BY <1>1, <2>1, <2>2, <2>3,
@@ -2911,7 +2964,7 @@ PROOF
 
 THEOREM PostGstHistoricalIngressDrainIsConcreteLocalProgress ==
   \A initialContext \in ContextRecords,
-     node \in AsyncCurrentResponsiveVoters:
+     node \in AsyncArchiveIoServiceNodes:
     /\ AsyncTypeInvariant
     /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
     /\ HistoricalDrainableIngressIndices(node) # {}
@@ -2920,7 +2973,7 @@ THEOREM PostGstHistoricalIngressDrainIsConcreteLocalProgress ==
          AsyncTerminatingLocalWorkDecreaseStep)
 PROOF
   <1>1. ASSUME NEW initialContext \in ContextRecords,
-                NEW node \in AsyncCurrentResponsiveVoters,
+                NEW node \in AsyncArchiveIoServiceNodes,
                 AsyncTypeInvariant,
                 AsyncCurrentResponsiveVoters =
                   AsyncVotersAt(initialContext),
@@ -2932,9 +2985,15 @@ PROOF
            /\ DrainHistoricalIngressSelected(node)
       BY <1>1 DEF PostGstRunHistoricalServer, RunHistoricalServer
     <2>2. IngressDepthLocalWorkDecreaseStep
-      BY <1>1, <2>1, IngressDrainStrictlyDecreasesLocalWork
+      BY <1>1, <2>1, IngressDrainStrictlyDecreasesLocalWork, Isa
+         DEF AsyncTimedServiceNodes
     <2>3. AsyncFairActionAt(initialContext)
-      BY <1>1 DEF AsyncFairActionAt
+      BY <1>1, Isa
+         DEF AsyncFairActionAt, PostGstRunHistoricalServer,
+             RunHistoricalServer, AsyncArchiveIoServiceNodes,
+             AsyncResponsiveAppliedArchiveServers,
+             AsyncResponsiveOnlineArchiveServers,
+             AsyncResponsiveArchiveServers
     <2> QED BY <1>1, <2>1, <2>2, <2>3,
          AsyncFairStrictStepIsParameterizedProductive
          DEF AsyncTerminatingLocalWorkDecreaseStep
@@ -2942,7 +3001,7 @@ PROOF
 
 THEOREM AppliedDrainableRecipientEnablesConcreteIngressProgress ==
   \A initialContext \in ContextRecords,
-     node \in AsyncCurrentResponsiveVoters:
+     node \in AsyncArchiveIoServiceNodes:
     /\ AsyncStrongTypeInvariant
     /\ PostGstReplayQuarantineExcluded
     /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
@@ -2953,7 +3012,7 @@ THEOREM AppliedDrainableRecipientEnablesConcreteIngressProgress ==
          AsyncTerminatingLocalWorkDecreaseStep)
 PROOF
   <1>1. ASSUME NEW initialContext \in ContextRecords,
-                NEW node \in AsyncCurrentResponsiveVoters,
+                NEW node \in AsyncArchiveIoServiceNodes,
                 AsyncStrongTypeInvariant,
                 PostGstReplayQuarantineExcluded,
                 AsyncCurrentResponsiveVoters =
@@ -2986,6 +3045,7 @@ THEOREM PostGstIoServiceIsConcreteLocalProgress ==
   \A initialContext \in ContextRecords, node \in ValidatorIds:
     /\ AsyncTypeInvariant
     /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
+    /\ node \in AsyncTimedServiceNodes
     /\ (PostGstServiceIoWorker(node)
           \/ PostGstServiceHistoricalRecoveryIoWorker(node))
     => PostGstProductiveStepWith(
@@ -2996,6 +3056,7 @@ PROOF
                 AsyncTypeInvariant,
                 AsyncCurrentResponsiveVoters =
                   AsyncVotersAt(initialContext),
+                node \in AsyncTimedServiceNodes,
                 PostGstServiceIoWorker(node)
                   \/ PostGstServiceHistoricalRecoveryIoWorker(node)
          PROVE PostGstProductiveStepWith(
@@ -3019,6 +3080,11 @@ PROOF
              PostGstServiceHistoricalRecoveryIoWorker,
              ServiceHistoricalRecoveryIoWorker,
              HistoricalRecoveryTarget,
+             AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
+             AsyncCurrentResponsiveVoters,
+             AsyncResponsiveAppliedArchiveServers,
+             AsyncResponsiveOnlineArchiveServers,
+             AsyncResponsiveArchiveServers,
              AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncHistoricalRecoveryTypeInvariant
     <2> QED BY <1>1, <2>1, <2>2, <2>3,
@@ -3064,7 +3130,7 @@ THEOREM DueNodeServiceEnablesConcreteGateProgress ==
     /\ PostGstReplayQuarantineExcluded
     /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
     /\ gst
-    /\ node \in LocalRunnerServiceOwners
+    /\ node \in AsyncTimedServiceNodes
     /\ LocalRunnerServiceContractDebt(node) = 1
     => ENABLED PostGstProductiveStepWith(
          AsyncTerminatingLocalWorkDecreaseStep)
@@ -3078,7 +3144,7 @@ PROOF
                 AsyncCurrentResponsiveVoters =
                   AsyncVotersAt(initialContext),
                 gst,
-                node \in LocalRunnerServiceOwners,
+                node \in AsyncTimedServiceNodes,
                 LocalRunnerServiceContractDebt(node) = 1
          PROVE ENABLED PostGstProductiveStepWith(
                  AsyncTerminatingLocalWorkDecreaseStep)
@@ -3102,8 +3168,8 @@ PROOF
                AsyncTerminatingLocalWorkDecreaseStep
       <3> QED BY <3>1, <3>2, <3>3, ENABLEDaxioms
     <2>3. CASE node \notin asyncHistoricalRecoveryTargets
-      <3>1. node \in AsyncCurrentResponsiveVoters
-        BY <1>1, <2>3
+      <3>1. node \in AsyncArchiveIoServiceNodes
+        BY <1>1, <2>3, Isa DEF AsyncTimedServiceNodes
       <3>2. CASE NodeHasApplication(node)
         <4>1. ENABLED PostGstRunHistoricalServer(node)
           BY <1>1, <3>1, <3>2,
@@ -3123,16 +3189,20 @@ PROOF
                  AsyncTerminatingLocalWorkDecreaseStep
         <4> QED BY <4>1, <4>2, <4>3, ENABLEDaxioms
       <3>3. CASE ~NodeHasApplication(node)
+        <4>1a. node \in AsyncCurrentResponsiveVoters
+          BY <3>1, <3>3, Isa
+             DEF AsyncArchiveIoServiceNodes,
+                 AsyncResponsiveAppliedArchiveServers
         <4>1. ENABLED RunNode(node)
-          BY <2>1, <3>1, <3>3,
+          BY <2>1, <4>1a, <3>3,
              <1>1, ResponsiveUnappliedRunNodeIsEnabled,
              ExternalCandidateProducerContinuationSelectionIsReady
         <4>2. ENABLED PostGstRunNode(node)
-          BY <1>1, <3>1, <4>1, EnabledRunNodeLiftsPostGst
+          BY <1>1, <4>1a, <4>1, EnabledRunNodeLiftsPostGst
         <4>3. PostGstRunNode(node)
                  => PostGstProductiveStepWith(
                       AsyncTerminatingLocalWorkDecreaseStep)
-          BY <1>1, <2>1, <3>1, <3>3,
+          BY <1>1, <2>1, <4>1a, <3>3,
              PostGstRunnerServiceIsConcreteGateProgress
         <4>4. /\ PostGstRunNode(node) \in BOOLEAN
                /\ PostGstProductiveStepWith(
@@ -3151,8 +3221,7 @@ THEOREM DueIoServiceEnablesConcreteLocalProgress ==
     /\ AsyncStrongTypeInvariant
     /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
     /\ gst
-    /\ node \in AsyncCurrentResponsiveVoters
-                 \cup asyncHistoricalRecoveryTargets
+    /\ node \in AsyncTimedServiceNodes
     /\ AsyncIoQueueDepth(node) > 0
     => ENABLED PostGstProductiveStepWith(
          AsyncTerminatingLocalWorkDecreaseStep)
@@ -3163,8 +3232,7 @@ PROOF
                 AsyncCurrentResponsiveVoters =
                   AsyncVotersAt(initialContext),
                 gst,
-                node \in AsyncCurrentResponsiveVoters
-                         \cup asyncHistoricalRecoveryTargets,
+                node \in AsyncTimedServiceNodes,
                 AsyncIoQueueDepth(node) > 0
          PROVE ENABLED PostGstProductiveStepWith(
                  AsyncTerminatingLocalWorkDecreaseStep)
@@ -3190,8 +3258,8 @@ PROOF
                AsyncTerminatingLocalWorkDecreaseStep
       <3> QED BY <3>1, <3>2, <3>3, ENABLEDaxioms
     <2>3. CASE node \notin asyncHistoricalRecoveryTargets
-      <3>1. node \in AsyncCurrentResponsiveVoters
-        BY <1>1, <2>3
+      <3>1. node \in AsyncArchiveIoServiceNodes
+        BY <1>1, <2>3, Isa DEF AsyncTimedServiceNodes
       <3>2. ENABLED PostGstServiceIoWorker(node)
         BY <1>1, <2>1, <3>1, QueuedIoEnablesPostGstService
       <3>3. PostGstServiceIoWorker(node)
@@ -3222,7 +3290,7 @@ its immutable Ingress owner.  No separate scheduler-bookkeeping action exists.
 
 THEOREM EmptyAppliedOverduePacketExposesAdmission ==
   \A initialContext \in ContextRecords,
-     recipient \in AsyncCurrentResponsiveVoters,
+     recipient \in AsyncArchiveIoServiceNodes,
      source \in AsyncIngressSources:
     /\ AsyncStrongTypeInvariant
     /\ PostGstReplayQuarantineExcluded
@@ -3246,7 +3314,7 @@ BY AsyncStrongTypeProjectsAsyncType,
    DEF DueIngressPacketCanEnter,
        DueIngressPacketCanCoalesce,
        IngressAdmissionPolicyAndOwnershipGatesAllow,
-       CanAdmitIngressItem,
+       CanAdmitIngressItemVia,
        AdmitIngressPacket, AdmitHiddenPacket,
        CoalesceHiddenPacket, DropPolicyRejectedHiddenPacket,
        DropExactActiveLeaderWireRetry,
@@ -3265,7 +3333,7 @@ BY AsyncStrongTypeProjectsAsyncType,
 
 THEOREM EmptyAppliedOverduePacketEnablesProgress ==
   \A initialContext \in ContextRecords,
-     recipient \in AsyncCurrentResponsiveVoters,
+     recipient \in AsyncArchiveIoServiceNodes,
      source \in AsyncIngressSources:
     /\ AsyncStrongTypeInvariant
     /\ PostGstReplayQuarantineExcluded
@@ -3314,15 +3382,14 @@ PROOF
     <2>2. PICK packet \in OverdueResponsivePackets: TRUE
       BY <1>1
     <2> DEFINE Recipient == packet.item.envelope.recipient
-    <2> DEFINE Source == packet.item.source
+    <2> DEFINE Source == packet.authenticatedSource
     <2> DEFINE Item == OldestDueSourcePacket(Recipient, Source).item
     <2>3. /\ Recipient \in ValidatorIds
            /\ Source \in AsyncIngressSources
            /\ DueSourcePackets(Recipient, Source) # {}
            /\ ResponsivePacketPairAt(
                 initialContext, Recipient, Source)
-           /\ Recipient \in AsyncCurrentResponsiveVoters
-                           \cup asyncHistoricalRecoveryTargets
+           /\ Recipient \in AsyncTimedServiceNodes
       BY <1>1, <2>1, <2>2,
          OverdueResponsivePacketUsesFairIngressPair, Isa
          DEF Recipient, Source, OverdueResponsivePackets,
@@ -3330,15 +3397,16 @@ PROOF
              HistoricalRecoveryTarget
     <2>4. /\ AsyncItemTyped(Item)
            /\ Item.envelope.recipient = Recipient
-           /\ Item.source = Source
+           /\ (OldestDueSourcePacket(Recipient, Source))
+                .authenticatedSource = Source
       BY <2>1, <2>3, OldestDueSourcePacketFacts
          DEF Item, AsyncPacketTyped
     <2>5. CASE DueIngressPacketCanEnter(Recipient, Source)
       BY <1>1, <2>3, <2>5,
          AdmissibleResponsivePacketEnablesConcreteProgress
     <2>6. CASE ~DueIngressPacketCanEnter(Recipient, Source)
-      <3>1. \/ IngressHasCoalescingOwner(Item)
-             \/ ~CanAdmitIngressItem(Item)
+      <3>1. \/ IngressHasCoalescingOwnerVia(Item, Source)
+             \/ ~CanAdmitIngressItemVia(Item, Source)
         BY <2>6
            DEF DueIngressPacketCanEnter,
                DueIngressPacketCanCoalesce, Item
@@ -3346,10 +3414,17 @@ PROOF
         BY <1>1, <2>3, <3>2,
            UnappliedPacketRecipientEnablesConcreteRunnerProgress
       <3>3. CASE NodeHasApplication(Recipient)
-        <4>1. Recipient \in AsyncCurrentResponsiveVoters
-          BY <1>1, <2>1, <2>3, <3>3, Isa
+        <4>1. Recipient \in AsyncArchiveIoServiceNodes
+          BY <1>1, <2>1, <2>2, <2>3, <3>3, Isa
              DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
-                 AsyncHistoricalRecoveryTypeInvariant
+                 AsyncHistoricalRecoveryTypeInvariant,
+                 OverdueResponsivePackets,
+                 AsyncPacketOwnsClockDeadline,
+                 AsyncTimedServiceNodes,
+                 AsyncArchiveIoServiceNodes,
+                 AsyncResponsiveAppliedArchiveServers,
+                 AsyncResponsiveOnlineArchiveServers,
+                 AsyncResponsiveArchiveServers
         <4>2. CASE IngressDepth(Recipient) = 0
           <5>1. OldestDueSourcePacket(Recipient, Source)
                    \in OverdueResponsivePackets
@@ -3380,7 +3455,7 @@ PROOF
 
 PostGstTickBlocker ==
   \/ OverdueResponsivePackets # {}
-  \/ \E node \in LocalRunnerServiceOwners:
+  \/ \E node \in AsyncTimedServiceNodes:
        \/ asyncNodeServiceDeadlines[node] <= asyncNow
        \/ /\ AsyncIoQueueDepth(node) > 0
              /\ asyncIoServiceDeadlines[node] <= asyncNow
@@ -3434,34 +3509,33 @@ PROOF
       <3>2. CASE OverdueResponsivePackets # {}
         BY <1>1, <3>2,
            OverdueResponsivePacketEnablesConcreteProgress
-      <3>3. CASE \E node \in LocalRunnerServiceOwners:
+      <3>3. CASE \E node \in AsyncTimedServiceNodes:
                        asyncNodeServiceDeadlines[node] <= asyncNow
-        <4>1. PICK serviceNode \in LocalRunnerServiceOwners:
+        <4>1. PICK serviceNode \in AsyncTimedServiceNodes:
                     asyncNodeServiceDeadlines[serviceNode] <= asyncNow
           BY <3>3
         <4>2. /\ serviceNode \in ValidatorIds
                /\ LocalRunnerServiceContractDebt(serviceNode) = 1
           BY <2>1, <4>1, Isa
              DEF LocalRunnerServiceContractDebt,
-                 LocalRunnerServiceOwners, AsyncTypeInvariant,
+                 AsyncTimedServiceNodes, AsyncTypeInvariant,
                  AsyncSchedulerTypeInvariant,
                  AsyncHistoricalRecoveryTypeInvariant,
                  AsyncRuntimeTypeInvariant,
                  AsyncRuntimeScalarTypeInvariant
         <4> QED BY <1>1, <4>1, <4>2,
              DueNodeServiceEnablesConcreteGateProgress
-      <3>4. CASE \E node \in AsyncCurrentResponsiveVoters
-                              \cup asyncHistoricalRecoveryTargets:
+      <3>4. CASE \E node \in AsyncTimedServiceNodes:
                        /\ AsyncIoQueueDepth(node) > 0
                        /\ asyncIoServiceDeadlines[node] <= asyncNow
-        <4>1. PICK ioNode \in AsyncCurrentResponsiveVoters
-                              \cup asyncHistoricalRecoveryTargets:
+        <4>1. PICK ioNode \in AsyncTimedServiceNodes:
                     /\ AsyncIoQueueDepth(ioNode) > 0
                     /\ asyncIoServiceDeadlines[ioNode] <= asyncNow
           BY <3>4
         <4>2. ioNode \in ValidatorIds
           BY <2>1, <4>1, Isa
-             DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             DEF AsyncTimedServiceNodes, AsyncArchiveIoServiceNodes,
+                 AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
                  AsyncHistoricalRecoveryTypeInvariant
         <4> QED BY <1>1, <4>1, <4>2,
              DueIoServiceEnablesConcreteLocalProgress

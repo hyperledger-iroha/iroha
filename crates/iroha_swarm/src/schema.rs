@@ -781,7 +781,9 @@ fn load_signed_genesis_and_run(runtime: Option<&PreparedRuntimeConfig>) -> Strin
                 runtime.build_line.as_str()
             )
         }
-        None => "export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH && exec iroha3d".to_owned(),
+        None => {
+            "export GENESIS_PUBLIC_KEY GENESIS GENESIS_EXPECTED_HASH && exec iroha3d".to_owned()
+        }
     };
     format!(
         r#"/bin/sh -eu -c "
