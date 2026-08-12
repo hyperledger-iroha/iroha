@@ -20,7 +20,7 @@ use std::{
 };
 
 use super::v2_core as reducer;
-use iroha_crypto::{Hash, HashOf, Signature};
+use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
@@ -34,21 +34,44 @@ use super::{
         ProducerContinuationTerminalToken, SERVICED_CANDIDATE_STAGES_PER_LIFECYCLE,
         ServicedCandidateKey, ServicedCandidateStore, serviced_candidate_stage_for_kind_code,
     },
-    v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
-    v2_lifecycle_coordinator::{
-        AdapterEffectAdmissionError, AuthenticatedLifecycleRecoveryCut,
-        AuthenticatedRecoveredWalValidateLifecycleRepair, CandidateAdmission,
-        DurableAuthenticatedRecoveredWalValidateLifecycleRepair, DurableValidateReplayEvidenceV1,
-        InstalledRecoveredWalSignRegistryCut, InvalidBodyReportReplayEvidenceV1,
-        LifecycleWorkRegistryHolder, OpenedRecoveredWalSignLifecycleCut,
-        OpenedRecoveredWalValidateLedger, ReadyRejectedAdapterAuthority,
-        ReadyValidatedAdapterAuthority, RecoveredWalParentFactoryError,
-        RecoveredWalSignInstallError, RecoveredWalSignLifecycleOpenError,
-        RecoveredWalValidateLedgerPersistError, RecoveredWalValidateRegistryCut,
-        RecoveredWalValidateRegistryJoinError, RecoveredWalVoteReplayEvidenceV1,
-        SealedInvalidBodyReportProjectionPermit, SealedLiveWalPersistedEffectV1,
+    v2_body_store::{
+        DurableBodyReceipt, RecoveredDecisionApplyAdapterPreviewPermit, ValidatedBodyReceipt,
     },
-    v2_runtime::PendingRuntimeEffectBinding,
+    v2_lifecycle_coordinator::{
+        AdapterEffectAdmissionError, AuthenticatedRecoveredWalControlProjection,
+        AuthenticatedRecoveredWalDecisionFetchProjection,
+        AuthenticatedRecoveredWalValidateLifecycleRepair, CandidateAdmission,
+        DurableValidateReplayEvidenceV1, ExactStoreRecoveredWalPersistError,
+        ExactStoreRecoveredWalSignInstallError, InstalledRecoveredWalSignStorage,
+        InvalidBodyReportReplayEvidenceV1, LifecycleDigest, LifecycleWorkRegistryHolder,
+        LiveValidateSignRegistryReservation, LiveValidateSignWorkProjectionPermit,
+        OpenedRecoveredWalValidateLedger, PersistedRecoveredWalValidateLedger,
+        PreparedLiveValidateSignRegistryWork, ProductionLifecycleOwnerV1,
+        ProductionOpenedRecoveredWalSignLifecycleCut, ProductionRecoveredWalStorageError,
+        ReadyRejectedAdapterAuthority, ReadyValidateSignPredecessorAuthority,
+        ReadyValidatedAdapterAuthority, RecoveredDecisionApplyCandidateLineageV1,
+        RecoveredDecisionApplyPendingLineageV1, RecoveredWalControlReplayEvidenceV1,
+        RecoveredWalDecisionFetchReplayEvidenceV1, RecoveredWalParentFactoryError,
+        RecoveredWalProductionOwnerOpenV1, RecoveredWalVoteReplayEvidenceV1,
+        SealedInvalidBodyReportProjectionPermit, SealedLiveWalPersistedEffectV1,
+        SealedValidateSignProjectionPermit,
+    },
+    v2_runtime::{
+        PendingRuntimeEffectBinding, RecoveredWalCandidateProjectionPermit,
+        RecoveredWalControlPendingMintPermit, RecoveredWalDecisionFetchPendingMintPermit,
+    },
+};
+
+#[cfg(test)]
+use super::v2_lifecycle_coordinator::{
+    AuthenticatedLifecycleRecoveryCut, DurableAuthenticatedRecoveredWalValidateLifecycleRepair,
+    InstalledRecoveredWalSignRegistryCut, LifecycleContext, OpenedRecoveredWalSignLifecycleCut,
+    RecoveredWalSignInstallError, RecoveredWalSignLifecycleOpenError,
+    RecoveredWalValidateLedgerPersistError, RecoveredWalValidateRegistryCut,
+    RecoveredWalValidateRegistryJoinError, append_same_owner_foreign_terminal_for_test,
+    substitute_recovered_control_replay_authority_for_test,
+    substitute_recovered_decision_fetch_owner_for_test,
+    substitute_recovered_decision_fetch_replay_authority_for_test,
 };
 
 // Keep wire admission and reducer capacity identical; mismatches fail at compile time.
@@ -484,7 +507,8 @@ impl PersistedWalFrameLocatorV1 {
 ///
 /// The adapter is the sole constructor. Minting consumes a private, non-clone
 /// startup wrapper, removes the exact reducer-owned `Sign` effect before any
-/// raw batch can escape, and reauthenticates the final recovered WAL envelope.
+/// raw batch can escape, and reauthenticates the latest exact matching WAL
+/// envelope after independently checking the terminal frontier.
 /// Ordinary code therefore cannot retain both the raw effect and this
 /// restart-only authority. Dropping the token is inert; the sole consuming
 /// runtime projection converts it into one exact causal successor.
@@ -496,6 +520,122 @@ pub(crate) struct RecoveredWalVoteSign {
     tag: reducer::EventTag,
     vote: wire::Vote,
     prepare_certificate: Option<wire::QuorumCertificate>,
+}
+
+/// Opaque authority for one payload-free control signature owned by an exact WAL frame.
+///
+/// The adapter consumes the sole matching startup effect into this move-only
+/// value. No effect, pending binding, locator part, encoded authority, or
+/// ordinal can be extracted. Its only consuming path is the runtime-private
+/// recovered-frame projection below.
+#[must_use = "a recovered WAL control Sign must enter the lifecycle startup transaction"]
+pub(crate) struct RecoveredWalControlSign {
+    wal_identity: RecoveredWalFrameIdentity,
+    replay_evidence: RecoveredWalControlReplayEvidenceV1,
+    effect: AdapterEffect,
+}
+
+/// Opaque authority for the exact certified Fetch emitted by a durable Decision.
+///
+/// This token retains the authenticated Decision frame, complete CommitQC,
+/// frozen ordered archive roster, exact Fetch effect, and canonical V1 replay
+/// evidence. It has no effect, certificate, locator, pending, candidate, or
+/// parts accessor; only the runtime-private consuming projection can use it.
+#[must_use = "a recovered Decision Fetch must enter lifecycle startup recovery"]
+pub(crate) struct RecoveredWalDecisionFetch {
+    wal_identity: RecoveredWalFrameIdentity,
+    replay_evidence: RecoveredWalDecisionFetchReplayEvidenceV1,
+    effect: AdapterEffect,
+}
+
+impl RecoveredWalControlSign {
+    /// Consume both runtime one-shot permits into the sealed lifecycle projection.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_lifecycle_projection(
+        self,
+        pending_permit: RecoveredWalControlPendingMintPermit,
+        candidate_permit: RecoveredWalCandidateProjectionPermit,
+        verified: &VerifiedHeightContext,
+    ) -> Result<AuthenticatedRecoveredWalControlProjection, Self> {
+        if !self
+            .replay_evidence
+            .exactly_matches_recovered_control(self.wal_identity, &self.effect)
+        {
+            return Err(self);
+        }
+        let Some(pending) = PendingRuntimeEffectBinding::from_exact_recovered_wal_frame(
+            pending_permit,
+            self.wal_identity,
+            &self.effect,
+        ) else {
+            return Err(self);
+        };
+        let Some(candidate) = self.replay_evidence.project_recovered_control_candidate(
+            candidate_permit,
+            verified,
+            self.wal_identity,
+            &self.effect,
+            &pending,
+        ) else {
+            return Err(self);
+        };
+        Ok(
+            AuthenticatedRecoveredWalControlProjection::from_runtime_projection(
+                self.wal_identity,
+                self.replay_evidence,
+                self.effect,
+                pending,
+                candidate,
+            ),
+        )
+    }
+}
+
+impl RecoveredWalDecisionFetch {
+    /// Consume both private permits into one sealed lifecycle projection.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_lifecycle_projection(
+        self,
+        pending_permit: RecoveredWalDecisionFetchPendingMintPermit,
+        candidate_permit: RecoveredWalCandidateProjectionPermit,
+        verified: &VerifiedHeightContext,
+    ) -> Result<AuthenticatedRecoveredWalDecisionFetchProjection, Self> {
+        if !self
+            .replay_evidence
+            .exactly_matches_recovered_decision_fetch(verified, self.wal_identity, &self.effect)
+        {
+            return Err(self);
+        }
+        let Some(pending) = self.replay_evidence.reconstruct_pending(
+            pending_permit,
+            verified,
+            self.wal_identity,
+            &self.effect,
+        ) else {
+            return Err(self);
+        };
+        let Some(candidate) = self
+            .replay_evidence
+            .project_recovered_decision_fetch_candidate(
+                candidate_permit,
+                verified,
+                self.wal_identity,
+                &self.effect,
+                &pending,
+            )
+        else {
+            return Err(self);
+        };
+        Ok(
+            AuthenticatedRecoveredWalDecisionFetchProjection::from_runtime_projection(
+                self.wal_identity,
+                self.replay_evidence,
+                self.effect,
+                pending,
+                candidate,
+            ),
+        )
+    }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -543,9 +683,14 @@ impl RecoveredWalVoteSign {
 /// Unpublished startup effects retained beside the adapter which produced them.
 ///
 /// Fields are private and the value is not cloneable. Its only consuming
-/// authority join removes an exact recovered WAL vote while retaining the
-/// remaining startup effects beside the adapter, so caller-owned effect bytes
-/// cannot mint or duplicate [`RecoveredWalVoteSign`].
+/// authentication validates the terminal WAL frontier independently, then
+/// classifies the reducer's exact current work as no authority, one phase vote,
+/// one control Sign, or the exact certificate-backed Decision Fetch. The latest
+/// exact matching authenticated frame owns a signature; the exact Decision
+/// frame owns its Fetch. Later durable frames may own the reducer's sealed
+/// signature FIFO. Every other residual inventory is rejected before the
+/// already-revalidated body cut is unsealed or Serve/Ledger opens. Caller-owned
+/// effect bytes therefore cannot mint or duplicate any recovered authority.
 #[cfg_attr(not(test), allow(dead_code))]
 #[must_use = "recovered adapter startup must be authenticated before effects are exposed"]
 pub(crate) struct RecoveredAdapterStartup {
@@ -553,13 +698,202 @@ pub(crate) struct RecoveredAdapterStartup {
     effects: Vec<AdapterEffect>,
 }
 
-/// Startup cut after the final WAL vote has been authenticated and removed.
+/// Startup cut after the WAL frontier and current WAL work are authenticated.
 #[cfg_attr(not(test), allow(dead_code))]
-#[must_use = "authenticated adapter startup must finish the no-vote path or join durable recovery"]
+#[must_use = "authenticated adapter startup must enter the unified durable recovery owner"]
 pub(crate) struct AuthenticatedRecoveredAdapterStartup {
     adapter: SumeragiV2Adapter,
     effects: Vec<AdapterEffect>,
-    recovered_vote: Option<RecoveredWalVoteSign>,
+    authority: RecoveredWalStartupAuthorityV1,
+}
+
+/// Exhaustive and mutually exclusive current recovered-WAL work authority.
+#[allow(variant_size_differences)]
+enum RecoveredWalStartupAuthorityV1 {
+    None,
+    PhaseVote(RecoveredWalVoteSign),
+    ControlSign(RecoveredWalControlSign),
+    DecisionFetch(RecoveredWalDecisionFetch),
+}
+
+#[allow(variant_size_differences)]
+enum PreparedRecoveredWalStartupAuthorityV1 {
+    None,
+    PhaseVote(RecoveredWalVoteSign),
+    ControlSign(AuthenticatedRecoveredWalControlProjection),
+    DecisionFetch(AuthenticatedRecoveredWalDecisionFetchProjection),
+}
+
+/// Adapter and residual replay effects retained by the sole lifecycle owner.
+///
+/// The fields have no extraction surface. The startup factory performs status
+/// publication in place only after durable lifecycle recovery has produced a
+/// complete owner, so neither recovery branch can release a free-standing
+/// adapter startup.
+#[must_use = "adapter startup authority must remain inside its lifecycle owner"]
+pub(crate) struct ProductionLifecycleAdapterStartupV1 {
+    state: ProductionLifecycleAdapterStartupStateV1,
+}
+
+#[allow(variant_size_differences)]
+enum ProductionLifecycleAdapterStartupStateV1 {
+    Recovered {
+        adapter: SumeragiV2Adapter,
+        effects: Vec<AdapterEffect>,
+    },
+    #[cfg(test)]
+    Fixture,
+}
+
+impl ProductionLifecycleAdapterStartupV1 {
+    fn recovered(adapter: SumeragiV2Adapter, effects: Vec<AdapterEffect>) -> Self {
+        Self {
+            state: ProductionLifecycleAdapterStartupStateV1::Recovered { adapter, effects },
+        }
+    }
+
+    /// Publish the retained adapter's initial status without releasing it.
+    pub(in crate::sumeragi) fn publish_status(&mut self) -> Result<(), AdapterError> {
+        match &mut self.state {
+            ProductionLifecycleAdapterStartupStateV1::Recovered { adapter, effects }
+                if effects.is_empty() =>
+            {
+                adapter.publish_status()
+            }
+            ProductionLifecycleAdapterStartupStateV1::Recovered { .. } => {
+                Err(AdapterError::FailClosed)
+            }
+            #[cfg(test)]
+            ProductionLifecycleAdapterStartupStateV1::Fixture => Ok(()),
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::sumeragi) const fn fixture_for_test() -> Self {
+        Self {
+            state: ProductionLifecycleAdapterStartupStateV1::Fixture,
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn is_exact_for_test(&self) -> bool {
+        match &self.state {
+            ProductionLifecycleAdapterStartupStateV1::Recovered { adapter, effects } => {
+                effects.is_empty() && adapter.current_tag().height() == adapter.wire_context.height
+            }
+            ProductionLifecycleAdapterStartupStateV1::Fixture => true,
+        }
+    }
+}
+
+// TODO: The lifecycle completion transaction must consume the current recovered
+// Sign, execute its reducer acknowledgement through this retained adapter, and
+// authenticate only the next `awaiting_signature` emitted by that step. Queued
+// signatures deliberately have no eager lifecycle token or pre-bound event tag.
+
+struct ProductionRecoveredLifecycleOwnerAssemblyLinearity;
+
+impl Drop for ProductionRecoveredLifecycleOwnerAssemblyLinearity {
+    fn drop(&mut self) {}
+}
+
+/// One-shot proof that adapter startup and recovered lifecycle open remained paired.
+///
+/// Only the private combined startup wrapper in this module can mint this
+/// permit. The lifecycle-owner constructor consumes it, so sibling modules
+/// cannot combine an adapter from one recovered startup with another open.
+pub(in crate::sumeragi) struct ProductionRecoveredLifecycleOwnerAssemblyPermitV1 {
+    _linearity: ProductionRecoveredLifecycleOwnerAssemblyLinearity,
+}
+
+impl ProductionRecoveredLifecycleOwnerAssemblyPermitV1 {
+    fn mint_paired() -> Self {
+        Self {
+            _linearity: ProductionRecoveredLifecycleOwnerAssemblyLinearity,
+        }
+    }
+}
+
+#[must_use = "the paired recovered startup must enter its lifecycle owner"]
+struct ProductionRecoveredLifecycleOwnerStartupV1 {
+    adapter_startup: ProductionLifecycleAdapterStartupV1,
+    opened: RecoveredWalProductionOwnerOpenV1,
+}
+
+impl ProductionRecoveredLifecycleOwnerStartupV1 {
+    fn into_owner(
+        self,
+        registry: LifecycleWorkRegistryHolder,
+        payload_store: super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1,
+        body_store: super::v2_body_store::V2BodyStore,
+    ) -> Result<
+        ProductionLifecycleOwnerV1,
+        super::v2_lifecycle_coordinator::ProductionLifecycleStartupErrorV1,
+    > {
+        let Self {
+            adapter_startup,
+            opened,
+        } = self;
+        ProductionLifecycleOwnerV1::from_recovered_wal_open(
+            ProductionRecoveredLifecycleOwnerAssemblyPermitV1::mint_paired(),
+            opened,
+            registry,
+            payload_store,
+            body_store,
+            adapter_startup,
+        )
+    }
+}
+
+/// Owned startup failure from the sole first-release lifecycle-owner factory.
+#[derive(Debug, Error)]
+#[error("{kind}")]
+#[must_use = "failed production lifecycle startup requires process restart"]
+pub(crate) struct ProductionLifecycleOwnerStartupErrorV1 {
+    kind: ProductionLifecycleOwnerStartupErrorKindV1,
+}
+
+#[derive(Debug, Error)]
+#[allow(variant_size_differences)]
+enum ProductionLifecycleOwnerStartupErrorKindV1 {
+    #[error("recovered adapter retained unadmitted startup effects")]
+    ResidualEffects,
+    #[error("revalidated body-store handoff failed: {0}")]
+    BodyStore(#[source] super::v2_body_store::V2BodyStoreError),
+    #[error("Certified-Serve payload store open failed: {0}")]
+    ServeStore(#[source] super::v2_certified_serve_payload_store::CertifiedServePayloadStoreError),
+    #[error("Certified-Serve payload authentication failed: {0}")]
+    ServeRecovery(
+        #[source] super::v2_certified_serve_payload_store::CertifiedServePayloadRecoveryError,
+    ),
+    #[error("storage-only lifecycle owner open failed: {0}")]
+    StorageOnly(#[source] super::v2_lifecycle_coordinator::ProductionLifecycleStartupErrorV1),
+    #[error("recovered WAL parent authentication failed: {0}")]
+    RecoveredParent(&'static str),
+    #[error("recovered WAL lifecycle persistence failed: {0}")]
+    Persist(&'static str),
+    #[error("recovered WAL Sign installation failed: {0}")]
+    SignInstall(&'static str),
+    #[error("recovered WAL lifecycle open failed: {0}")]
+    RecoveredOpen(&'static str),
+    #[error("recovered WAL lifecycle owner join failed: {0}")]
+    RecoveredOwner(#[source] super::v2_lifecycle_coordinator::ProductionLifecycleStartupErrorV1),
+    #[error("recovered WAL control Sign startup failed: {0}")]
+    RecoveredControl(&'static str),
+    #[error("recovered WAL Decision Fetch startup failed: {0}")]
+    RecoveredDecisionFetch(&'static str),
+    #[error("recovered WAL Decision body preflight failed: {0}")]
+    RecoveredDecisionBody(#[source] super::v2_body_store::RecoveredDecisionApplyBodyCutError),
+    #[error("recovered WAL Decision Apply startup is unavailable: {0}")]
+    RecoveredDecisionApply(&'static str),
+    #[error("production lifecycle status publication failed: {0}")]
+    Status(&'static str),
+}
+
+impl ProductionLifecycleOwnerStartupErrorV1 {
+    fn new(kind: ProductionLifecycleOwnerStartupErrorKindV1) -> Self {
+        Self { kind }
+    }
 }
 
 /// Startup cut whose recovered vote has joined one exact lifecycle repair.
@@ -571,7 +905,7 @@ pub(crate) struct AuthenticatedRecoveredAdapterStartup {
 /// registry row has already been detached, and the lifetime-bound repair keeps
 /// the registry exclusively borrowed until the splice completes. Every later
 /// failure is fail-stop/restart rather than ordinary rollback.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 #[must_use = "WAL lifecycle startup remains sealed until durable recovery completes"]
 struct AuthenticatedRecoveredWalLifecycleStartup<'registry> {
     adapter: SumeragiV2Adapter,
@@ -581,8 +915,8 @@ struct AuthenticatedRecoveredWalLifecycleStartup<'registry> {
 
 /// Storage-authenticated recovered-parent startup assembled without scheduler authority.
 ///
-/// The authenticated lifecycle recovery cut, exact opened LedgerV1 store/frame,
-/// adapter, unpublished effects, and registry-borrowed repair remain one opaque
+/// The exact opened LedgerV1 store/frame, adapter, unpublished effects, and
+/// registry-borrowed repair remain one opaque
 /// value. No raw candidate, effect, pending binding, receipt, ordinal, or
 /// registry cut can be extracted.
 #[allow(dead_code)]
@@ -590,7 +924,6 @@ struct AuthenticatedRecoveredWalLifecycleStartup<'registry> {
 struct StorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
     adapter: SumeragiV2Adapter,
     effects: Vec<AdapterEffect>,
-    recovery: AuthenticatedLifecycleRecoveryCut,
     ledger: OpenedRecoveredWalValidateLedger,
     repair: AuthenticatedRecoveredWalValidateLifecycleRepair<'registry>,
 }
@@ -606,12 +939,10 @@ struct StorageAuthenticatedRecoveredWalLifecycleStartupError<'body> {
 enum StorageAuthenticatedRecoveredWalLifecycleStartupFailure<'body> {
     MissingVote {
         _startup: AuthenticatedRecoveredAdapterStartup,
-        _recovery: AuthenticatedLifecycleRecoveryCut,
     },
     Factory {
         _adapter: SumeragiV2Adapter,
         _effects: Vec<AdapterEffect>,
-        _recovery: AuthenticatedLifecycleRecoveryCut,
         _error: RecoveredWalParentFactoryError<'body>,
     },
 }
@@ -631,12 +962,84 @@ impl StorageAuthenticatedRecoveredWalLifecycleStartupError<'_> {
     }
 }
 
+/// Exact-store startup after the recovered LedgerV1 repair is durable.
+#[must_use = "the durable recovered startup must install its exact Sign"]
+struct PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
+    adapter: SumeragiV2Adapter,
+    effects: Vec<AdapterEffect>,
+    persisted: PersistedRecoveredWalValidateLedger<'registry>,
+}
+
+/// Exact-store startup after Sign installation and before final recovery open.
+#[must_use = "the installed recovered startup must enter its production owner"]
+struct InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
+    adapter: SumeragiV2Adapter,
+    effects: Vec<AdapterEffect>,
+    installed: InstalledRecoveredWalSignStorage<'registry>,
+}
+
+#[must_use = "failed exact-store persistence requires process restart"]
+struct StorageRecoveredWalPersistError<'registry> {
+    _adapter: SumeragiV2Adapter,
+    _effects: Vec<AdapterEffect>,
+    error: ExactStoreRecoveredWalPersistError<'registry>,
+}
+
+#[must_use = "failed exact-store Sign installation requires process restart"]
+struct StorageRecoveredWalSignInstallError<'registry> {
+    _adapter: SumeragiV2Adapter,
+    _effects: Vec<AdapterEffect>,
+    error: ExactStoreRecoveredWalSignInstallError<'registry>,
+}
+
+#[must_use = "failed exact-store lifecycle open requires process restart"]
+struct StorageRecoveredWalOpenError<'registry> {
+    failure: StorageRecoveredWalOpenFailure<'registry>,
+}
+
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+enum StorageRecoveredWalOpenFailure<'registry> {
+    Storage {
+        _adapter: SumeragiV2Adapter,
+        _effects: Vec<AdapterEffect>,
+        error: ProductionRecoveredWalStorageError,
+    },
+    OwnerSeal {
+        _adapter: SumeragiV2Adapter,
+        _effects: Vec<AdapterEffect>,
+        _opened: ProductionOpenedRecoveredWalSignLifecycleCut<'registry>,
+    },
+}
+
+impl StorageRecoveredWalPersistError<'_> {
+    fn reason(&self) -> &'static str {
+        self.error.reason()
+    }
+}
+
+impl StorageRecoveredWalSignInstallError<'_> {
+    fn reason(&self) -> &'static str {
+        self.error.reason()
+    }
+}
+
+impl StorageRecoveredWalOpenError<'_> {
+    fn reason(&self) -> &'static str {
+        match &self.failure {
+            StorageRecoveredWalOpenFailure::Storage { error, .. } => error.reason(),
+            StorageRecoveredWalOpenFailure::OwnerSeal { .. } => {
+                "opened recovered lifecycle lost its exact owner seal"
+            }
+        }
+    }
+}
+
 /// Sealed startup cut after the complete recovered LedgerV1 frame was fsynced.
 ///
 /// The adapter and unpublished effects remain inseparable from the durable
 /// repair and its exclusive registry reservation. The future child-install
 /// tranche must consume this wrapper as a whole.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 #[must_use = "durable WAL lifecycle startup has not installed its Sign child"]
 struct DurableAuthenticatedRecoveredWalLifecycleStartup<'registry> {
     adapter: SumeragiV2Adapter,
@@ -650,7 +1053,7 @@ struct DurableAuthenticatedRecoveredWalLifecycleStartup<'registry> {
 /// installed registry cut. That cut keeps the registry exclusively borrowed,
 /// while the complete durable repair and validated parent authority live in
 /// its closed child row. No ordinary startup or raw-work escape exists here.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 #[must_use = "installed WAL lifecycle startup has not completed publication"]
 struct InstalledRecoveredWalLifecycleStartup<'registry> {
     adapter: SumeragiV2Adapter,
@@ -658,6 +1061,7 @@ struct InstalledRecoveredWalLifecycleStartup<'registry> {
     installed: InstalledRecoveredWalSignRegistryCut<'registry>,
 }
 
+#[cfg(test)]
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum RecoveredWalLifecycleStartupFailure<'registry> {
     MissingVote {
@@ -676,6 +1080,7 @@ enum RecoveredWalLifecycleStartupFailure<'registry> {
 /// No adapter, startup effect, recovered vote, or lifecycle binding is exposed
 /// through this diagnostic. A failed join therefore cannot fall back to the
 /// ordinary startup path or splice authority from another recovery instance.
+#[cfg(test)]
 #[allow(dead_code)]
 #[must_use = "failed WAL lifecycle startup still owns all recovery authority"]
 struct RecoveredWalLifecycleStartupError<'registry> {
@@ -687,6 +1092,7 @@ struct RecoveredWalLifecycleStartupError<'registry> {
 /// The error exposes only a stable diagnostic. It cannot release the adapter,
 /// startup effects, registry reservation, validation result, or ledger repair,
 /// regardless of whether the filesystem failed before or after publication.
+#[cfg(test)]
 #[allow(dead_code)]
 #[must_use = "failed durable WAL startup still owns all recovery authority"]
 struct RecoveredWalLifecycleLedgerPersistError<'registry> {
@@ -697,6 +1103,7 @@ struct RecoveredWalLifecycleLedgerPersistError<'registry> {
 
 /// Fail-stop Sign-install error retaining the adapter, unpublished batch, and
 /// complete uninstalled post-fsync authority.
+#[cfg(test)]
 #[allow(dead_code)]
 #[must_use = "failed recovered Sign installation still owns all startup authority"]
 struct RecoveredWalLifecycleSignInstallError<'registry> {
@@ -705,7 +1112,7 @@ struct RecoveredWalLifecycleSignInstallError<'registry> {
     error: RecoveredWalSignInstallError<'registry>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 impl RecoveredWalLifecycleLedgerPersistError<'_> {
     /// Return a stable classification without exposing retained authority.
     fn reason(&self) -> &'static str {
@@ -713,7 +1120,7 @@ impl RecoveredWalLifecycleLedgerPersistError<'_> {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 impl RecoveredWalLifecycleSignInstallError<'_> {
     /// Return a stable classification without exposing retained authority.
     fn reason(&self) -> &'static str {
@@ -721,7 +1128,7 @@ impl RecoveredWalLifecycleSignInstallError<'_> {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 impl RecoveredWalLifecycleStartupError<'_> {
     /// Return a stable failure classification without exposing retained authority.
     fn reason(&self) -> &'static str {
@@ -736,46 +1143,479 @@ impl RecoveredWalLifecycleStartupError<'_> {
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl RecoveredAdapterStartup {
-    /// Consume the sealed startup cut and authenticate its unique final WAL vote.
+    /// Exhaustively authenticate the WAL frontier and current startup authority.
     ///
-    /// Failure returns the complete wrapper unchanged. Success retains the
-    /// remaining batch in a second sealed wrapper, with the exact recovered
-    /// vote removed from that batch.
+    /// Failure returns the complete wrapper unchanged. Success moves the sole
+    /// exact phase-vote, control-Sign, or Decision-Fetch authority into one
+    /// private enum and
+    /// retains an empty residual effect vector.
     #[allow(clippy::result_large_err)]
-    pub(crate) fn authenticate_final_wal_vote(
+    pub(crate) fn authenticate_final_wal_startup_authority(
         mut self,
     ) -> Result<AuthenticatedRecoveredAdapterStartup, (AdapterError, Self)> {
-        match self
+        if let Err(error) = self.adapter.authenticate_recovered_wal_frontier() {
+            return Err((error, self));
+        }
+        let recovered_vote = match self
             .adapter
             .authenticate_recovered_wal_vote_sign(&mut self.effects)
         {
-            Ok(recovered_vote) => Ok(AuthenticatedRecoveredAdapterStartup {
+            Ok(recovered_vote) => recovered_vote,
+            Err(error) => return Err((error, self)),
+        };
+        if let Some(recovered_vote) = recovered_vote {
+            debug_assert!(self.effects.is_empty());
+            return Ok(AuthenticatedRecoveredAdapterStartup {
                 adapter: self.adapter,
                 effects: self.effects,
-                recovered_vote,
-            }),
-            Err(error) => Err((error, self)),
+                authority: RecoveredWalStartupAuthorityV1::PhaseVote(recovered_vote),
+            });
         }
+        let recovered_control = match self
+            .adapter
+            .authenticate_recovered_wal_control_sign(&mut self.effects)
+        {
+            Ok(recovered_control) => recovered_control,
+            Err(error) => return Err((error, self)),
+        };
+        if let Some(control) = recovered_control {
+            debug_assert!(self.effects.is_empty());
+            return Ok(AuthenticatedRecoveredAdapterStartup {
+                adapter: self.adapter,
+                effects: self.effects,
+                authority: RecoveredWalStartupAuthorityV1::ControlSign(control),
+            });
+        }
+        let recovered_fetch = match self
+            .adapter
+            .authenticate_recovered_wal_decision_fetch(&mut self.effects)
+        {
+            Ok(recovered_fetch) => recovered_fetch,
+            Err(error) => return Err((error, self)),
+        };
+        if let Some(fetch) = recovered_fetch {
+            debug_assert!(self.effects.is_empty());
+            return Ok(AuthenticatedRecoveredAdapterStartup {
+                adapter: self.adapter,
+                effects: self.effects,
+                authority: RecoveredWalStartupAuthorityV1::DecisionFetch(fetch),
+            });
+        }
+        if !self.effects.is_empty() {
+            let error = self
+                .adapter
+                .classify_unsupported_recovered_startup(&self.effects);
+            return Err((error, self));
+        }
+        Ok(AuthenticatedRecoveredAdapterStartup {
+            adapter: self.adapter,
+            effects: self.effects,
+            authority: RecoveredWalStartupAuthorityV1::None,
+        })
     }
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
 impl AuthenticatedRecoveredAdapterStartup {
-    /// Finish a startup whose final WAL record owns no phase-vote continuation.
+    /// Consume all recovered adapter and storage authority into one V1 owner.
     ///
-    /// A recovered Prepare or Commit vote keeps the complete wrapper sealed and
-    /// must use [`Self::authenticate_recovered_validate`] instead. This remains
-    /// test-only until the no-vote branch consumes an exact storage-only
-    /// lifecycle/registry open and publishes status last.
+    /// The no-authority, phase-vote, control-Sign, and Decision-Fetch cases are
+    /// private branches over this type's sealed authority enum. Callers supply
+    /// only durable Ledger/Serve roots, the exact semantically revalidated
+    /// same-store body cut, verified production capacity, and the local Serve
+    /// retainer. No body root, signature policy, recovery snapshot, candidate,
+    /// effect, pending binding, ordinal, or branch selector crosses this
+    /// boundary.
+    #[allow(
+        clippy::result_large_err,
+        clippy::too_many_arguments,
+        clippy::too_many_lines
+    )]
+    pub(crate) fn open_production_lifecycle_owner_v1(
+        self,
+        config: &iroha_config::parameters::actual::SumeragiV2Config,
+        reply_route_source_capacity: usize,
+        ledger_root: &std::path::Path,
+        serve_payload_root: &std::path::Path,
+        mut body_store: super::v2_body_store::RevalidatedV2BodyStore,
+        local_signer: &KeyPair,
+    ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
+        if !self.effects.is_empty() {
+            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::ResidualEffects,
+            ));
+        }
+        let Self {
+            adapter,
+            effects,
+            authority,
+        } = self;
+        let verified = VerifiedHeightContext {
+            context: adapter.wire_context.clone(),
+            proofs_of_possession: adapter.proofs_of_possession.clone(),
+            parent_verification: adapter.parent_verification.clone(),
+        };
+        // Standalone WAL authority is projected before the already-revalidated
+        // body cut is unsealed and before Serve/Ledger open. A malformed token
+        // therefore cannot mutate or observe any newly opened storage owner.
+        let authority = match authority {
+            RecoveredWalStartupAuthorityV1::None => PreparedRecoveredWalStartupAuthorityV1::None,
+            RecoveredWalStartupAuthorityV1::PhaseVote(vote) => {
+                PreparedRecoveredWalStartupAuthorityV1::PhaseVote(vote)
+            }
+            RecoveredWalStartupAuthorityV1::ControlSign(control) => {
+                let projected = crate::sumeragi::v2_runtime::project_recovered_wal_control_sign(
+                    &verified, control,
+                )
+                .map_err(|_control| {
+                    ProductionLifecycleOwnerStartupErrorV1::new(
+                        ProductionLifecycleOwnerStartupErrorKindV1::RecoveredControl(
+                            "recovered control Sign projection is inconsistent",
+                        ),
+                    )
+                })?;
+                PreparedRecoveredWalStartupAuthorityV1::ControlSign(projected)
+            }
+            RecoveredWalStartupAuthorityV1::DecisionFetch(fetch) => {
+                let projected = crate::sumeragi::v2_runtime::project_recovered_wal_decision_fetch(
+                    &verified, fetch,
+                )
+                .map_err(|_fetch| {
+                    ProductionLifecycleOwnerStartupErrorV1::new(
+                        ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionFetch(
+                            "recovered Decision Fetch projection is inconsistent",
+                        ),
+                    )
+                })?;
+                PreparedRecoveredWalStartupAuthorityV1::DecisionFetch(projected)
+            }
+        };
+        if !body_store.matches_context(verified.context()) {
+            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(
+                    super::v2_body_store::V2BodyStoreError::ContextMismatch,
+                ),
+            ));
+        }
+        let authority = match authority {
+            PreparedRecoveredWalStartupAuthorityV1::DecisionFetch(fetch) => {
+                match body_store.detach_recovered_decision_apply_body(&fetch) {
+                    Ok(body) => {
+                        if !body.exactly_matches_decision(&fetch) {
+                            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                                    "detached Decision body lost its exact same-store binding",
+                                ),
+                            ));
+                        }
+                        let lineage =
+                            body.prepare_replay_lineage(&verified, &fetch)
+                                .ok_or_else(|| {
+                                    ProductionLifecycleOwnerStartupErrorV1::new(
+                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                                    "Decision body replay lineage is inconsistent",
+                                ),
+                            )
+                                })?;
+                        let preview = body
+                            .into_adapter_preview(adapter, &verified, fetch, lineage)
+                            .map_err(|error| {
+                                let _ = error.reason();
+                                ProductionLifecycleOwnerStartupErrorV1::new(
+                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                                    "Decision body reducer fast-forward is inconsistent",
+                                ),
+                            )
+                            })?;
+                        let storage = preview.into_storage_preview(&verified).map_err(|_error| {
+                            ProductionLifecycleOwnerStartupErrorV1::new(
+                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                                    "Decision body storage lineage is inconsistent",
+                                ),
+                            )
+                        })?;
+                        if !storage.validates(&verified) {
+                            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                                ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                                    "Decision body storage projection lost its same-store binding",
+                                ),
+                            ));
+                        }
+                        let restored = storage.restore_body();
+                        debug_assert!(restored.staged().validates(&verified));
+                        let _staged = restored.into_staged();
+                        // TODO: Replace this typed stop only when one transaction
+                        // can preflight the exact four-row LedgerV1 lineage and
+                        // full coordinator/registry census, fsync once, then
+                        // publish the staged adapter and dedicated Apply carrier
+                        // through an infallible volatile tail.
+                        return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionApply(
+                                "restart-closed Decision Apply publication is not implemented",
+                            ),
+                        ));
+                    }
+                    Err(
+                        super::v2_body_store::RecoveredDecisionApplyBodyCutError::MissingMarker,
+                    ) => PreparedRecoveredWalStartupAuthorityV1::DecisionFetch(fetch),
+                    Err(error) => {
+                        return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                            ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionBody(
+                                error,
+                            ),
+                        ));
+                    }
+                }
+            }
+            authority => authority,
+        };
+        let mut body_store = body_store
+            .into_lifecycle_owner_store(verified.context())
+            .map_err(|error| {
+                ProductionLifecycleOwnerStartupErrorV1::new(
+                    ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
+                )
+            })?;
+        let (mut payload_store, recovered_payloads) =
+            super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
+                serve_payload_root,
+                verified.context(),
+            )
+            .map_err(|error| {
+                ProductionLifecycleOwnerStartupErrorV1::new(
+                    ProductionLifecycleOwnerStartupErrorKindV1::ServeStore(error),
+                )
+            })?;
+        let serve_payloads = recovered_payloads
+            .authenticate(&verified, local_signer, &body_store)
+            .map_err(|error| {
+                ProductionLifecycleOwnerStartupErrorV1::new(
+                    ProductionLifecycleOwnerStartupErrorKindV1::ServeRecovery(error),
+                )
+            })?;
+
+        let vote = match authority {
+            PreparedRecoveredWalStartupAuthorityV1::None => {
+                let owner = ProductionLifecycleOwnerV1::open_storage_only_recovered_startup(
+                    verified,
+                    ledger_root,
+                    body_store,
+                    config,
+                    reply_route_source_capacity,
+                    payload_store,
+                    serve_payloads,
+                    ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
+                )
+                .map_err(|error| {
+                    ProductionLifecycleOwnerStartupErrorV1::new(
+                        ProductionLifecycleOwnerStartupErrorKindV1::StorageOnly(error),
+                    )
+                })?;
+                return owner.publish_recovered_adapter_status().map_err(|error| {
+                    ProductionLifecycleOwnerStartupErrorV1::new(
+                        ProductionLifecycleOwnerStartupErrorKindV1::Status(error.reason()),
+                    )
+                });
+            }
+            PreparedRecoveredWalStartupAuthorityV1::ControlSign(control) => {
+                let owner = ProductionLifecycleOwnerV1::open_recovered_control_startup(
+                    verified,
+                    control,
+                    ledger_root,
+                    body_store,
+                    config,
+                    reply_route_source_capacity,
+                    payload_store,
+                    serve_payloads,
+                    ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
+                )
+                .map_err(|error| {
+                    ProductionLifecycleOwnerStartupErrorV1::new(
+                        ProductionLifecycleOwnerStartupErrorKindV1::RecoveredControl(
+                            error.reason(),
+                        ),
+                    )
+                })?;
+                return owner.publish_recovered_adapter_status().map_err(|error| {
+                    ProductionLifecycleOwnerStartupErrorV1::new(
+                        ProductionLifecycleOwnerStartupErrorKindV1::Status(error.reason()),
+                    )
+                });
+            }
+            PreparedRecoveredWalStartupAuthorityV1::DecisionFetch(fetch) => {
+                let owner = ProductionLifecycleOwnerV1::open_recovered_decision_fetch_startup(
+                    verified,
+                    fetch,
+                    ledger_root,
+                    body_store,
+                    config,
+                    reply_route_source_capacity,
+                    payload_store,
+                    serve_payloads,
+                    ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
+                )
+                .map_err(|error| {
+                    ProductionLifecycleOwnerStartupErrorV1::new(
+                        ProductionLifecycleOwnerStartupErrorKindV1::RecoveredDecisionFetch(
+                            error.reason(),
+                        ),
+                    )
+                })?;
+                return owner.publish_recovered_adapter_status().map_err(|error| {
+                    ProductionLifecycleOwnerStartupErrorV1::new(
+                        ProductionLifecycleOwnerStartupErrorKindV1::Status(error.reason()),
+                    )
+                });
+            }
+            PreparedRecoveredWalStartupAuthorityV1::PhaseVote(vote) => vote,
+        };
+        let phase_startup = AuthenticatedRecoveredAdapterStartup {
+            adapter,
+            effects,
+            authority: RecoveredWalStartupAuthorityV1::PhaseVote(vote),
+        };
+        let mut registry = LifecycleWorkRegistryHolder::empty();
+        let authenticated = phase_startup
+            .authenticate_recovered_parent_from_storage(&mut registry, &mut body_store, ledger_root)
+            .map_err(|error| {
+                ProductionLifecycleOwnerStartupErrorV1::new(
+                    ProductionLifecycleOwnerStartupErrorKindV1::RecoveredParent(error.reason()),
+                )
+            })?;
+        let persisted = authenticated.persist_repair().map_err(|error| {
+            ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::Persist(error.reason()),
+            )
+        })?;
+        let installed = persisted.install_recovered_sign().map_err(|error| {
+            ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::SignInstall(error.reason()),
+            )
+        })?;
+        let paired = installed
+            .open_production_owner_seals(
+                config,
+                reply_route_source_capacity,
+                &mut body_store,
+                &mut payload_store,
+                serve_payloads,
+            )
+            .map_err(|error| {
+                ProductionLifecycleOwnerStartupErrorV1::new(
+                    ProductionLifecycleOwnerStartupErrorKindV1::RecoveredOpen(error.reason()),
+                )
+            })?;
+        let owner = paired
+            .into_owner(registry, payload_store, body_store)
+            .map_err(|error| {
+                ProductionLifecycleOwnerStartupErrorV1::new(
+                    ProductionLifecycleOwnerStartupErrorKindV1::RecoveredOwner(error),
+                )
+            })?;
+        owner.publish_recovered_adapter_status().map_err(|error| {
+            ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::Status(error.reason()),
+            )
+        })
+    }
+
+    /// Open an empty-marker test body store and enter the exact production handoff.
     ///
-    /// TODO: Replace this fixture escape with the consuming storage-authenticated
-    /// no-vote startup transaction before production runner cutover.
+    /// Production has no root-reopen counterpart. Fixtures which persist a
+    /// terminal marker must explicitly replay it and pass the resulting sealed
+    /// store to [`Self::open_production_lifecycle_owner_v1`].
+    #[cfg(test)]
+    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
+    fn open_production_lifecycle_owner_v1_from_roots_for_test(
+        self,
+        config: &iroha_config::parameters::actual::SumeragiV2Config,
+        reply_route_source_capacity: usize,
+        ledger_root: &std::path::Path,
+        serve_payload_root: &std::path::Path,
+        body_root: &std::path::Path,
+        body_signature_policy: super::v2_body_store::BlockSignaturePolicy,
+        local_signer: &KeyPair,
+    ) -> Result<ProductionLifecycleOwnerV1, ProductionLifecycleOwnerStartupErrorV1> {
+        if !self.effects.is_empty() {
+            return Err(ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::ResidualEffects,
+            ));
+        }
+        let mut body_store = super::v2_body_store::V2BodyStore::open_with_policy(
+            body_root,
+            self.adapter.wire_context.clone(),
+            body_signature_policy,
+        )
+        .map_err(|error| {
+            ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
+            )
+        })?;
+        body_store
+            .ensure_recovered_markers_revalidated()
+            .map_err(|error| {
+                ProductionLifecycleOwnerStartupErrorV1::new(
+                    ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
+                )
+            })?;
+        body_store
+            .revalidate_recovered_markers(|_| -> Result<wire::ExecutionCommitment, String> {
+                unreachable!("the root-only fixture admits no recovered markers")
+            })
+            .map_err(|error| {
+                ProductionLifecycleOwnerStartupErrorV1::new(
+                    ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
+                )
+            })?;
+        let body_store = body_store.into_revalidated_startup().map_err(|error| {
+            ProductionLifecycleOwnerStartupErrorV1::new(
+                ProductionLifecycleOwnerStartupErrorKindV1::BodyStore(error),
+            )
+        })?;
+        self.open_production_lifecycle_owner_v1(
+            config,
+            reply_route_source_capacity,
+            ledger_root,
+            serve_payload_root,
+            body_store,
+            local_signer,
+        )
+    }
+
+    #[cfg(test)]
+    fn recovered_phase_vote_for_test(&self) -> Option<&RecoveredWalVoteSign> {
+        match &self.authority {
+            RecoveredWalStartupAuthorityV1::PhaseVote(vote) => Some(vote),
+            RecoveredWalStartupAuthorityV1::None
+            | RecoveredWalStartupAuthorityV1::ControlSign(_)
+            | RecoveredWalStartupAuthorityV1::DecisionFetch(_) => None,
+        }
+    }
+
+    #[cfg(test)]
+    fn has_no_recovered_wal_authority_for_test(&self) -> bool {
+        matches!(self.authority, RecoveredWalStartupAuthorityV1::None)
+    }
+
+    #[cfg(test)]
+    fn has_recovered_control_sign_for_test(&self) -> bool {
+        matches!(
+            self.authority,
+            RecoveredWalStartupAuthorityV1::ControlSign(_)
+        )
+    }
+
+    /// Finish a startup whose current reducer state owns no WAL continuation.
+    ///
+    /// This extraction is retained only for focused adapter tests. Production
+    /// startup always consumes the wrapper through
+    /// [`Self::open_production_lifecycle_owner_v1`], including the no-vote case.
     #[cfg(test)]
     #[allow(clippy::result_large_err)]
     fn finish_without_wal_vote(
         mut self,
     ) -> Result<(SumeragiV2Adapter, Vec<AdapterEffect>), (AdapterError, Self)> {
-        if self.recovered_vote.is_some() {
+        if !matches!(self.authority, RecoveredWalStartupAuthorityV1::None) {
             return Err((AdapterError::RecoveredVoteSignMismatch, self));
         }
         if let Err(error) = self.adapter.publish_status() {
@@ -788,9 +1628,10 @@ impl AuthenticatedRecoveredAdapterStartup {
     ///
     /// This production factory consumes no scheduler lease, runtime ordinal
     /// source, or caller-minted effect/pending pair. Success retains the
-    /// authenticated recovery cut and exact opened LedgerV1 store/frame beside
-    /// the adapter and registry-borrowed repair. Every failure returns one
-    /// opaque owner of the complete remaining startup authority.
+    /// authenticated WAL repair and exact opened LedgerV1 store/frame beside
+    /// the adapter. The repair keeps its registry borrow exclusive. Every
+    /// failure returns one opaque owner of the complete remaining startup
+    /// authority.
     #[allow(dead_code)]
     #[allow(clippy::result_large_err)]
     fn authenticate_recovered_parent_from_storage<'registry, 'body>(
@@ -798,7 +1639,6 @@ impl AuthenticatedRecoveredAdapterStartup {
         registry: &'registry mut LifecycleWorkRegistryHolder,
         body_store: &'body mut super::v2_body_store::V2BodyStore,
         ledger_root: &std::path::Path,
-        recovery: AuthenticatedLifecycleRecoveryCut,
     ) -> Result<
         StorageAuthenticatedRecoveredWalLifecycleStartup<'registry>,
         StorageAuthenticatedRecoveredWalLifecycleStartupError<'body>,
@@ -808,13 +1648,17 @@ impl AuthenticatedRecoveredAdapterStartup {
             proofs_of_possession: self.adapter.proofs_of_possession.clone(),
             parent_verification: self.adapter.parent_verification.clone(),
         };
-        let Some(recovered) = self.recovered_vote.take() else {
+        if !matches!(self.authority, RecoveredWalStartupAuthorityV1::PhaseVote(_)) {
             return Err(StorageAuthenticatedRecoveredWalLifecycleStartupError {
                 failure: StorageAuthenticatedRecoveredWalLifecycleStartupFailure::MissingVote {
                     _startup: self,
-                    _recovery: recovery,
                 },
             });
+        }
+        let RecoveredWalStartupAuthorityV1::PhaseVote(recovered) =
+            core::mem::replace(&mut self.authority, RecoveredWalStartupAuthorityV1::None)
+        else {
+            unreachable!("phase-vote shape checked before replacement")
         };
         match registry.reconstruct_recovered_wal_validate_parent(
             &verified,
@@ -825,7 +1669,6 @@ impl AuthenticatedRecoveredAdapterStartup {
             Ok((ledger, repair)) => Ok(StorageAuthenticatedRecoveredWalLifecycleStartup {
                 adapter: self.adapter,
                 effects: self.effects,
-                recovery,
                 ledger,
                 repair,
             }),
@@ -833,7 +1676,6 @@ impl AuthenticatedRecoveredAdapterStartup {
                 failure: StorageAuthenticatedRecoveredWalLifecycleStartupFailure::Factory {
                     _adapter: self.adapter,
                     _effects: self.effects,
-                    _recovery: recovery,
                     _error: error,
                 },
             }),
@@ -846,6 +1688,7 @@ impl AuthenticatedRecoveredAdapterStartup {
     /// binding crosses this boundary. Success keeps the adapter, remaining
     /// startup batch, and authenticated lifecycle repair in one non-clone
     /// wrapper. Every failure owns all inputs and exposes diagnostics only.
+    #[cfg(test)]
     #[allow(clippy::result_large_err)]
     fn authenticate_recovered_validate<'registry>(
         mut self,
@@ -859,13 +1702,18 @@ impl AuthenticatedRecoveredAdapterStartup {
             proofs_of_possession: self.adapter.proofs_of_possession.clone(),
             parent_verification: self.adapter.parent_verification.clone(),
         };
-        let Some(recovered_vote) = self.recovered_vote.take() else {
+        if !matches!(self.authority, RecoveredWalStartupAuthorityV1::PhaseVote(_)) {
             return Err(RecoveredWalLifecycleStartupError {
                 failure: RecoveredWalLifecycleStartupFailure::MissingVote {
                     startup: self,
                     validate,
                 },
             });
+        }
+        let RecoveredWalStartupAuthorityV1::PhaseVote(recovered_vote) =
+            core::mem::replace(&mut self.authority, RecoveredWalStartupAuthorityV1::None)
+        else {
+            unreachable!("phase-vote shape checked before replacement")
         };
         match validate.join_recovered_vote(&verified, recovered_vote) {
             Ok(repair) => Ok(AuthenticatedRecoveredWalLifecycleStartup {
@@ -881,6 +1729,125 @@ impl AuthenticatedRecoveredAdapterStartup {
                 },
             }),
         }
+    }
+}
+
+impl<'registry> StorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
+    /// Fsync the repaired frame against the store retained since reconstruction.
+    #[allow(clippy::result_large_err)]
+    fn persist_repair(
+        self,
+    ) -> Result<
+        PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>,
+        StorageRecoveredWalPersistError<'registry>,
+    > {
+        let Self {
+            adapter,
+            effects,
+            ledger,
+            repair,
+        } = self;
+        match ledger.persist_recovered_wal_repair(repair) {
+            Ok(persisted) => Ok(PersistedStorageAuthenticatedRecoveredWalLifecycleStartup {
+                adapter,
+                effects,
+                persisted,
+            }),
+            Err(error) => Err(StorageRecoveredWalPersistError {
+                _adapter: adapter,
+                _effects: effects,
+                error,
+            }),
+        }
+    }
+}
+
+impl<'registry> PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
+    /// Install the repaired Sign while retaining the exact post-fsync store.
+    #[allow(clippy::result_large_err)]
+    fn install_recovered_sign(
+        self,
+    ) -> Result<
+        InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>,
+        StorageRecoveredWalSignInstallError<'registry>,
+    > {
+        let Self {
+            adapter,
+            effects,
+            persisted,
+        } = self;
+        match persisted.install_recovered_wal_sign() {
+            Ok(installed) => Ok(InstalledStorageAuthenticatedRecoveredWalLifecycleStartup {
+                adapter,
+                effects,
+                installed,
+            }),
+            Err(error) => Err(StorageRecoveredWalSignInstallError {
+                _adapter: adapter,
+                _effects: effects,
+                error,
+            }),
+        }
+    }
+}
+
+impl<'registry> InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'registry> {
+    /// Complete final-frame recovery and release only no-lifetime owner seals.
+    #[allow(clippy::result_large_err, clippy::too_many_arguments)]
+    fn open_production_owner_seals(
+        self,
+        config: &iroha_config::parameters::actual::SumeragiV2Config,
+        reply_route_source_capacity: usize,
+        body_store: &mut super::v2_body_store::V2BodyStore,
+        payload_store: &mut super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1,
+        serve_payloads: super::v2_certified_serve_payload_store::AuthenticatedCertifiedServePayloadRecoveryCut,
+    ) -> Result<ProductionRecoveredLifecycleOwnerStartupV1, StorageRecoveredWalOpenError<'registry>>
+    {
+        let Self {
+            adapter,
+            effects,
+            installed,
+        } = self;
+        let verified = VerifiedHeightContext {
+            context: adapter.wire_context.clone(),
+            proofs_of_possession: adapter.proofs_of_possession.clone(),
+            parent_verification: adapter.parent_verification.clone(),
+        };
+        let opened = match installed.open_production_lifecycle(
+            &verified,
+            config,
+            reply_route_source_capacity,
+            body_store,
+            payload_store,
+            serve_payloads,
+        ) {
+            Ok(opened) => opened,
+            Err(error) => {
+                return Err(StorageRecoveredWalOpenError {
+                    failure: StorageRecoveredWalOpenFailure::Storage {
+                        _adapter: adapter,
+                        _effects: effects,
+                        error,
+                    },
+                });
+            }
+        };
+        let opened = match opened.into_production_owner_open() {
+            Ok(opened) => opened,
+            Err(opened) => {
+                return Err(StorageRecoveredWalOpenError {
+                    failure: StorageRecoveredWalOpenFailure::OwnerSeal {
+                        _adapter: adapter,
+                        _effects: effects,
+                        _opened: opened,
+                    },
+                });
+            }
+        };
+        Ok(ProductionRecoveredLifecycleOwnerStartupV1 {
+            adapter_startup: ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
+            opened,
+        })
     }
 }
 
@@ -1057,11 +2024,11 @@ impl RecoveredWalLifecycleSignInstallError<'_> {
 // RECOVERED_WAL_SIGN_STATUS_PUBLICATION_BEGIN
 /// Fully opened recovered-WAL startup after adapter status publication.
 ///
-/// The adapter, unpublished residual batch, installed registry borrow,
-/// authenticated recovery cut, and opened coordinator remain in one opaque
-/// value. The forthcoming runner cutover must consume this wrapper directly;
-/// it cannot extract a raw coordinator or concrete Sign effect.
-#[cfg_attr(not(test), allow(dead_code))]
+/// This test-only fixture retains the adapter, unpublished residual batch,
+/// installed registry borrow, authenticated recovery cut, and opened
+/// coordinator in one opaque value. Production startup returns only
+/// `ProductionLifecycleOwnerV1` from the unified consuming factory.
+#[cfg(test)]
 #[must_use = "published recovered WAL startup has not entered the production runner"]
 struct PublishedRecoveredWalLifecycleStartup<'registry> {
     adapter: SumeragiV2Adapter,
@@ -1070,12 +2037,13 @@ struct PublishedRecoveredWalLifecycleStartup<'registry> {
 }
 
 /// Fail-stop open/publication error retaining the complete sealed startup.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 #[must_use = "failed recovered WAL startup publication still owns all authority"]
 struct RecoveredWalLifecycleOpenPublicationError<'registry> {
     failure: RecoveredWalLifecycleOpenPublicationFailure<'registry>,
 }
 
+#[cfg(test)]
 #[allow(dead_code, clippy::large_enum_variant, variant_size_differences)]
 enum RecoveredWalLifecycleOpenPublicationFailure<'registry> {
     Open {
@@ -1091,7 +2059,7 @@ enum RecoveredWalLifecycleOpenPublicationFailure<'registry> {
     },
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 impl RecoveredWalLifecycleOpenPublicationError<'_> {
     /// Return one stable classification without exposing retained authority.
     fn reason(&self) -> &'static str {
@@ -1105,6 +2073,7 @@ impl RecoveredWalLifecycleOpenPublicationError<'_> {
     }
 }
 
+#[cfg(test)]
 impl<'registry> InstalledRecoveredWalLifecycleStartup<'registry> {
     #[allow(clippy::result_large_err)]
     fn publish_open_result(
@@ -1248,11 +2217,9 @@ impl RecoveredWalLifecycleOpenPublicationError<'_> {
 }
 // RECOVERED_WAL_SIGN_STATUS_PUBLICATION_END
 
-// TODO: Assemble `AuthenticatedLifecycleRecoveryCut` in the sole production
-// startup, consume `StorageAuthenticatedRecoveredWalLifecycleStartup` through
-// the existing persist/install/open transaction, and hand only its opaque
-// published wrapper to the unified runner. The production runner and
-// SchedulerInputs factory remain intentionally untouched in this tranche.
+// TODO: Make the serialized runner consume the owner factory above and delete
+// its independent adapter/store startup in the same cut; no dual launch may
+// coexist with this owner.
 
 /// Structurally and cryptographically verified immutable context for one
 /// height.
@@ -1418,6 +2385,15 @@ impl VerifiedHeightContext {
     /// Borrow proofs of possession in the exact frozen-roster order.
     pub(crate) fn proofs_of_possession(&self) -> &[Vec<u8>] {
         &self.proofs_of_possession
+    }
+
+    /// Verify one quorum certificate against this exact frozen roster and its
+    /// already-authenticated proofs of possession.
+    pub(crate) fn verify_quorum_certificate(
+        &self,
+        certificate: &wire::QuorumCertificate,
+    ) -> Result<(), AdapterError> {
+        verify_quorum_certificate(&self.context, certificate, &self.proofs_of_possession)
     }
 }
 
@@ -2280,6 +3256,96 @@ impl RegisteredPrepareInvalidBodyReportCapability {
     }
 }
 
+/// Opaque proof that one staged `LockAndCommit` record retained the exact
+/// registered Prepare certificate promoted by its unsigned Commit vote.
+///
+/// Construction is private to the Ready-Validate Persist preflight. The
+/// certificate has no accessor and callers can only ask whether the complete
+/// capability authorizes one exact ordinary-Validate-to-Commit refinement.
+#[derive(Debug)]
+#[must_use = "registered Prepare authority must bind its sealed Commit Sign successor"]
+pub(in crate::sumeragi) struct RegisteredPrepareValidateSignCapability {
+    prepare: wire::QuorumCertificate,
+    commit_effect: AdapterEffect,
+}
+
+impl RegisteredPrepareValidateSignCapability {
+    fn from_staged_lock_and_commit(
+        record: &reducer::WalRecord,
+        registry: &WireRegistry,
+        commit_effect: &AdapterEffect,
+    ) -> Option<Self> {
+        let reducer::WalRecord::LockAndCommit { prepare, vote } = record else {
+            return None;
+        };
+        let AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Vote(commit_vote),
+        } = commit_effect
+        else {
+            return None;
+        };
+        let registered = registry.certificates.get(&prepare.reference())?;
+        if prepare.phase() != reducer::Phase::Prepare
+            || vote.phase() != reducer::Phase::Commit
+            || prepare.round() != vote.round()
+            || prepare.proposal_round() != vote.proposal_round()
+            || prepare.subject() != vote.subject()
+            || registered.phase != wire::GlobalPhase::Prepare
+            || commit_vote.phase != wire::GlobalPhase::Commit
+            || registered.round != commit_vote.round
+            || registered.proposal_round != commit_vote.proposal_round
+            || registered.subject != commit_vote.subject
+            || registered.execution_commitment != commit_vote.execution_commitment
+            || tag.height() != commit_vote.round.height
+            || tag.view() != commit_vote.round.view
+            || !commit_vote.signature.is_empty()
+            || !registry.reducer_qc_matches_wire(prepare, registered)
+            || registry.unsigned_vote_to_wire(*vote).ok().as_ref() != Some(commit_vote)
+        {
+            return None;
+        }
+        Some(Self {
+            prepare: registered.clone(),
+            commit_effect: commit_effect.clone(),
+        })
+    }
+
+    /// Return whether this unforgeable registered carrier authorizes the exact
+    /// ordinary Validate predecessor and unsigned Commit successor.
+    pub(in crate::sumeragi) fn authorizes_ordinary_validate_commit(
+        &self,
+        predecessor: &AdapterEffect,
+        successor: &AdapterEffect,
+    ) -> bool {
+        let (
+            AdapterEffect::ValidateBody {
+                tag: predecessor_tag,
+                round: predecessor_round,
+                subject: predecessor_subject,
+            },
+            AdapterEffect::Sign {
+                tag: successor_tag,
+                request: SignRequest::Vote(vote),
+            },
+        ) = (predecessor, successor)
+        else {
+            return false;
+        };
+        successor == &self.commit_effect
+            && predecessor_tag == successor_tag
+            && vote.phase == wire::GlobalPhase::Commit
+            && vote.signature.is_empty()
+            && vote.proposal_round == *predecessor_round
+            && vote.subject == *predecessor_subject
+            && self.prepare.phase == wire::GlobalPhase::Prepare
+            && self.prepare.round == vote.round
+            && self.prepare.proposal_round == vote.proposal_round
+            && self.prepare.subject == vote.subject
+            && self.prepare.execution_commitment == vote.execution_commitment
+    }
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectValidationFailedReport<'_> {
     /// Borrow the exact certified-body rejection report.
@@ -2433,6 +3499,244 @@ struct PreparedDirectValidationSucceededApply<'a> {
     next_fence_generation: u64,
 }
 
+/// Opaque staged adapter state for the fixed recovered Decision body fast-forward.
+///
+/// The adapter already contains the staged BodyAvailable, BodyStored, and
+/// ValidationCompleted reducer states. Intermediate Store/Validate effects
+/// and all predecessor-derived pending bindings remain private. The same-store
+/// body module wraps this value with the original Fetch projection, body cut,
+/// and replay lineage before it can leave the preview boundary.
+#[must_use = "staged recovered Decision adapter state must enter its body-owned composite"]
+pub(in crate::sumeragi) struct RecoveredDecisionApplyStagedAdapterV1 {
+    adapter: SumeragiV2Adapter,
+    store_effect: AdapterEffect,
+    validate_effect: AdapterEffect,
+    apply_effect: AdapterEffect,
+    pending: RecoveredDecisionApplyPendingLineageV1,
+}
+
+/// Closed staged adapter plus exact recovered-Decision logical lineage.
+///
+/// The authenticated Fetch projection remains attached to the derived body
+/// children. Ledger and registry code receive only fixed comparison oracles;
+/// adapter state and concrete authority separate only inside the final
+/// publication transaction.
+#[must_use = "recovered Decision storage projection must enter exact publication"]
+pub(in crate::sumeragi) struct RecoveredDecisionApplyStagedStorageV1 {
+    adapter: SumeragiV2Adapter,
+    fetch: AuthenticatedRecoveredWalDecisionFetchProjection,
+    lineage: RecoveredDecisionApplyCandidateLineageV1,
+    apply_effect: AdapterEffect,
+    apply_pending: PendingRuntimeEffectBinding,
+}
+
+/// Opaque projection failure retaining every staged input.
+#[must_use = "failed recovered Decision storage projection requires restart"]
+pub(in crate::sumeragi) struct RecoveredDecisionApplyStorageProjectionErrorV1 {
+    _staged: RecoveredDecisionApplyStagedAdapterV1,
+    _fetch: AuthenticatedRecoveredWalDecisionFetchProjection,
+    _replay: super::v2_lifecycle_coordinator::RecoveredDecisionApplyReplayLineageV1,
+}
+
+/// One-shot proof that the fixed staged adapter still owns all body successors.
+///
+/// Replay projection consumes this permit while effects and predecessor-derived
+/// bindings remain nested in [`RecoveredDecisionApplyStagedAdapterV1`].
+pub(in crate::sumeragi) struct RecoveredDecisionApplyCandidateProjectionPermit {
+    _linearity: RecoveredDecisionApplyCandidateProjectionLinearity,
+}
+
+struct RecoveredDecisionApplyCandidateProjectionLinearity;
+
+impl Drop for RecoveredDecisionApplyCandidateProjectionLinearity {
+    fn drop(&mut self) {}
+}
+
+/// Opaque failure retaining the original, unstaged cold adapter.
+///
+/// The caller receives only a stable diagnostic. A failed preview has no
+/// fallback path; startup must reopen the WAL and body store from durability.
+#[must_use = "a failed recovered Decision preview requires restart"]
+pub(in crate::sumeragi) struct RecoveredDecisionApplyAdapterStagingError {
+    error: AdapterError,
+    _adapter: SumeragiV2Adapter,
+}
+
+struct RecoveredDecisionApplyAdapterRollback {
+    reducer: reducer::Reducer,
+    registry: WireRegistry,
+    reducer_fence_generation: u64,
+    last_progress: Option<(
+        reducer::Generation,
+        reducer::Round,
+        wire::SumeragiV2ProgressTransition,
+    )>,
+}
+
+impl RecoveredDecisionApplyAdapterRollback {
+    fn restore(self, adapter: &mut SumeragiV2Adapter) {
+        adapter.reducer = self.reducer;
+        adapter.registry = self.registry;
+        adapter.reducer_fence_generation = self.reducer_fence_generation;
+        adapter.last_progress = self.last_progress;
+    }
+}
+
+impl RecoveredDecisionApplyAdapterStagingError {
+    /// Retain the restored cold adapter without releasing a fallback surface.
+    pub(in crate::sumeragi) fn retain(error: AdapterError, adapter: SumeragiV2Adapter) -> Self {
+        Self {
+            error,
+            _adapter: adapter,
+        }
+    }
+
+    /// Borrow the non-authorizing adapter diagnostic.
+    pub(in crate::sumeragi) const fn error(&self) -> &AdapterError {
+        &self.error
+    }
+}
+
+impl RecoveredDecisionApplyStagedAdapterV1 {
+    /// Recheck the fixed effect shapes, derived pending lineage, and final state.
+    pub(in crate::sumeragi) fn validates(&self) -> bool {
+        let (
+            AdapterEffect::StoreBody {
+                tag: store_tag,
+                round: store_round,
+                subject: store_subject,
+            },
+            AdapterEffect::ValidateBody {
+                tag: validate_tag,
+                round: validate_round,
+                subject: validate_subject,
+            },
+            AdapterEffect::Apply {
+                tag: apply_tag,
+                subject: apply_subject,
+                certificate,
+            },
+        ) = (
+            &self.store_effect,
+            &self.validate_effect,
+            &self.apply_effect,
+        )
+        else {
+            return false;
+        };
+        store_tag == validate_tag
+            && validate_tag == apply_tag
+            && store_round == validate_round
+            && store_subject == validate_subject
+            && validate_subject == apply_subject
+            && certificate.phase == wire::GlobalPhase::Commit
+            && certificate.proposal_round == *validate_round
+            && certificate.subject == *apply_subject
+            && self.pending.exactly_matches(
+                &self.store_effect,
+                &self.validate_effect,
+                &self.apply_effect,
+            )
+            && self.adapter.reducer.durable_state().decision().is_some()
+            && self.adapter.registry.execution_commitments.iter().any(
+                |((round, subject), commitment)| {
+                    self.adapter.registry.round_to_wire(*round) == *validate_round
+                        && self.adapter.registry.subjects.get(subject) == Some(apply_subject)
+                        && commitment == &certificate.execution_commitment
+                },
+            )
+    }
+
+    /// Consume the fixed preview into one closed durable lineage.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_storage_projection(
+        self,
+        verified: &VerifiedHeightContext,
+        fetch: AuthenticatedRecoveredWalDecisionFetchProjection,
+        replay: super::v2_lifecycle_coordinator::RecoveredDecisionApplyReplayLineageV1,
+        durable: &DurableBodyReceipt,
+    ) -> Result<RecoveredDecisionApplyStagedStorageV1, RecoveredDecisionApplyStorageProjectionErrorV1>
+    {
+        if !self.validates() {
+            return Err(RecoveredDecisionApplyStorageProjectionErrorV1 {
+                _staged: self,
+                _fetch: fetch,
+                _replay: replay,
+            });
+        }
+        let Self {
+            adapter,
+            store_effect,
+            validate_effect,
+            apply_effect,
+            pending,
+        } = self;
+        let projected = pending.project_candidate_lineage(
+            RecoveredDecisionApplyCandidateProjectionPermit {
+                _linearity: RecoveredDecisionApplyCandidateProjectionLinearity,
+            },
+            &replay,
+            verified,
+            durable,
+            &store_effect,
+            &validate_effect,
+            &apply_effect,
+            &fetch,
+        );
+        let (lineage, apply_pending) = match projected {
+            Ok(projected) => projected,
+            Err(pending) => {
+                return Err(RecoveredDecisionApplyStorageProjectionErrorV1 {
+                    _staged: RecoveredDecisionApplyStagedAdapterV1 {
+                        adapter,
+                        store_effect,
+                        validate_effect,
+                        apply_effect,
+                        pending,
+                    },
+                    _fetch: fetch,
+                    _replay: replay,
+                });
+            }
+        };
+        debug_assert!(fetch.owns_apply_lineage(verified, &lineage));
+        drop(store_effect);
+        drop(validate_effect);
+        drop(replay);
+        Ok(RecoveredDecisionApplyStagedStorageV1 {
+            adapter,
+            fetch,
+            lineage,
+            apply_effect,
+            apply_pending,
+        })
+    }
+}
+
+impl RecoveredDecisionApplyStagedStorageV1 {
+    /// Recheck the complete Fetch-to-Apply projection without releasing parts.
+    pub(in crate::sumeragi) fn validates(&self, verified: &VerifiedHeightContext) -> bool {
+        self.fetch.owns_apply_lineage(verified, &self.lineage)
+            && self
+                .apply_pending
+                .exactly_binds_adapter_effect(&self.apply_effect)
+            && matches!(self.apply_effect, AdapterEffect::Apply { .. })
+    }
+
+    /// Borrow the opaque logical lineage for fixed ledger and registry oracles.
+    pub(in crate::sumeragi) const fn lineage(&self) -> &RecoveredDecisionApplyCandidateLineageV1 {
+        &self.lineage
+    }
+
+    /// Borrow the original exact Fetch only for its fixed ledger-row oracle.
+    pub(in crate::sumeragi) const fn fetch(
+        &self,
+    ) -> &AuthenticatedRecoveredWalDecisionFetchProjection {
+        &self.fetch
+    }
+
+}
+
 #[cfg_attr(not(test), allow(dead_code))]
 impl PreparedDirectValidationSucceededApply<'_> {
     /// Borrow the exact canonical application effect derived from the Decision.
@@ -2562,7 +3866,7 @@ pub(in crate::sumeragi) struct PreparedInvalidBodyReportAdapterReplay<'a> {
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
-impl PreparedReadyDurableValidateAdapterPublication<'_> {
+impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
     /// Return only the exact closed publication discriminator.
     pub(crate) const fn kind(&self) -> ReadyDurableValidateAdapterPublicationKind {
         match &self.0 {
@@ -2776,8 +4080,8 @@ enum ReadyDurableValidateAdapterPublicationState<'a> {
 /// Purely preflighted `Persist -> Persisted -> Sign` branch.
 ///
 /// The encoded payload is retained but unappended. The reducer and registry are
-/// the exact post-acknowledgement clones, so a future sole atomic consumer can
-/// order WAL sync before ledger publication without another reducer call.
+/// the exact post-acknowledgement clones, so the sole atomic consumer can order
+/// WAL sync before ledger publication without another reducer call.
 #[allow(dead_code)]
 struct PreparedReadyDurableValidatePersistPublication<'a> {
     _adapter: &'a mut SumeragiV2Adapter,
@@ -2790,8 +4094,510 @@ struct PreparedReadyDurableValidatePersistPublication<'a> {
     persisted_event: reducer::Event,
     sign_core_effect: reducer::Effect,
     sign_effect: AdapterEffect,
+    registered_prepare: Option<RegisteredPrepareValidateSignCapability>,
     next_fence_generation: u64,
 }
+
+// READY_DURABLE_VALIDATE_LIVE_SIGN_BEGIN
+/// Pre-WAL Ready-Validate vote publication bound to the exact installed
+/// Validate predecessor without exposing either pending binding.
+#[must_use = "a bound Validate Sign intent has not reached the safety WAL"]
+#[allow(dead_code)]
+pub(in crate::sumeragi) struct PreparedReadyDurableValidateBoundSignPublication<'a> {
+    prepared: PreparedReadyDurableValidatePersistPublication<'a>,
+    child_pending: PendingRuntimeEffectBinding,
+}
+
+/// Post-fsync Ready-Validate vote authority.
+///
+/// The reducer, registry, and fence remain staged until the lifecycle-ledger
+/// publication commits. The live adapter retains only the armed
+/// persistence identifier for the fsynced frame. Dropping this token cannot
+/// undo its WAL append, so it permanently closes the borrowed adapter and
+/// requires restart.
+#[must_use = "a persisted Validate Sign still requires lifecycle-ledger publication"]
+#[allow(dead_code)]
+pub(in crate::sumeragi) struct PreparedReadyDurableValidatePersistedSign<'a> {
+    adapter: &'a mut SumeragiV2Adapter,
+    next_reducer: Option<reducer::Reducer>,
+    next_registry: Option<WireRegistry>,
+    committed_status: Option<wire::SumeragiV2Status>,
+    validation_event: Option<reducer::Event>,
+    persist_effect: Option<reducer::Effect>,
+    persisted_event: Option<reducer::Event>,
+    sign_core_effect: Option<reducer::Effect>,
+    persisted_sign: Option<SealedLiveWalPersistedEffectV1>,
+    registry_work: Option<PreparedLiveValidateSignRegistryWork>,
+    next_fence_generation: u64,
+    armed: bool,
+}
+
+/// Opaque ownership-retaining failure from the real live-WAL Sign append.
+///
+/// A pre-WAL contract mismatch retains the complete bound token. Any append
+/// attempt instead retains the adapter borrow in a permanently fail-closed
+/// state because the filesystem result may be durable or ambiguous.
+#[must_use = "a failed Validate Sign append still owns its sealed adapter authority"]
+#[allow(dead_code)]
+pub(in crate::sumeragi) struct ReadyDurableValidateSignWalError<'a> {
+    failure: ReadyDurableValidateSignWalFailure<'a>,
+}
+
+#[allow(variant_size_differences, clippy::large_enum_variant)]
+#[allow(dead_code)]
+enum ReadyDurableValidateSignWalFailure<'a> {
+    PreWal {
+        _prepared: PreparedReadyDurableValidateBoundSignPublication<'a>,
+    },
+    PostWal {
+        _adapter: &'a mut SumeragiV2Adapter,
+        _error: AdapterError,
+    },
+}
+
+impl Drop for PreparedReadyDurableValidatePersistedSign<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.adapter.fail_closed = true;
+        }
+    }
+}
+
+impl PreparedReadyDurableValidatePersistedSign<'_> {
+    fn post_wal_publication_is_exact(&self) -> bool {
+        let (
+            Some(next_reducer),
+            Some(_next_registry),
+            Some(validation_event),
+            Some(persist_effect),
+            Some(persisted_event),
+            Some(sign_core_effect),
+            Some(persisted_sign),
+        ) = (
+            self.next_reducer.as_ref(),
+            self.next_registry.as_ref(),
+            self.validation_event.as_ref(),
+            self.persist_effect.as_ref(),
+            self.persisted_event.as_ref(),
+            self.sign_core_effect.as_ref(),
+            self.persisted_sign.as_ref(),
+        )
+        else {
+            return false;
+        };
+        let reducer::Event::ValidationCompleted {
+            tag: validation_tag,
+            valid: true,
+            ..
+        } = validation_event
+        else {
+            return false;
+        };
+        let reducer::Effect::Persist {
+            tag: persist_tag,
+            entry,
+        } = persist_effect
+        else {
+            return false;
+        };
+        let reducer::Event::Persisted {
+            tag: persisted_tag,
+            id,
+        } = persisted_event
+        else {
+            return false;
+        };
+        let reducer::Effect::Sign {
+            tag: sign_tag,
+            message,
+        } = sign_core_effect
+        else {
+            return false;
+        };
+        self.armed
+            && !self.adapter.fail_closed
+            && self.adapter.pending_persistence_id == Some(entry.id().get())
+            && self.committed_status.as_ref().is_some_and(|status| {
+                status.height_context_id == self.adapter.wire_context.id()
+                    && status.height == self.adapter.wire_context.height
+                    && status.pending_persistence_id.is_none()
+                    && !status.restart_required
+            })
+            && self.registry_work.is_none()
+            && persisted_sign.exactly_binds_validate_sign_pending()
+            && validation_tag == persist_tag
+            && persist_tag == persisted_tag
+            && persisted_tag == sign_tag
+            && id == entry.id()
+            && next_reducer.pending_persistence_record().is_none()
+            && next_reducer.awaiting_signature() == Some(message)
+    }
+
+    /// Project the already-authorized post-WAL child without repeating pending
+    /// refinement or exposing effect/replay parts.
+    pub(in crate::sumeragi) fn project_validate_sign_candidate(
+        &self,
+        permit: &SealedValidateSignProjectionPermit,
+        verified: &VerifiedHeightContext,
+    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
+        if !self.post_wal_publication_is_exact() {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        }
+        self.persisted_sign
+            .as_ref()
+            .expect("exact post-WAL publication retains its Sign seal")
+            .project_sealed_validate_sign_candidate(permit, verified)
+    }
+
+    /// Consume the nested Sign seal into one closed ordinary registry carrier.
+    ///
+    /// Failure returns the complete armed token. Success still publishes
+    /// nothing and is safe to retain across the subsequent LedgerV1 fsync.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn prepare_registry_work(
+        mut self,
+        permit: LiveValidateSignWorkProjectionPermit,
+    ) -> Result<Self, Self> {
+        if !self.post_wal_publication_is_exact() {
+            return Err(self);
+        }
+        let persisted = self
+            .persisted_sign
+            .take()
+            .expect("exact post-WAL publication retains its Sign seal");
+        match persisted.into_live_validate_sign_work(permit) {
+            Ok(work) => {
+                let valid = work.validates_exact();
+                self.registry_work = Some(work);
+                if valid { Ok(self) } else { Err(self) }
+            }
+            Err(persisted) => {
+                self.persisted_sign = Some(persisted);
+                Err(self)
+            }
+        }
+    }
+
+    /// Match the closed prepared work against the staged coordinator digest.
+    pub(in crate::sumeragi) fn registry_work_matches(
+        &self,
+        owner: super::v2_lifecycle_coordinator::OwnerId,
+        ordinal: u128,
+        slot: super::v2_lifecycle_coordinator::PhysicalSlotId,
+        digest: LifecycleDigest,
+    ) -> bool {
+        self.armed
+            && self.persisted_sign.is_none()
+            && self
+                .registry_work
+                .as_ref()
+                .is_some_and(|work| work.validates_publication(owner, ordinal, slot, digest))
+    }
+
+    /// Publish the prechecked registry child and staged adapter state after
+    /// exact LedgerV1 fsync.
+    ///
+    /// No fallible operation is permitted here. The caller has already swapped
+    /// the staged lifecycle coordinator, while the retained exclusive registry
+    /// reservation proves the parent absent and child vacant.
+    pub(in crate::sumeragi) fn install_registry_and_commit_adapter(
+        mut self,
+        reservation: LiveValidateSignRegistryReservation<'_>,
+    ) {
+        let work = self
+            .registry_work
+            .take()
+            .expect("pre-fsync publication retains one exact ordinary Sign carrier");
+        let next_reducer = self
+            .next_reducer
+            .take()
+            .expect("pre-fsync publication retains staged reducer state");
+        let next_registry = self
+            .next_registry
+            .take()
+            .expect("pre-fsync publication retains staged wire registry state");
+        let committed_status = self
+            .committed_status
+            .take()
+            .expect("pre-fsync publication retains its exact committed status");
+        let validation_event = self
+            .validation_event
+            .take()
+            .expect("pre-fsync publication retains ValidationCompleted");
+        let persist_effect = self
+            .persist_effect
+            .take()
+            .expect("pre-fsync publication retains its Persist effect");
+        let persisted_event = self
+            .persisted_event
+            .take()
+            .expect("pre-fsync publication retains its Persisted event");
+        let sign_core_effect = self
+            .sign_core_effect
+            .take()
+            .expect("pre-fsync publication retains its Sign effect");
+
+        work.install_into(reservation);
+        self.adapter.reducer = next_reducer;
+        self.adapter.registry = next_registry;
+        self.adapter.pending_persistence_id = None;
+        self.adapter.reducer_fence_generation = self.next_fence_generation;
+        self.adapter.record_reducer_outcome(
+            &validation_event,
+            reducer::StepDisposition::Applied,
+            core::slice::from_ref(&persist_effect),
+        );
+        self.adapter
+            .log_body_progress(&validation_event, reducer::StepDisposition::Applied, 1);
+        self.adapter.record_reducer_outcome(
+            &persisted_event,
+            reducer::StepDisposition::Applied,
+            core::slice::from_ref(&sign_core_effect),
+        );
+        self.armed = false;
+        super::status::set_v2_status(committed_status);
+    }
+}
+
+impl<'a> PreparedReadyDurableValidateAdapterPublication<'a> {
+    /// Bind only a `ValidatedPersist` branch to the registry-minted exact
+    /// Validate predecessor. A wrong branch or failed refinement returns this
+    /// whole publication unchanged and performs no WAL I/O.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn bind_validate_sign_predecessor(
+        self,
+        predecessor: ReadyValidateSignPredecessorAuthority<'_>,
+    ) -> Result<PreparedReadyDurableValidateBoundSignPublication<'a>, Self> {
+        let Self(state) = self;
+        let prepared = match state {
+            ReadyDurableValidateAdapterPublicationState::ValidatedPersist(prepared) => prepared,
+            other => return Err(Self(other)),
+        };
+        match prepared.bind_validate_sign_predecessor(predecessor) {
+            Ok(bound) => Ok(bound),
+            Err(prepared) => Err(Self(
+                ReadyDurableValidateAdapterPublicationState::ValidatedPersist(prepared),
+            )),
+        }
+    }
+}
+
+impl<'a> PreparedReadyDurableValidatePersistPublication<'a> {
+    fn bind_validate_sign_predecessor(
+        self,
+        predecessor: ReadyValidateSignPredecessorAuthority<'_>,
+    ) -> Result<PreparedReadyDurableValidateBoundSignPublication<'a>, Self> {
+        let Some(child_pending) =
+            predecessor.project_successor(&self.sign_effect, self.registered_prepare.as_ref())
+        else {
+            return Err(self);
+        };
+        if !child_pending.exactly_binds_adapter_effect(&self.sign_effect) {
+            return Err(self);
+        }
+        Ok(PreparedReadyDurableValidateBoundSignPublication {
+            prepared: self,
+            child_pending,
+        })
+    }
+}
+
+#[allow(dead_code)]
+impl<'a> PreparedReadyDurableValidateBoundSignPublication<'a> {
+    fn pre_wal_is_exact(&self) -> bool {
+        let prepared = &self.prepared;
+        let reducer::Effect::Persist { entry, .. } = &prepared.persist_effect else {
+            return false;
+        };
+        !prepared._adapter.fail_closed
+            && prepared._adapter.replay_complete
+            && prepared._adapter.pending_persistence_id.is_none()
+            && prepared
+                ._adapter
+                .reducer
+                .pending_persistence_record()
+                .is_none()
+            && prepared._adapter.reducer.awaiting_signature().is_none()
+            && prepared.next_reducer.pending_persistence_record().is_none()
+            && prepared.child_pending_is_exact(&self.child_pending)
+            && prepared
+                ._adapter
+                .wal
+                .recovered_records()
+                .last()
+                .map_or(prepared.expected_wal_sequence == 0, |record| {
+                    record.sequence().checked_add(1) == Some(prepared.expected_wal_sequence)
+                })
+            && prepared.expected_wal_sequence.checked_add(1) == Some(entry.id().get())
+    }
+
+    /// Append and fsync the exact pre-encoded WAL payload, then mint the live
+    /// frame identity solely from the returned receipt and retained frame.
+    #[allow(clippy::result_large_err, clippy::too_many_lines)]
+    pub(in crate::sumeragi) fn append_live_wal(
+        self,
+    ) -> Result<PreparedReadyDurableValidatePersistedSign<'a>, ReadyDurableValidateSignWalError<'a>>
+    {
+        if !self.pre_wal_is_exact() {
+            return Err(ReadyDurableValidateSignWalError {
+                failure: ReadyDurableValidateSignWalFailure::PreWal { _prepared: self },
+            });
+        }
+        let Self {
+            prepared,
+            child_pending,
+        } = self;
+        let PreparedReadyDurableValidatePersistPublication {
+            _adapter: adapter,
+            mut next_reducer,
+            mut next_registry,
+            validation_event,
+            persist_effect,
+            expected_wal_sequence,
+            encoded_wal_payload,
+            persisted_event,
+            sign_core_effect,
+            sign_effect,
+            registered_prepare: _,
+            next_fence_generation,
+        } = prepared;
+        let reducer::Effect::Persist { entry, .. } = &persist_effect else {
+            unreachable!("pre-WAL exactness retained one Persist effect")
+        };
+        let persistence_id = entry.id().get();
+        adapter.pending_persistence_id = Some(persistence_id);
+        let receipt = match adapter.wal.append(&encoded_wal_payload) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                adapter.fail_closed = true;
+                return Err(ReadyDurableValidateSignWalError {
+                    failure: ReadyDurableValidateSignWalFailure::PostWal {
+                        _adapter: adapter,
+                        _error: error.into(),
+                    },
+                });
+            }
+        };
+        // TODO: Add a test-only crash injection immediately after this
+        // successful append receipt to exercise the restart-only ambiguous
+        // boundary without weakening the production WAL API.
+        let frame_sequence = receipt.sequence();
+        let frame_hash = receipt.frame_hash();
+        let post_wal = (|| {
+            let frame = adapter.wal.recovered_records().last().ok_or(
+                AdapterError::WalFrameIdentityMismatch {
+                    frame_sequence,
+                    persistence_id,
+                    frame_hash,
+                },
+            )?;
+            if frame_sequence != expected_wal_sequence
+                || frame.payload() != encoded_wal_payload.as_slice()
+            {
+                return Err(AdapterError::WalFrameIdentityMismatch {
+                    frame_sequence,
+                    persistence_id,
+                    frame_hash,
+                });
+            }
+            let wal_identity =
+                LiveWalFrameIdentity::from_append_receipt(frame, receipt, persistence_id).ok_or(
+                    AdapterError::WalFrameIdentityMismatch {
+                        frame_sequence,
+                        persistence_id,
+                        frame_hash,
+                    },
+                )?;
+            let wal_pending = PendingRuntimeEffectBinding::from_exact_live_wal_append(
+                &wal_identity,
+                &sign_effect,
+            )
+            .ok_or(AdapterError::LiveWalReplayCauseMismatch)?;
+            let persisted_sign = SealedLiveWalPersistedEffectV1::from_exact_live_append(
+                ExactLiveWalPersistedContinuationCause::PayloadFree {
+                    wal_identity,
+                    effect: sign_effect,
+                    pending: wal_pending,
+                },
+            )
+            .ok_or(AdapterError::LiveWalReplayCauseMismatch)?;
+            persisted_sign
+                .bind_exact_validate_sign_pending(child_pending)
+                .map_err(|_| AdapterError::LiveWalReplayCauseMismatch)
+        })();
+        let persisted_sign = match post_wal {
+            Ok(persisted_sign) => persisted_sign,
+            Err(error) => {
+                adapter.fail_closed = true;
+                return Err(ReadyDurableValidateSignWalError {
+                    failure: ReadyDurableValidateSignWalFailure::PostWal {
+                        _adapter: adapter,
+                        _error: error,
+                    },
+                });
+            }
+        };
+        debug_assert!(persisted_sign.exactly_binds_validate_sign_pending());
+
+        // Build the exact post-commit status before LifecycleLedgerV1 can
+        // advance. Temporarily installing the already-preflighted reducer and
+        // registry is publication-inert: the old adapter state and armed WAL
+        // marker are restored before this block returns. A conversion failure
+        // is post-WAL and therefore closes the adapter for restart.
+        let armed_persistence_id = adapter.pending_persistence_id.take();
+        core::mem::swap(&mut adapter.reducer, &mut next_reducer);
+        core::mem::swap(&mut adapter.registry, &mut next_registry);
+        let prior_last_progress = adapter.last_progress;
+        adapter.record_reducer_outcome(
+            &validation_event,
+            reducer::StepDisposition::Applied,
+            core::slice::from_ref(&persist_effect),
+        );
+        adapter.record_reducer_outcome(
+            &persisted_event,
+            reducer::StepDisposition::Applied,
+            core::slice::from_ref(&sign_core_effect),
+        );
+        let committed_status = adapter.status();
+        adapter.last_progress = prior_last_progress;
+        core::mem::swap(&mut adapter.registry, &mut next_registry);
+        core::mem::swap(&mut adapter.reducer, &mut next_reducer);
+        adapter.pending_persistence_id = armed_persistence_id;
+        let committed_status = match committed_status {
+            Ok(status) => status,
+            Err(error) => {
+                adapter.fail_closed = true;
+                return Err(ReadyDurableValidateSignWalError {
+                    failure: ReadyDurableValidateSignWalFailure::PostWal {
+                        _adapter: adapter,
+                        _error: error,
+                    },
+                });
+            }
+        };
+        Ok(PreparedReadyDurableValidatePersistedSign {
+            adapter,
+            next_reducer: Some(next_reducer),
+            next_registry: Some(next_registry),
+            committed_status: Some(committed_status),
+            validation_event: Some(validation_event),
+            persist_effect: Some(persist_effect),
+            persisted_event: Some(persisted_event),
+            sign_core_effect: Some(sign_core_effect),
+            persisted_sign: Some(persisted_sign),
+            registry_work: None,
+            next_fence_generation,
+            armed: true,
+        })
+    }
+}
+
+impl PreparedReadyDurableValidatePersistPublication<'_> {
+    fn child_pending_is_exact(&self, pending: &PendingRuntimeEffectBinding) -> bool {
+        pending.exactly_binds_adapter_effect(&self.sign_effect)
+    }
+}
+// READY_DURABLE_VALIDATE_LIVE_SIGN_END
 
 impl<'a> SealedReadyDurableValidateAdapterPreview<'a> {
     /// Consume the sealed preview into a fully checked, still-inert publication.
@@ -2914,6 +4720,18 @@ impl<'a> PreparedDirectValidationSucceededPersist<'a> {
             },
             _ => return Err(AdapterError::ReadyDurableValidatePublicationContractViolation),
         };
+        let registered_prepare = match entry.record() {
+            reducer::WalRecord::PrepareIntent(_) => None,
+            reducer::WalRecord::LockAndCommit { .. } => Some(
+                RegisteredPrepareValidateSignCapability::from_staged_lock_and_commit(
+                    entry.record(),
+                    &next_registry,
+                    &sign_effect,
+                )
+                .ok_or(AdapterError::ReadyDurableValidatePublicationContractViolation)?,
+            ),
+            _ => return Err(AdapterError::ReadyDurableValidatePublicationContractViolation),
+        };
         if next_reducer.pending_persistence_record().is_some()
             || next_reducer.awaiting_signature()
                 != Some(&reducer::SignableMessage::Vote(expected_vote))
@@ -2945,6 +4763,7 @@ impl<'a> PreparedDirectValidationSucceededPersist<'a> {
             persisted_event,
             sign_core_effect,
             sign_effect,
+            registered_prepare,
             next_fence_generation,
         })
     }
@@ -6028,12 +7847,32 @@ pub(crate) enum AdapterError {
     /// startup frontier can contain.
     #[error("Sumeragi v2 recovered validation authority exceeded its bounded replay frontier")]
     RecoveredValidationCapacityExceeded,
-    /// The startup batch did not carry the exact vote named by the final WAL record.
+    /// The startup batch did not carry the reducer's exact current WAL-owned vote.
     #[error("Sumeragi v2 recovered WAL vote does not match its startup sign effect")]
     RecoveredVoteSignMismatch,
-    /// More than one startup phase-vote sign effect claimed the final WAL intent.
+    /// More than one startup phase-vote effect claimed the current WAL intent.
     #[error("Sumeragi v2 recovered WAL vote has ambiguous startup sign effects")]
     RecoveredVoteSignAmbiguous,
+    /// No latest exact ProposalIntent/TimeoutIntent owned the current control Sign.
+    #[error("Sumeragi v2 recovered WAL control intent does not match its startup Sign")]
+    RecoveredControlSignMismatch,
+    /// The recovered Decision did not own one exact certificate-backed Fetch.
+    #[error("Sumeragi v2 recovered Decision Fetch does not match its WAL authority")]
+    RecoveredDecisionFetchMismatch,
+    /// A durable Decision Apply requires a restart-closed sealed publication composite.
+    #[error(
+        "Sumeragi v2 recovered Decision Apply lacks restart-closed body-transition publication"
+    )]
+    RecoveredDecisionApplyRequiresDurablePredecessor,
+    /// The private recovered-Decision body fast-forward did not emit exactly
+    /// Store, Validate, and final Apply under one unchanged Decision owner.
+    #[error(
+        "Sumeragi v2 recovered Decision Apply fast-forward violated its closed reducer contract"
+    )]
+    RecoveredDecisionApplyFastForwardMismatch,
+    /// The residual ResumeAfterReplay inventory was not one supported exact effect.
+    #[error("Sumeragi v2 recovered startup effect inventory is inconsistent")]
+    RecoveredStartupEffectMismatch,
     /// One immutable subject was bound to different execution results.
     #[error("conflicting Sumeragi v2 execution commitments for one immutable subject")]
     ConflictingExecutionCommitment,
@@ -7097,38 +8936,11 @@ impl SumeragiV2Adapter {
         })
     }
 
-    // RECOVERED_WAL_VOTE_SIGN_MINT_BEGIN
-    /// Extract the unique startup phase vote backed by the final recovered WAL record.
-    ///
-    /// An empty WAL, or an authenticated final record which produces no phase
-    /// vote, returns `None`. `PrepareIntent` and `LockAndCommit` must instead
-    /// own exactly one reducer-awaited vote in the sealed startup batch. The
-    /// exact vote effect is removed only after the complete WAL, context,
-    /// phase, certificate, and startup-batch checks succeed.
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn authenticate_recovered_wal_vote_sign(
+    /// Reauthenticate one complete recovered WAL frame and seal its exact identity.
+    fn authenticate_recovered_wal_frame(
         &self,
-        startup_effects: &mut Vec<AdapterEffect>,
-    ) -> Result<Option<RecoveredWalVoteSign>, AdapterError> {
-        self.ensure_ingress()?;
-        if startup_effects.len() > MAX_ADAPTER_EFFECTS_PER_MACRO_STEP {
-            return Err(AdapterError::RecoveredVoteSignAmbiguous);
-        }
-        let Some(frame) = self.wal.recovered_records().last() else {
-            if startup_effects.iter().any(|effect| {
-                matches!(
-                    effect,
-                    AdapterEffect::Sign {
-                        request: SignRequest::Vote(_),
-                        ..
-                    }
-                )
-            }) {
-                return Err(AdapterError::RecoveredVoteSignMismatch);
-            }
-            return Ok(None);
-        };
-
+        frame: &RecoveredRecord,
+    ) -> Result<(RecoveredWalFrameIdentity, WalEnvelopeV2), AdapterError> {
         let mut payload = frame.payload();
         let envelope = WalEnvelopeV2::decode(&mut payload)
             .map_err(|error| AdapterError::WalDecode(error.to_string()))?;
@@ -7143,7 +8955,7 @@ impl SumeragiV2Adapter {
                 envelope.protocol_version
             )));
         }
-        let Some(wal_identity) =
+        let Some(identity) =
             RecoveredWalFrameIdentity::from_recovered_record(frame, envelope.persistence_id)
         else {
             return Err(AdapterError::WalFrameIdentityMismatch {
@@ -7152,52 +8964,67 @@ impl SumeragiV2Adapter {
                 frame_hash: frame.frame_hash(),
             });
         };
-        if self.reducer.durable_state().last_id().get() != envelope.persistence_id {
-            return Err(AdapterError::RecoveredVoteSignMismatch);
-        }
         verify_wal_record_authority(
             &self.wire_context,
             self.parent_verification.as_ref(),
             &envelope.record,
             &self.proofs_of_possession,
         )?;
+        Ok((identity, envelope))
+    }
 
-        let (vote, prepare_certificate, expected_phase) = match envelope.record {
-            WalRecordV2::PrepareIntent(vote) => (vote, None, wire::GlobalPhase::Prepare),
-            WalRecordV2::LockAndCommit { prepare, vote } => {
-                if prepare.phase != wire::GlobalPhase::Prepare
-                    || prepare.round != prepare.proposal_round
-                    || vote.round != prepare.round
-                    || vote.proposal_round != prepare.proposal_round
-                    || vote.subject != prepare.subject
-                    || vote.execution_commitment != prepare.execution_commitment
-                {
-                    return Err(AdapterError::RecoveredVoteSignMismatch);
-                }
-                // `verify_wal_record_authority` cryptographically authenticates
-                // this exact certificate. Retain the complete signer set and
-                // aggregate rather than reducing it to a reference.
-                (vote, Some(prepare), wire::GlobalPhase::Commit)
-            }
-            WalRecordV2::ProposalIntent(_)
-            | WalRecordV2::ObservePrepare(_)
-            | WalRecordV2::TimeoutIntent(_)
-            | WalRecordV2::InstallTimeout(_)
-            | WalRecordV2::Decision(_) => {
-                if startup_effects.iter().any(|effect| {
-                    matches!(
-                        effect,
-                        AdapterEffect::Sign {
-                            request: SignRequest::Vote(_),
-                            ..
-                        }
-                    )
-                }) {
-                    return Err(AdapterError::RecoveredVoteSignMismatch);
-                }
-                return Ok(None);
-            }
+    /// Authenticate terminal WAL continuity independently of the current Sign owner.
+    fn authenticate_recovered_wal_frontier(&self) -> Result<(), AdapterError> {
+        let durable_last_id = self.reducer.durable_state().last_id().get();
+        let Some(frame) = self.wal.recovered_records().last() else {
+            return (durable_last_id == 0)
+                .then_some(())
+                .ok_or(AdapterError::RecoveredStartupEffectMismatch);
         };
+        let (_, envelope) = self.authenticate_recovered_wal_frame(frame)?;
+        if envelope.persistence_id != durable_last_id {
+            return Err(AdapterError::RecoveredStartupEffectMismatch);
+        }
+        Ok(())
+    }
+
+    // RECOVERED_WAL_VOTE_SIGN_MINT_BEGIN
+    /// Extract the current startup phase vote from its latest exact WAL owner.
+    ///
+    /// Terminal WAL continuity is authenticated separately. This mint binds the
+    /// reducer's sole `awaiting_signature` and sole residual Sign to the latest
+    /// authenticated matching `PrepareIntent` or `LockAndCommit`, so legal
+    /// byte-identical repeated intents deterministically select the later frame.
+    /// A recovered Commit may carry the current owner tag into a later view only
+    /// while the full selected PrepareQC is still the reducer's exact active lock.
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn authenticate_recovered_wal_vote_sign(
+        &self,
+        startup_effects: &mut Vec<AdapterEffect>,
+    ) -> Result<Option<RecoveredWalVoteSign>, AdapterError> {
+        self.ensure_ingress()?;
+        if startup_effects.len() > MAX_ADAPTER_EFFECTS_PER_MACRO_STEP {
+            return Err(AdapterError::RecoveredVoteSignAmbiguous);
+        }
+        let Some(reducer::SignableMessage::Vote(awaiting_vote)) = self.reducer.awaiting_signature()
+        else {
+            if startup_effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    AdapterEffect::Sign {
+                        request: SignRequest::Vote(_),
+                        ..
+                    }
+                )
+            }) {
+                return Err(AdapterError::RecoveredVoteSignMismatch);
+            }
+            return Ok(None);
+        };
+        let vote = self.registry.unsigned_vote_to_wire(*awaiting_vote)?;
+        if startup_effects.len() != 1 {
+            return Err(AdapterError::RecoveredVoteSignAmbiguous);
+        }
 
         let signer_in_roster =
             usize::try_from(vote.signer).is_ok_and(|index| index < self.wire_context.roster.len());
@@ -7205,11 +9032,12 @@ impl SumeragiV2Adapter {
             return Err(AdapterError::RecoveredVoteSignMismatch);
         };
         let local_signer = self.registry.validator_index(local_validator)?;
-        if vote.phase != expected_phase
-            || !vote.signature.is_empty()
+        if !vote.signature.is_empty()
             || vote.round != vote.proposal_round
             || vote.round.context_id != self.wire_context.id()
             || vote.round.height != self.wire_context.height
+            || vote.proposal_round.context_id != self.wire_context.id()
+            || vote.proposal_round.height != self.wire_context.height
             || vote.execution_commitment.validate().is_err()
             || !signer_in_roster
             || vote.signer != local_signer
@@ -7217,16 +9045,73 @@ impl SumeragiV2Adapter {
             return Err(AdapterError::RecoveredVoteSignMismatch);
         }
         let expected_tag = self.current_tag();
-        if expected_tag.height() != vote.round.height || expected_tag.view() != vote.round.view {
+        let tag_is_exact = expected_tag.height() == vote.round.height
+            && match vote.phase {
+                wire::GlobalPhase::Prepare => expected_tag.view() == vote.round.view,
+                wire::GlobalPhase::Commit => expected_tag.view() >= vote.round.view,
+            };
+        if !tag_is_exact {
             return Err(AdapterError::RecoveredVoteSignMismatch);
         }
-        let Some(reducer::SignableMessage::Vote(awaiting_vote)) = self.reducer.awaiting_signature()
-        else {
+
+        let active_commit_lock = match vote.phase {
+            wire::GlobalPhase::Prepare => None,
+            wire::GlobalPhase::Commit => {
+                let Some(locked) = self.reducer.durable_state().locked() else {
+                    return Err(AdapterError::RecoveredVoteSignMismatch);
+                };
+                if self.reducer.durable_state().commit_intent_for_lock(locked)
+                    != Some(*awaiting_vote)
+                {
+                    return Err(AdapterError::RecoveredVoteSignMismatch);
+                }
+                Some(locked)
+            }
+        };
+
+        let mut owner = None;
+        for frame in self.wal.recovered_records().iter().rev() {
+            let (wal_identity, envelope) = self.authenticate_recovered_wal_frame(frame)?;
+            match envelope.record {
+                WalRecordV2::PrepareIntent(candidate)
+                    if vote.phase == wire::GlobalPhase::Prepare && candidate == vote =>
+                {
+                    owner = Some((wal_identity, None));
+                    break;
+                }
+                WalRecordV2::LockAndCommit {
+                    prepare,
+                    vote: candidate,
+                } if vote.phase == wire::GlobalPhase::Commit
+                    && candidate == vote
+                    && prepare.phase == wire::GlobalPhase::Prepare
+                    && prepare.round == prepare.proposal_round
+                    && prepare.round == vote.round
+                    && prepare.proposal_round == vote.proposal_round
+                    && prepare.subject == vote.subject
+                    && prepare.execution_commitment == vote.execution_commitment
+                    && active_commit_lock.is_some_and(|locked| {
+                        self.registry.reducer_qc_matches_wire(locked, &prepare)
+                    }) =>
+                {
+                    // The frame authentication above verifies the full PrepareQC.
+                    // Retain its complete signer set and aggregate rather than a
+                    // stable reference, because it is the active lock lineage.
+                    owner = Some((wal_identity, Some(prepare)));
+                    break;
+                }
+                WalRecordV2::ProposalIntent(_)
+                | WalRecordV2::PrepareIntent(_)
+                | WalRecordV2::ObservePrepare(_)
+                | WalRecordV2::LockAndCommit { .. }
+                | WalRecordV2::TimeoutIntent(_)
+                | WalRecordV2::InstallTimeout(_)
+                | WalRecordV2::Decision(_) => {}
+            }
+        }
+        let Some((wal_identity, prepare_certificate)) = owner else {
             return Err(AdapterError::RecoveredVoteSignMismatch);
         };
-        if self.registry.unsigned_vote_to_wire(awaiting_vote.clone())? != vote {
-            return Err(AdapterError::RecoveredVoteSignMismatch);
-        }
 
         let mut vote_effects = startup_effects
             .iter()
@@ -7270,6 +9155,251 @@ impl SumeragiV2Adapter {
         }))
     }
     // RECOVERED_WAL_VOTE_SIGN_MINT_END
+
+    /// Consume the current ProposalIntent/TimeoutIntent control Sign from replay.
+    ///
+    /// The reducer awaiting-signature state, tag, local role, unsigned action,
+    /// and complete one-effect inventory must agree. The latest exact matching
+    /// authenticated WAL frame owns the control Sign even when later frames own
+    /// queued phase signatures.
+    fn authenticate_recovered_wal_control_sign(
+        &mut self,
+        startup_effects: &mut Vec<AdapterEffect>,
+    ) -> Result<Option<RecoveredWalControlSign>, AdapterError> {
+        self.ensure_ingress()?;
+        let expected_tag = self.current_tag();
+        let (wal_identity, expected) = match self.reducer.awaiting_signature() {
+            Some(reducer::SignableMessage::Proposal(awaiting)) => {
+                let proposal = self
+                    .registry
+                    .unsigned_proposal_to_wire(awaiting, self.aggregator.as_ref())?;
+                if !proposal.signature.is_empty()
+                    || proposal.round.context_id != self.wire_context.id()
+                    || proposal.round.height != self.wire_context.height
+                    || expected_tag.height() != proposal.round.height
+                    || expected_tag.view() != proposal.round.view
+                {
+                    return Err(AdapterError::RecoveredControlSignMismatch);
+                }
+                let mut owner = None;
+                for frame in self.wal.recovered_records().iter().rev() {
+                    let (identity, envelope) = self.authenticate_recovered_wal_frame(frame)?;
+                    if matches!(
+                        envelope.record,
+                        WalRecordV2::ProposalIntent(candidate) if candidate == proposal
+                    ) {
+                        owner = Some(identity);
+                        break;
+                    }
+                }
+                let Some(owner) = owner else {
+                    return Err(AdapterError::RecoveredControlSignMismatch);
+                };
+                (
+                    owner,
+                    AdapterEffect::Sign {
+                        tag: expected_tag,
+                        request: SignRequest::Proposal(proposal),
+                    },
+                )
+            }
+            Some(reducer::SignableMessage::TimeoutVote(awaiting)) => {
+                let vote = self
+                    .registry
+                    .unsigned_timeout_vote_to_wire(awaiting, self.aggregator.as_ref())?;
+                let local = self
+                    .reducer
+                    .local_validator()
+                    .and_then(|validator| self.registry.validator_index(validator).ok());
+                if !vote.signature.is_empty()
+                    || local != Some(vote.signer)
+                    || vote.round.context_id != self.wire_context.id()
+                    || vote.round.height != self.wire_context.height
+                    || expected_tag.height() != vote.round.height
+                    || expected_tag.view() != vote.round.view
+                {
+                    return Err(AdapterError::RecoveredControlSignMismatch);
+                }
+                let mut owner = None;
+                for frame in self.wal.recovered_records().iter().rev() {
+                    let (identity, envelope) = self.authenticate_recovered_wal_frame(frame)?;
+                    if matches!(
+                        envelope.record,
+                        WalRecordV2::TimeoutIntent(candidate) if candidate == vote
+                    ) {
+                        owner = Some(identity);
+                        break;
+                    }
+                }
+                let Some(owner) = owner else {
+                    return Err(AdapterError::RecoveredControlSignMismatch);
+                };
+                (
+                    owner,
+                    AdapterEffect::Sign {
+                        tag: expected_tag,
+                        request: SignRequest::TimeoutVote(vote),
+                    },
+                )
+            }
+            Some(reducer::SignableMessage::Vote(_)) | None => {
+                if startup_effects.iter().any(|effect| {
+                    matches!(
+                        effect,
+                        AdapterEffect::Sign {
+                            request: SignRequest::Proposal(_) | SignRequest::TimeoutVote(_),
+                            ..
+                        }
+                    )
+                }) {
+                    return Err(AdapterError::RecoveredControlSignMismatch);
+                }
+                return Ok(None);
+            }
+        };
+        if startup_effects.as_slice() != [expected.clone()] {
+            return Err(AdapterError::RecoveredControlSignMismatch);
+        }
+        let Some(replay_evidence) =
+            RecoveredWalControlReplayEvidenceV1::from_sealed_recovered_control(
+                wal_identity,
+                &expected,
+            )
+        else {
+            return Err(AdapterError::RecoveredControlSignMismatch);
+        };
+        let effect = startup_effects
+            .pop()
+            .expect("one exact control Sign was compared above");
+        Ok(Some(RecoveredWalControlSign {
+            wal_identity,
+            replay_evidence,
+            effect,
+        }))
+    }
+
+    /// Consume the exact certificate-backed Fetch owned by a durable Decision.
+    ///
+    /// The reducer Decision, current tag, complete one-effect inventory,
+    /// manifest absence, frozen ordered archive roster, authenticated CommitQC,
+    /// and latest exact Decision frame must all agree. The resulting token has
+    /// no raw-effect or locator extraction surface.
+    fn authenticate_recovered_wal_decision_fetch(
+        &mut self,
+        startup_effects: &mut Vec<AdapterEffect>,
+    ) -> Result<Option<RecoveredWalDecisionFetch>, AdapterError> {
+        self.ensure_ingress()?;
+        let has_fetch = startup_effects
+            .iter()
+            .any(|effect| matches!(effect, AdapterEffect::FetchBody { .. }));
+        let Some(decision) = self.reducer.durable_state().decision().cloned() else {
+            return if has_fetch {
+                Err(AdapterError::RecoveredDecisionFetchMismatch)
+            } else {
+                Ok(None)
+            };
+        };
+        let certificate = self
+            .registry
+            .qc_to_wire(&decision, self.aggregator.as_ref())?;
+        let expected_sources = self
+            .wire_context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let expected = AdapterEffect::FetchBody {
+            tag: self.current_tag(),
+            round: certificate.proposal_round,
+            subject: certificate.subject,
+            manifest: None,
+            certified_sources: expected_sources,
+            certificate: Some(certificate.clone()),
+        };
+        if startup_effects.as_slice() != [expected.clone()]
+            || certificate.phase != wire::GlobalPhase::Commit
+        {
+            return if has_fetch {
+                Err(AdapterError::RecoveredDecisionFetchMismatch)
+            } else {
+                Ok(None)
+            };
+        }
+
+        let mut owner = None;
+        for frame in self.wal.recovered_records().iter().rev() {
+            let (identity, envelope) = self.authenticate_recovered_wal_frame(frame)?;
+            if matches!(envelope.record, WalRecordV2::Decision(candidate) if candidate == certificate)
+            {
+                owner = Some(identity);
+                break;
+            }
+        }
+        let Some(wal_identity) = owner else {
+            return Err(AdapterError::RecoveredDecisionFetchMismatch);
+        };
+        let verified = VerifiedHeightContext {
+            context: self.wire_context.clone(),
+            proofs_of_possession: self.proofs_of_possession.clone(),
+            parent_verification: self.parent_verification.clone(),
+        };
+        let Some(replay_evidence) =
+            RecoveredWalDecisionFetchReplayEvidenceV1::from_sealed_recovered_decision_fetch(
+                &verified,
+                wal_identity,
+                &expected,
+            )
+        else {
+            return Err(AdapterError::RecoveredDecisionFetchMismatch);
+        };
+        let effect = startup_effects
+            .pop()
+            .expect("one exact Decision Fetch was compared above");
+        Ok(Some(RecoveredWalDecisionFetch {
+            wal_identity,
+            replay_evidence,
+            effect,
+        }))
+    }
+
+    /// Classify a durable-Decision Apply tail until restart-closed publication exists.
+    fn classify_unsupported_recovered_startup(
+        &self,
+        startup_effects: &[AdapterEffect],
+    ) -> AdapterError {
+        let Some(frame) = self.wal.recovered_records().last() else {
+            return AdapterError::RecoveredStartupEffectMismatch;
+        };
+        let mut payload = frame.payload();
+        let Ok(envelope) = WalEnvelopeV2::decode(&mut payload) else {
+            return AdapterError::RecoveredStartupEffectMismatch;
+        };
+        let WalRecordV2::Decision(certificate) = envelope.record else {
+            return AdapterError::RecoveredStartupEffectMismatch;
+        };
+        let [effect] = startup_effects else {
+            return AdapterError::RecoveredStartupEffectMismatch;
+        };
+        match effect {
+            AdapterEffect::Apply {
+                tag,
+                subject,
+                certificate: observed,
+            } if *tag == self.current_tag()
+                && *subject == certificate.subject
+                && observed == &certificate =>
+            {
+                // TODO: Atomically consume the sealed recovered Decision-Fetch
+                // startup authority, its exact semantically revalidated
+                // BodyFrame marker, and any exact LedgerV1 Validate parent;
+                // drive the fixed BodyAvailable -> BodyStored ->
+                // ValidationCompleted reducer sequence and authorize only its
+                // resulting Apply without exposing intermediate raw effects.
+                AdapterError::RecoveredDecisionApplyRequiresDurablePredecessor
+            }
+            _ => AdapterError::RecoveredStartupEffectMismatch,
+        }
+    }
 
     /// Return the exact Decision key reconstructed from complete WAL frames.
     ///
@@ -8341,6 +10471,228 @@ impl SumeragiV2Adapter {
         validated_receipt: &ValidatedBodyReceipt,
     ) -> Result<(), AdapterError> {
         self.bind_validated_body(manifest, validated_receipt)
+    }
+
+    /// Stage the fixed recovered Decision body fast-forward on this owned cold adapter.
+    ///
+    /// The non-forgeable body-cut permit and opaque Decision-Fetch projection
+    /// prevent arbitrary callers from submitting manifest, receipt, or effect
+    /// parts. The existing direct previews thread cloned reducer/registry state
+    /// through this unpublished owned adapter, rolling the exact cold state
+    /// back on every typed failure. No intermediate Store or Validate effect
+    /// can escape.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn prepare_recovered_decision_apply_fast_forward(
+        mut self,
+        permit: RecoveredDecisionApplyAdapterPreviewPermit,
+        verified: &VerifiedHeightContext,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+        manifest: &wire::PayloadManifest,
+        durable: &DurableBodyReceipt,
+        validated: &ValidatedBodyReceipt,
+    ) -> Result<RecoveredDecisionApplyStagedAdapterV1, RecoveredDecisionApplyAdapterStagingError>
+    {
+        macro_rules! fail_unstaged {
+            ($error:expr) => {
+                return Err(RecoveredDecisionApplyAdapterStagingError::retain(
+                    $error, self,
+                ))
+            };
+        }
+        macro_rules! fail_staged {
+            ($rollback:expr, $error:expr) => {{
+                $rollback.restore(&mut self);
+                return Err(RecoveredDecisionApplyAdapterStagingError::retain(
+                    $error, self,
+                ));
+            }};
+        }
+        if verified.context() != &self.wire_context
+            || durable.context_id() != self.wire_context.id()
+            || durable.round() != manifest.round
+            || durable.subject() != manifest.subject
+            || durable.manifest_hash() != HashOf::new(manifest)
+            || validated.durable() != durable
+        {
+            fail_unstaged!(AdapterError::RecoveredDecisionApplyFastForwardMismatch);
+        }
+        let Some(decision) = self.reducer.durable_state().decision().cloned() else {
+            fail_unstaged!(AdapterError::RecoveredDecisionApplyFastForwardMismatch);
+        };
+        let mut comparison_registry = self.registry.clone();
+        let certificate = match comparison_registry.qc_to_wire(&decision, self.aggregator.as_ref())
+        {
+            Ok(certificate) => certificate,
+            Err(error) => fail_unstaged!(error),
+        };
+        let expected_fetch = AdapterEffect::FetchBody {
+            tag: self.current_tag(),
+            round: certificate.proposal_round,
+            subject: certificate.subject,
+            manifest: None,
+            certified_sources: self
+                .wire_context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            certificate: Some(certificate.clone()),
+        };
+        if certificate.phase != wire::GlobalPhase::Commit
+            || certificate.proposal_round != manifest.round
+            || certificate.subject != manifest.subject
+            || certificate.execution_commitment != validated.execution_commitment()
+            || !projection.matches_fast_forward_fetch(&permit, verified, &expected_fetch)
+        {
+            fail_unstaged!(AdapterError::RecoveredDecisionApplyFastForwardMismatch);
+        }
+        let tag = self.current_tag();
+        let store_prepared = match self.prepare_direct_certified_body_available(tag, manifest) {
+            Ok(DirectCertifiedBodyAvailablePreparation::Applied(prepared)) => prepared,
+            Ok(other) => {
+                drop(other);
+                fail_unstaged!(AdapterError::RecoveredDecisionApplyFastForwardMismatch);
+            }
+            Err(error) => fail_unstaged!(error),
+        };
+        let PreparedDirectCertifiedBodyAvailable {
+            adapter: _,
+            next_reducer: store_reducer,
+            next_registry: store_registry,
+            event: store_event,
+            core_effect: store_core_effect,
+            store_effect,
+            next_fence_generation: store_fence_generation,
+        } = store_prepared;
+        let rollback = RecoveredDecisionApplyAdapterRollback {
+            reducer: std::mem::replace(&mut self.reducer, store_reducer),
+            registry: std::mem::replace(&mut self.registry, store_registry),
+            reducer_fence_generation: std::mem::replace(
+                &mut self.reducer_fence_generation,
+                store_fence_generation,
+            ),
+            last_progress: self.last_progress.clone(),
+        };
+
+        let validate_prepared =
+            match self.prepare_direct_body_stored(tag, manifest.round, manifest.subject, durable) {
+                Ok(DirectBodyStoredPreparation::Applied(prepared)) => prepared,
+                Ok(other) => {
+                    drop(other);
+                    fail_staged!(
+                        rollback,
+                        AdapterError::RecoveredDecisionApplyFastForwardMismatch
+                    );
+                }
+                Err(error) => fail_staged!(rollback, error),
+            };
+        let PreparedDirectBodyStored {
+            adapter: _,
+            next_reducer: validate_reducer,
+            next_registry: validate_registry,
+            event: validate_event,
+            core_effect: validate_core_effect,
+            validate_effect,
+            next_fence_generation: validate_fence_generation,
+        } = validate_prepared;
+        self.reducer = validate_reducer;
+        self.registry = validate_registry;
+        self.reducer_fence_generation = validate_fence_generation;
+
+        let apply_prepared = match self.prepare_direct_validation_succeeded(
+            tag,
+            manifest.round,
+            manifest.subject,
+            validated,
+        ) {
+            Ok(DirectValidationSucceededPreparation::Apply(prepared)) => prepared,
+            Ok(other) => {
+                drop(other);
+                fail_staged!(
+                    rollback,
+                    AdapterError::RecoveredDecisionApplyFastForwardMismatch
+                );
+            }
+            Err(error) => fail_staged!(rollback, error),
+        };
+        let PreparedDirectValidationSucceededApply {
+            _adapter: _,
+            next_reducer: apply_reducer,
+            next_registry: apply_registry,
+            event: apply_event,
+            core_effect: apply_core_effect,
+            apply_effect,
+            next_fence_generation: apply_fence_generation,
+        } = apply_prepared;
+        if !matches!(
+            &apply_effect,
+            AdapterEffect::Apply {
+                tag: apply_tag,
+                subject: apply_subject,
+                certificate: apply_certificate,
+            } if *apply_tag == tag
+                && *apply_subject == manifest.subject
+                && apply_certificate == &certificate
+        ) {
+            fail_staged!(
+                rollback,
+                AdapterError::RecoveredDecisionApplyFastForwardMismatch
+            );
+        }
+        let Some(pending) = projection.project_decision_apply_pending_lineage(
+            &permit,
+            verified,
+            &expected_fetch,
+            &store_effect,
+            &validate_effect,
+            &apply_effect,
+        ) else {
+            fail_staged!(
+                rollback,
+                AdapterError::RecoveredDecisionApplyFastForwardMismatch
+            );
+        };
+
+        self.reducer = apply_reducer;
+        self.registry = apply_registry;
+        self.reducer_fence_generation = apply_fence_generation;
+        let mut preview = RecoveredDecisionApplyStagedAdapterV1 {
+            adapter: self,
+            store_effect,
+            validate_effect,
+            apply_effect,
+            pending,
+        };
+        if !preview.validates() {
+            let RecoveredDecisionApplyStagedAdapterV1 {
+                mut adapter,
+                store_effect: _,
+                validate_effect: _,
+                apply_effect: _,
+                pending: _,
+            } = preview;
+            rollback.restore(&mut adapter);
+            return Err(RecoveredDecisionApplyAdapterStagingError::retain(
+                AdapterError::RecoveredDecisionApplyFastForwardMismatch,
+                adapter,
+            ));
+        }
+        drop(rollback);
+        for (event, effect) in [
+            (&store_event, &store_core_effect),
+            (&validate_event, &validate_core_effect),
+            (&apply_event, &apply_core_effect),
+        ] {
+            preview.adapter.record_reducer_outcome(
+                event,
+                reducer::StepDisposition::Applied,
+                core::slice::from_ref(effect),
+            );
+            preview
+                .adapter
+                .log_body_progress(event, reducer::StepDisposition::Applied, 1);
+        }
+        Ok(preview)
     }
 
     /// Preview a certified Fetch completion directly against the sole reducer.
@@ -15874,9 +18226,16 @@ fn aggregate_core_shares(
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::OpenOptions, io::Write as _, time::Duration};
+    use std::{fs::OpenOptions, io::Write as _, num::NonZeroU64, time::Duration};
 
-    use iroha_crypto::{Algorithm, HashOf, KeyPair};
+    #[cfg(feature = "bls")]
+    use std::collections::BTreeMap;
+
+    use iroha_config::parameters::actual::{
+        SUMERAGI_V2_CONFIG_FORMAT_VERSION, SumeragiV2Config, SumeragiV2KeyPolicy, SumeragiV2Limits,
+    };
+    use iroha_crypto::{Algorithm, HashOf, KeyPair, SignatureOf};
+    use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
     use tempfile::TempDir;
 
     use super::super::serviced_candidate_store::ProducerContinuationSourceClass;
@@ -16061,6 +18420,47 @@ mod tests {
             &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
         )
         .expect("aggregate fixture certificate");
+    }
+
+    #[cfg(feature = "bls")]
+    fn authenticated_timeout_certificate(
+        round: wire::ConsensusRound,
+        highest_prepare_qc: Option<wire::QuorumCertificate>,
+        signers: Vec<wire::ValidatorIndex>,
+        keys: &[KeyPair],
+    ) -> wire::TimeoutCertificate {
+        let signer = signers
+            .first()
+            .copied()
+            .expect("fixture timeout certificate has signers");
+        let preimage = wire::TimeoutVote {
+            round,
+            highest_prepare_qc: highest_prepare_qc.clone(),
+            signer,
+            signature: Vec::new(),
+        }
+        .signature_preimage();
+        let shares = signers
+            .iter()
+            .map(|signer| {
+                let index = usize::try_from(*signer).expect("small timeout signer index");
+                Signature::new(keys[index].private_key(), &preimage)
+                    .payload()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+            &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        )
+        .expect("aggregate fixture timeout certificate");
+        wire::TimeoutCertificate {
+            round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc,
+                signers,
+                aggregate_signature,
+            }],
+        }
     }
 
     #[cfg(feature = "bls")]
@@ -17330,6 +19730,402 @@ mod tests {
             Box::new(TestAggregator),
             deferred_admission_ordinals(),
         )
+    }
+
+    fn open_recovered_leader_startup_test(
+        directory: &TempDir,
+    ) -> Result<RecoveredAdapterStartup, AdapterError> {
+        let context = context();
+        let leader = context.leader(0);
+        SumeragiV2Adapter::open_recovered_startup_with_aggregator(
+            directory.path().join("leader-safety.wal"),
+            verified_genesis(context),
+            Some(leader),
+            reducer::Generation::new(1),
+            [0x22; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+    }
+
+    #[cfg(feature = "bls")]
+    fn write_and_reopen_authenticated_wal_startup(
+        directory: &TempDir,
+        context: &wire::HeightContext,
+        proofs_of_possession: &[Vec<u8>],
+        local_validator: wire::ValidatorIndex,
+        consensus_key_hash: [u8; 32],
+        records: Vec<WalRecordV2>,
+    ) -> RecoveredAdapterStartup {
+        let wal_path = directory.path().join("authenticated-fifo-safety.wal");
+        let verified =
+            VerifiedHeightContext::genesis(context.clone(), proofs_of_possession.to_vec())
+                .expect("verify authenticated FIFO context");
+        let (mut adapter, startup) = SumeragiV2Adapter::open_with_aggregator(
+            wal_path.clone(),
+            verified,
+            Some(local_validator),
+            reducer::Generation::new(50),
+            consensus_key_hash,
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("open authenticated FIFO WAL writer");
+        assert!(startup.is_empty());
+        for (index, record) in records.into_iter().enumerate() {
+            let persistence_id = u64::try_from(index)
+                .expect("small FIFO index")
+                .checked_add(1)
+                .expect("FIFO persistence id");
+            let payload = WalEnvelopeV2 {
+                protocol_version: wire::PROTOCOL_VERSION,
+                persistence_id,
+                record,
+            }
+            .encode();
+            let receipt = adapter.wal.append(&payload).expect("append FIFO WAL frame");
+            assert_eq!(receipt.sequence().checked_add(1), Some(persistence_id));
+        }
+        drop(adapter);
+
+        let verified =
+            VerifiedHeightContext::genesis(context.clone(), proofs_of_possession.to_vec())
+                .expect("reverify authenticated FIFO context");
+        SumeragiV2Adapter::open_recovered_startup_with_aggregator(
+            wal_path,
+            verified,
+            Some(local_validator),
+            reducer::Generation::new(50),
+            consensus_key_hash,
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("reopen authenticated FIFO WAL")
+    }
+
+    fn take_current_sign(effects: &mut Vec<AdapterEffect>) -> AdapterEffect {
+        let signs = effects
+            .iter()
+            .enumerate()
+            .filter_map(|(index, effect)| {
+                matches!(effect, AdapterEffect::Sign { .. }).then_some(index)
+            })
+            .collect::<Vec<_>>();
+        let [index] = signs.as_slice() else {
+            panic!("expected one current Sign beside inert completion effects: {effects:?}")
+        };
+        effects.remove(*index)
+    }
+
+    fn persist_proposal_intent_for_control_recovery(directory: &TempDir, marker: u8) {
+        let (mut adapter, startup) =
+            open_test_as_leader(directory).expect("open local ProposalIntent fixture");
+        assert!(startup.is_empty());
+        let proposal = proposal(
+            &adapter.wire_context,
+            adapter.wire_context.leader(0),
+            subject(marker),
+        );
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+            unreachable!("proposal fixture")
+        };
+        let (durable, validated) =
+            validated_receipts_for_manifest(&adapter.wire_context, &proposal.manifest);
+        let sign = adapter
+            .local_proposal_ready(
+                adapter.current_tag(),
+                proposal.manifest,
+                &durable,
+                &validated,
+            )
+            .expect("persist exact ProposalIntent");
+        assert!(matches!(
+            sign.effects(),
+            [AdapterEffect::Sign {
+                request: SignRequest::Proposal(_),
+                ..
+            }]
+        ));
+    }
+
+    fn persist_timeout_intent_for_control_recovery(directory: &TempDir) {
+        let (mut adapter, startup) = open_test(directory).expect("open TimeoutIntent fixture");
+        assert!(startup.is_empty());
+        let sign = adapter
+            .timeout_elapsed(adapter.current_tag())
+            .expect("persist exact TimeoutIntent");
+        assert!(matches!(
+            sign.effects(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(_),
+                ..
+            }]
+        ));
+    }
+
+    fn open_control_owner_for_test(
+        safety: &TempDir,
+        storage: &TempDir,
+        proposal: bool,
+    ) -> ProductionLifecycleOwnerV1 {
+        let startup = if proposal {
+            open_recovered_leader_startup_test(safety)
+        } else {
+            open_recovered_startup_test(safety)
+        }
+        .expect("open exact recovered control startup");
+        let authenticated = startup
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _startup)| {
+                panic!("authenticate exact recovered control startup: {error}")
+            });
+        assert!(authenticated.has_recovered_control_sign_for_test());
+        assert!(authenticated.effects.is_empty());
+        let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+            .expect("deterministic BLS control-startup signer");
+        authenticated
+            .open_production_lifecycle_owner_v1_from_roots_for_test(
+                &lifecycle_owner_config(),
+                4,
+                &storage.path().join("ledger"),
+                &storage.path().join("serve"),
+                &storage.path().join("body"),
+                super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+                &local_signer,
+            )
+            .unwrap_or_else(|error| panic!("open exact recovered control owner: {error}"))
+    }
+
+    #[cfg(feature = "bls")]
+    fn write_authenticated_decision_startup(
+        safety: &TempDir,
+        marker: u8,
+    ) -> (RecoveredAdapterStartup, wire::HeightContext, Vec<Vec<u8>>) {
+        let (context, keys, proofs) = authenticated_context();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let mut decision = wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject: subject(marker),
+            execution_commitment: execution_commitment(marker),
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        };
+        authenticate_qc(&mut decision, &keys);
+        let startup = write_and_reopen_authenticated_wal_startup(
+            safety,
+            &context,
+            &proofs,
+            0,
+            [marker; 32],
+            vec![WalRecordV2::Decision(decision)],
+        );
+        (startup, context, proofs)
+    }
+
+    #[cfg(feature = "bls")]
+    fn reopen_authenticated_decision_startup(
+        safety: &TempDir,
+        context: &wire::HeightContext,
+        proofs: Vec<Vec<u8>>,
+        marker: u8,
+    ) -> RecoveredAdapterStartup {
+        let verified = VerifiedHeightContext::genesis(context.clone(), proofs)
+            .expect("reverify Decision Fetch context");
+        SumeragiV2Adapter::open_recovered_startup_with_aggregator(
+            safety.path().join("authenticated-fifo-safety.wal"),
+            verified,
+            Some(0),
+            reducer::Generation::new(50),
+            [marker; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("reopen authenticated Decision WAL")
+    }
+
+    #[cfg(feature = "bls")]
+    #[derive(Clone, Copy)]
+    enum DecisionBodyMarkerFixture {
+        Validated,
+        Rejected,
+    }
+
+    #[cfg(feature = "bls")]
+    #[allow(clippy::too_many_lines)]
+    fn write_decision_startup_with_body_marker(
+        safety: &TempDir,
+        body_root: &std::path::Path,
+        marker: u8,
+        outcome: DecisionBodyMarkerFixture,
+    ) -> (
+        RecoveredAdapterStartup,
+        super::super::v2_body_store::V2BodyStore,
+    ) {
+        let (context, keys, proofs) = authenticated_context();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let leader = context.leader(round.view);
+        let leader_index = usize::try_from(leader).expect("fixture leader index fits usize");
+        let header = BlockHeader::new(
+            NonZeroU64::new(round.height).expect("fixture height is non-zero"),
+            None,
+            None,
+            None,
+            8_000 + u64::from(marker),
+            round.view,
+        );
+        let signature = SignatureOf::try_from_hash(keys[leader_index].private_key(), header.hash())
+            .expect("sign Decision body-marker fixture");
+        let block = SignedBlock::presigned(
+            BlockSignature::new(u64::from(leader), signature),
+            header,
+            Vec::new(),
+        );
+        let canonical_wire = block
+            .encode_wire()
+            .expect("encode Decision body-marker SignedBlockWire");
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: block.hash(),
+            payload_hash: Hash::new(&canonical_wire),
+        };
+        let chunks = wire::encode_payload_chunks(context.da_layout, &canonical_wire)
+            .expect("encode Decision body-marker chunks");
+        let manifest = wire::PayloadManifest::derive(
+            &context,
+            round,
+            subject,
+            u64::try_from(canonical_wire.len()).expect("fixture body length fits u64"),
+            &chunks,
+        )
+        .expect("derive Decision body-marker manifest");
+        let mut body_store =
+            super::super::v2_body_store::V2BodyStore::open(body_root, context.clone())
+                .expect("open Decision body-marker store");
+        let durable = body_store
+            .store(manifest, canonical_wire)
+            .expect("fsync Decision body-marker body");
+        let commitment = execution_commitment(marker);
+        let validation = match outcome {
+            DecisionBodyMarkerFixture::Validated => body_store.execute_durable_validation(
+                durable.clone(),
+                durable.manifest_hash(),
+                |_| Ok::<_, String>(commitment),
+            ),
+            DecisionBodyMarkerFixture::Rejected => body_store.execute_durable_validation(
+                durable.clone(),
+                durable.manifest_hash(),
+                |_| {
+                    Err::<wire::ExecutionCommitment, _>(
+                        "deterministic Decision body rejection".to_owned(),
+                    )
+                },
+            ),
+        }
+        .expect("fsync Decision body outcome marker");
+        match outcome {
+            DecisionBodyMarkerFixture::Validated => {
+                assert!(validation.validated_receipt().is_some())
+            }
+            DecisionBodyMarkerFixture::Rejected => {
+                assert!(validation.rejection_reason().is_some())
+            }
+        }
+
+        let mut decision = wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment: commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        };
+        authenticate_qc(&mut decision, &keys);
+        let startup = write_and_reopen_authenticated_wal_startup(
+            safety,
+            &context,
+            &proofs,
+            0,
+            [marker; 32],
+            vec![WalRecordV2::Decision(decision)],
+        );
+        (startup, body_store)
+    }
+
+    fn lifecycle_owner_config() -> SumeragiV2Config {
+        SumeragiV2Config {
+            format_version: SUMERAGI_V2_CONFIG_FORMAT_VERSION,
+            protocol_version: wire::PROTOCOL_VERSION,
+            mode: wire::ConsensusMode::Permissioned,
+            block_cadence_ms: 1_000,
+            limits: SumeragiV2Limits {
+                max_transactions: 512,
+                max_payload_bytes: 16 * 1024 * 1024,
+                max_queue_scan: 2_048,
+                control_queue_capacity: 128,
+                runtime_command_capacity: 8,
+                runtime_progress_reserve: 2,
+                runtime_completion_reserve: 2,
+                body_queue_capacity: 16,
+                authenticated_non_validator_source_capacity: 2,
+                body_bytes: 160 * 1024 * 1024,
+                body_source_bytes: 32 * 1024 * 1024,
+                chunk_queue_capacity: 64,
+                effect_work_capacity: 2,
+                ready_body_capacity: 8,
+                ready_body_bytes: 32 * 1024 * 1024,
+                certified_request_capacity: 8,
+                authenticated_merge_qc_capacity: 64,
+                merge_leader_body_frame_headroom_bytes: 1024 * 1024,
+                autonomous_carrier_headroom_bytes: 1024 * 1024,
+                autonomous_producer_recheck_ms: 100,
+                historical_recovery_stuck_attempts: 32,
+                historical_recovery_retry_tier_attempts: 4,
+                historical_recovery_max_retry_tier: 6,
+                sidecar_service_burst: 8,
+                merge_sidecar_inbound_session_capacity: 32,
+                merge_sidecar_inbound_sessions_per_peer: 4,
+                merge_sidecar_inbound_assembly_bytes: 64 * 1024 * 1024,
+                merge_sidecar_inbound_assembly_bytes_per_peer: 32 * 1024 * 1024,
+                merge_sidecar_deferred_block_capacity: 128,
+                merge_sidecar_future_block_distance: 64,
+                merge_sidecar_request_timeout_ms: 10_000,
+                merge_sidecar_outbound_sessions_per_source: 2,
+                merge_sidecar_outbound_bytes_per_source: 16 * 1024 * 1024,
+                merge_sidecar_server_request_gates_per_source: 4,
+                pending_certified_merge_entry_capacity: 1_024,
+                pending_queue_plan_admission_capacity: 1_024,
+                pending_control_sidecar_bytes: 256 * 1024 * 1024,
+                merge_signing_guard_record_capacity: 1_024,
+                merge_signing_guard_record_bytes: 16 * 1024 * 1024 + 64 * 1024,
+                merge_signing_guard_total_bytes: 256 * 1024 * 1024,
+                native_amx_signing_guard_record_capacity: 524_288,
+                native_amx_signing_guard_record_bytes: 16 * 1024,
+                native_amx_signing_guard_anchor_bytes: 4 * 1024,
+            },
+            key_policy: SumeragiV2KeyPolicy {
+                activation_lead_blocks: 1,
+                overlap_grace_blocks: 1,
+                expiry_grace_blocks: 1,
+                require_hsm: false,
+                allowed_algorithms: vec![Algorithm::BlsNormal],
+                allowed_hsm_providers: Vec::new(),
+            },
+        }
     }
 
     fn open_test_with_capacity_geometry(
@@ -21270,6 +24066,32 @@ mod tests {
         (tag, manifest, durable, validated)
     }
 
+    fn ordinary_validate_predecessor_for_test(
+        tag: reducer::EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        owner_ordinal: u128,
+    ) -> (AdapterEffect, PendingRuntimeEffectBinding) {
+        let store = AdapterEffect::StoreBody {
+            tag,
+            round,
+            subject,
+        };
+        let validate = AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        };
+        let owner = RuntimeEffectOwnership::fresh_for_test(tag, owner_ordinal);
+        let store_pending = owner
+            .pending_adapter_effect_binding(&store)
+            .expect("bind ordinary Store predecessor");
+        let validate_pending = store_pending
+            .project_store_validate_successor(&store, &validate)
+            .expect("project ordinary Validate predecessor");
+        (validate, validate_pending)
+    }
+
     fn advance_direct_validation_fixture_to_durable_with_proposal(
         adapter: &mut SumeragiV2Adapter,
         marker: u8,
@@ -21372,6 +24194,154 @@ mod tests {
         (recovered, expected_vote, proposal, manifest, validated)
     }
 
+    #[allow(clippy::too_many_lines)]
+    fn reopen_with_persisted_prepare_intent(
+        safety_directory: &TempDir,
+        body_root: &std::path::Path,
+        marker: u8,
+    ) -> (
+        RecoveredAdapterStartup,
+        wire::Proposal,
+        wire::PayloadManifest,
+        ValidatedBodyReceipt,
+    ) {
+        let (mut adapter, startup) =
+            open_test(safety_directory).expect("open persisted Prepare replay fixture");
+        assert!(startup.is_empty());
+        let context = adapter.wire_context.clone();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let leader = context.leader(round.view);
+        let leader_index = usize::try_from(leader).expect("fixture leader index fits usize");
+        let mut keys = (1_u8..=4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic persisted-body signer")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        assert_eq!(
+            keys[leader_index].public_key(),
+            context.roster[leader_index].validator.public_key(),
+        );
+        let header = BlockHeader::new(
+            NonZeroU64::new(round.height).expect("fixture height is non-zero"),
+            None,
+            None,
+            None,
+            4_000 + u64::from(marker),
+            round.view,
+        );
+        let signature = SignatureOf::try_from_hash(keys[leader_index].private_key(), header.hash())
+            .expect("sign persisted Prepare body");
+        let block = SignedBlock::presigned(
+            BlockSignature::new(u64::from(leader), signature),
+            header,
+            Vec::new(),
+        );
+        let canonical_wire = block
+            .encode_wire()
+            .expect("encode persisted Prepare SignedBlockWire");
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: block.hash(),
+            payload_hash: Hash::new(&canonical_wire),
+        };
+        let chunks = wire::encode_payload_chunks(context.da_layout, &canonical_wire)
+            .expect("encode persisted Prepare body chunks");
+        let manifest = wire::PayloadManifest::derive(
+            &context,
+            round,
+            subject,
+            u64::try_from(canonical_wire.len()).expect("fixture body length fits u64"),
+            &chunks,
+        )
+        .expect("derive persisted Prepare manifest");
+        let proposal = wire::Proposal {
+            round,
+            proposer: leader,
+            subject,
+            manifest: manifest.clone(),
+            justification: wire::ProposalJustification::ParentCommit(
+                wire::ParentCommitJustification { certificate: None },
+            ),
+            signature: vec![0x91],
+        };
+        let fetch = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::Proposal(proposal.clone()),
+            ))
+            .expect("accept persisted Prepare proposal")
+            .into_effects();
+        let [
+            AdapterEffect::FetchBody {
+                tag,
+                manifest: Some(projected_manifest),
+                ..
+            },
+        ] = fetch.as_slice()
+        else {
+            panic!("persisted Prepare proposal must expose one exact Fetch")
+        };
+        assert_eq!(projected_manifest, &manifest);
+        let tag = *tag;
+        let DirectCertifiedBodyAvailablePreparation::Applied(available) = adapter
+            .prepare_direct_certified_body_available(tag, &manifest)
+            .expect("prepare persisted Prepare Store transition")
+        else {
+            panic!("persisted Prepare body must project one Store")
+        };
+        assert!(matches!(
+            available.commit(),
+            AdapterEffect::StoreBody { .. }
+        ));
+
+        let mut body_store = super::super::v2_body_store::V2BodyStore::open(body_root, context)
+            .expect("open persisted Prepare body store");
+        let durable = body_store
+            .store(manifest.clone(), canonical_wire)
+            .expect("fsync persisted Prepare body");
+        let DirectBodyStoredPreparation::Applied(stored) = adapter
+            .prepare_direct_body_stored(tag, round, subject, &durable)
+            .expect("prepare persisted Prepare Validate transition")
+        else {
+            panic!("persisted Prepare Store must project one Validate")
+        };
+        assert!(matches!(
+            stored.commit(),
+            AdapterEffect::ValidateBody {
+                tag: effect_tag,
+                round: effect_round,
+                subject: effect_subject,
+            } if effect_tag == tag && effect_round == round && effect_subject == subject
+        ));
+        let commitment = ValidatedBodyReceipt::for_test(durable.clone()).execution_commitment();
+        let validated = body_store
+            .validate(&durable, |_| Ok::<_, String>(commitment))
+            .expect("fsync persisted Prepare validation marker");
+        let sign = adapter
+            .validation_succeeded(tag, round, subject, &validated)
+            .expect("persist exact PrepareIntent for the durable body")
+            .into_effects();
+        assert!(matches!(
+            sign.as_slice(),
+            [AdapterEffect::Sign {
+                request: SignRequest::Vote(vote),
+                ..
+            }] if vote.phase == wire::GlobalPhase::Prepare
+                && vote.execution_commitment == commitment
+        ));
+        drop(adapter);
+        drop(body_store);
+
+        let recovered = open_recovered_startup_test(safety_directory)
+            .expect("replay persisted PrepareIntent behind the startup cut");
+        (recovered, proposal, manifest, validated)
+    }
+
     fn join_recovered_prepare_startup<'registry>(
         startup: RecoveredAdapterStartup,
         proposal: wire::Proposal,
@@ -21379,15 +24349,13 @@ mod tests {
         validated: ValidatedBodyReceipt,
         holder: &'registry mut super::super::v2_lifecycle_coordinator::LifecycleWorkRegistryHolder,
     ) -> AuthenticatedRecoveredWalLifecycleStartup<'registry> {
-        let authenticated =
-            startup
-                .authenticate_final_wal_vote()
-                .unwrap_or_else(|(error, _startup)| {
-                    panic!("authenticate recovered Prepare WAL vote: {error}")
-                });
+        let authenticated = startup
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _startup)| {
+                panic!("authenticate recovered Prepare WAL vote: {error}")
+            });
         let authority = authenticated
-            .recovered_vote
-            .as_ref()
+            .recovered_phase_vote_for_test()
             .expect("PrepareIntent carries one restart vote");
         let verified = VerifiedHeightContext {
             context: authenticated.adapter.wire_context.clone(),
@@ -21465,6 +24433,1763 @@ mod tests {
         (payload_store, recovery)
     }
 
+    #[test]
+    fn production_lifecycle_owner_factory_opens_the_private_no_vote_branch() {
+        let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+        crate::sumeragi::status::clear_v2_status();
+        let safety = TempDir::new().expect("temporary no-vote safety store");
+        let storage = TempDir::new().expect("temporary no-vote lifecycle stores");
+        let authenticated = open_recovered_startup_test(&safety)
+            .expect("open sealed no-vote adapter startup")
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _startup)| {
+                panic!("authenticate empty recovered WAL: {error}")
+            });
+        assert!(authenticated.has_no_recovered_wal_authority_for_test());
+        assert!(authenticated.effects.is_empty());
+        let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+            .expect("deterministic local Serve retainer");
+        let mut owner = authenticated
+            .open_production_lifecycle_owner_v1_from_roots_for_test(
+                &lifecycle_owner_config(),
+                4,
+                &storage.path().join("ledger"),
+                &storage.path().join("serve"),
+                &storage.path().join("body"),
+                super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+                &local_signer,
+            )
+            .unwrap_or_else(|error| panic!("open complete no-vote lifecycle owner: {error}"));
+        assert!(owner.exact_recovered_fetch_join_for_test());
+        assert_eq!(
+            crate::sumeragi::status::v2_status()
+                .expect("status publishes only after the complete no-vote owner exists")
+                .height,
+            context().height
+        );
+        crate::sumeragi::status::clear_v2_status();
+    }
+
+    fn assert_control_repair_and_coalesce(proposal_intent: bool, marker: u8) {
+        let safety = TempDir::new().expect("temporary control safety store");
+        let storage = TempDir::new().expect("temporary control lifecycle stores");
+        if proposal_intent {
+            persist_proposal_intent_for_control_recovery(&safety, marker);
+        } else {
+            persist_timeout_intent_for_control_recovery(&safety);
+        }
+        crate::sumeragi::status::clear_v2_status();
+        assert!(crate::sumeragi::status::v2_status().is_none());
+
+        let mut first = open_control_owner_for_test(&safety, &storage, proposal_intent);
+        let first_summary = first
+            .recovered_control_row_summary_for_test()
+            .expect("missing-row repair installs one exact control row and carrier");
+        assert_eq!(first_summary.0, first_summary.1);
+        assert_eq!(
+            crate::sumeragi::status::v2_status()
+                .expect("status publication follows the complete control owner")
+                .height,
+            context().height
+        );
+        let ledger_path = storage.path().join("ledger/lifecycle-ledger-v1.norito");
+        let first_frame = std::fs::read(&ledger_path).expect("read repaired control LedgerV1");
+        #[cfg(unix)]
+        let first_inode = {
+            use std::os::unix::fs::MetadataExt as _;
+
+            std::fs::metadata(&ledger_path)
+                .expect("inspect repaired control LedgerV1")
+                .ino()
+        };
+        drop(first);
+
+        crate::sumeragi::status::clear_v2_status();
+        let mut reopened = open_control_owner_for_test(&safety, &storage, proposal_intent);
+        let reopened_summary = reopened
+            .recovered_control_row_summary_for_test()
+            .expect("coalesced reopen reconstructs the exact volatile carrier");
+        assert_eq!(reopened_summary, first_summary);
+        assert_eq!(
+            std::fs::read(&ledger_path).expect("read coalesced control LedgerV1"),
+            first_frame,
+            "exact coalesce preserves the full frame, high-water, and control ordinal"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            assert_eq!(
+                std::fs::metadata(&ledger_path)
+                    .expect("inspect coalesced control LedgerV1")
+                    .ino(),
+                first_inode,
+                "exact coalesce validates the durable frame without replacing it"
+            );
+        }
+        assert_eq!(
+            crate::sumeragi::status::v2_status()
+                .expect("coalesced status follows exact carrier reconstruction")
+                .height,
+            context().height
+        );
+        crate::sumeragi::status::clear_v2_status();
+    }
+
+    #[test]
+    fn bls_proposal_intent_control_sign_repairs_and_coalesces_exactly() {
+        let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+        assert_control_repair_and_coalesce(true, 0xC1);
+    }
+
+    #[test]
+    fn bls_timeout_intent_control_sign_repairs_and_coalesces_exactly() {
+        let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+        assert_control_repair_and_coalesce(false, 0xC2);
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
+        let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+        crate::sumeragi::status::clear_v2_status();
+        let safety = TempDir::new().expect("temporary Decision Fetch safety store");
+        let storage = TempDir::new().expect("temporary Decision Fetch lifecycle stores");
+        let (wire_context, keys, proofs) = authenticated_context();
+        let round = wire::ConsensusRound {
+            context_id: wire_context.id(),
+            height: wire_context.height,
+            view: 0,
+        };
+        let mut decision = wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject: subject(0xCA),
+            execution_commitment: execution_commitment(0xCA),
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        };
+        authenticate_qc(&mut decision, &keys);
+        let first_startup = write_and_reopen_authenticated_wal_startup(
+            &safety,
+            &wire_context,
+            &proofs,
+            0,
+            [0xCA; 32],
+            vec![WalRecordV2::Decision(decision)],
+        );
+        let first_authenticated = first_startup
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _)| panic!("authenticate Decision Fetch startup: {error}"));
+        assert!(matches!(
+            &first_authenticated.authority,
+            RecoveredWalStartupAuthorityV1::DecisionFetch(_)
+        ));
+        assert!(first_authenticated.effects.is_empty());
+        let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+            .expect("deterministic Decision Fetch Serve retainer");
+        let ledger_root = storage.path().join("ledger");
+        let serve_root = storage.path().join("serve");
+        let body_root = storage.path().join("body");
+        let mut first = first_authenticated
+            .open_production_lifecycle_owner_v1_from_roots_for_test(
+                &lifecycle_owner_config(),
+                4,
+                &ledger_root,
+                &serve_root,
+                &body_root,
+                super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+                &local_signer,
+            )
+            .unwrap_or_else(|error| panic!("open Decision Fetch lifecycle owner: {error}"));
+        let first_summary = first
+            .recovered_decision_fetch_row_summary_for_test()
+            .expect("missing Decision appends one exact Fetch row");
+        assert_eq!(first_summary.0, first_summary.1);
+        let ledger_path = ledger_root.join("lifecycle-ledger-v1.norito");
+        let first_frame = std::fs::read(&ledger_path).expect("read Decision Fetch LedgerV1");
+        #[cfg(unix)]
+        let first_inode = {
+            use std::os::unix::fs::MetadataExt as _;
+
+            std::fs::metadata(&ledger_path)
+                .expect("inspect Decision Fetch LedgerV1")
+                .ino()
+        };
+        drop(first);
+
+        crate::sumeragi::status::clear_v2_status();
+        let verified = VerifiedHeightContext::genesis(wire_context.clone(), proofs)
+            .expect("reverify Decision Fetch context");
+        let reopened = SumeragiV2Adapter::open_recovered_startup_with_aggregator(
+            safety.path().join("authenticated-fifo-safety.wal"),
+            verified,
+            Some(0),
+            reducer::Generation::new(50),
+            [0xCA; 32],
+            fingerprints(),
+            Box::new(TestAggregator),
+            deferred_admission_ordinals(),
+        )
+        .expect("reopen unchanged Decision WAL")
+        .authenticate_final_wal_startup_authority()
+        .unwrap_or_else(|(error, _)| panic!("reauthenticate Decision Fetch startup: {error}"));
+        let mut reopened = reopened
+            .open_production_lifecycle_owner_v1_from_roots_for_test(
+                &lifecycle_owner_config(),
+                4,
+                &ledger_root,
+                &serve_root,
+                &body_root,
+                super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+                &local_signer,
+            )
+            .unwrap_or_else(|error| panic!("coalesce Decision Fetch lifecycle owner: {error}"));
+        assert_eq!(
+            reopened
+                .recovered_decision_fetch_row_summary_for_test()
+                .expect("coalesced Decision Fetch retains its exact row"),
+            first_summary
+        );
+        assert_eq!(
+            std::fs::read(&ledger_path).expect("reread coalesced Decision Fetch LedgerV1"),
+            first_frame,
+            "exact Decision Fetch coalesce preserves the complete frame"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+
+            assert_eq!(
+                std::fs::metadata(&ledger_path)
+                    .expect("inspect coalesced Decision Fetch LedgerV1")
+                    .ino(),
+                first_inode,
+                "exact Decision Fetch coalesce validates without replacing the inode"
+            );
+        }
+        assert_eq!(
+            crate::sumeragi::status::v2_status()
+                .expect("Decision Fetch status follows complete owner publication")
+                .height,
+            wire_context.height
+        );
+        crate::sumeragi::status::clear_v2_status();
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn bls_decision_fetch_body_markers_fail_before_ledger_mutation() {
+        let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+            .expect("deterministic Decision body-marker retainer");
+        for (outcome, promoted_marker, quarantined_marker) in [
+            (DecisionBodyMarkerFixture::Validated, 0xD1, 0xD2),
+            (DecisionBodyMarkerFixture::Rejected, 0xD3, 0xD4),
+        ] {
+            let promoted_safety = TempDir::new().expect("temporary promoted Decision marker WAL");
+            let promoted_storage =
+                TempDir::new().expect("temporary promoted Decision marker stores");
+            let promoted_body_root = promoted_storage.path().join("body");
+            let promoted_ledger_root = promoted_storage.path().join("ledger");
+            let (startup, body_store) = write_decision_startup_with_body_marker(
+                &promoted_safety,
+                &promoted_body_root,
+                promoted_marker,
+                outcome,
+            );
+            let authenticated = startup
+                .authenticate_final_wal_startup_authority()
+                .unwrap_or_else(|(error, _)| {
+                    panic!("authenticate promoted Decision marker startup: {error}")
+                });
+            let AuthenticatedRecoveredAdapterStartup {
+                adapter,
+                effects,
+                authority,
+            } = authenticated;
+            assert!(effects.is_empty());
+            let verified = VerifiedHeightContext {
+                context: adapter.wire_context.clone(),
+                proofs_of_possession: adapter.proofs_of_possession.clone(),
+                parent_verification: adapter.parent_verification.clone(),
+            };
+            let RecoveredWalStartupAuthorityV1::DecisionFetch(fetch) = authority else {
+                panic!("Decision body marker must retain one Fetch authority")
+            };
+            let Ok(projection) =
+                crate::sumeragi::v2_runtime::project_recovered_wal_decision_fetch(&verified, fetch)
+            else {
+                panic!("project exact promoted Decision Fetch")
+            };
+            let (payload_store, recovered_payloads) =
+                super::super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
+                    promoted_storage.path().join("serve"),
+                    verified.context(),
+                )
+                .expect("open promoted Decision Serve store");
+            let serve_payloads = recovered_payloads
+                .authenticate(&verified, &local_signer, &body_store)
+                .expect("authenticate empty promoted Decision Serve recovery");
+            let Err(error) = ProductionLifecycleOwnerV1::open_recovered_decision_fetch_startup(
+                verified,
+                projection,
+                &promoted_ledger_root,
+                body_store,
+                &lifecycle_owner_config(),
+                4,
+                payload_store,
+                serve_payloads,
+                ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
+            ) else {
+                panic!("a promoted Decision body marker must block duplicate Fetch startup")
+            };
+            match outcome {
+                DecisionBodyMarkerFixture::Validated => {
+                    assert!(error.reason().contains("exact validated marker"))
+                }
+                DecisionBodyMarkerFixture::Rejected => {
+                    assert!(
+                        error
+                            .reason()
+                            .contains("deterministic local body rejection")
+                    )
+                }
+            }
+            assert!(
+                !promoted_ledger_root.exists(),
+                "promoted body conflicts must stop before LedgerV1 opens"
+            );
+
+            let quarantined_safety =
+                TempDir::new().expect("temporary quarantined Decision marker WAL");
+            let quarantined_storage =
+                TempDir::new().expect("temporary quarantined Decision marker stores");
+            let quarantined_body_root = quarantined_storage.path().join("body");
+            let quarantined_ledger_root = quarantined_storage.path().join("ledger");
+            let (startup, body_store) = write_decision_startup_with_body_marker(
+                &quarantined_safety,
+                &quarantined_body_root,
+                quarantined_marker,
+                outcome,
+            );
+            let context = startup.adapter.wire_context.clone();
+            drop(body_store);
+            drop(startup);
+            let reopened =
+                super::super::v2_body_store::V2BodyStore::open(&quarantined_body_root, context)
+                    .expect("reopen quarantined Decision body marker");
+            let Err(error) = reopened.into_revalidated_startup() else {
+                panic!("a quarantined Decision marker cannot cross the startup seal")
+            };
+            assert!(matches!(
+                error,
+                super::super::v2_body_store::V2BodyStoreError::UnrevalidatedValidationMarkers
+            ));
+            assert!(
+                !quarantined_ledger_root.exists(),
+                "quarantined body markers stop before LedgerV1 opens"
+            );
+            assert!(!quarantined_storage.path().join("serve").exists());
+        }
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn bls_revalidated_decision_body_cut_is_same_store_and_drop_restores_exactly() {
+        let safety = TempDir::new().expect("temporary Decision body-cut WAL");
+        let storage = TempDir::new().expect("temporary Decision body-cut store");
+        let body_root = storage.path().join("body");
+        let (startup, body_store) = write_decision_startup_with_body_marker(
+            &safety,
+            &body_root,
+            0xD5,
+            DecisionBodyMarkerFixture::Validated,
+        );
+        let context_directory = std::fs::read_dir(&body_root)
+            .expect("read Decision body-store root")
+            .next()
+            .expect("body-store root contains one context")
+            .expect("read body-store context entry")
+            .path();
+        let frames_before = std::fs::read_dir(&context_directory)
+            .expect("read Decision body-store context")
+            .map(|entry| {
+                let path = entry.expect("read Decision body-store frame entry").path();
+                let bytes = std::fs::read(&path).expect("read Decision body-store frame");
+                (
+                    path.file_name().expect("frame has a file name").to_owned(),
+                    bytes,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let authenticated = startup
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _)| panic!("authenticate Decision body cut: {error}"));
+        let AuthenticatedRecoveredAdapterStartup {
+            adapter,
+            effects,
+            authority,
+        } = authenticated;
+        assert!(effects.is_empty());
+        let verified = VerifiedHeightContext {
+            context: adapter.wire_context.clone(),
+            proofs_of_possession: adapter.proofs_of_possession.clone(),
+            parent_verification: adapter.parent_verification.clone(),
+        };
+        let RecoveredWalStartupAuthorityV1::DecisionFetch(fetch) = authority else {
+            panic!("Decision body cut requires exact Fetch authority")
+        };
+        let projection =
+            crate::sumeragi::v2_runtime::project_recovered_wal_decision_fetch(&verified, fetch)
+                .unwrap_or_else(|_| panic!("project exact Decision body cut"));
+        let mut body_store = body_store
+            .into_revalidated_startup()
+            .expect("seal semantically revalidated Decision body store");
+        assert!(body_store.matches_context(verified.context()));
+        let mut foreign_context = verified.context().clone();
+        foreign_context.height = foreign_context
+            .height
+            .checked_add(1)
+            .expect("fixture height advances");
+        assert!(!body_store.matches_context(&foreign_context));
+        let identity = body_store.instance_identity();
+        for attempt in 0..2 {
+            let body = body_store
+                .detach_recovered_decision_apply_body(&projection)
+                .unwrap_or_else(|error| panic!("detach Decision body attempt {attempt}: {error}"));
+            assert!(body.exactly_matches_decision(&projection));
+            assert!(body.exactly_matches_store_for_test(&identity, verified.context()));
+            assert!(
+                body.prepare_replay_lineage(&verified, &projection)
+                    .is_some(),
+                "the same-store cut derives one closed Decision body replay lineage"
+            );
+            drop(body);
+        }
+        let body = body_store
+            .detach_recovered_decision_apply_body(&projection)
+            .expect("detach Decision body for the closed adapter preview");
+        let replay = body
+            .prepare_replay_lineage(&verified, &projection)
+            .expect("derive the exact Decision body replay lineage");
+        let preview = body
+            .into_adapter_preview(adapter, &verified, projection, replay)
+            .unwrap_or_else(|error| {
+                panic!("stage exact Decision body preview: {}", error.reason())
+            });
+        assert!(
+            preview.validates_for_test(),
+            "the closed composite retains exact Fetch, body, replay, effects, and pending lineage"
+        );
+        drop(preview);
+        let reopened = reopen_authenticated_decision_startup(
+            &safety,
+            verified.context(),
+            verified.proofs_of_possession.clone(),
+            0xD5,
+        )
+        .authenticate_final_wal_startup_authority()
+        .unwrap_or_else(|(error, _)| panic!("reauthenticate restored Decision body: {error}"));
+        let AuthenticatedRecoveredAdapterStartup {
+            adapter: restored_adapter,
+            effects: restored_effects,
+            authority: restored_authority,
+        } = reopened;
+        assert!(restored_effects.is_empty());
+        let RecoveredWalStartupAuthorityV1::DecisionFetch(restored_fetch) = restored_authority
+        else {
+            panic!("restored Decision body retains its exact Fetch authority")
+        };
+        let restored_projection =
+            crate::sumeragi::v2_runtime::project_recovered_wal_decision_fetch(
+                &verified,
+                restored_fetch,
+            )
+            .unwrap_or_else(|_| panic!("project restored Decision body Fetch"));
+        let restored_body = body_store
+            .detach_recovered_decision_apply_body(&restored_projection)
+            .expect("the dropped composite restores its exact in-memory body cut");
+        assert!(restored_body.exactly_matches_decision(&restored_projection));
+        drop(restored_body);
+        drop(restored_adapter);
+        let frames_after = std::fs::read_dir(&context_directory)
+            .expect("reread Decision body-store context")
+            .map(|entry| {
+                let path = entry
+                    .expect("reread Decision body-store frame entry")
+                    .path();
+                let bytes = std::fs::read(&path).expect("reread Decision body-store frame");
+                (
+                    path.file_name().expect("frame has a file name").to_owned(),
+                    bytes,
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(frames_after, frames_before);
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn bls_unified_decision_body_preflight_stops_before_serve_or_ledger() {
+        let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+        let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+            .expect("deterministic Decision body-preflight retainer");
+        for (outcome, marker, expected) in [
+            (
+                DecisionBodyMarkerFixture::Validated,
+                0xD6,
+                "restart-closed Decision Apply publication is not implemented",
+            ),
+            (
+                DecisionBodyMarkerFixture::Rejected,
+                0xD7,
+                "recovered Decision body was deterministically rejected",
+            ),
+        ] {
+            crate::sumeragi::status::clear_v2_status();
+            let safety = TempDir::new().expect("temporary Decision preflight WAL");
+            let storage = TempDir::new().expect("temporary Decision preflight stores");
+            let (startup, body_store) = write_decision_startup_with_body_marker(
+                &safety,
+                &storage.path().join("body"),
+                marker,
+                outcome,
+            );
+            let authenticated = startup
+                .authenticate_final_wal_startup_authority()
+                .unwrap_or_else(|(error, _)| {
+                    panic!("authenticate Decision body preflight: {error}")
+                });
+            let body_store = body_store
+                .into_revalidated_startup()
+                .expect("seal promoted Decision body outcome");
+            let ledger_root = storage.path().join("ledger");
+            let serve_root = storage.path().join("serve");
+            let Err(error) = authenticated.open_production_lifecycle_owner_v1(
+                &lifecycle_owner_config(),
+                4,
+                &ledger_root,
+                &serve_root,
+                body_store,
+                &local_signer,
+            ) else {
+                panic!("a terminal Decision body cannot reinstall Fetch")
+            };
+            assert!(error.to_string().contains(expected));
+            assert!(!ledger_root.exists());
+            assert!(!serve_root.exists());
+            assert!(crate::sumeragi::status::v2_status().is_none());
+        }
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn bls_decision_fetch_same_key_drift_fails_without_rewrite() {
+        let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+        let mutations: [(&str, fn(&std::path::Path, LifecycleContext) -> bool); 2] = [
+            ("owner", substitute_recovered_decision_fetch_owner_for_test),
+            (
+                "replay authority",
+                substitute_recovered_decision_fetch_replay_authority_for_test,
+            ),
+        ];
+        for (index, (label, mutate)) in mutations.into_iter().enumerate() {
+            crate::sumeragi::status::clear_v2_status();
+            let safety = TempDir::new().expect("temporary Decision drift WAL");
+            let storage = TempDir::new().expect("temporary Decision drift stores");
+            let marker = 0xD8_u8
+                .checked_add(u8::try_from(index).expect("bounded drift fixture index"))
+                .expect("bounded drift fixture marker");
+            let (startup, context, proofs) = write_authenticated_decision_startup(&safety, marker);
+            let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+                .expect("deterministic Decision drift retainer");
+            let ledger_root = storage.path().join("ledger");
+            let serve_root = storage.path().join("serve");
+            let body_root = storage.path().join("body");
+            let owner = startup
+                .authenticate_final_wal_startup_authority()
+                .unwrap_or_else(|(error, _)| {
+                    panic!("authenticate initial Decision drift startup: {error}")
+                })
+                .open_production_lifecycle_owner_v1_from_roots_for_test(
+                    &lifecycle_owner_config(),
+                    4,
+                    &ledger_root,
+                    &serve_root,
+                    &body_root,
+                    super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+                    &local_signer,
+                )
+                .unwrap_or_else(|error| panic!("open initial Decision drift owner: {error}"));
+            drop(owner);
+            assert!(
+                mutate(
+                    &ledger_root,
+                    super::super::v2_lifecycle_projection::lifecycle_context(&context),
+                ),
+                "construct structurally valid {label} drift"
+            );
+            let ledger_path = ledger_root.join("lifecycle-ledger-v1.norito");
+            let drifted = std::fs::read(&ledger_path).expect("read drifted Decision ledger");
+
+            crate::sumeragi::status::clear_v2_status();
+            let reopened = reopen_authenticated_decision_startup(&safety, &context, proofs, marker)
+                .authenticate_final_wal_startup_authority()
+                .unwrap_or_else(|(error, _)| {
+                    panic!("reauthenticate Decision {label} drift startup: {error}")
+                });
+            assert!(
+                reopened
+                    .open_production_lifecycle_owner_v1_from_roots_for_test(
+                        &lifecycle_owner_config(),
+                        4,
+                        &ledger_root,
+                        &serve_root,
+                        &body_root,
+                        super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+                        &local_signer,
+                    )
+                    .is_err(),
+                "same-key Decision {label} drift must fail closed"
+            );
+            assert_eq!(
+                std::fs::read(&ledger_path).expect("reread drifted Decision ledger"),
+                drifted,
+                "failed Decision {label} recovery must not rewrite the incumbent"
+            );
+        }
+        crate::sumeragi::status::clear_v2_status();
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn recovered_signature_fifo_uses_latest_exact_owner_before_terminal_wal_frame() {
+        let directory = TempDir::new().expect("temporary Proposal FIFO WAL");
+        let (context, keys, proofs) = authenticated_context();
+        let round_zero = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let round_one = wire::ConsensusRound {
+            view: 1,
+            ..round_zero
+        };
+        let local = context.leader(round_one.view);
+        let subject = subject(0xC6);
+        let commitment = execution_commitment(0xC6);
+        let mut old_prepare = wire::QuorumCertificate {
+            round: round_zero,
+            proposal_round: round_zero,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment: commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        };
+        authenticate_qc(&mut old_prepare, &keys);
+        let timeout = authenticated_timeout_certificate(
+            round_zero,
+            Some(old_prepare.clone()),
+            vec![0, 1, 2],
+            &keys,
+        );
+        let chunks = wire::encode_payload_chunks(context.da_layout, b"recovered signature fifo")
+            .expect("encode FIFO proposal payload");
+        let manifest = wire::PayloadManifest::derive(
+            &context,
+            round_one,
+            subject,
+            u64::try_from(b"recovered signature fifo".len()).expect("small FIFO payload"),
+            &chunks,
+        )
+        .expect("derive FIFO proposal manifest");
+        let proposal = wire::Proposal {
+            round: round_one,
+            proposer: local,
+            subject,
+            manifest,
+            justification: wire::ProposalJustification::Timeout(wire::TimeoutJustification {
+                timeout_certificate: timeout.clone(),
+                highest_prepare_qc: Some(old_prepare.clone()),
+            }),
+            signature: Vec::new(),
+        };
+        let prepare_vote = wire::Vote {
+            round: round_one,
+            proposal_round: round_one,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment: commitment,
+            signer: local,
+            signature: Vec::new(),
+        };
+        let mut current_prepare = wire::QuorumCertificate {
+            round: round_one,
+            proposal_round: round_one,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment: commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        };
+        authenticate_qc(&mut current_prepare, &keys);
+        let current_commit = wire::Vote {
+            phase: wire::GlobalPhase::Commit,
+            ..prepare_vote.clone()
+        };
+        let old_commit = wire::Vote {
+            round: round_zero,
+            proposal_round: round_zero,
+            phase: wire::GlobalPhase::Commit,
+            ..prepare_vote.clone()
+        };
+        let startup = write_and_reopen_authenticated_wal_startup(
+            &directory,
+            &context,
+            &proofs,
+            local,
+            [0xC6; 32],
+            vec![
+                WalRecordV2::LockAndCommit {
+                    prepare: old_prepare,
+                    vote: old_commit,
+                },
+                WalRecordV2::InstallTimeout(timeout),
+                WalRecordV2::ProposalIntent(proposal.clone()),
+                WalRecordV2::ProposalIntent(proposal.clone()),
+                WalRecordV2::PrepareIntent(prepare_vote.clone()),
+                WalRecordV2::PrepareIntent(prepare_vote.clone()),
+                WalRecordV2::LockAndCommit {
+                    prepare: current_prepare.clone(),
+                    vote: current_commit.clone(),
+                },
+                WalRecordV2::LockAndCommit {
+                    prepare: current_prepare.clone(),
+                    vote: current_commit.clone(),
+                },
+            ],
+        );
+        assert!(matches!(
+            startup.effects.as_slice(),
+            [AdapterEffect::Sign {
+                request: SignRequest::Proposal(observed),
+                ..
+            }] if observed == &proposal
+        ));
+        assert_eq!(startup.adapter.reducer.queued_signatures().count(), 2);
+
+        let authenticated = startup
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _)| panic!("authenticate FIFO Proposal owner: {error}"));
+        let RecoveredWalStartupAuthorityV1::ControlSign(control) = &authenticated.authority else {
+            panic!("the current FIFO head must be the Proposal control Sign")
+        };
+        let frames = authenticated.adapter.wal.recovered_records();
+        assert!(control.wal_identity.exactly_matches_record(&frames[3]));
+        assert!(
+            !control
+                .wal_identity
+                .exactly_matches_record(frames.last().expect("terminal FIFO frame"))
+        );
+        let AuthenticatedRecoveredAdapterStartup {
+            mut adapter,
+            effects,
+            authority,
+        } = authenticated;
+        assert!(effects.is_empty());
+        drop(authority);
+
+        let tag = adapter.current_tag();
+        let mut after_proposal = adapter
+            .signature_completed(tag, vec![0xA1; 96])
+            .expect("complete recovered Proposal")
+            .into_effects();
+        let prepare_sign = take_current_sign(&mut after_proposal);
+        assert!(matches!(
+            prepare_sign,
+            AdapterEffect::Sign {
+                request: SignRequest::Vote(ref vote),
+                ..
+            } if vote == &prepare_vote
+        ));
+        let mut current = vec![prepare_sign];
+        let prepare_owner = adapter
+            .authenticate_recovered_wal_vote_sign(&mut current)
+            .expect("authenticate current recovered Prepare")
+            .expect("Prepare has one WAL owner");
+        assert!(current.is_empty());
+        assert!(prepare_owner.exactly_matches_wal_record(&adapter.wal.recovered_records()[5]));
+        let prepare_tag = prepare_owner.tag();
+        drop(prepare_owner);
+
+        let mut after_prepare = adapter
+            .signature_completed(prepare_tag, vec![0xA2; 96])
+            .expect("complete recovered Prepare")
+            .into_effects();
+        let commit_sign = take_current_sign(&mut after_prepare);
+        assert!(matches!(
+            commit_sign,
+            AdapterEffect::Sign {
+                request: SignRequest::Vote(ref vote),
+                ..
+            } if vote == &current_commit
+        ));
+        let mut current = vec![commit_sign];
+        let commit_owner = adapter
+            .authenticate_recovered_wal_vote_sign(&mut current)
+            .expect("authenticate current recovered Commit")
+            .expect("Commit has one WAL owner");
+        assert!(current.is_empty());
+        assert!(commit_owner.exactly_matches_wal_record(&adapter.wal.recovered_records()[7]));
+        assert_eq!(commit_owner.prepare_certificate(), Some(&current_prepare));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn recovered_current_timeout_then_historical_commit_keeps_intrinsic_vote_round() {
+        let directory = TempDir::new().expect("temporary Timeout/Commit FIFO WAL");
+        let (context, keys, proofs) = authenticated_context();
+        let locked_round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let current_round = wire::ConsensusRound {
+            view: 1,
+            ..locked_round
+        };
+        let local = 0;
+        let subject = subject(0xC7);
+        let commitment = execution_commitment(0xC7);
+        let mut locked_prepare = wire::QuorumCertificate {
+            round: locked_round,
+            proposal_round: locked_round,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment: commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        };
+        authenticate_qc(&mut locked_prepare, &keys);
+        let historical_commit = wire::Vote {
+            round: locked_round,
+            proposal_round: locked_round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment: commitment,
+            signer: local,
+            signature: Vec::new(),
+        };
+        let installed_timeout =
+            authenticated_timeout_certificate(locked_round, None, vec![0, 1, 2], &keys);
+        let current_timeout = wire::TimeoutVote {
+            round: current_round,
+            highest_prepare_qc: Some(locked_prepare.clone()),
+            signer: local,
+            signature: Vec::new(),
+        };
+        let startup = write_and_reopen_authenticated_wal_startup(
+            &directory,
+            &context,
+            &proofs,
+            local,
+            [0xC7; 32],
+            vec![
+                WalRecordV2::LockAndCommit {
+                    prepare: locked_prepare.clone(),
+                    vote: historical_commit.clone(),
+                },
+                WalRecordV2::InstallTimeout(installed_timeout),
+                WalRecordV2::TimeoutIntent(current_timeout.clone()),
+            ],
+        );
+        assert!(matches!(
+            startup.effects.as_slice(),
+            [AdapterEffect::Sign {
+                request: SignRequest::TimeoutVote(observed),
+                ..
+            }] if observed == &current_timeout
+        ));
+        assert_eq!(startup.adapter.reducer.queued_signatures().count(), 1);
+        let authenticated = startup
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _)| panic!("authenticate current Timeout owner: {error}"));
+        let RecoveredWalStartupAuthorityV1::ControlSign(control) = &authenticated.authority else {
+            panic!("the current FIFO head must be the Timeout control Sign")
+        };
+        assert!(
+            control.wal_identity.exactly_matches_record(
+                authenticated
+                    .adapter
+                    .wal
+                    .recovered_records()
+                    .last()
+                    .expect("final TimeoutIntent frame")
+            )
+        );
+        let AuthenticatedRecoveredAdapterStartup {
+            mut adapter,
+            effects,
+            authority,
+        } = authenticated;
+        assert!(effects.is_empty());
+        drop(authority);
+
+        let tag = adapter.current_tag();
+        let mut after_timeout = adapter
+            .signature_completed(tag, vec![0xB1; 96])
+            .expect("complete current recovered Timeout")
+            .into_effects();
+        let commit_sign = take_current_sign(&mut after_timeout);
+        assert!(matches!(
+            commit_sign,
+            AdapterEffect::Sign {
+                tag: commit_tag,
+                request: SignRequest::Vote(ref vote),
+            } if commit_tag.view() == current_round.view
+                && vote == &historical_commit
+                && vote.round == locked_round
+        ));
+        let mut current = vec![commit_sign];
+        let commit_owner = adapter
+            .authenticate_recovered_wal_vote_sign(&mut current)
+            .expect("authenticate historical recovered Commit")
+            .expect("historical Commit has one WAL owner");
+        assert!(current.is_empty());
+        assert!(commit_owner.exactly_matches_wal_record(&adapter.wal.recovered_records()[0]));
+        assert_eq!(commit_owner.tag().view(), current_round.view);
+        assert_eq!(commit_owner.vote().round, locked_round);
+        assert_eq!(commit_owner.prepare_certificate(), Some(&locked_prepare));
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
+    fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_sources() {
+        let exact_directory = TempDir::new().expect("temporary exact Decision Fetch WAL");
+        let (context, keys, proofs) = authenticated_context();
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let decision_subject = subject(0xC8);
+        let mut decision = wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject: decision_subject,
+            execution_commitment: execution_commitment(0xC8),
+            signers: vec![0, 1, 2],
+            aggregate_signature: Vec::new(),
+        };
+        authenticate_qc(&mut decision, &keys);
+        let startup = write_and_reopen_authenticated_wal_startup(
+            &exact_directory,
+            &context,
+            &proofs,
+            0,
+            [0xC8; 32],
+            vec![WalRecordV2::Decision(decision.clone())],
+        );
+        let exact_effect = startup
+            .effects
+            .first()
+            .expect("Decision replays one exact Fetch")
+            .clone();
+        let authenticated = startup
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _)| panic!("authenticate exact Decision Fetch: {error}"));
+        assert!(authenticated.effects.is_empty());
+        assert!(matches!(
+            authenticated.authority,
+            RecoveredWalStartupAuthorityV1::DecisionFetch(_)
+        ));
+
+        let manifest_directory = TempDir::new().expect("temporary mutated-manifest WAL");
+        let mut retained = write_and_reopen_authenticated_wal_startup(
+            &manifest_directory,
+            &context,
+            &proofs,
+            0,
+            [0xC8; 32],
+            vec![WalRecordV2::Decision(decision.clone())],
+        );
+        let AdapterEffect::FetchBody { manifest, .. } = &mut retained.effects[0] else {
+            panic!("Decision replay effect must remain FetchBody")
+        };
+
+        let chunks = wire::encode_payload_chunks(context.da_layout, b"forbidden guessed manifest")
+            .expect("encode mutation payload");
+        let guessed = wire::PayloadManifest::derive(
+            &context,
+            round,
+            decision_subject,
+            u64::try_from(b"forbidden guessed manifest".len()).expect("small mutation payload"),
+            &chunks,
+        )
+        .expect("derive mutation manifest");
+        *manifest = Some(guessed);
+        let Err((error, _retained)) = retained.authenticate_final_wal_startup_authority() else {
+            panic!("a guessed Decision manifest must fail exact classification")
+        };
+        assert!(matches!(
+            error,
+            AdapterError::RecoveredDecisionFetchMismatch
+        ));
+
+        let certificate_directory = TempDir::new().expect("temporary foreign-certificate WAL");
+        let mut retained = write_and_reopen_authenticated_wal_startup(
+            &certificate_directory,
+            &context,
+            &proofs,
+            0,
+            [0xC8; 32],
+            vec![WalRecordV2::Decision(decision.clone())],
+        );
+        let mut foreign_certificate = decision.clone();
+        foreign_certificate.subject = subject(0xC9);
+        foreign_certificate.execution_commitment = execution_commitment(0xC9);
+        authenticate_qc(&mut foreign_certificate, &keys);
+        let AdapterEffect::FetchBody {
+            round: effect_round,
+            subject: effect_subject,
+            certificate,
+            ..
+        } = &mut retained.effects[0]
+        else {
+            panic!("Decision replay effect must remain FetchBody")
+        };
+        *effect_round = foreign_certificate.proposal_round;
+        *effect_subject = foreign_certificate.subject;
+        *certificate = Some(foreign_certificate);
+        let Err((error, _retained)) = retained.authenticate_final_wal_startup_authority() else {
+            panic!("a foreign Decision certificate must fail exact classification")
+        };
+        assert!(matches!(
+            error,
+            AdapterError::RecoveredDecisionFetchMismatch
+        ));
+
+        let sources_directory = TempDir::new().expect("temporary mutated-sources WAL");
+        let mut retained = write_and_reopen_authenticated_wal_startup(
+            &sources_directory,
+            &context,
+            &proofs,
+            0,
+            [0xC8; 32],
+            vec![WalRecordV2::Decision(decision.clone())],
+        );
+        retained.effects[0] = exact_effect;
+        let AdapterEffect::FetchBody {
+            certified_sources, ..
+        } = &mut retained.effects[0]
+        else {
+            panic!("Decision replay effect must remain FetchBody")
+        };
+        certified_sources.pop();
+        let Err((error, _retained)) = retained.authenticate_final_wal_startup_authority() else {
+            panic!("a truncated Decision source roster must fail exact classification")
+        };
+        assert!(matches!(
+            error,
+            AdapterError::RecoveredDecisionFetchMismatch
+        ));
+
+        let locator_directory = TempDir::new().expect("temporary foreign-locator WAL");
+        let authenticated = write_and_reopen_authenticated_wal_startup(
+            &locator_directory,
+            &context,
+            &proofs,
+            0,
+            [0xC8; 32],
+            vec![WalRecordV2::Decision(decision)],
+        )
+        .authenticate_final_wal_startup_authority()
+        .unwrap_or_else(|(error, _)| panic!("authenticate locator fixture: {error}"));
+        let AuthenticatedRecoveredAdapterStartup {
+            adapter,
+            effects,
+            authority,
+        } = authenticated;
+        assert!(effects.is_empty());
+        let RecoveredWalStartupAuthorityV1::DecisionFetch(mut fetch) = authority else {
+            panic!("locator fixture must retain Decision Fetch")
+        };
+        fetch.wal_identity = RecoveredWalFrameIdentity::for_test(0, 1, [0xE8; 32]);
+        let verified = VerifiedHeightContext {
+            context: adapter.wire_context.clone(),
+            proofs_of_possession: adapter.proofs_of_possession.clone(),
+            parent_verification: adapter.parent_verification.clone(),
+        };
+        assert!(
+            crate::sumeragi::v2_runtime::project_recovered_wal_decision_fetch(&verified, fetch)
+                .is_err(),
+            "a substituted exact-shaped WAL locator must not project Decision Fetch authority"
+        );
+    }
+
+    #[test]
+    fn bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store() {
+        let proposal_safety = TempDir::new().expect("temporary ProposalIntent classifier WAL");
+        let timeout_safety = TempDir::new().expect("temporary TimeoutIntent classifier WAL");
+        persist_proposal_intent_for_control_recovery(&proposal_safety, 0xC3);
+        persist_timeout_intent_for_control_recovery(&timeout_safety);
+
+        let mut proposal = open_recovered_leader_startup_test(&proposal_safety)
+            .expect("open ProposalIntent startup");
+        let mut timeout =
+            open_recovered_startup_test(&timeout_safety).expect("open TimeoutIntent startup");
+        let proposal_effect = proposal.effects.pop().expect("one Proposal control effect");
+        let timeout_effect = timeout.effects.pop().expect("one Timeout control effect");
+        proposal.effects.push(timeout_effect);
+        timeout.effects.push(proposal_effect);
+        for swapped in [proposal, timeout] {
+            let Err((error, retained)) = swapped.authenticate_final_wal_startup_authority() else {
+                panic!("Proposal/Timeout owner-frame action swaps must fail")
+            };
+            assert!(matches!(error, AdapterError::RecoveredControlSignMismatch));
+            assert_eq!(retained.effects.len(), 1);
+        }
+
+        let mut wrong_tag = open_recovered_leader_startup_test(&proposal_safety)
+            .expect("reopen ProposalIntent for tag mutation");
+        let AdapterEffect::Sign { tag, .. } = &mut wrong_tag.effects[0] else {
+            unreachable!("ProposalIntent replays one Sign")
+        };
+        *tag = reducer::EventTag::new(
+            tag.height(),
+            tag.view(),
+            reducer::Generation::new(tag.generation().get().saturating_add(1)),
+        );
+        let Err((error, retained)) = wrong_tag.authenticate_final_wal_startup_authority() else {
+            panic!("mutated recovered control tag must fail")
+        };
+        assert!(matches!(error, AdapterError::RecoveredControlSignMismatch));
+        assert_eq!(retained.effects.len(), 1);
+
+        let mut extra = open_recovered_leader_startup_test(&proposal_safety)
+            .expect("reopen ProposalIntent for residual mutation");
+        let duplicate = extra.effects[0].clone();
+        extra.effects.push(duplicate);
+        let Err((error, retained)) = extra.authenticate_final_wal_startup_authority() else {
+            panic!("an extra residual effect must fail before authority removal")
+        };
+        assert!(matches!(error, AdapterError::RecoveredControlSignMismatch));
+        assert_eq!(retained.effects.len(), 2);
+
+        let phase_safety = TempDir::new().expect("temporary phase/control exclusivity WAL");
+        let (mut phase, _vote, _proposal, _manifest, _validated) =
+            reopen_with_prepare_intent(&phase_safety, 0xC4);
+        let control = open_recovered_startup_test(&timeout_safety)
+            .expect("reopen TimeoutIntent control for dual residual")
+            .effects
+            .into_iter()
+            .next()
+            .expect("one Timeout control effect");
+        phase.effects.push(control);
+        let Err((error, retained)) = phase.authenticate_final_wal_startup_authority() else {
+            panic!("phase-vote and control authority must be mutually exclusive")
+        };
+        assert!(matches!(error, AdapterError::RecoveredVoteSignAmbiguous));
+        assert_eq!(retained.effects.len(), 2);
+
+        let unopened = TempDir::new().expect("unopened classification store root");
+        assert!(!unopened.path().join("ledger").exists());
+        assert!(!unopened.path().join("serve").exists());
+    }
+
+    #[test]
+    fn bls_foreign_control_replay_row_is_never_repaired_or_published() {
+        let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+        let safety = TempDir::new().expect("temporary foreign control replay WAL");
+        let storage = TempDir::new().expect("temporary foreign control lifecycle stores");
+        persist_timeout_intent_for_control_recovery(&safety);
+        crate::sumeragi::status::clear_v2_status();
+        drop(open_control_owner_for_test(&safety, &storage, false));
+        crate::sumeragi::status::clear_v2_status();
+
+        let wire_context = context();
+        let mut context_id = [0_u8; 32];
+        context_id.copy_from_slice(wire_context.id().0.as_ref());
+        assert!(substitute_recovered_control_replay_authority_for_test(
+            &storage.path().join("ledger"),
+            LifecycleContext::new(LifecycleDigest::new(context_id), wire_context.height),
+        ));
+        let ledger_path = storage.path().join("ledger/lifecycle-ledger-v1.norito");
+        let foreign_frame = std::fs::read(&ledger_path).expect("read foreign replay frame");
+
+        let authenticated = open_recovered_startup_test(&safety)
+            .expect("reopen foreign replay control startup")
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _startup)| {
+                panic!("WAL authority itself remains exact: {error}")
+            });
+        let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+            .expect("deterministic BLS control-startup signer");
+        assert!(
+            authenticated
+                .open_production_lifecycle_owner_v1_from_roots_for_test(
+                    &lifecycle_owner_config(),
+                    4,
+                    &storage.path().join("ledger"),
+                    &storage.path().join("serve"),
+                    &storage.path().join("body"),
+                    super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+                    &local_signer,
+                )
+                .is_err(),
+            "a structurally valid foreign replay row must never be repaired in place"
+        );
+        assert_eq!(
+            std::fs::read(&ledger_path).expect("reread rejected foreign replay frame"),
+            foreign_frame,
+            "rejection performs no LedgerV1 fsync"
+        );
+        assert!(crate::sumeragi::status::v2_status().is_none());
+    }
+
+    #[test]
+    fn bls_same_owner_foreign_terminal_control_row_is_rejected_without_rewrite() {
+        let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+        let safety = TempDir::new().expect("temporary same-owner control WAL");
+        let storage = TempDir::new().expect("temporary same-owner lifecycle stores");
+        persist_timeout_intent_for_control_recovery(&safety);
+        crate::sumeragi::status::clear_v2_status();
+        drop(open_control_owner_for_test(&safety, &storage, false));
+        crate::sumeragi::status::clear_v2_status();
+
+        let wire_context = context();
+        let mut context_id = [0_u8; 32];
+        context_id.copy_from_slice(wire_context.id().0.as_ref());
+        assert!(append_same_owner_foreign_terminal_for_test(
+            &storage.path().join("ledger"),
+            LifecycleContext::new(LifecycleDigest::new(context_id), wire_context.height),
+        ));
+        let ledger_path = storage.path().join("ledger/lifecycle-ledger-v1.norito");
+        let foreign_frame = std::fs::read(&ledger_path).expect("read same-owner foreign frame");
+
+        let authenticated = open_recovered_startup_test(&safety)
+            .expect("reopen same-owner control startup")
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _startup)| {
+                panic!("WAL authority itself remains exact: {error}")
+            });
+        let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+            .expect("deterministic same-owner control signer");
+        assert!(
+            authenticated
+                .open_production_lifecycle_owner_v1_from_roots_for_test(
+                    &lifecycle_owner_config(),
+                    4,
+                    &storage.path().join("ledger"),
+                    &storage.path().join("serve"),
+                    &storage.path().join("body"),
+                    super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+                    &local_signer,
+                )
+                .is_err(),
+            "a foreign terminal row cannot share the standalone control owner"
+        );
+        assert_eq!(
+            std::fs::read(&ledger_path).expect("reread rejected same-owner frame"),
+            foreign_frame,
+            "same-owner rejection performs no LedgerV1 rewrite"
+        );
+        assert!(crate::sumeragi::status::v2_status().is_none());
+    }
+
+    #[test]
+    fn bls_mutated_control_frame_identity_fails_before_serve_or_ledger_open() {
+        let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+        let safety = TempDir::new().expect("temporary mutated control frame WAL");
+        let storage = TempDir::new().expect("temporary unopened control stores");
+        persist_timeout_intent_for_control_recovery(&safety);
+        crate::sumeragi::status::clear_v2_status();
+        let mut authenticated = open_recovered_startup_test(&safety)
+            .expect("open exact TimeoutIntent before identity mutation")
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _startup)| panic!("authenticate exact frame first: {error}"));
+        let (frame_sequence, mut foreign_hash) = {
+            let frame = authenticated
+                .adapter
+                .wal
+                .recovered_records()
+                .last()
+                .expect("retained TimeoutIntent frame");
+            (frame.sequence(), frame.frame_hash())
+        };
+        foreign_hash[0] ^= 1;
+        let RecoveredWalStartupAuthorityV1::ControlSign(control) = &mut authenticated.authority
+        else {
+            panic!("TimeoutIntent owns one control Sign")
+        };
+        control.wal_identity = RecoveredWalFrameIdentity::for_test(
+            frame_sequence,
+            frame_sequence
+                .checked_add(1)
+                .expect("fixture persistence id"),
+            foreign_hash,
+        );
+        let body_root = storage.path().join("body");
+        let body_store = super::super::v2_body_store::V2BodyStore::open(
+            &body_root,
+            authenticated.adapter.wire_context.clone(),
+        )
+        .expect("open the runner-owned empty body store");
+        let body_entries_before = std::fs::read_dir(&body_root)
+            .expect("read preflight body directory")
+            .count();
+        let body_store = body_store
+            .into_revalidated_startup()
+            .expect("seal the empty runner-owned body store");
+        let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+            .expect("deterministic BLS control-startup signer");
+        assert!(
+            authenticated
+                .open_production_lifecycle_owner_v1(
+                    &lifecycle_owner_config(),
+                    4,
+                    &storage.path().join("ledger"),
+                    &storage.path().join("serve"),
+                    body_store,
+                    &local_signer,
+                )
+                .is_err()
+        );
+        assert!(body_root.exists());
+        assert_eq!(
+            std::fs::read_dir(&body_root)
+                .expect("reread unchanged preflight body directory")
+                .count(),
+            body_entries_before
+        );
+        assert!(!storage.path().join("ledger").exists());
+        assert!(!storage.path().join("serve").exists());
+        assert!(crate::sumeragi::status::v2_status().is_none());
+    }
+
+    #[test]
+    fn recovered_wal_first_release_source_is_closed_and_store_ordered() {
+        let adapter = include_str!("v2.rs");
+        let runtime = include_str!("v2_runtime.rs");
+        let replay = include_str!("v2_lifecycle_replay_authority.rs");
+        let wal_recovery = include_str!("v2_lifecycle_wal_recovery.rs");
+        let ledger = include_str!("v2_lifecycle_ledger.rs");
+        let registry = include_str!("v2_lifecycle_work_registry.rs");
+
+        let factory_start = adapter
+            .find("pub(crate) fn open_production_lifecycle_owner_v1(")
+            .expect("locate unified lifecycle owner factory");
+        let factory_tail = &adapter[factory_start..];
+        let factory_end = factory_tail
+            .find("fn open_production_lifecycle_owner_v1_from_roots_for_test(")
+            .expect("locate test-only root adapter after the production factory");
+        let factory = &factory_tail[..factory_end];
+        let projection = factory
+            .find("project_recovered_wal_control_sign")
+            .expect("control projection is in the unified factory");
+        let decision_projection = factory
+            .find("project_recovered_wal_decision_fetch")
+            .expect("Decision Fetch projection is in the unified factory");
+        let decision_body_preflight = factory
+            .find("detach_recovered_decision_apply_body")
+            .expect("locate the opaque Decision body preflight");
+        let decision_adapter_preview = factory
+            .find(".into_adapter_preview(adapter, &verified, fetch, lineage)")
+            .expect("locate the consuming recovered Decision adapter preview");
+        let body_handoff = factory
+            .find("into_lifecycle_owner_store")
+            .expect("locate the revalidated same-store handoff");
+        let serve_open = factory
+            .find("CertifiedServePayloadStoreV1::open")
+            .expect("locate Serve store open");
+        let control_open = factory
+            .find("ProductionLifecycleOwnerV1::open_recovered_control_startup")
+            .expect("locate control owner open");
+        let control_status = factory[control_open..]
+            .find("owner.publish_recovered_adapter_status()")
+            .expect("status follows the control owner")
+            + control_open;
+        let decision_open = factory
+            .find("ProductionLifecycleOwnerV1::open_recovered_decision_fetch_startup")
+            .expect("locate Decision Fetch owner open");
+        let decision_status = factory[decision_open..]
+            .find("owner.publish_recovered_adapter_status()")
+            .expect("status follows the Decision Fetch owner")
+            + decision_open;
+        assert!(projection < body_handoff);
+        assert!(decision_projection < decision_body_preflight);
+        assert!(decision_body_preflight < decision_adapter_preview);
+        assert!(decision_adapter_preview < body_handoff);
+        assert!(body_handoff < serve_open);
+        assert!(control_open < control_status);
+        assert!(decision_open < decision_status);
+        assert!(factory[..projection].contains("if !self.effects.is_empty()"));
+        assert!(factory.contains("restart-closed Decision Apply publication is not implemented"));
+        for forbidden in [
+            "V2BodyStore::open_with_policy",
+            "body_root:",
+            "body_signature_policy:",
+        ] {
+            assert!(
+                !factory.contains(forbidden),
+                "production owner factory retained root compatibility surface {forbidden}"
+            );
+        }
+
+        let control_token = adapter
+            .split_once("pub(crate) struct RecoveredWalControlSign")
+            .expect("locate opaque control token")
+            .1
+            .split_once("impl RecoveredWalVoteSign")
+            .expect("locate end of control token surface")
+            .0;
+        for forbidden in [
+            "#[derive(Clone)]",
+            "fn candidate(",
+            "fn effect(",
+            "fn installed_effect(",
+            "fn pending(",
+            "fn locator(",
+            "fn into_parts(",
+            "fn bytes(",
+            "fn ordinal(",
+            "RuntimeLifecycleOrdinalSource",
+        ] {
+            assert!(
+                !control_token.contains(forbidden),
+                "forbidden control surface: {forbidden}"
+            );
+        }
+
+        let control_classifier = adapter
+            .split_once("fn authenticate_recovered_wal_control_sign(")
+            .expect("locate exact control classifier")
+            .1
+            .split_once("fn authenticate_recovered_wal_decision_fetch(")
+            .expect("locate end of exact control classifier")
+            .0;
+        for required in [
+            "WalRecordV2::ProposalIntent(candidate) if candidate == proposal",
+            "reducer::SignableMessage::Proposal(awaiting)",
+            "SignRequest::Proposal(proposal)",
+            "WalRecordV2::TimeoutIntent(candidate) if candidate == vote",
+            "reducer::SignableMessage::TimeoutVote(awaiting)",
+            "SignRequest::TimeoutVote(vote)",
+            "self.wal.recovered_records().iter().rev()",
+            "self.authenticate_recovered_wal_frame(frame)",
+            "startup_effects.as_slice() != [expected.clone()]",
+        ] {
+            assert!(
+                control_classifier.contains(required),
+                "missing exact residual mapping: {required}"
+            );
+        }
+        let decision_classifier = adapter
+            .split_once("fn authenticate_recovered_wal_decision_fetch(")
+            .expect("locate exact Decision Fetch classifier")
+            .1
+            .split_once("fn classify_unsupported_recovered_startup(")
+            .expect("locate end of exact Decision Fetch classifier")
+            .0;
+        for required in [
+            "manifest: None",
+            "certified_sources: expected_sources",
+            "certificate: Some(certificate.clone())",
+            "self.wal.recovered_records().iter().rev()",
+            "self.authenticate_recovered_wal_frame(frame)",
+            "WalRecordV2::Decision(candidate) if candidate == certificate",
+            "startup_effects.as_slice() != [expected.clone()]",
+        ] {
+            assert!(
+                decision_classifier.contains(required),
+                "missing exact Decision Fetch mapping: {required}"
+            );
+        }
+        let exhaustive_classifier = adapter
+            .split_once("pub(crate) fn authenticate_final_wal_startup_authority(")
+            .expect("locate exhaustive startup-authority classifier")
+            .1
+            .split_once("impl AuthenticatedRecoveredAdapterStartup")
+            .expect("locate end of exhaustive startup-authority classifier")
+            .0;
+        let frontier = exhaustive_classifier
+            .find("authenticate_recovered_wal_frontier")
+            .expect("terminal WAL frontier is authenticated first");
+        let phase = exhaustive_classifier
+            .find("authenticate_recovered_wal_vote_sign")
+            .expect("phase vote is classified first");
+        let control = exhaustive_classifier
+            .find("authenticate_recovered_wal_control_sign")
+            .expect("control Sign is classified only without a phase vote");
+        let decision_fetch = exhaustive_classifier
+            .find("authenticate_recovered_wal_decision_fetch")
+            .expect("Decision Fetch is classified only without a Sign");
+        assert!(frontier < phase && phase < control && control < decision_fetch);
+        for required in [
+            "RecoveredWalStartupAuthorityV1::PhaseVote(recovered_vote)",
+            "RecoveredWalStartupAuthorityV1::ControlSign(control)",
+            "RecoveredWalStartupAuthorityV1::DecisionFetch(fetch)",
+            "debug_assert!(self.effects.is_empty())",
+        ] {
+            assert!(
+                exhaustive_classifier.contains(required),
+                "missing exclusive startup-authority branch: {required}"
+            );
+        }
+
+        let runtime_control = runtime
+            .split_once("pub(crate) fn project_recovered_wal_control_sign(")
+            .expect("locate runtime control projection")
+            .1
+            .split_once("/// Ownership-preserving failure")
+            .expect("locate end of runtime control projection")
+            .0;
+        assert!(!runtime_control.contains("RuntimeLifecycleOrdinalSource"));
+        assert!(!runtime_control.contains("CandidateAdmission::new"));
+
+        let authority = replay
+            .split_once("fn exact_recovered_wal_control_authority(")
+            .expect("locate exact control replay authority")
+            .1
+            .split_once("fn exact_recovered_wal_vote_authority(")
+            .expect("locate end of exact control replay authority")
+            .0;
+        for required in [
+            "SignRequest::Proposal(proposal)",
+            "ReplayWalRoleV1::PROPOSAL_INTENT",
+            "LifecycleStageKind::SignProposal",
+            "SignRequest::TimeoutVote(vote)",
+            "ReplayWalRoleV1::TIMEOUT_INTENT",
+            "LifecycleStageKind::SignTimeoutVote",
+        ] {
+            assert!(
+                authority.contains(required),
+                "missing exact control mapping: {required}"
+            );
+        }
+
+        let durable = ledger
+            .split_once("pub(in crate::sumeragi) fn open_recovered_control_startup(")
+            .expect("locate recovered control storage transaction")
+            .1
+            .split_once("/// Bind one paired recovered-WAL open")
+            .expect("locate end of recovered control storage transaction")
+            .0;
+        assert!(durable.contains("stage_authenticated_wal_control_sign"));
+        assert!(durable.contains("if changed"));
+        assert!(durable.contains("persist_exact_successor"));
+        assert!(
+            durable
+                .find("stage_authenticated_wal_control_sign")
+                .expect("classification precedes the registry")
+                < durable
+                    .find("LifecycleWorkRegistryHolder::empty")
+                    .expect("locate fresh registry construction")
+        );
+        assert!(!durable.contains("RuntimeLifecycleOrdinalSource"));
+        assert!(!durable.contains("publish_recovered_adapter_status"));
+        let decision_durable = durable
+            .split_once("pub(in crate::sumeragi) fn open_recovered_decision_fetch_startup(")
+            .expect("locate recovered Decision Fetch storage transaction")
+            .1;
+        let body_parent_check = decision_durable
+            .find("has_exact_recovered_decision_fetch_parent")
+            .expect("validated body is checked before Decision Fetch repair");
+        let quarantined_body_parent_check = decision_durable
+            .find("has_quarantined_recovered_decision_fetch_parent")
+            .expect("quarantined body is checked before Decision Fetch repair");
+        let rejected_body_check = decision_durable
+            .find("has_rejected_recovered_decision_body")
+            .expect("rejected body is checked before Decision Fetch repair");
+        let decision_ledger_open = decision_durable
+            .find("LifecycleLedgerStoreV1::open")
+            .expect("locate Decision Fetch LedgerV1 open");
+        let decision_stage = decision_durable
+            .find("stage_authenticated_wal_decision_fetch")
+            .expect("locate Decision Fetch durable staging");
+        let decision_registry = decision_durable
+            .find("install_recovered_wal_decision_fetch")
+            .expect("locate Decision Fetch carrier installation");
+        assert!(
+            body_parent_check < decision_ledger_open
+                && quarantined_body_parent_check < decision_ledger_open
+                && rejected_body_check < decision_ledger_open
+        );
+        assert!(decision_ledger_open < decision_stage && decision_stage < decision_registry);
+        assert!(decision_durable.contains("if changed"));
+        assert!(decision_durable.contains("persist_exact_successor"));
+
+        for required in [
+            "enum RecoveredWalRegistrySlotV1",
+            "PhaseVote(ConcreteWorkAddress)",
+            "ControlSign(ConcreteWorkAddress)",
+            "DecisionFetch(ConcreteWorkAddress)",
+            "DurableRecoveredWalControlSign",
+            "DurableRecoveredWalDecisionFetch",
+            "exactly_covers_recovered_ready_work_and_wal_authority",
+        ] {
+            assert!(
+                registry.contains(required),
+                "missing complete registry cut: {required}"
+            );
+        }
+        for required in [
+            "struct AuthenticatedRecoveredWalControlProjection",
+            "struct DurableRecoveredWalControlSignCarrierV1",
+            "struct AuthenticatedRecoveredWalDecisionFetchProjection",
+            "struct DurableRecoveredWalDecisionFetchCarrierV1",
+            "there is no parts API",
+        ] {
+            assert!(
+                wal_recovery.contains(required),
+                "missing sealed WAL cut: {required}"
+            );
+        }
+        for required in [
+            "RecoveredWalDecisionFetch",
+            "RecoveredDecisionApplyRequiresDurablePredecessor",
+            "sealed Decision-Fetch startup authority",
+            "exact semantically revalidated BodyFrame marker",
+        ] {
+            assert!(
+                adapter.contains(required),
+                "missing typed Decision TODO: {required}"
+            );
+        }
+        for required in [
+            "WalReplayActionV1::FetchDecision",
+            "certified_sources[..index].contains(source)",
+        ] {
+            assert!(
+                replay.contains(required),
+                "missing exact Decision Fetch replay source: {required}"
+            );
+        }
+    }
+
+    #[test]
+    fn production_lifecycle_owner_factory_opens_the_private_recovered_vote_branch() {
+        let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+        crate::sumeragi::status::clear_v2_status();
+        let safety = TempDir::new().expect("temporary recovered-vote safety store");
+        let storage = TempDir::new().expect("temporary recovered-vote lifecycle stores");
+        let ledger_root = storage.path().join("ledger");
+        let (startup, proposal, manifest, validated) =
+            reopen_with_persisted_prepare_intent(&safety, &storage.path().join("body"), 0xC7);
+        let commitment = validated.execution_commitment();
+
+        {
+            let mut holder =
+                super::super::v2_lifecycle_coordinator::LifecycleWorkRegistryHolder::empty();
+            let joined =
+                join_recovered_prepare_startup(startup, proposal, manifest, validated, &mut holder);
+            let (summary, durable) =
+                joined
+                    .persist_repair_for_test(&ledger_root)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "seed exact repaired recovered-vote ledger: {}",
+                            error.reason()
+                        )
+                    });
+            assert!(summary.parent_advanced() && summary.child_live());
+            drop(durable);
+        }
+
+        let authenticated = open_recovered_startup_test(&safety)
+            .expect("reopen the exact recovered-vote adapter startup")
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _startup)| {
+                panic!("authenticate persisted recovered-vote startup: {error}")
+            });
+        assert!(authenticated.recovered_phase_vote_for_test().is_some());
+        assert!(authenticated.effects.is_empty());
+        let mut body_store = super::super::v2_body_store::V2BodyStore::open(
+            storage.path().join("body"),
+            authenticated.adapter.wire_context.clone(),
+        )
+        .expect("reopen exact recovered-vote body store");
+        body_store
+            .revalidate_recovered_markers(|_| Ok::<_, String>(commitment))
+            .expect("semantically replay exact recovered-vote body marker");
+        let body_store = body_store
+            .into_revalidated_startup()
+            .expect("seal exact recovered-vote body store");
+        let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+            .expect("deterministic recovered-vote Serve retainer");
+        let _owner = authenticated
+            .open_production_lifecycle_owner_v1(
+                &lifecycle_owner_config(),
+                4,
+                &ledger_root,
+                &storage.path().join("serve"),
+                body_store,
+                &local_signer,
+            )
+            .unwrap_or_else(|error| {
+                panic!("open complete recovered-vote lifecycle owner: {error}")
+            });
+        assert_eq!(
+            crate::sumeragi::status::v2_status()
+                .expect("status publishes after the recovered-vote owner exists")
+                .height,
+            context().height,
+        );
+        crate::sumeragi::status::clear_v2_status();
+    }
+
+    #[test]
+    fn production_lifecycle_owner_factory_rejects_residual_effects_before_storage_open() {
+        let safety = TempDir::new().expect("temporary residual-effect safety store");
+        let storage = TempDir::new().expect("temporary residual-effect lifecycle stores");
+        let mut authenticated = open_recovered_startup_test(&safety)
+            .expect("open sealed residual-effect adapter startup")
+            .authenticate_final_wal_startup_authority()
+            .unwrap_or_else(|(error, _startup)| {
+                panic!("authenticate empty recovered WAL: {error}")
+            });
+        let tag = authenticated.adapter.current_tag();
+        authenticated.effects.push(AdapterEffect::StoreBody {
+            tag,
+            round: wire::ConsensusRound {
+                context_id: authenticated.adapter.wire_context.id(),
+                height: authenticated.adapter.wire_context.height,
+                view: tag.view(),
+            },
+            subject: subject(0xF4),
+        });
+        let body_root = storage.path().join("body-must-remain-absent");
+        let ledger_root = storage.path().join("ledger-must-remain-absent");
+        let serve_root = storage.path().join("serve-must-remain-absent");
+        let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+            .expect("deterministic local Serve retainer");
+        let error = match authenticated.open_production_lifecycle_owner_v1_from_roots_for_test(
+            &lifecycle_owner_config(),
+            4,
+            &ledger_root,
+            &serve_root,
+            &body_root,
+            super::super::v2_body_store::BlockSignaturePolicy::RotatingLeader,
+            &local_signer,
+        ) {
+            Ok(_owner) => panic!("unadmitted residual effects must fail startup"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.to_string(),
+            "recovered adapter retained unadmitted startup effects"
+        );
+        assert!(!body_root.exists());
+        assert!(!ledger_root.exists());
+        assert!(!serve_root.exists());
+    }
+
     fn expect_recovered_open_error<'registry>(
         result: Result<
             PublishedRecoveredWalLifecycleStartup<'registry>,
@@ -21483,15 +26208,14 @@ mod tests {
         let directory = TempDir::new().expect("temporary Prepare recovery directory");
         let (startup, expected_vote, proposal, manifest, validated) =
             reopen_with_prepare_intent(&directory, 0xD1);
-        let authenticated = match startup.authenticate_final_wal_vote() {
+        let authenticated = match startup.authenticate_final_wal_startup_authority() {
             Ok(authenticated) => authenticated,
             Err((error, _startup)) => {
-                panic!("authenticate the final recovered PrepareIntent: {error}")
+                panic!("authenticate the current recovered PrepareIntent: {error}")
             }
         };
         let authority = authenticated
-            .recovered_vote
-            .as_ref()
+            .recovered_phase_vote_for_test()
             .expect("PrepareIntent carries one restart vote");
         assert!(
             authenticated.effects.is_empty(),
@@ -21605,15 +26329,14 @@ mod tests {
         let directory = TempDir::new().expect("temporary stale Prepare recovery directory");
         let (startup, _expected_vote, proposal, manifest, validated) =
             reopen_with_prepare_intent(&directory, 0xD3);
-        let authenticated = match startup.authenticate_final_wal_vote() {
+        let authenticated = match startup.authenticate_final_wal_startup_authority() {
             Ok(authenticated) => authenticated,
             Err((error, _startup)) => {
                 panic!("authenticate stale recovered PrepareIntent: {error}")
             }
         };
         let authority = authenticated
-            .recovered_vote
-            .as_ref()
+            .recovered_phase_vote_for_test()
             .expect("PrepareIntent carries one stale-snapshot restart vote");
         let verified = VerifiedHeightContext {
             context: authenticated.adapter.wire_context.clone(),
@@ -21741,6 +26464,87 @@ mod tests {
             restarted_holder.recovered_wal_sign_entry_count_for_test(),
             1,
             "fresh startup leaves one exact closed Sign child after releasing the borrow"
+        );
+    }
+
+    #[test]
+    fn recovered_owner_seal_cannot_relabel_the_authenticated_payload_store() {
+        let safety = TempDir::new().expect("temporary owner-seal safety store");
+        let ledger = TempDir::new().expect("temporary owner-seal ledger");
+        let payload = TempDir::new().expect("temporary owner-seal payload store");
+        let body = TempDir::new().expect("temporary owner-seal body store");
+        let mut holder =
+            super::super::v2_lifecycle_coordinator::LifecycleWorkRegistryHolder::empty();
+        let installed =
+            install_recovered_prepare_startup(&safety, ledger.path(), 0xD0, &mut holder);
+        let verified = verified_from_installed_startup(&installed);
+        let body_store =
+            super::super::v2_body_store::V2BodyStore::open(body.path(), verified.context().clone())
+                .expect("open exact owner-seal body store");
+        let (mut payload_store, recovered_payloads) =
+            super::super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
+                payload.path(),
+                verified.context(),
+            )
+            .expect("open exact owner-seal payload store");
+        let signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
+            .expect("deterministic empty-payload signer");
+        let payloads = recovered_payloads
+            .authenticate(&verified, &signer, &body_store)
+            .expect("authenticate empty owner-seal payload recovery");
+        let (_ledger_store, opened_ledger) =
+            super::super::v2_lifecycle_ledger::LifecycleLedgerStoreV1::open(
+                ledger.path(),
+                super::super::v2_lifecycle_projection::lifecycle_context(verified.context()),
+            )
+            .expect("open exact repaired owner-seal ledger");
+        let mut recovery = AuthenticatedLifecycleRecoveryCut::empty_for_recovered_wal_test(
+            &verified,
+            opened_ledger,
+            payloads,
+        )
+        .expect("assemble owner-seal recovery cut");
+        assert!(
+            installed
+                .installed
+                .seed_parent_recovery_for_test(&mut recovery)
+        );
+        let verified_context = verified.context().clone();
+        let InstalledRecoveredWalLifecycleStartup {
+            adapter,
+            effects,
+            installed,
+        } = installed;
+        let opened = installed
+            .open_coordinator_for_test(&verified, ledger.path(), &mut payload_store, recovery)
+            .unwrap_or_else(|error| {
+                panic!("open exact owner-seal coordinator: {}", error.reason())
+            });
+        let owner_seal = ProductionOpenedRecoveredWalSignLifecycleCut::from_opened_for_test(
+            opened,
+            verified,
+            &body_store,
+            &payload_store,
+        )
+        .into_production_owner_open()
+        .unwrap_or_else(|_opened| panic!("convert exact open into owner seal"));
+        let (foreign_payload_store, _foreign_recovery) =
+            super::super::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1::open(
+                payload.path(),
+                &verified_context,
+            )
+            .expect("reopen the same payload path as a distinct instance");
+        let paired = ProductionRecoveredLifecycleOwnerStartupV1 {
+            adapter_startup: ProductionLifecycleAdapterStartupV1::recovered(adapter, effects),
+            opened: owner_seal,
+        };
+        let error = match paired.into_owner(holder, foreign_payload_store, body_store) {
+            Ok(_owner) => panic!("same-path foreign payload-store instance must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.to_string(),
+            "authenticated lifecycle storage instances changed before startup"
         );
     }
 
@@ -22181,15 +26985,14 @@ mod tests {
 
         let startup = open_recovered_startup_test(&directory)
             .expect("replay authenticated LockAndCommit behind the sealed startup cut");
-        let authenticated = match startup.authenticate_final_wal_vote() {
+        let authenticated = match startup.authenticate_final_wal_startup_authority() {
             Ok(authenticated) => authenticated,
             Err((error, _startup)) => {
-                panic!("authenticate the final recovered LockAndCommit: {error}")
+                panic!("authenticate the current recovered LockAndCommit: {error}")
             }
         };
         let authority = authenticated
-            .recovered_vote
-            .as_ref()
+            .recovered_phase_vote_for_test()
             .expect("LockAndCommit carries one restart vote");
         assert!(authenticated.effects.is_empty());
         assert!(authority.wal_identity().is_exact());
@@ -22226,11 +27029,11 @@ mod tests {
             reopen_with_prepare_intent(&directory, 0xD3);
         let wal_path = directory.path().join("safety.wal");
         let durable_before = std::fs::read(&wal_path).expect("read sealed WAL before drop");
-        let authenticated = match startup.authenticate_final_wal_vote() {
+        let authenticated = match startup.authenticate_final_wal_startup_authority() {
             Ok(authenticated) => authenticated,
             Err((error, _startup)) => panic!("authenticate exact replay vote: {error}"),
         };
-        assert!(authenticated.recovered_vote.is_some());
+        assert!(authenticated.recovered_phase_vote_for_test().is_some());
         assert!(
             authenticated.effects.iter().all(|effect| !matches!(
                 effect,
@@ -22254,15 +27057,15 @@ mod tests {
         let repeated = open_recovered_startup_test(&directory)
             .expect("the unchanged WAL can be authenticated by a new sealed startup instance");
         let repeated = repeated
-            .authenticate_final_wal_vote()
+            .authenticate_final_wal_startup_authority()
             .unwrap_or_else(|(error, _startup)| panic!("reauthenticate unchanged WAL: {error}"));
-        assert!(repeated.recovered_vote.is_some());
+        assert!(repeated.recovered_phase_vote_for_test().is_some());
         assert!(repeated.effects.is_empty());
         drop(repeated);
     }
 
     #[test]
-    fn recovered_startup_exposes_authenticated_non_vote_wal_records() {
+    fn recovered_startup_seals_authenticated_control_wal_records() {
         let directory = TempDir::new().expect("temporary non-vote recovery directory");
         let (mut adapter, startup) = open_test(&directory).expect("open timeout replay fixture");
         assert!(startup.is_empty());
@@ -22282,23 +27085,14 @@ mod tests {
         let startup = open_recovered_startup_test(&directory)
             .expect("replay the durable TimeoutIntent behind the sealed startup cut");
         let authenticated = startup
-            .authenticate_final_wal_vote()
+            .authenticate_final_wal_startup_authority()
             .unwrap_or_else(|(error, _startup)| panic!("authenticate TimeoutIntent: {error}"));
+        assert!(authenticated.has_recovered_control_sign_for_test());
+        assert!(authenticated.effects.is_empty());
         assert!(
-            authenticated.recovered_vote.is_none(),
-            "TimeoutIntent owns no phase-vote continuation"
+            authenticated.finish_without_wal_vote().is_err(),
+            "a control Sign cannot escape through the no-authority path"
         );
-        let Ok((adapter, startup)) = authenticated.finish_without_wal_vote() else {
-            panic!("authenticated non-vote startup must use the ordinary ready path")
-        };
-        assert!(matches!(
-            startup.as_slice(),
-            [AdapterEffect::Sign {
-                request: SignRequest::TimeoutVote(_),
-                ..
-            }]
-        ));
-        assert_eq!(adapter.wal.recovered_records().len(), 1);
     }
 
     #[test]
@@ -22981,6 +27775,251 @@ mod tests {
         assert_registry_eq(&adapter.registry, &registry_before);
         assert_eq!(adapter.reducer_fence_generation, fence_before);
         assert_eq!(adapter.wal.recovered_records().len(), wal_records_before);
+    }
+
+    #[test]
+    fn ready_validate_prepare_sign_uses_real_wal_and_retains_pre_wal_retry() {
+        let directory = TempDir::new().expect("temporary Ready Validate Sign directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let (tag, manifest, _durable, validated) =
+            advance_direct_validation_fixture_to_durable(&mut adapter, 0xB9);
+        let reducer_before = adapter.reducer.clone();
+        let registry_before = adapter.registry.clone();
+        let last_progress_before = adapter.last_progress;
+        let fence_before = adapter.reducer_fence_generation;
+        let (validate, validate_pending) =
+            ordinary_validate_predecessor_for_test(tag, manifest.round, manifest.subject, 61_001);
+        let DirectValidationSucceededPreparation::Persist(preview) = adapter
+            .prepare_direct_validation_succeeded(tag, manifest.round, manifest.subject, &validated)
+            .expect("preview exact successful validation")
+        else {
+            panic!("ordinary validation must stage PrepareIntent")
+        };
+        let publication = SealedReadyDurableValidateAdapterPreview(
+            ReadyDurableValidateAdapterPreviewKind::ValidatedPersist(preview),
+        )
+        .preflight_publication()
+        .expect("preflight PrepareIntent publication");
+        let exact_sign = match &publication.0 {
+            ReadyDurableValidateAdapterPublicationState::ValidatedPersist(prepared) => {
+                assert!(prepared.registered_prepare.is_none());
+                prepared.sign_effect.clone()
+            }
+            _ => unreachable!("fixture retains one Persist publication"),
+        };
+
+        let (foreign_validate, foreign_pending) =
+            ordinary_validate_predecessor_for_test(tag, manifest.round, subject(0xBA), 61_002);
+        let publication = match publication.bind_validate_sign_predecessor(
+            ReadyValidateSignPredecessorAuthority::for_test(&foreign_validate, &foreign_pending),
+        ) {
+            Ok(_) => panic!("foreign predecessor cannot bind the WAL Sign intent"),
+            Err(publication) => publication,
+        };
+        let ReadyDurableValidateAdapterPublicationState::ValidatedPersist(prepared) =
+            &publication.0
+        else {
+            unreachable!("failed pre-WAL join returns the exact publication")
+        };
+        assert!(prepared._adapter.wal.recovered_records().is_empty());
+        assert!(prepared._adapter.pending_persistence_id.is_none());
+        assert!(!prepared._adapter.fail_closed);
+
+        let bound = publication
+            .bind_validate_sign_predecessor(ReadyValidateSignPredecessorAuthority::for_test(
+                &validate,
+                &validate_pending,
+            ))
+            .unwrap_or_else(|_| panic!("returned publication remains exactly retryable"));
+        assert!(bound.pre_wal_is_exact());
+        let persisted = bound
+            .append_live_wal()
+            .unwrap_or_else(|_| panic!("append and fsync exact PrepareIntent"));
+        assert_eq!(persisted.adapter.wal.recovered_records().len(), 1);
+        assert_eq!(persisted.adapter.pending_persistence_id, Some(1));
+        assert!(!persisted.adapter.fail_closed);
+        assert!(
+            persisted
+                .persisted_sign
+                .as_ref()
+                .expect("post-WAL fixture retains its nested Sign seal")
+                .exactly_matches_validate_sign_for_test(
+                    &exact_sign,
+                    validate_pending.causal_lifecycle_key(),
+                )
+        );
+        assert!(matches!(
+            persisted
+                .next_reducer
+                .as_ref()
+                .expect("post-WAL fixture retains staged reducer state")
+                .awaiting_signature(),
+            Some(reducer::SignableMessage::Vote(vote))
+                if vote.phase() == reducer::Phase::Prepare
+        ));
+        let committed_status = persisted
+            .committed_status
+            .as_ref()
+            .expect("post-WAL fixture precomputes exact committed status");
+        assert_eq!(committed_status.pending_persistence_id, None);
+        assert_eq!(committed_status.phase, wire::SumeragiV2StatusPhase::Prepare);
+        assert_eq!(
+            committed_status.body_state,
+            wire::SumeragiV2BodyState::Validated
+        );
+        assert!(matches!(
+            committed_status.liveness.last_progress,
+            Some(wire::SumeragiV2ProgressTransitionStatus {
+                transition: wire::SumeragiV2ProgressTransition::BodyValidated,
+                ..
+            })
+        ));
+        drop(persisted);
+
+        assert_eq!(adapter.reducer, reducer_before);
+        assert_registry_eq(&adapter.registry, &registry_before);
+        assert_eq!(adapter.last_progress, last_progress_before);
+        assert_eq!(adapter.reducer_fence_generation, fence_before);
+        assert_eq!(adapter.pending_persistence_id, Some(1));
+        assert_eq!(adapter.wal.recovered_records().len(), 1);
+        assert!(adapter.fail_closed);
+    }
+
+    #[test]
+    fn ready_validate_commit_sign_uses_only_registered_prepare_capability() {
+        let directory = TempDir::new().expect("temporary Ready Validate Commit directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let (tag, manifest, _durable, validated) =
+            advance_direct_validation_fixture_to_durable(&mut adapter, 0xBB);
+        let prepare = wire::QuorumCertificate {
+            round: manifest.round,
+            proposal_round: manifest.round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: manifest.subject,
+            execution_commitment: validated.execution_commitment(),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0xBB; 96],
+        };
+        let observed = adapter
+            .receive_authenticated(AuthenticatedConsensusMessage::for_test(
+                wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::QuorumCertificate(
+                    prepare.clone(),
+                )),
+            ))
+            .expect("register concurrent PrepareQC");
+        assert!(observed.effects().is_empty());
+        let wal_records_before = adapter.wal.recovered_records().len();
+        let (validate, ordinary_pending) =
+            ordinary_validate_predecessor_for_test(tag, manifest.round, manifest.subject, 61_003);
+        let wal_before = std::fs::read(directory.path().join("safety.wal"))
+            .expect("snapshot WAL before substituted registered-QC preflight");
+        let DirectValidationSucceededPreparation::Persist(mut substituted) = adapter
+            .prepare_direct_validation_succeeded(tag, manifest.round, manifest.subject, &validated)
+            .expect("preview exact LockAndCommit for substitution check")
+        else {
+            panic!("concurrent PrepareQC must stage LockAndCommit")
+        };
+        let reducer::Effect::Persist { entry, .. } = &substituted.persist_effect else {
+            unreachable!("successful validation stages one Persist effect")
+        };
+        let reducer::WalRecord::LockAndCommit {
+            prepare: registered_prepare,
+            ..
+        } = entry.record()
+        else {
+            unreachable!("concurrent PrepareQC stages LockAndCommit")
+        };
+        substituted
+            .next_registry
+            .certificates
+            .get_mut(&registered_prepare.reference())
+            .expect("staged registry retains its registered PrepareQC")
+            .execution_commitment = execution_commitment(0xBC);
+        assert!(substituted.preflight_publication().is_err());
+        assert_eq!(adapter.wal.recovered_records().len(), wal_records_before);
+        assert!(adapter.pending_persistence_id.is_none());
+        assert_eq!(
+            std::fs::read(directory.path().join("safety.wal"))
+                .expect("read WAL after substituted registered-QC preflight"),
+            wal_before
+        );
+
+        let DirectValidationSucceededPreparation::Persist(preview) = adapter
+            .prepare_direct_validation_succeeded(tag, manifest.round, manifest.subject, &validated)
+            .expect("preview exact LockAndCommit validation")
+        else {
+            panic!("concurrent PrepareQC must stage LockAndCommit")
+        };
+        let publication = SealedReadyDurableValidateAdapterPreview(
+            ReadyDurableValidateAdapterPreviewKind::ValidatedPersist(preview),
+        )
+        .preflight_publication()
+        .expect("preflight LockAndCommit publication");
+        let exact_sign = match &publication.0 {
+            ReadyDurableValidateAdapterPublicationState::ValidatedPersist(prepared) => {
+                assert!(prepared.registered_prepare.is_some());
+                assert!(matches!(
+                    &prepared.persist_effect,
+                    reducer::Effect::Persist { entry, .. }
+                        if matches!(entry.record(), reducer::WalRecord::LockAndCommit { .. })
+                ));
+                prepared.sign_effect.clone()
+            }
+            _ => unreachable!("fixture retains one LockAndCommit publication"),
+        };
+        assert!(
+            ordinary_pending
+                .project_validate_sign_commit_successor(&validate, &exact_sign)
+                .is_none(),
+            "ordinary Validate cannot mint Commit without the opaque carrier"
+        );
+
+        let bound = publication
+            .bind_validate_sign_predecessor(ReadyValidateSignPredecessorAuthority::for_test(
+                &validate,
+                &ordinary_pending,
+            ))
+            .unwrap_or_else(|_| panic!("registered carrier refines ordinary Validate"));
+        let persisted = bound
+            .append_live_wal()
+            .unwrap_or_else(|_| panic!("append and fsync exact LockAndCommit"));
+        let frame = persisted
+            .adapter
+            .wal
+            .recovered_records()
+            .last()
+            .expect("one real LockAndCommit frame");
+        let mut encoded = frame.payload();
+        let envelope = WalEnvelopeV2::decode(&mut encoded).expect("decode persisted envelope");
+        assert!(encoded.is_empty());
+        assert!(matches!(
+            envelope.record,
+            WalRecordV2::LockAndCommit {
+                prepare: persisted_prepare,
+                vote,
+            } if persisted_prepare == prepare
+                && vote.phase == wire::GlobalPhase::Commit
+                && vote.execution_commitment == validated.execution_commitment()
+        ));
+        assert!(
+            persisted
+                .persisted_sign
+                .as_ref()
+                .expect("post-WAL fixture retains its nested Sign seal")
+                .exactly_matches_validate_sign_for_test(
+                    &exact_sign,
+                    ordinary_pending.causal_lifecycle_key(),
+                )
+        );
+        drop(persisted);
+
+        assert_eq!(
+            adapter.wal.recovered_records().len(),
+            wal_records_before + 1
+        );
+        assert!(adapter.fail_closed);
     }
 
     #[test]
@@ -24033,7 +29072,8 @@ mod tests {
     }
 
     #[test]
-    fn ready_validate_adapter_bridge_is_sealed_fixed_output_and_unwired() {
+    #[allow(clippy::too_many_lines)]
+    fn ready_validate_adapter_bridge_is_sealed_and_live_sign_has_one_real_append() {
         let source = include_str!("v2.rs");
         let (production, _) = source
             .split_once("\n#[cfg(test)]\nmod tests {")
@@ -24061,6 +29101,14 @@ mod tests {
             .map(|offset| token_start + offset)
             .expect("locate end of sealed Ready Validate adapter inventory");
         let tokens = &production[token_start..token_end];
+        let live_start = tokens
+            .find("// READY_DURABLE_VALIDATE_LIVE_SIGN_BEGIN")
+            .expect("locate sealed live-Sign cut");
+        let live_end = tokens
+            .find("// READY_DURABLE_VALIDATE_LIVE_SIGN_END")
+            .expect("locate end of sealed live-Sign cut");
+        let live_sign = &tokens[live_start..live_end];
+        let preflight_tokens = [&tokens[..live_start], &tokens[live_end..]].concat();
         assert!(tokens.contains("pub(crate) struct SealedReadyDurableValidateAdapterPreview"));
         assert!(
             tokens.contains("pub(crate) struct PreparedReadyDurableValidateAdapterPublication")
@@ -24122,8 +29170,83 @@ mod tests {
             "fn persisted_event(",
         ] {
             assert!(
-                !tokens.contains(forbidden),
+                !preflight_tokens.contains(forbidden),
                 "sealed Ready Validate adapter token exposes forbidden surface {forbidden}"
+            );
+        }
+        for required in [
+            "PreparedReadyDurableValidateBoundSignPublication",
+            "PreparedReadyDurableValidatePersistedSign",
+            "ReadyValidateSignPredecessorAuthority",
+            ".project_successor(&self.sign_effect, self.registered_prepare.as_ref())",
+            "adapter.wal.append(&encoded_wal_payload)",
+            "LiveWalFrameIdentity::from_append_receipt(frame, receipt, persistence_id)",
+            "bind_exact_validate_sign_pending(child_pending)",
+            "impl Drop for PreparedReadyDurableValidatePersistedSign",
+            "self.adapter.fail_closed = true",
+            "registry_work: Option<PreparedLiveValidateSignRegistryWork>",
+            "committed_status: Option<wire::SumeragiV2Status>",
+            "let committed_status = adapter.status()",
+            "work.install_into(reservation)",
+            "self.adapter.pending_persistence_id = None",
+            "self.adapter.record_reducer_outcome(",
+            ".log_body_progress(&validation_event, reducer::StepDisposition::Applied, 1)",
+            "self.armed = false",
+            "super::status::set_v2_status(committed_status)",
+        ] {
+            assert!(
+                live_sign.contains(required),
+                "sealed live-Sign cut omitted {required}"
+            );
+        }
+        assert_eq!(live_sign.matches(".wal.append(").count(), 1);
+        let post_fsync = live_sign
+            .split("fn install_registry_and_commit_adapter(")
+            .nth(1)
+            .and_then(|suffix| suffix.split("\n    }\n}").next())
+            .expect("live Sign adapter publication has one bounded body");
+        let registry_install = post_fsync
+            .find("work.install_into(reservation)")
+            .expect("reserved registry child is installed");
+        let reducer_swap = post_fsync
+            .find("self.adapter.reducer = next_reducer")
+            .expect("adapter reducer is swapped");
+        let marker_clear = post_fsync
+            .find("self.adapter.pending_persistence_id = None")
+            .expect("post-WAL marker is cleared");
+        let disarm = post_fsync
+            .find("self.armed = false")
+            .expect("fail-stop Drop is disarmed before status publication");
+        let status_publish = post_fsync
+            .find("super::status::set_v2_status(committed_status)")
+            .expect("precomputed committed status is published last");
+        assert!(
+            registry_install < reducer_swap
+                && reducer_swap < marker_clear
+                && marker_clear < disarm
+                && disarm < status_publish
+        );
+        for forbidden in ["?", "return Err", "publish_status(", ".wal.append("] {
+            assert!(
+                !post_fsync.contains(forbidden),
+                "post-fsync adapter publication acquired fallible work through {forbidden}"
+            );
+        }
+        for forbidden in [
+            "LiveWalFrameIdentity::for_test",
+            "fn into_parts(",
+            "fn effect(",
+            "fn pending(",
+            "fn receipt(",
+            "fn locator(",
+            "fn commit(",
+            "fn install(",
+            "LifecycleCoordinator",
+            "persist_durable_projection",
+        ] {
+            assert!(
+                !live_sign.contains(forbidden),
+                "sealed live-Sign cut exposed forbidden surface {forbidden}"
             );
         }
 
@@ -24204,10 +29327,14 @@ mod tests {
             "prepare_certificate: Option<wire::QuorumCertificate>",
             "pub(crate) struct RecoveredAdapterStartup",
             "pub(crate) struct AuthenticatedRecoveredAdapterStartup",
+            "pub(crate) struct ProductionLifecycleAdapterStartupV1",
             "struct AuthenticatedRecoveredWalLifecycleStartup<'registry>",
             "struct StorageAuthenticatedRecoveredWalLifecycleStartup<'registry>",
-            "recovery: AuthenticatedLifecycleRecoveryCut",
             "ledger: OpenedRecoveredWalValidateLedger",
+            "struct PersistedStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>",
+            "struct InstalledStorageAuthenticatedRecoveredWalLifecycleStartup<'registry>",
+            "struct ProductionRecoveredLifecycleOwnerStartupV1",
+            "ProductionRecoveredLifecycleOwnerAssemblyPermitV1",
             "struct DurableAuthenticatedRecoveredWalLifecycleStartup<'registry>",
             "struct InstalledRecoveredWalLifecycleStartup<'registry>",
             "struct RecoveredWalLifecycleLedgerPersistError<'registry>",
@@ -24215,7 +29342,19 @@ mod tests {
             "repair: AuthenticatedRecoveredWalValidateLifecycleRepair<'registry>",
             "repair: DurableAuthenticatedRecoveredWalValidateLifecycleRepair<'registry>",
             "installed: InstalledRecoveredWalSignRegistryCut<'registry>",
-            "pub(crate) fn authenticate_final_wal_vote(",
+            "pub(crate) fn authenticate_final_wal_startup_authority(",
+            "pub(crate) fn open_production_lifecycle_owner_v1(",
+            "if !self.effects.is_empty()",
+            "enum RecoveredWalStartupAuthorityV1",
+            "PhaseVote(RecoveredWalVoteSign)",
+            "ControlSign(RecoveredWalControlSign)",
+            "ProductionLifecycleOwnerV1::open_storage_only_recovered_startup(",
+            ".persist_repair()",
+            ".install_recovered_sign()",
+            ".open_production_owner_seals(",
+            ".into_owner(registry, payload_store, body_store)",
+            "ProductionLifecycleOwnerV1::from_recovered_wal_open(",
+            "owner.publish_recovered_adapter_status()",
             "#[cfg(test)]\n    #[allow(clippy::result_large_err)]\n    fn finish_without_wal_vote(",
             "fn authenticate_recovered_parent_from_storage<'registry, 'body>(",
             "registry: &'registry mut LifecycleWorkRegistryHolder",
@@ -24238,6 +29377,28 @@ mod tests {
                 "recovery token omitted {required}"
             );
         }
+        assert_eq!(
+            token
+                .matches("ProductionRecoveredLifecycleOwnerAssemblyPermitV1::mint_paired()")
+                .count(),
+            1,
+            "only the paired recovered startup may mint owner-assembly authority"
+        );
+        let production_open = token
+            .split_once("fn open_production_owner_seals(")
+            .expect("locate paired production open")
+            .1
+            .split_once("#[cfg(test)]\nimpl<'registry> AuthenticatedRecoveredWalLifecycleStartup")
+            .expect("locate the end of paired production open")
+            .0;
+        let open_signature = production_open
+            .split_once(") -> Result<")
+            .expect("paired production open signature ends")
+            .0;
+        assert!(!open_signature.contains("verified: VerifiedHeightContext"));
+        assert!(production_open.contains("context: adapter.wire_context.clone()"));
+        assert!(production_open.contains("ProductionRecoveredLifecycleOwnerStartupV1"));
+        assert!(!production_open.contains("Ok(("));
         for forbidden in [
             "#[derive(Clone)]\npub(crate) struct RecoveredWalVoteSign",
             "pub(crate) const fn frame_sequence(",
@@ -24259,6 +29420,8 @@ mod tests {
             "validate_effect: AdapterEffect",
             "validate_pending: PendingRuntimeEffectBinding",
             "RuntimeLifecycleOrdinalSource",
+            "recovery: AuthenticatedLifecycleRecoveryCut",
+            "recovered_vote: Option<RecoveredWalVoteSign>,\n        recovery:",
         ] {
             assert!(
                 !token.contains(forbidden),
@@ -24273,6 +29436,25 @@ mod tests {
             1,
             "the sealed startup join owns one private recovery-token mint"
         );
+        let frontier_start = production
+            .find("fn authenticate_recovered_wal_frontier(")
+            .expect("locate independent recovered WAL frontier authentication");
+        let frontier_end = production[frontier_start..]
+            .find("// RECOVERED_WAL_VOTE_SIGN_MINT_BEGIN")
+            .map(|offset| frontier_start + offset)
+            .expect("locate end of recovered WAL frontier authentication");
+        let frontier = &production[frontier_start..frontier_end];
+        for required in [
+            "self.reducer.durable_state().last_id().get()",
+            "self.wal.recovered_records().last()",
+            "self.authenticate_recovered_wal_frame(frame)?",
+            "envelope.persistence_id != durable_last_id",
+        ] {
+            assert!(
+                frontier.contains(required),
+                "recovered WAL frontier omitted {required}"
+            );
+        }
         let mint_start = production
             .find("// RECOVERED_WAL_VOTE_SIGN_MINT_BEGIN")
             .expect("locate recovered WAL vote-sign mint");
@@ -24282,17 +29464,20 @@ mod tests {
             .expect("locate end of recovered WAL vote-sign mint");
         let mint = &production[mint_start..mint_end];
         for required in [
-            "self.wal.recovered_records().last()",
             "startup_effects.len() > MAX_ADAPTER_EFFECTS_PER_MACRO_STEP",
-            "WalEnvelopeV2::decode",
-            "RecoveredWalFrameIdentity::from_recovered_record(frame, envelope.persistence_id)",
-            "frame.frame_hash()",
-            "self.reducer.durable_state().last_id().get()",
             "self.reducer.awaiting_signature()",
-            ".unsigned_vote_to_wire(awaiting_vote.clone())?",
-            "verify_wal_record_authority(",
-            "WalRecordV2::PrepareIntent(vote)",
-            "WalRecordV2::LockAndCommit { prepare, vote }",
+            ".unsigned_vote_to_wire(*awaiting_vote)?",
+            "vote.round != vote.proposal_round",
+            "vote.proposal_round.context_id != self.wire_context.id()",
+            "vote.proposal_round.height != self.wire_context.height",
+            "self.wal.recovered_records().iter().rev()",
+            "self.authenticate_recovered_wal_frame(frame)?",
+            "WalRecordV2::PrepareIntent(candidate)",
+            "WalRecordV2::LockAndCommit {",
+            "vote: candidate",
+            "prepare.round == prepare.proposal_round",
+            "commit_intent_for_lock(locked)",
+            "self.registry.reducer_qc_matches_wire(locked, &prepare)",
             "prepare.execution_commitment",
             "vote.execution_commitment",
             "RecoveredWalVoteReplayEvidenceV1::from_sealed_recovered_vote",
@@ -24311,6 +29496,7 @@ mod tests {
             "publish_status(",
             "for_test(",
             "pub(crate) fn authenticate_recovered_wal_vote_sign(",
+            "self.wal.recovered_records().last()",
         ] {
             assert!(
                 !mint.contains(forbidden),
@@ -24335,6 +29521,8 @@ mod tests {
             "predecessor_effect: AdapterEffect",
             "predecessor_pending: PendingRuntimeEffectBinding",
             "pending: PendingRuntimeEffectBinding",
+            "_prepare_certificate: Option<wire::QuorumCertificate>",
+            "CommitSuccessorTagRelation::RecoveredMonotone",
             "fn into_ledger_lifecycle_projection(",
             "fn into_durable_lifecycle_projection(",
             "RecoveredWalCandidateProjectionPermit::new()",
@@ -24372,6 +29560,60 @@ mod tests {
         assert!(projection.contains("recovered.replay_evidence_is_exact()"));
         assert!(projection.contains("recovered.replay_evidence().clone()"));
         assert!(projection.contains("predecessor_pending: self"));
+        assert!(projection.contains("recovered.prepare_certificate().and_then(|prepare|"));
+        assert!(projection.contains("project_recovered_inherited_validate_commit_successor"));
+        assert!(projection.contains("project_recovered_ordinary_validate_commit_successor"));
+
+        let commit_relation_start = runtime
+            .find("enum CommitSuccessorTagRelation")
+            .expect("locate bounded Commit tag relation");
+        let commit_relation_end = runtime[commit_relation_start..]
+            .find("\nimpl PendingRuntimeEffectBinding")
+            .map(|offset| commit_relation_start + offset)
+            .expect("locate end of bounded Commit tag relation");
+        let commit_relation = &runtime[commit_relation_start..commit_relation_end];
+        for required in [
+            "LiveExact",
+            "RecoveredMonotone",
+            "predecessor == successor",
+            "successor.view() == vote_round.view",
+            "predecessor.generation() == successor.generation()",
+            "predecessor.view() >= vote_round.view",
+            "predecessor.view() <= successor.view()",
+            "recovered_prepare_matches_commit_vote",
+            "prepare.execution_commitment == vote.execution_commitment",
+        ] {
+            assert!(
+                commit_relation.contains(required),
+                "bounded Commit tag relation omitted {required}"
+            );
+        }
+        let live_commit = runtime
+            .split_once("pub(crate) fn project_validate_sign_commit_successor(")
+            .expect("locate live Commit projection")
+            .1
+            .split_once("/// Project a Commit-vote successor for an ordinary Validate")
+            .expect("locate end of live Commit projection")
+            .0;
+        assert!(live_commit.contains("CommitSuccessorTagRelation::LiveExact"));
+        let runtime_production = runtime
+            .split_once("#[cfg(test)]\nmod tests")
+            .expect("locate runtime test boundary")
+            .0;
+        assert_eq!(
+            runtime_production
+                .matches("project_recovered_inherited_validate_commit_successor(")
+                .count(),
+            2,
+            "recovered inherited-Prepare retag is called only by its sealed projection"
+        );
+        assert_eq!(
+            runtime_production
+                .matches("project_recovered_ordinary_validate_commit_successor(")
+                .count(),
+            2,
+            "recovered ordinary-Validate retag is called only by its sealed projection"
+        );
 
         let replay = include_str!("v2_lifecycle_replay_authority.rs");
         for required in [
@@ -24382,6 +29624,10 @@ mod tests {
             "fn project_recovered_vote_candidate(",
             "source.locator.exactly_matches_runtime(locator)",
             "LifecycleReplayAuthorityV1::decode_canonical",
+            "wire::GlobalPhase::Prepare => tag.view() == vote.round.view",
+            "wire::GlobalPhase::Commit => tag.view() >= vote.round.view",
+            "wire::GlobalPhase::Prepare => self.tag.view == vote.round.view",
+            "wire::GlobalPhase::Commit => true",
         ] {
             assert!(
                 replay.contains(required),
@@ -24400,6 +29646,28 @@ mod tests {
                 "recovered replay evidence exposes {forbidden}"
             );
         }
+        for required in [
+            "struct RecoveredDecisionApplyReplayLineageV1",
+            "fetch: LifecycleReplayAuthorityV1",
+            "body: RecoveredDecisionBodyPipelineReplayFamilyV1",
+            "apply: LifecycleReplayAuthorityV1",
+            "BodyPipelineOriginV1::RecoveredDecision",
+            "WalReplayActionV1::FetchDecision",
+            "WalReplayActionV1::ApplyDecision",
+            "fn is_stage_closed(&self, context: LifecycleContext) -> bool",
+            "DurableContinuationEdge::FetchToStore",
+            "DurableContinuationEdge::StoreToValidate",
+            "DurableContinuationEdge::ValidateToApply",
+        ] {
+            assert!(
+                replay.contains(required),
+                "recovered Decision body lineage omitted {required}"
+            );
+        }
+        assert!(
+            !replay.contains("project_exact_body_candidate"),
+            "recovered Decision body lineage exposes a raw candidate projector"
+        );
 
         let reconstructed_start = runtime
             .find("pub(crate) fn reconstruct_recovered_wal_vote_successor(")
@@ -24450,6 +29718,14 @@ mod tests {
             "self.store.validated.insert(self.key, validated)",
             "pub(super) fn exactly_matches_ledger_parent",
             "pub(super) fn into_validation_outcome",
+            "pub(in crate::sumeragi) struct RecoveredDecisionApplyBodyCut<'store>",
+            "store_identity: V2BodyStoreInstanceIdentity",
+            "context: wire::HeightContext",
+            "envelope: StoredBodyEnvelope",
+            "impl Drop for RecoveredDecisionApplyBodyCut<'_>",
+            "a detached recovered Decision body cannot collide while restoring",
+            "wire::GlobalPhase::Prepare => recovered.tag().view() == vote.round.view",
+            "wire::GlobalPhase::Commit => recovered.tag().view() >= vote.round.view",
         ] {
             assert!(
                 marker.contains(required),
@@ -24461,6 +29737,8 @@ mod tests {
             "fn receipt(",
             "fn into_receipt(",
             "into_parts",
+            "fn manifest(",
+            "fn body(",
         ] {
             assert!(
                 !marker.contains(forbidden),
@@ -24470,6 +29748,97 @@ mod tests {
         assert!(
             !body_store.contains("#[derive(Clone)]\npub(super) struct RecoveredValidatedBodyCut")
         );
+        for required in [
+            "pub(crate) struct RevalidatedV2BodyStore(V2BodyStore)",
+            "pub(crate) fn into_revalidated_startup(",
+            "self.ensure_recovered_markers_revalidated()?",
+            "fn matches_context(&self, context: &wire::HeightContext)",
+            "fn detach_recovered_decision_apply_body(",
+            "fn into_lifecycle_owner_store(",
+            "if &self.0.context != expected_context",
+        ] {
+            assert!(
+                body_store.contains(required),
+                "revalidated same-store startup cut omitted {required}"
+            );
+        }
+        assert!(!body_store.contains("impl Clone for RevalidatedV2BodyStore"));
+
+        let decision_composite = body_store
+            .split_once("struct RecoveredDecisionApplyAdapterPreviewV1<'store>")
+            .expect("locate recovered Decision adapter composite")
+            .1
+            .split_once("/// One-shot call capability for deriving")
+            .expect("locate end of recovered Decision adapter composite")
+            .0;
+        for required in [
+            "_fetch: AuthenticatedRecoveredWalDecisionFetchProjection",
+            "_body: RecoveredDecisionApplyBodyCut<'store>",
+            "RecoveredDecisionApplyReplayLineageV1",
+            "_staged: super::v2::RecoveredDecisionApplyStagedAdapterV1",
+            "RecoveredDecisionApplyAdapterPreviewFailure<'store>",
+        ] {
+            assert!(
+                decision_composite.contains(required),
+                "recovered Decision adapter composite omitted {required}"
+            );
+        }
+        for forbidden in [
+            "fn effect(",
+            "fn pending(",
+            "fn candidate(",
+            "fn body(",
+            "fn replay(",
+            "into_parts",
+        ] {
+            assert!(
+                !decision_composite.contains(forbidden),
+                "recovered Decision adapter composite exposes {forbidden}"
+            );
+        }
+
+        let decision_wal_recovery = include_str!("v2_lifecycle_wal_recovery.rs");
+        let decision_preview = production
+            .split_once("fn prepare_recovered_decision_apply_fast_forward(")
+            .expect("locate recovered Decision adapter fast-forward")
+            .1
+            .split_once("/// Preview a certified Fetch completion directly")
+            .expect("locate end of recovered Decision adapter fast-forward")
+            .0;
+        for required in [
+            "let mut comparison_registry = self.registry.clone()",
+            "prepare_direct_certified_body_available",
+            "prepare_direct_body_stored",
+            "prepare_direct_validation_succeeded",
+            "apply_certificate == &certificate",
+            "project_decision_apply_pending_lineage",
+            "project_certified_fetch_store_successor",
+            "project_store_validate_successor",
+            "project_validate_apply_successor",
+            "RecoveredDecisionApplyAdapterRollback",
+            "reducer_fence_generation",
+            "last_progress",
+            "rollback.restore(&mut adapter)",
+        ] {
+            assert!(
+                decision_preview.contains(required) || decision_wal_recovery.contains(required),
+                "recovered Decision fast-forward omitted {required}"
+            );
+        }
+        for forbidden in [
+            ".commit()",
+            "commit_recovered_decision_apply",
+            "CandidateAdmission",
+            "LifecycleCoordinator",
+            "LifecycleWorkRegistry",
+            ".wal.append(",
+            "publish_status(",
+        ] {
+            assert!(
+                !decision_preview.contains(forbidden),
+                "recovered Decision fast-forward invokes {forbidden}"
+            );
+        }
 
         let ledger = include_str!("v2_lifecycle_ledger.rs");
         let parent_start = ledger
@@ -24484,6 +29853,8 @@ mod tests {
             "fn authenticate_recovered_wal_validate_parent(",
             "recovered.prepare_certificate().is_none()",
             "prepare.execution_commitment == vote.execution_commitment",
+            "wire::GlobalPhase::Prepare => recovered.tag().view() == vote.round.view",
+            "wire::GlobalPhase::Commit => recovered.tag().view() >= vote.round.view",
             "LifecycleStageKind::ValidateBody",
             "DurableContinuation::None",
             "TerminalOutcome::Advanced",
@@ -24508,6 +29879,120 @@ mod tests {
                 "ledger parent seal exposes forbidden surface {forbidden}"
             );
         }
+
+        let registry = include_str!("v2_lifecycle_work_registry.rs");
+        let exact_store = registry
+            .split_once("pub(crate) struct OpenedRecoveredWalValidateLedger")
+            .expect("locate exact recovered-WAL store cut")
+            .1
+            .split_once(
+                "/// Opaque failure from storage-authenticated recovered-parent reconstruction.",
+            )
+            .expect("locate end of exact recovered-WAL store transaction")
+            .0;
+        for required in [
+            "store: super::ledger::LifecycleLedgerStoreV1",
+            "opened: super::ledger::LifecycleLedgerV1",
+            "struct PersistedRecoveredWalValidateLedger<'registry>",
+            "struct InstalledRecoveredWalSignStorage<'registry>",
+            "persist_recovered_wal_repair",
+            "install_recovered_wal_sign",
+            "authenticate_durable_certified_fetch_startup(verified, body_store)",
+            "assemble_storage_only_with_recovered_wal_sign_and_durable_fetch_startup",
+            "install_alongside_recovered_wal_authority",
+            "open_with_exact_store_authority(authority, store, payload_store, recovery)",
+            "let body_store_identity = body_store.instance_identity()",
+            "let payload_store_identity = payload_store.instance_identity()",
+            "ProductionOpenedRecoveredWalSignLifecycleCut",
+        ] {
+            assert!(
+                exact_store.contains(required),
+                "exact recovered-WAL store transaction omitted {required}"
+            );
+        }
+        for forbidden in [
+            "ledger_root",
+            "LifecycleLedgerStoreV1::open(",
+            "fn into_parts(",
+            "pub(crate) fn store(",
+            "pub(crate) fn ledger(",
+        ] {
+            assert!(
+                !exact_store.contains(forbidden),
+                "exact recovered-WAL store transaction exposed {forbidden}"
+            );
+        }
+        let owner_seal = registry
+            .split_once("pub(crate) struct RecoveredWalProductionOwnerOpenV1")
+            .expect("locate recovered-WAL owner seal")
+            .1
+            .split_once("/// Opaque fail-stop coordinator-open error")
+            .expect("locate end of recovered-WAL owner seal")
+            .0;
+        for required in [
+            "verified: VerifiedHeightContext",
+            "registry_identity: ConcreteLifecycleWorkRegistryInstanceIdentity",
+            "V2BodyStoreInstanceIdentity",
+            "CertifiedServePayloadStoreInstanceIdentity",
+        ] {
+            assert!(
+                owner_seal.contains(required),
+                "recovered-WAL owner seal omitted {required}"
+            );
+        }
+        let authenticated_open = registry
+            .split_once("pub(crate) struct ProductionOpenedRecoveredWalSignLifecycleCut")
+            .expect("locate store-authenticated recovered open")
+            .1
+            .split_once("/// No-lifetime exact-open seal")
+            .expect("locate the end of the store-authenticated recovered open")
+            .0;
+        for required in [
+            "opened: OpenedRecoveredWalSignLifecycleCut<'registry>",
+            "verified: VerifiedHeightContext",
+            "V2BodyStoreInstanceIdentity",
+            "CertifiedServePayloadStoreInstanceIdentity",
+        ] {
+            assert!(
+                authenticated_open.contains(required),
+                "store-authenticated recovered open omitted {required}"
+            );
+        }
+        let owner_conversion = registry
+            .split_once("impl<'registry> ProductionOpenedRecoveredWalSignLifecycleCut<'registry>")
+            .expect("locate store-authenticated owner conversion")
+            .1
+            .split_once("#[cfg(test)]\nimpl OpenedRecoveredWalSignLifecycleCut")
+            .expect("locate the end of store-authenticated owner conversion")
+            .0;
+        assert!(owner_conversion.contains("fn into_production_owner_open(\n        self,"));
+        for forbidden in [
+            "verified: VerifiedHeightContext,",
+            "body_store_identity:",
+            "payload_store_identity:",
+        ] {
+            let signature = owner_conversion
+                .split_once("fn into_production_owner_open(")
+                .expect("locate owner conversion signature")
+                .1
+                .split_once(") ->")
+                .expect("owner conversion signature ends")
+                .0;
+            assert!(
+                !signature.contains(forbidden),
+                "owner conversion accepts caller-supplied authority {forbidden}"
+            );
+        }
+        let owner_assembly = ledger
+            .split_once("pub(in crate::sumeragi) fn from_recovered_wal_open(")
+            .expect("locate the recovered owner assembly")
+            .1
+            .split_once("#[cfg(test)]\nimpl ProductionLifecycleOwnerV1")
+            .expect("locate the end of recovered owner assembly")
+            .0;
+        assert!(
+            owner_assembly.contains("_permit: ProductionRecoveredLifecycleOwnerAssemblyPermitV1")
+        );
 
         let wal_recovery = include_str!("v2_lifecycle_wal_recovery.rs");
         for required in [
@@ -24570,6 +30055,10 @@ mod tests {
             .split_once("// RECOVERED_WAL_SIGN_STATUS_PUBLICATION_END")
             .expect("recovered Sign publication ends")
             .0;
+        assert!(
+            publication.contains("#[cfg(test)]"),
+            "the superseded parts-based publication remains test-only"
+        );
         for required in [
             "struct PublishedRecoveredWalLifecycleStartup<'registry>",
             "struct RecoveredWalLifecycleOpenPublicationError<'registry>",
@@ -24597,6 +30086,51 @@ mod tests {
             .find("adapter.publish_status()")
             .expect("adapter status is published");
         assert!(opened < status, "status must follow the exact open result");
+        let owner_factory = production
+            .split_once("pub(crate) fn open_production_lifecycle_owner_v1(")
+            .expect("locate the sole production owner factory")
+            .1
+            .split_once("/// Open an empty-marker test body store")
+            .expect("locate the end of the production owner factory")
+            .0;
+        let residual = owner_factory
+            .find("if !self.effects.is_empty()")
+            .expect("factory rejects residual effects");
+        let control_projection = owner_factory
+            .find("project_recovered_wal_control_sign")
+            .expect("factory projects the sealed control authority");
+        let decision_projection = owner_factory
+            .find("project_recovered_wal_decision_fetch")
+            .expect("factory projects the sealed Decision authority");
+        let decision_body_preflight = owner_factory
+            .find("detach_recovered_decision_apply_body")
+            .expect("factory preflights an opaque same-store Decision body");
+        let body_handoff = owner_factory
+            .find("into_lifecycle_owner_store")
+            .expect("factory consumes the revalidated same-store handoff");
+        let serve_open = owner_factory
+            .find("CertifiedServePayloadStoreV1::open(")
+            .expect("factory opens the Serve store");
+        let owner_open = owner_factory
+            .find(".into_owner(registry, payload_store, body_store)")
+            .expect("factory constructs the recovered owner");
+        let owner_status = owner_factory
+            .rfind("owner.publish_recovered_adapter_status()")
+            .expect("factory publishes status through the complete owner");
+        assert!(residual < control_projection);
+        assert!(control_projection < body_handoff);
+        assert!(decision_projection < decision_body_preflight);
+        assert!(decision_body_preflight < body_handoff);
+        assert!(body_handoff < serve_open);
+        assert!(serve_open < owner_open);
+        assert!(owner_open < owner_status);
+        assert!(!owner_factory.contains("recovery: AuthenticatedLifecycleRecoveryCut"));
+        assert!(
+            owner_factory.contains("restart-closed Decision Apply publication is not implemented")
+        );
+        assert!(!owner_factory.contains("V2BodyStore::open_with_policy("));
+        assert!(!owner_factory.contains("body_root:"));
+        assert!(!owner_factory.contains("body_signature_policy:"));
         for forbidden in [
             "CandidateAdmission",
             "PendingRuntimeEffectBinding",

@@ -6,15 +6,19 @@ use norito::codec::Encode;
 use thiserror::Error;
 
 use super::replay_authority::{
-    CertifiedServeReplayEvidencePairV1, CertifiedServeTerminalReplayAuthorityPairV1,
-    exact_direct_signed_admission_authority,
+    CertifiedFetchReplayEvidenceV1, CertifiedServeReplayEvidencePairV1,
+    CertifiedServeTerminalReplayAuthorityPairV1, exact_direct_signed_admission_authority,
 };
 use super::schema::{
     AdmissionRequest, CandidateAdmission, CausalRoot, DurableBodyFrameReference,
     DurablePayloadReference, DurableServeNegativeOutcome, InitialLifecycleState, LifecycleContext,
     LifecycleDigest, LifecycleKey, LifecyclePhase, LifecycleRound, LifecycleStage,
     LifecycleStageKind, LifecycleWorkClass, OwnerId, PhysicalGeometry, PhysicalSlot,
-    PhysicalSlotId, PredecessorScope, TerminalOutcome, WaitSource,
+    PhysicalSlotId, PredecessorScope, TerminalOutcome, WaitSource, producer_turn_key_for_serve,
+};
+use super::work_registry::{
+    CertifiedServeRegistryBatchPublicationError, CertifiedServeTerminalRegistryPublicationError,
+    PreparedCertifiedServeRegistryBatchV1, PreparedCertifiedServeTerminalRegistryTransitionV1,
 };
 use crate::sumeragi::{
     v2::{AdapterEffect, SignRequest, VerifiedHeightContext},
@@ -25,13 +29,19 @@ use crate::sumeragi::{
     v2_certified_serve_payload_store::{
         AuthenticatedRecoveredCertifiedServePayload,
         AuthenticatedRecoveredCertifiedServePayloadState, CertifiedServePayloadNegativeOutcome,
-        CertifiedServePayloadStoreError, CertifiedServePayloadStoreV1,
-        DurableCertifiedServeAdmissionReceipt, DurableCertifiedServeCompletedReceipt,
+        CertifiedServePayloadRetentionError, CertifiedServeTerminalPersistenceError,
+        DurableCertifiedServeAdmissionPublication, DurableCertifiedServeAdmissionReceipt,
+        DurableCertifiedServeAdmissionStateV1, DurableCertifiedServeCompletedReceipt,
         DurableCertifiedServeNegativeReceipt,
     },
     v2_core::EquivocationKind,
     v2_runtime::{PendingRuntimeEffectBinding, RuntimeCandidateSemanticStatement},
     v2_transport::AuthenticatedCertifiedBodyRequest,
+};
+
+#[cfg(test)]
+use crate::sumeragi::v2_certified_serve_payload_store::{
+    CertifiedServePayloadStoreError, CertifiedServePayloadStoreV1,
 };
 
 const BLOCK_SUBJECT_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:block-subject:v1";
@@ -44,6 +54,7 @@ const CERTIFIED_FETCH_WAIT_SOURCE_DOMAIN: &[u8] =
 const DURABLE_VALIDATION_WAIT_SOURCE_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:lifecycle:durable-validation-wait-source:v1";
 const REDUCER_FENCE_WAIT_SOURCE_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:reducer-fence:v1";
+#[cfg(test)]
 const PRODUCER_TURN_PHYSICAL_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:lifecycle:producer-turn-physical:v1";
 
@@ -126,9 +137,23 @@ pub(super) struct AuthenticatedDurableBodyFrameRecovery {
     receipt: DurableBodyReceipt,
 }
 
+impl AuthenticatedDurableBodyFrameRecovery {
+    /// Consume this exact catalog seal only through its frame-bound Certified
+    /// Fetch replay family.
+    pub(super) fn into_certified_fetch_body(
+        self,
+        evidence: &CertifiedFetchReplayEvidenceV1,
+    ) -> Option<DurableBodyReceipt> {
+        evidence
+            .exactly_matches_recovered_body_frame(&self.reference, &self.manifest, &self.receipt)
+            .then_some(self.receipt)
+    }
+}
+
 /// Failure at the payload-first/ledger-second Certified-Serve admission
 /// boundary.
 #[derive(Debug, Error)]
+#[cfg(test)]
 pub(crate) enum CertifiedServeAdmissionBoundaryError {
     /// The exact payload could not be durably published or safely rolled back.
     #[error(transparent)]
@@ -139,16 +164,1008 @@ pub(crate) enum CertifiedServeAdmissionBoundaryError {
     Projection(CertifiedServeAdmissionError),
 }
 
-/// Fail-closed reason why a Certified-Serve terminal receipt could not settle
-/// its exact active lifecycle lease.
+/// Stable failure class for the receipt-free Certified-Serve terminal owner
+/// transaction. The enclosing result distinguishes safe prepublication input
+/// rejection from restart-required owner invariant or durability failures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CertifiedServeSettlementError {
-    /// The lease has no matching pending Certified-Serve durable material.
-    InvalidLease,
-    /// The post-fsync terminal receipt names another request or certificate.
-    ReceiptMismatch,
-    /// The coordinator rejected or could not durably publish the transition.
-    CoordinatorFault(super::CoordinatorFault),
+pub(crate) enum CertifiedServeTerminalSettlementFailureV1 {
+    /// The coordinator, active lease, or attached LedgerV1 was not exact.
+    Coordinator,
+    /// The signed request did not name the active Serve storage family.
+    RequestAuthority,
+    /// Completion was attempted after the exact body-store owner left this owner.
+    BodyStoreUnavailable,
+    /// Terminal payload persistence did not return an exact durable receipt.
+    PayloadStore,
+    /// The post-fsync receipt could not close the terminal replay family.
+    TerminalAuthority,
+    /// The complete current or prospective concrete census was not exact.
+    Registry,
+    /// Exact LedgerV1 successor publication failed.
+    Ledger,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum DurableCertifiedServeTerminalPublicationV1 {
+    Completed(DurableCertifiedServeCompletedReceipt),
+    Negative(DurableCertifiedServeNegativeReceipt),
+}
+
+/// Opaque fail-stop result retaining every move-only authority still needed by
+/// startup reconciliation. The live owner remains faulted and continues to own
+/// its exact terminal payload store.
+#[must_use = "terminal settlement failure requires process restart"]
+#[derive(Debug)]
+pub(crate) struct CertifiedServeTerminalSettlementRestartV1 {
+    failure: CertifiedServeTerminalSettlementFailureV1,
+    _lease: super::TurnLease,
+    _publication: Option<DurableCertifiedServeTerminalPublicationV1>,
+    _transition: Option<PreparedCertifiedServeTerminalRegistryTransitionV1>,
+}
+
+impl CertifiedServeTerminalSettlementRestartV1 {
+    /// Return the stable fail-stop class without releasing retained authority.
+    pub(crate) const fn failure(&self) -> CertifiedServeTerminalSettlementFailureV1 {
+        self.failure
+    }
+}
+
+/// Ownership-preserving terminal settlement failure. Prepublication failures
+/// return the unchanged active lease; restart-required failures retain all
+/// post-fsync authority opaquely.
+#[must_use = "the Certified-Serve terminal settlement failure must be handled"]
+#[derive(Debug)]
+pub(crate) struct CertifiedServeTerminalSettlementErrorV1 {
+    kind: CertifiedServeTerminalSettlementErrorKindV1,
+}
+
+#[allow(variant_size_differences)]
+#[derive(Debug)]
+enum CertifiedServeTerminalSettlementErrorKindV1 {
+    Prepublication {
+        failure: CertifiedServeTerminalSettlementFailureV1,
+        lease: super::TurnLease,
+    },
+    RestartRequired(CertifiedServeTerminalSettlementRestartV1),
+}
+
+impl CertifiedServeTerminalSettlementErrorV1 {
+    /// Return the stable failure class.
+    pub(crate) const fn failure(&self) -> CertifiedServeTerminalSettlementFailureV1 {
+        match &self.kind {
+            CertifiedServeTerminalSettlementErrorKindV1::Prepublication { failure, .. } => *failure,
+            CertifiedServeTerminalSettlementErrorKindV1::RestartRequired(restart) => {
+                restart.failure()
+            }
+        }
+    }
+
+    /// Whether terminal storage may already be durable and startup is required.
+    pub(crate) const fn restart_required(&self) -> bool {
+        matches!(
+            &self.kind,
+            CertifiedServeTerminalSettlementErrorKindV1::RestartRequired(_)
+        )
+    }
+
+    /// Recover the unchanged active lease only before any terminal publication.
+    pub(crate) fn into_lease(self) -> Result<super::TurnLease, Self> {
+        match self.kind {
+            CertifiedServeTerminalSettlementErrorKindV1::Prepublication { lease, .. } => Ok(lease),
+            kind @ CertifiedServeTerminalSettlementErrorKindV1::RestartRequired(_) => {
+                Err(Self { kind })
+            }
+        }
+    }
+
+    fn prepublication(
+        failure: CertifiedServeTerminalSettlementFailureV1,
+        lease: super::TurnLease,
+    ) -> Self {
+        Self {
+            kind: CertifiedServeTerminalSettlementErrorKindV1::Prepublication { failure, lease },
+        }
+    }
+
+    fn restart_required(restart: CertifiedServeTerminalSettlementRestartV1) -> Self {
+        Self {
+            kind: CertifiedServeTerminalSettlementErrorKindV1::RestartRequired(restart),
+        }
+    }
+}
+
+/// Stable classification for the sealed fresh Certified-Serve transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CertifiedServeConcreteAdmissionFailureV1 {
+    /// The selector target names another context, command family, or request.
+    SelectorAuthority,
+    /// Payload retention failed before a post-fsync receipt existed.
+    PayloadStore,
+    /// The authenticated request could not form the closed replay family.
+    Projection,
+    /// The live coordinator or its attached LedgerV1 was not exact.
+    Coordinator,
+    /// The prospective coordinator/registry census was not exact.
+    Registry,
+    /// LedgerV1 publication was invoked and its result requires restart.
+    Ledger,
+    /// The exact pre-ledger Pending abort did not complete durably.
+    PendingAbort,
+}
+
+/// Opaque ownership-preserving result of one selector-bound payload-first admission.
+#[cfg_attr(not(test), allow(dead_code))]
+#[must_use = "the selector-owned Certified-Serve target must be handled"]
+pub(crate) struct CertifiedServeConcreteAdmissionV1 {
+    kind: CertifiedServeConcreteAdmissionKindV1,
+}
+
+#[allow(variant_size_differences)]
+enum CertifiedServeConcreteAdmissionKindV1 {
+    Published {
+        decision: super::AdmissionDecision,
+        target: super::LifecycleIngressIoTargetSeal,
+    },
+    Retryable {
+        failure: CertifiedServeConcreteAdmissionFailureV1,
+        decision: Option<super::AdmissionDecision>,
+        target: super::LifecycleIngressIoTargetSeal,
+    },
+    RestartRequired {
+        failure: CertifiedServeConcreteAdmissionFailureV1,
+        _target: super::LifecycleIngressIoTargetSeal,
+        _publication: Option<DurableCertifiedServeAdmissionPublication>,
+        _replay: Option<CertifiedServeReplayEvidencePairV1>,
+        _batch: Option<PreparedCertifiedServeRegistryBatchV1>,
+    },
+}
+
+/// Safe consuming continuation after a published result or proven pre-ledger rollback.
+#[cfg_attr(not(test), allow(dead_code))]
+#[must_use = "the selector-owned Certified-Serve continuation must be handled"]
+pub(crate) struct CertifiedServeConcreteAdmissionContinuationV1 {
+    decision: Option<super::AdmissionDecision>,
+    failure: Option<CertifiedServeConcreteAdmissionFailureV1>,
+    target: super::LifecycleIngressIoTargetSeal,
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl CertifiedServeConcreteAdmissionV1 {
+    /// Return the durable admission decision when one was safely published or
+    /// conclusively declined before LedgerV1.
+    pub(crate) const fn decision(&self) -> Option<super::AdmissionDecision> {
+        match &self.kind {
+            CertifiedServeConcreteAdmissionKindV1::Published { decision, .. } => Some(*decision),
+            CertifiedServeConcreteAdmissionKindV1::Retryable { decision, .. } => *decision,
+            CertifiedServeConcreteAdmissionKindV1::RestartRequired { .. } => None,
+        }
+    }
+
+    /// Return whether the process must restart before touching this owner.
+    pub(crate) const fn restart_required(&self) -> bool {
+        matches!(
+            &self.kind,
+            CertifiedServeConcreteAdmissionKindV1::RestartRequired { .. }
+        )
+    }
+
+    /// Return the stable failure class, if this was not a publication success.
+    pub(crate) const fn failure(&self) -> Option<CertifiedServeConcreteAdmissionFailureV1> {
+        match &self.kind {
+            CertifiedServeConcreteAdmissionKindV1::Published { .. } => None,
+            CertifiedServeConcreteAdmissionKindV1::Retryable { failure, .. }
+            | CertifiedServeConcreteAdmissionKindV1::RestartRequired { failure, .. } => {
+                Some(*failure)
+            }
+        }
+    }
+
+    /// Extract a safe continuation only when no fail-stop authority is retained.
+    pub(crate) fn into_safe_continuation(
+        self,
+    ) -> Result<CertifiedServeConcreteAdmissionContinuationV1, Self> {
+        match self.kind {
+            CertifiedServeConcreteAdmissionKindV1::Published { decision, target } => {
+                Ok(CertifiedServeConcreteAdmissionContinuationV1 {
+                    decision: Some(decision),
+                    failure: None,
+                    target,
+                })
+            }
+            CertifiedServeConcreteAdmissionKindV1::Retryable {
+                failure,
+                decision,
+                target,
+            } => Ok(CertifiedServeConcreteAdmissionContinuationV1 {
+                decision,
+                failure: Some(failure),
+                target,
+            }),
+            kind @ CertifiedServeConcreteAdmissionKindV1::RestartRequired { .. } => {
+                Err(Self { kind })
+            }
+        }
+    }
+
+    fn published(
+        decision: super::AdmissionDecision,
+        target: super::LifecycleIngressIoTargetSeal,
+    ) -> Self {
+        Self {
+            kind: CertifiedServeConcreteAdmissionKindV1::Published { decision, target },
+        }
+    }
+
+    fn retryable(
+        failure: CertifiedServeConcreteAdmissionFailureV1,
+        decision: Option<super::AdmissionDecision>,
+        target: super::LifecycleIngressIoTargetSeal,
+    ) -> Self {
+        Self {
+            kind: CertifiedServeConcreteAdmissionKindV1::Retryable {
+                failure,
+                decision,
+                target,
+            },
+        }
+    }
+
+    fn restart_required(
+        failure: CertifiedServeConcreteAdmissionFailureV1,
+        target: super::LifecycleIngressIoTargetSeal,
+        publication: Option<DurableCertifiedServeAdmissionPublication>,
+        replay: Option<CertifiedServeReplayEvidencePairV1>,
+        batch: Option<PreparedCertifiedServeRegistryBatchV1>,
+    ) -> Self {
+        Self {
+            kind: CertifiedServeConcreteAdmissionKindV1::RestartRequired {
+                failure,
+                _target: target,
+                _publication: publication,
+                _replay: replay,
+                _batch: batch,
+            },
+        }
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+impl CertifiedServeConcreteAdmissionContinuationV1 {
+    /// Return the safe logical decision, if projection failed before one existed.
+    pub(crate) const fn decision(&self) -> Option<super::AdmissionDecision> {
+        self.decision
+    }
+
+    /// Return the safe pre-ledger failure class, if any.
+    pub(crate) const fn failure(&self) -> Option<CertifiedServeConcreteAdmissionFailureV1> {
+        self.failure
+    }
+
+    /// Recover the unchanged selector target only from this safe continuation.
+    pub(crate) fn into_target(self) -> super::LifecycleIngressIoTargetSeal {
+        self.target
+    }
+}
+
+fn certified_serve_terminal_replay_decision(
+    coordinator: &super::LifecycleCoordinator,
+    verified: &VerifiedHeightContext,
+    authenticated: &AuthenticatedCertifiedBodyRequest,
+    publication: &DurableCertifiedServeAdmissionPublication,
+) -> Option<super::AdmissionDecision> {
+    if publication.is_pending()
+        || !publication.exactly_matches_authenticated_request(authenticated)
+        || coordinator.active_context() != lifecycle_context(verified.context())
+    {
+        return None;
+    }
+    let request = authenticated.request();
+    request.validate(verified.context()).ok()?;
+    if authenticated.request_hash() != HashOf::new(request)
+        || request.certificate.round.context_id != request.round.context_id
+        || request.certificate.round.height != request.round.height
+        || request.certificate.proposal_round != request.round
+        || request.certificate.subject != request.subject
+    {
+        return None;
+    }
+    let request_digest = digest_from_bytes(authenticated.request_hash().as_ref());
+    let certificate_digest = digest_from_bytes(HashOf::new(&request.certificate).as_ref());
+    let (payload, outcome) = match publication.state() {
+        DurableCertifiedServeAdmissionStateV1::Pending => return None,
+        DurableCertifiedServeAdmissionStateV1::Completed(response) => {
+            let response = digest_from_bytes(response.as_ref());
+            (
+                DurablePayloadReference::CertifiedServeCompleted {
+                    request: request_digest,
+                    certificate: certificate_digest,
+                    response,
+                },
+                TerminalOutcome::Completed(Some(response)),
+            )
+        }
+        DurableCertifiedServeAdmissionStateV1::Negative(outcome) => {
+            let outcome = match outcome {
+                CertifiedServePayloadNegativeOutcome::Cancelled => {
+                    DurableServeNegativeOutcome::Cancelled
+                }
+                CertifiedServePayloadNegativeOutcome::Rejected(code) => {
+                    DurableServeNegativeOutcome::Rejected(code)
+                }
+                CertifiedServePayloadNegativeOutcome::Failed(code) => {
+                    DurableServeNegativeOutcome::Failed(code)
+                }
+            };
+            (
+                DurablePayloadReference::CertifiedServeNegative {
+                    request: request_digest,
+                    certificate: certificate_digest,
+                    outcome,
+                },
+                outcome.terminal(),
+            )
+        }
+    };
+    let key = lifecycle_key(
+        verified.context(),
+        request.certificate.round,
+        Some(request.round),
+        Some(certified_serve_key_subject(
+            request.subject,
+            authenticated.request_hash(),
+        )),
+        LifecyclePhase::Serve,
+        Some(execution_commitment(
+            request.certificate.execution_commitment,
+        )),
+    );
+    let serve_ordinal = coordinator.key_index.get(&key).copied()?;
+    let producer_ordinal = serve_ordinal.checked_add(1)?;
+    let serve = coordinator.records.get(&serve_ordinal)?;
+    let serve_metadata = coordinator.durable_records.get(&serve_ordinal)?;
+    let producer = coordinator.records.get(&producer_ordinal)?;
+    let producer_metadata = coordinator.durable_records.get(&producer_ordinal)?;
+    let owner = serve.owner;
+    let producer_debt_is_exact = if matches!(producer.state, super::LifecycleState::Terminal(_)) {
+        !coordinator.producer_debts.contains_key(&serve_ordinal)
+    } else {
+        coordinator.producer_debts.get(&serve_ordinal) == Some(&producer_ordinal)
+    };
+    if serve.key != key
+        || serve.ordinal != serve_ordinal
+        || serve.owner.first_admission_ordinal() != serve_ordinal
+        || serve.owner.causal_root().digest() != request_digest
+        || serve.work_class != LifecycleWorkClass::CertifiedServe
+        || serve.stage.kind() != LifecycleStageKind::CertifiedServe
+        || serve.state != super::LifecycleState::Terminal(outcome)
+        || serve_metadata.reconstruction_source != request_digest
+        || serve_metadata.payload != payload
+        || !serve_metadata.replay_authority.structurally_matches_record(
+            coordinator.active_context(),
+            serve.key,
+            serve.work_class,
+            serve.stage,
+            serve_metadata.payload,
+        )
+        || !serve_metadata
+            .replay_authority
+            .exactly_matches_certified_serve_publication(authenticated, publication.receipt())
+        || producer.key != producer_turn_key_for_serve(key)?
+        || producer.ordinal != producer_ordinal
+        || producer.owner != owner
+        || producer.work_class != LifecycleWorkClass::ProducerTurn
+        || producer.stage.kind() != LifecycleStageKind::ProducerTurn
+        || producer_metadata.reconstruction_source != request_digest
+        || producer_metadata.payload != DurablePayloadReference::None
+        || !producer_metadata
+            .replay_authority
+            .structurally_matches_record(
+                coordinator.active_context(),
+                producer.key,
+                producer.work_class,
+                producer.stage,
+                producer_metadata.payload,
+            )
+        || !producer_metadata
+            .replay_authority
+            .exactly_matches_certified_serve_publication(authenticated, publication.receipt())
+        || !serve_metadata
+            .replay_authority
+            .same_persisted_family(&producer_metadata.replay_authority)
+        || !producer_debt_is_exact
+        || (outcome == TerminalOutcome::Cancelled
+            && producer.state != super::LifecycleState::Terminal(TerminalOutcome::Cancelled))
+    {
+        return None;
+    }
+    Some(match outcome {
+        TerminalOutcome::Completed(Some(_)) => {
+            super::AdmissionDecision::ReplayTerminal { owner, outcome }
+        }
+        TerminalOutcome::Cancelled | TerminalOutcome::Rejected(_) | TerminalOutcome::Failed(_) => {
+            super::AdmissionDecision::StutterTerminal { owner }
+        }
+        TerminalOutcome::Advanced | TerminalOutcome::Completed(None) => return None,
+    })
+}
+
+impl super::ProductionLifecycleOwnerV1 {
+    /// Persist one selected Certified-Serve payload, then atomically publish its
+    /// adjacent LedgerV1 rows and two exact concrete carriers.
+    ///
+    /// This boundary accepts only the selector's opaque target and the
+    /// authenticated signed request. It accepts no route, queue witness,
+    /// candidate, effect, pending binding, ordinal, digest, or replay bytes.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::sumeragi) fn admit_selected_certified_serve(
+        &mut self,
+        target: super::LifecycleIngressIoTargetSeal,
+        local_signer: &KeyPair,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+    ) -> CertifiedServeConcreteAdmissionV1 {
+        if self.coordinator.fault().is_some() || self.coordinator.ledger_store.is_none() {
+            return CertifiedServeConcreteAdmissionV1::restart_required(
+                CertifiedServeConcreteAdmissionFailureV1::Coordinator,
+                target,
+                None,
+                None,
+                None,
+            );
+        }
+        if target.context() != self.coordinator.active_context()
+            || target.kind() != super::LifecycleIngressIoTargetKind::CertifiedServe
+            || !target.matches_certified_serve_request(authenticated.request_hash())
+        {
+            return CertifiedServeConcreteAdmissionV1::retryable(
+                CertifiedServeConcreteAdmissionFailureV1::SelectorAuthority,
+                None,
+                target,
+            );
+        }
+        if {
+            let registry = self.registry.registry_mut();
+            !registry.exactly_covers_recovered_ready_work(&self.coordinator)
+                && !registry
+                    .exactly_covers_recovered_ready_work_and_wal_authority(&self.coordinator)
+        } {
+            return CertifiedServeConcreteAdmissionV1::retryable(
+                CertifiedServeConcreteAdmissionFailureV1::Coordinator,
+                None,
+                target,
+            );
+        }
+        let publication = match self
+            .payload_store
+            .retain_for_admission_with_verified_retention(
+                &self.verified,
+                local_signer,
+                authenticated,
+            ) {
+            Ok(publication) => publication,
+            Err(CertifiedServePayloadRetentionError::Unchanged(_error)) => {
+                return CertifiedServeConcreteAdmissionV1::retryable(
+                    CertifiedServeConcreteAdmissionFailureV1::PayloadStore,
+                    None,
+                    target,
+                );
+            }
+            Err(CertifiedServePayloadRetentionError::PublicationAmbiguous(_error)) => {
+                self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                return CertifiedServeConcreteAdmissionV1::restart_required(
+                    CertifiedServeConcreteAdmissionFailureV1::PayloadStore,
+                    target,
+                    None,
+                    None,
+                    None,
+                );
+            }
+        };
+        if !publication.is_pending() {
+            return match certified_serve_terminal_replay_decision(
+                &self.coordinator,
+                &self.verified,
+                authenticated,
+                &publication,
+            ) {
+                Some(decision) => CertifiedServeConcreteAdmissionV1::published(decision, target),
+                None => self.certified_serve_preledger_failure(
+                    target,
+                    publication,
+                    CertifiedServeConcreteAdmissionFailureV1::Coordinator,
+                    None,
+                    None,
+                    None,
+                ),
+            };
+        }
+        let prepared = match prepare_certified_serve_admission(
+            self.coordinator.active_context(),
+            &self.verified,
+            authenticated,
+            publication.receipt(),
+        ) {
+            Ok(prepared) => prepared,
+            Err(_) => {
+                return self.certified_serve_preledger_failure(
+                    target,
+                    publication,
+                    CertifiedServeConcreteAdmissionFailureV1::Projection,
+                    None,
+                    None,
+                    None,
+                );
+            }
+        };
+        let (candidate, replay) = prepared.into_candidate_and_replay();
+        let serve_key = candidate.key;
+        let mut staged = self.coordinator.stage_durable_transaction();
+        let decision = staged.reduce_admit(AdmissionRequest::Candidate(candidate));
+        match decision {
+            super::AdmissionDecision::Admitted {
+                producer_turn_ordinal: Some(_),
+                ..
+            } => {}
+            super::AdmissionDecision::Retry { .. } => {
+                return CertifiedServeConcreteAdmissionV1::published(decision, target);
+            }
+            super::AdmissionDecision::WaitForCapacity(_)
+            | super::AdmissionDecision::Rejected(_)
+            | super::AdmissionDecision::NonCandidate
+            | super::AdmissionDecision::FailClosed(_) => {
+                return self.certified_serve_preledger_failure(
+                    target,
+                    publication,
+                    CertifiedServeConcreteAdmissionFailureV1::Coordinator,
+                    Some(decision),
+                    Some(replay),
+                    None,
+                );
+            }
+            _ => {
+                return self.certified_serve_preledger_failure(
+                    target,
+                    publication,
+                    CertifiedServeConcreteAdmissionFailureV1::Coordinator,
+                    None,
+                    Some(replay),
+                    None,
+                );
+            }
+        }
+        let batch = match PreparedCertifiedServeRegistryBatchV1::from_fresh_admitted_pair(
+            &staged, serve_key, replay,
+        ) {
+            Ok(batch) => batch,
+            Err(replay) => {
+                return self.certified_serve_preledger_failure(
+                    target,
+                    publication,
+                    CertifiedServeConcreteAdmissionFailureV1::Registry,
+                    None,
+                    Some(replay),
+                    None,
+                );
+            }
+        };
+        let publication_result = self
+            .registry
+            .registry_mut()
+            .install_certified_serve_fresh_batch_before_publication(
+                batch,
+                &self.coordinator,
+                &staged,
+                || self.coordinator.persist_exact_staged_successor(&staged),
+            );
+        match publication_result {
+            Ok(()) => {
+                self.coordinator = staged;
+                CertifiedServeConcreteAdmissionV1::published(decision, target)
+            }
+            Err(CertifiedServeRegistryBatchPublicationError::Preflight(batch)) => self
+                .certified_serve_preledger_failure(
+                    target,
+                    publication,
+                    CertifiedServeConcreteAdmissionFailureV1::Registry,
+                    None,
+                    None,
+                    Some(batch),
+                ),
+            Err(CertifiedServeRegistryBatchPublicationError::Publication(_, batch)) => {
+                self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                CertifiedServeConcreteAdmissionV1::restart_required(
+                    CertifiedServeConcreteAdmissionFailureV1::Ledger,
+                    target,
+                    Some(publication),
+                    None,
+                    Some(batch),
+                )
+            }
+        }
+    }
+
+    fn certified_serve_preledger_failure(
+        &mut self,
+        target: super::LifecycleIngressIoTargetSeal,
+        publication: DurableCertifiedServeAdmissionPublication,
+        failure: CertifiedServeConcreteAdmissionFailureV1,
+        decision: Option<super::AdmissionDecision>,
+        replay: Option<CertifiedServeReplayEvidencePairV1>,
+        batch: Option<PreparedCertifiedServeRegistryBatchV1>,
+    ) -> CertifiedServeConcreteAdmissionV1 {
+        if publication.can_abort_fresh_pending()
+            && self
+                .payload_store
+                .rollback_pending(publication.receipt())
+                .is_ok()
+        {
+            return CertifiedServeConcreteAdmissionV1::retryable(failure, decision, target);
+        }
+        self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+        CertifiedServeConcreteAdmissionV1::restart_required(
+            if publication.can_abort_fresh_pending() {
+                CertifiedServeConcreteAdmissionFailureV1::PendingAbort
+            } else {
+                failure
+            },
+            target,
+            Some(publication),
+            replay,
+            batch,
+        )
+    }
+}
+
+impl super::ProductionLifecycleOwnerV1 {
+    /// Persist and publish one exact completed Certified-Serve terminal.
+    ///
+    /// The terminal receipt is created inside this owner from its retained
+    /// payload store and its exact retained body-store instance. No receipt,
+    /// payload id, candidate, ordinal, digest, or replay parts enter this API.
+    #[cfg(any(not(test), feature = "bls"))]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::sumeragi) fn settle_certified_serve_completed(
+        &mut self,
+        lease: super::TurnLease,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+        durable_body: &DurableBodyReceipt,
+        response: &wire::CertifiedBodyResponse,
+    ) -> Result<(), CertifiedServeTerminalSettlementErrorV1> {
+        self.preflight_certified_serve_terminal(&lease, authenticated)?;
+        // TODO: After the owner-to-worker launch consumes `body_store`, replace
+        // this unlaunched-owner completion seam with one worker-authenticated
+        // completion capability bound to the retained store-instance seal.
+        let Some(body_store) = self.body_store.as_ref() else {
+            return Err(CertifiedServeTerminalSettlementErrorV1::prepublication(
+                CertifiedServeTerminalSettlementFailureV1::BodyStoreUnavailable,
+                lease,
+            ));
+        };
+        let receipt = match self.payload_store.persist_completed_with_exact_body(
+            authenticated,
+            durable_body,
+            body_store,
+            response,
+        ) {
+            Ok(receipt) => receipt,
+            Err(CertifiedServeTerminalPersistenceError::InputRejected(_)) => {
+                return Err(CertifiedServeTerminalSettlementErrorV1::prepublication(
+                    CertifiedServeTerminalSettlementFailureV1::PayloadStore,
+                    lease,
+                ));
+            }
+            Err(
+                CertifiedServeTerminalPersistenceError::StoreInvariant(_)
+                | CertifiedServeTerminalPersistenceError::PublicationAmbiguous(_),
+            ) => {
+                return Err(self.certified_serve_terminal_restart(
+                    CertifiedServeTerminalSettlementFailureV1::PayloadStore,
+                    lease,
+                    None,
+                    None,
+                ));
+            }
+        };
+        self.publish_certified_serve_terminal(
+            lease,
+            authenticated,
+            DurableCertifiedServeTerminalPublicationV1::Completed(receipt),
+        )
+    }
+
+    /// Persist and publish one exact typed negative Certified-Serve terminal.
+    ///
+    /// The retained payload store derives the opaque request id from the
+    /// authenticated request. No caller-supplied id or terminal receipt is
+    /// accepted.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::sumeragi) fn settle_certified_serve_negative(
+        &mut self,
+        lease: super::TurnLease,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+        outcome: CertifiedServePayloadNegativeOutcome,
+    ) -> Result<(), CertifiedServeTerminalSettlementErrorV1> {
+        self.preflight_certified_serve_terminal(&lease, authenticated)?;
+        let receipt = match self
+            .payload_store
+            .persist_negative_for_authenticated_request(authenticated, outcome)
+        {
+            Ok(receipt) => receipt,
+            Err(
+                CertifiedServeTerminalPersistenceError::InputRejected(_)
+                | CertifiedServeTerminalPersistenceError::StoreInvariant(_)
+                | CertifiedServeTerminalPersistenceError::PublicationAmbiguous(_),
+            ) => {
+                return Err(self.certified_serve_terminal_restart(
+                    CertifiedServeTerminalSettlementFailureV1::PayloadStore,
+                    lease,
+                    None,
+                    None,
+                ));
+            }
+        };
+        self.publish_certified_serve_terminal(
+            lease,
+            authenticated,
+            DurableCertifiedServeTerminalPublicationV1::Negative(receipt),
+        )
+    }
+
+    fn preflight_certified_serve_terminal(
+        &mut self,
+        lease: &super::TurnLease,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+    ) -> Result<(), CertifiedServeTerminalSettlementErrorV1> {
+        if self.coordinator.fault.is_some() || self.coordinator.ledger_store.is_none() {
+            return Err(self.certified_serve_terminal_restart(
+                CertifiedServeTerminalSettlementFailureV1::Coordinator,
+                lease.clone(),
+                None,
+                None,
+            ));
+        }
+        if self.coordinator.active_lease.as_ref() != Some(lease)
+            || lease.work_class != LifecycleWorkClass::CertifiedServe
+        {
+            return Err(CertifiedServeTerminalSettlementErrorV1::prepublication(
+                CertifiedServeTerminalSettlementFailureV1::Coordinator,
+                lease.clone(),
+            ));
+        }
+        if !self
+            .coordinator
+            .records
+            .get(&lease.ordinal)
+            .is_some_and(|record| {
+                record.owner == lease.owner
+                    && record.state == super::LifecycleState::Claimed(lease.id)
+            })
+        {
+            return Err(self.certified_serve_terminal_restart(
+                CertifiedServeTerminalSettlementFailureV1::Coordinator,
+                lease.clone(),
+                None,
+                None,
+            ));
+        }
+        let Some(producer_ordinal) = self.coordinator.producer_debts.get(&lease.ordinal).copied()
+        else {
+            return Err(self.certified_serve_terminal_restart(
+                CertifiedServeTerminalSettlementFailureV1::Coordinator,
+                lease.clone(),
+                None,
+                None,
+            ));
+        };
+        let (Some(serve), Some(serve_metadata), Some(producer), Some(producer_metadata)) = (
+            self.coordinator.records.get(&lease.ordinal),
+            self.coordinator.durable_records.get(&lease.ordinal),
+            self.coordinator.records.get(&producer_ordinal),
+            self.coordinator.durable_records.get(&producer_ordinal),
+        ) else {
+            return Err(self.certified_serve_terminal_restart(
+                CertifiedServeTerminalSettlementFailureV1::Coordinator,
+                lease.clone(),
+                None,
+                None,
+            ));
+        };
+        if serve.ordinal.checked_add(1) != Some(producer.ordinal)
+            || serve.owner != producer.owner
+            || serve.work_class != LifecycleWorkClass::CertifiedServe
+            || producer.work_class != LifecycleWorkClass::ProducerTurn
+            || !super::schema::serve_and_producer_keys_match(serve.key, producer.key)
+            || !serve_metadata
+                .replay_authority
+                .same_persisted_family(&producer_metadata.replay_authority)
+        {
+            return Err(self.certified_serve_terminal_restart(
+                CertifiedServeTerminalSettlementFailureV1::Coordinator,
+                lease.clone(),
+                None,
+                None,
+            ));
+        }
+        if !self
+            .registry
+            .registry_mut()
+            .preflight_certified_serve_terminal_owner_state(&self.coordinator, lease)
+        {
+            return Err(self.certified_serve_terminal_restart(
+                CertifiedServeTerminalSettlementFailureV1::Registry,
+                lease.clone(),
+                None,
+                None,
+            ));
+        }
+        let request_is_exact = serve_metadata
+            .replay_authority
+            .exactly_matches_certified_serve_request(authenticated)
+            && producer_metadata
+                .replay_authority
+                .exactly_matches_certified_serve_request(authenticated);
+        if !request_is_exact {
+            return Err(CertifiedServeTerminalSettlementErrorV1::prepublication(
+                CertifiedServeTerminalSettlementFailureV1::RequestAuthority,
+                lease.clone(),
+            ));
+        }
+        if !self
+            .registry
+            .registry_mut()
+            .preflight_certified_serve_terminal_settlement(&self.coordinator, lease, authenticated)
+        {
+            return Err(self.certified_serve_terminal_restart(
+                CertifiedServeTerminalSettlementFailureV1::Registry,
+                lease.clone(),
+                None,
+                None,
+            ));
+        }
+        Ok(())
+    }
+
+    fn publish_certified_serve_terminal(
+        &mut self,
+        lease: super::TurnLease,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+        publication: DurableCertifiedServeTerminalPublicationV1,
+    ) -> Result<(), CertifiedServeTerminalSettlementErrorV1> {
+        let Some(producer_ordinal) = self.coordinator.producer_debts.get(&lease.ordinal).copied()
+        else {
+            return Err(self.certified_serve_terminal_restart(
+                CertifiedServeTerminalSettlementFailureV1::TerminalAuthority,
+                lease,
+                Some(publication),
+                None,
+            ));
+        };
+        let (Some(serve), Some(serve_metadata), Some(producer), Some(producer_metadata)) = (
+            self.coordinator.records.get(&lease.ordinal),
+            self.coordinator.durable_records.get(&lease.ordinal),
+            self.coordinator.records.get(&producer_ordinal),
+            self.coordinator.durable_records.get(&producer_ordinal),
+        ) else {
+            return Err(self.certified_serve_terminal_restart(
+                CertifiedServeTerminalSettlementFailureV1::TerminalAuthority,
+                lease,
+                Some(publication),
+                None,
+            ));
+        };
+        let terminal = match publication {
+            DurableCertifiedServeTerminalPublicationV1::Completed(receipt) => {
+                CertifiedServeTerminalReplayAuthorityPairV1::from_completed_receipt(
+                    self.coordinator.active_context,
+                    serve,
+                    serve_metadata,
+                    producer,
+                    producer_metadata,
+                    receipt,
+                )
+            }
+            DurableCertifiedServeTerminalPublicationV1::Negative(receipt) => {
+                CertifiedServeTerminalReplayAuthorityPairV1::from_negative_receipt(
+                    self.coordinator.active_context,
+                    serve,
+                    serve_metadata,
+                    producer,
+                    producer_metadata,
+                    receipt,
+                )
+            }
+        };
+        let Some(terminal) = terminal else {
+            return Err(self.certified_serve_terminal_restart(
+                CertifiedServeTerminalSettlementFailureV1::TerminalAuthority,
+                lease,
+                Some(publication),
+                None,
+            ));
+        };
+        let transition = self
+            .registry
+            .registry_mut()
+            .prepare_certified_serve_terminal_transition(
+                &self.coordinator,
+                &lease,
+                authenticated,
+                &terminal,
+            );
+        let Some(transition) = transition else {
+            return Err(self.certified_serve_terminal_restart(
+                CertifiedServeTerminalSettlementFailureV1::Registry,
+                lease,
+                Some(publication),
+                None,
+            ));
+        };
+        let outcome = terminal.terminal_outcome();
+        let mut staged = self.coordinator.stage_durable_transaction();
+        staged.reduce_settle_turn(
+            lease.clone(),
+            super::TurnOutcome::Terminal(outcome),
+            Some(terminal),
+        );
+        if staged.fault.is_some() {
+            return Err(self.certified_serve_terminal_restart(
+                CertifiedServeTerminalSettlementFailureV1::TerminalAuthority,
+                lease,
+                Some(publication),
+                Some(transition),
+            ));
+        }
+        let publication_result = self
+            .registry
+            .registry_mut()
+            .publish_certified_serve_terminal_transition(
+                transition,
+                &self.coordinator,
+                &staged,
+                &lease,
+                || self.coordinator.persist_exact_staged_successor(&staged),
+            );
+        match publication_result {
+            Ok(()) => {
+                self.coordinator = staged;
+                Ok(())
+            }
+            Err(CertifiedServeTerminalRegistryPublicationError::Preflight(transition)) => Err(self
+                .certified_serve_terminal_restart(
+                    CertifiedServeTerminalSettlementFailureV1::Registry,
+                    lease,
+                    Some(publication),
+                    Some(transition),
+                )),
+            Err(CertifiedServeTerminalRegistryPublicationError::Publication(_, transition)) => {
+                Err(self.certified_serve_terminal_restart(
+                    CertifiedServeTerminalSettlementFailureV1::Ledger,
+                    lease,
+                    Some(publication),
+                    Some(transition),
+                ))
+            }
+        }
+    }
+
+    fn certified_serve_terminal_restart(
+        &mut self,
+        failure: CertifiedServeTerminalSettlementFailureV1,
+        lease: super::TurnLease,
+        publication: Option<DurableCertifiedServeTerminalPublicationV1>,
+        transition: Option<PreparedCertifiedServeTerminalRegistryTransitionV1>,
+    ) -> CertifiedServeTerminalSettlementErrorV1 {
+        if self.coordinator.fault.is_none() {
+            self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+        }
+        CertifiedServeTerminalSettlementErrorV1::restart_required(
+            CertifiedServeTerminalSettlementRestartV1 {
+                failure,
+                _lease: lease,
+                _publication: publication,
+                _transition: transition,
+            },
+        )
+    }
 }
 
 impl super::LifecycleCoordinator {
@@ -161,6 +1178,7 @@ impl super::LifecycleCoordinator {
     /// rejections synchronously remove the exact pending payload again. A ledger
     /// durability failure retains the payload as an authenticated crash tail
     /// for startup reconciliation and latches the coordinator fault.
+    #[cfg(test)]
     pub(crate) fn persist_and_admit_certified_serve(
         &mut self,
         payload_store: &mut CertifiedServePayloadStoreV1,
@@ -176,9 +1194,20 @@ impl super::LifecycleCoordinator {
         if let Some(fault) = self.fault() {
             return Ok(super::AdmissionDecision::FailClosed(fault));
         }
-        let publication = payload_store
-            .retain_for_admission_with_verified_retention(verified, local_signer, authenticated)
-            .map_err(CertifiedServeAdmissionBoundaryError::PayloadStore)?;
+        let publication = match payload_store.retain_for_admission_with_verified_retention(
+            verified,
+            local_signer,
+            authenticated,
+        ) {
+            Ok(publication) => publication,
+            Err(CertifiedServePayloadRetentionError::Unchanged(error)) => {
+                return Err(CertifiedServeAdmissionBoundaryError::PayloadStore(error));
+            }
+            Err(CertifiedServePayloadRetentionError::PublicationAmbiguous(error)) => {
+                self.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                return Err(CertifiedServeAdmissionBoundaryError::PayloadStore(error));
+            }
+        };
         let receipt = publication.receipt();
         let request = match certified_serve_admission_request(
             self.active_context(),
@@ -245,98 +1274,6 @@ impl super::LifecycleCoordinator {
         }
         Ok(decision)
     }
-
-    /// Settle one Certified-Serve completion only after its exact response
-    /// metadata is durable in the payload store.
-    pub(crate) fn settle_certified_serve_completed(
-        &mut self,
-        lease: super::TurnLease,
-        receipt: DurableCertifiedServeCompletedReceipt,
-    ) -> Result<(), CertifiedServeSettlementError> {
-        self.require_active_serve_lease(&lease)?;
-        let producer_ordinal = self
-            .producer_debts
-            .get(&lease.ordinal)
-            .copied()
-            .ok_or(CertifiedServeSettlementError::InvalidLease)?;
-        let terminal = CertifiedServeTerminalReplayAuthorityPairV1::from_completed_receipt(
-            self.active_context,
-            self.records
-                .get(&lease.ordinal)
-                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
-            self.durable_records
-                .get(&lease.ordinal)
-                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
-            self.records
-                .get(&producer_ordinal)
-                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
-            self.durable_records
-                .get(&producer_ordinal)
-                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
-            receipt,
-        )
-        .ok_or(CertifiedServeSettlementError::ReceiptMismatch)?;
-        self.settle_turn_with_durable_serve_terminal(lease, terminal);
-        self.fault()
-            .map(CertifiedServeSettlementError::CoordinatorFault)
-            .map_or(Ok(()), Err)
-    }
-
-    /// Settle one deterministic Certified-Serve failure only after its exact
-    /// negative result is durable in the payload store.
-    pub(crate) fn settle_certified_serve_negative(
-        &mut self,
-        lease: super::TurnLease,
-        receipt: DurableCertifiedServeNegativeReceipt,
-    ) -> Result<(), CertifiedServeSettlementError> {
-        self.require_active_serve_lease(&lease)?;
-        let producer_ordinal = self
-            .producer_debts
-            .get(&lease.ordinal)
-            .copied()
-            .ok_or(CertifiedServeSettlementError::InvalidLease)?;
-        let terminal = CertifiedServeTerminalReplayAuthorityPairV1::from_negative_receipt(
-            self.active_context,
-            self.records
-                .get(&lease.ordinal)
-                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
-            self.durable_records
-                .get(&lease.ordinal)
-                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
-            self.records
-                .get(&producer_ordinal)
-                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
-            self.durable_records
-                .get(&producer_ordinal)
-                .ok_or(CertifiedServeSettlementError::InvalidLease)?,
-            receipt,
-        )
-        .ok_or(CertifiedServeSettlementError::ReceiptMismatch)?;
-        self.settle_turn_with_durable_serve_terminal(lease, terminal);
-        self.fault()
-            .map(CertifiedServeSettlementError::CoordinatorFault)
-            .map_or(Ok(()), Err)
-    }
-
-    fn require_active_serve_lease(
-        &mut self,
-        lease: &super::TurnLease,
-    ) -> Result<(), CertifiedServeSettlementError> {
-        if let Some(fault) = self.fault() {
-            return Err(CertifiedServeSettlementError::CoordinatorFault(fault));
-        }
-        if self.active_lease.as_ref() != Some(lease)
-            || lease.work_class != LifecycleWorkClass::CertifiedServe
-            || !self.records.get(&lease.ordinal).is_some_and(|record| {
-                record.owner == lease.owner
-                    && record.state == super::LifecycleState::Claimed(lease.id)
-            })
-        {
-            self.fault = Some(super::CoordinatorFault::StaleLease);
-            return Err(CertifiedServeSettlementError::InvalidLease);
-        }
-        Ok(())
-    }
 }
 
 /// Complete recovery projection for one authenticated Certified-Serve payload.
@@ -346,13 +1283,35 @@ impl super::LifecycleCoordinator {
 /// additionally describes a payload store which may be ahead of the ledger.
 pub(super) struct RecoveredCertifiedServeProjection {
     candidate: CandidateAdmission,
+    replay: CertifiedServeReplayEvidencePairV1,
     resolved_payload: DurablePayloadReference,
     terminal_outcome: Option<TerminalOutcome>,
     terminal_replay: Option<CertifiedServeTerminalReplayAuthorityPairV1>,
 }
 
 impl RecoveredCertifiedServeProjection {
-    /// Consume the sealed projection into coordinator-owned recovery parts.
+    /// Consume the sealed projection into coordinator- and registry-owned
+    /// recovery parts.
+    pub(super) fn into_registry_parts(
+        self,
+    ) -> (
+        CandidateAdmission,
+        DurablePayloadReference,
+        Option<TerminalOutcome>,
+        Option<CertifiedServeTerminalReplayAuthorityPairV1>,
+        CertifiedServeReplayEvidencePairV1,
+    ) {
+        (
+            self.candidate,
+            self.resolved_payload,
+            self.terminal_outcome,
+            self.terminal_replay,
+            self.replay,
+        )
+    }
+
+    /// Consume a test projection without exporting its runtime-only replay pair.
+    #[cfg(test)]
     pub(super) fn into_parts(
         self,
     ) -> (
@@ -367,6 +1326,23 @@ impl RecoveredCertifiedServeProjection {
             self.terminal_outcome,
             self.terminal_replay,
         )
+    }
+}
+
+/// One exact post-fsync Certified-Serve candidate kept inseparable from the
+/// common replay family required by both adjacent concrete carriers.
+#[must_use = "the prepared Certified-Serve admission still owns its replay family"]
+pub(super) struct PreparedCertifiedServeAdmissionV1 {
+    candidate: CandidateAdmission,
+    replay: CertifiedServeReplayEvidencePairV1,
+}
+
+impl PreparedCertifiedServeAdmissionV1 {
+    /// Consume the closed projection at the coordinator/registry transaction.
+    pub(super) fn into_candidate_and_replay(
+        self,
+    ) -> (CandidateAdmission, CertifiedServeReplayEvidencePairV1) {
+        (self.candidate, self.replay)
     }
 }
 
@@ -385,12 +1361,29 @@ struct ProjectedShape {
 /// Returns an error when the verified episode is foreign, the signed request
 /// is structurally inconsistent, or the post-fsync receipt names different
 /// request or certificate bytes.
+#[cfg(test)]
 pub(super) fn certified_serve_admission_request(
     active_context: LifecycleContext,
     verified: &VerifiedHeightContext,
     authenticated: &AuthenticatedCertifiedBodyRequest,
     receipt: DurableCertifiedServeAdmissionReceipt,
 ) -> Result<AdmissionRequest, CertifiedServeAdmissionError> {
+    prepare_certified_serve_admission(active_context, verified, authenticated, receipt).map(
+        |prepared| {
+            let (candidate, _replay) = prepared.into_candidate_and_replay();
+            AdmissionRequest::Candidate(candidate)
+        },
+    )
+}
+
+/// Close one authenticated, post-fsync request over the candidate and the
+/// opaque replay family that must enter both concrete registry rows.
+pub(super) fn prepare_certified_serve_admission(
+    active_context: LifecycleContext,
+    verified: &VerifiedHeightContext,
+    authenticated: &AuthenticatedCertifiedBodyRequest,
+    receipt: DurableCertifiedServeAdmissionReceipt,
+) -> Result<PreparedCertifiedServeAdmissionV1, CertifiedServeAdmissionError> {
     let context = verified.context();
     if lifecycle_context(context) != active_context {
         return Err(CertifiedServeAdmissionError::ForeignContext);
@@ -405,15 +1398,14 @@ pub(super) fn certified_serve_admission_request(
     {
         return Err(CertifiedServeAdmissionError::ReceiptMismatch);
     }
-    let payload_hash = receipt.payload_hash();
     let replay = CertifiedServeReplayEvidencePairV1::from_post_fsync_pending(
         active_context,
         authenticated,
         receipt,
     )
     .ok_or(CertifiedServeAdmissionError::ReceiptMismatch)?;
-    certified_serve_candidate(active_context, authenticated, payload_hash, replay)
-        .map(AdmissionRequest::Candidate)
+    let candidate = certified_serve_candidate(active_context, authenticated, &replay)?;
+    Ok(PreparedCertifiedServeAdmissionV1 { candidate, replay })
 }
 
 /// Reconstruct one authenticated payload-store record into its exact
@@ -431,12 +1423,7 @@ pub(super) fn recovered_certified_serve_projection(
     let replay =
         CertifiedServeReplayEvidencePairV1::from_authenticated_recovery(active_context, recovered)
             .ok_or(CertifiedServeAdmissionError::ReceiptMismatch)?;
-    let mut candidate = certified_serve_candidate(
-        active_context,
-        authenticated,
-        recovered.payload_hash(),
-        replay,
-    )?;
+    let mut candidate = certified_serve_candidate(active_context, authenticated, &replay)?;
     let request = digest_from_bytes(authenticated.request_hash().as_ref());
     let certificate = digest_from_bytes(recovered.certificate_hash().as_ref());
     let (resolved_payload, terminal_outcome) = match recovered.state() {
@@ -503,6 +1490,7 @@ pub(super) fn recovered_certified_serve_projection(
     }
     Ok(RecoveredCertifiedServeProjection {
         candidate,
+        replay,
         resolved_payload,
         terminal_outcome,
         terminal_replay,
@@ -512,8 +1500,7 @@ pub(super) fn recovered_certified_serve_projection(
 fn certified_serve_candidate(
     active_context: LifecycleContext,
     authenticated: &AuthenticatedCertifiedBodyRequest,
-    durable_payload_hash: Hash,
-    replay: CertifiedServeReplayEvidencePairV1,
+    replay: &CertifiedServeReplayEvidencePairV1,
 ) -> Result<CandidateAdmission, CertifiedServeAdmissionError> {
     let request = authenticated.request();
     let request_hash = authenticated.request_hash();
@@ -529,27 +1516,8 @@ fn certified_serve_candidate(
         return Err(CertifiedServeAdmissionError::InvalidRequest);
     }
 
-    let serve_slot =
-        PhysicalSlotId::for_capacity(LifecycleWorkClass::CertifiedServe.capacity_class(), 0);
-    let producer_slot =
-        PhysicalSlotId::for_capacity(LifecycleWorkClass::ProducerTurn.capacity_class(), 0);
-    let producer_digest = domain_digest(PRODUCER_TURN_PHYSICAL_DOMAIN, request_hash.as_ref());
     replay
-        .into_admission(
-            active_context,
-            PhysicalGeometry::new(
-                [PhysicalSlot::new(
-                    serve_slot,
-                    digest_from_hash(&durable_payload_hash),
-                )],
-                [serve_slot],
-            ),
-            PhysicalGeometry::new(
-                [PhysicalSlot::new(producer_slot, producer_digest)],
-                [producer_slot],
-            ),
-            durable_payload_hash,
-        )
+        .admission_candidate(active_context)
         .ok_or(CertifiedServeAdmissionError::InvalidRequest)
 }
 
@@ -2277,6 +3245,52 @@ mod tests {
         lease
     }
 
+    fn reduce_completed_serve_for_test(
+        coordinator: &mut LifecycleCoordinator,
+        lease: super::super::TurnLease,
+        receipt: DurableCertifiedServeCompletedReceipt,
+    ) -> bool {
+        let Some(producer_ordinal) = coordinator.producer_debts.get(&lease.ordinal).copied() else {
+            return false;
+        };
+        let terminal = CertifiedServeTerminalReplayAuthorityPairV1::from_completed_receipt(
+            coordinator.active_context,
+            &coordinator.records[&lease.ordinal],
+            &coordinator.durable_records[&lease.ordinal],
+            &coordinator.records[&producer_ordinal],
+            &coordinator.durable_records[&producer_ordinal],
+            receipt,
+        );
+        let Some(terminal) = terminal else {
+            return false;
+        };
+        coordinator.settle_turn_with_durable_serve_terminal(lease, terminal);
+        coordinator.fault().is_none()
+    }
+
+    fn reduce_negative_serve_for_test(
+        coordinator: &mut LifecycleCoordinator,
+        lease: super::super::TurnLease,
+        receipt: DurableCertifiedServeNegativeReceipt,
+    ) -> bool {
+        let Some(producer_ordinal) = coordinator.producer_debts.get(&lease.ordinal).copied() else {
+            return false;
+        };
+        let terminal = CertifiedServeTerminalReplayAuthorityPairV1::from_negative_receipt(
+            coordinator.active_context,
+            &coordinator.records[&lease.ordinal],
+            &coordinator.durable_records[&lease.ordinal],
+            &coordinator.records[&producer_ordinal],
+            &coordinator.durable_records[&producer_ordinal],
+            receipt,
+        );
+        let Some(terminal) = terminal else {
+            return false;
+        };
+        coordinator.settle_turn_with_durable_serve_terminal(lease, terminal);
+        coordinator.fault().is_none()
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)]
     fn pending_certified_serve_admits_one_ready_serve_and_adjacent_dormant_producer() {
@@ -2567,10 +3581,11 @@ mod tests {
         let pending_producer_replay = coordinator.durable_records[&2].replay_authority.clone();
         let lease = execute_ready_turn(&mut coordinator);
 
-        assert_eq!(
-            coordinator.settle_certified_serve_negative(lease.clone(), foreign_terminal),
-            Err(CertifiedServeSettlementError::ReceiptMismatch)
-        );
+        assert!(!reduce_negative_serve_for_test(
+            &mut coordinator,
+            lease.clone(),
+            foreign_terminal,
+        ));
         assert_eq!(coordinator.active_lease, Some(lease.clone()));
         let terminal = payload_store
             .persist_negative(
@@ -2578,9 +3593,11 @@ mod tests {
                 CertifiedServePayloadNegativeOutcome::Rejected(19),
             )
             .expect("persist exact negative result");
-        coordinator
-            .settle_certified_serve_negative(lease, terminal)
-            .expect("exact post-fsync receipt settles Serve");
+        assert!(reduce_negative_serve_for_test(
+            &mut coordinator,
+            lease,
+            terminal,
+        ));
 
         assert_eq!(
             coordinator.records[&1].state,
@@ -2669,10 +3686,11 @@ mod tests {
         let capacity_used = coordinator.capacity_used.clone();
         let active_lease = coordinator.active_lease.clone();
 
-        assert_eq!(
-            coordinator.settle_certified_serve_negative(lease, terminal),
-            Err(CertifiedServeSettlementError::ReceiptMismatch)
-        );
+        assert!(!reduce_negative_serve_for_test(
+            &mut coordinator,
+            lease,
+            terminal,
+        ));
         assert_eq!(coordinator.records, records);
         assert_eq!(coordinator.durable_records, durable_records);
         assert_eq!(coordinator.ready_index, ready_index);
@@ -2705,9 +3723,11 @@ mod tests {
                 CertifiedServePayloadNegativeOutcome::Cancelled,
             )
             .expect("persist cancellation before ledger settlement");
-        coordinator
-            .settle_certified_serve_negative(lease, terminal)
-            .expect("settle cancellation from its durable receipt");
+        assert!(reduce_negative_serve_for_test(
+            &mut coordinator,
+            lease,
+            terminal,
+        ));
         assert_eq!(
             coordinator.records[&1].state,
             LifecycleState::Terminal(TerminalOutcome::Cancelled)
@@ -2764,9 +3784,11 @@ mod tests {
         let terminal = payload_store
             .persist_completed(&request, &response)
             .expect("persist exact response metadata");
-        coordinator
-            .settle_certified_serve_completed(lease, terminal)
-            .expect("exact post-fsync response receipt settles Serve");
+        assert!(reduce_completed_serve_for_test(
+            &mut coordinator,
+            lease,
+            terminal,
+        ));
 
         let response = digest_from_bytes(HashOf::new(&response).as_ref());
         assert_eq!(
@@ -3382,9 +4404,11 @@ mod tests {
                 CertifiedServePayloadNegativeOutcome::Rejected(41),
             )
             .expect("persist exact terminal frame");
-        coordinator
-            .settle_certified_serve_negative(lease, terminal)
-            .expect("settle and persist exact terminal pair");
+        assert!(reduce_negative_serve_for_test(
+            &mut coordinator,
+            lease,
+            terminal,
+        ));
         assert!(
             coordinator.durable_records[&1]
                 .replay_authority
@@ -3489,9 +4513,11 @@ mod tests {
         let terminal = payload_store
             .persist_completed(&request, &response)
             .expect("persist exact completed frame");
-        coordinator
-            .settle_certified_serve_completed(lease, terminal)
-            .expect("settle and persist exact terminal pair");
+        assert!(reduce_completed_serve_for_test(
+            &mut coordinator,
+            lease,
+            terminal,
+        ));
         assert!(
             coordinator.durable_records[&1]
                 .replay_authority

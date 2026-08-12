@@ -5,17 +5,18 @@
 //! work. A future admission transaction must first reauthenticate the retained
 //! source against the verified height context and its owning durable store.
 
-use std::sync::Arc;
+use std::{mem::size_of, sync::Arc};
 
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::consensus_v2 as wire;
+use iroha_data_model::{block::consensus_v2 as wire, peer::PeerId};
 use norito::codec::{Decode, DecodeAll as _, Encode};
 
 use crate::sumeragi::{
     v2::{
         AdapterEffect, ExactLiveWalPersistedContinuationCause, LiveWalFrameIdentity,
-        PersistedWalFrameLocatorV1, RecoveredWalFrameIdentity,
-        RegisteredPrepareInvalidBodyReportCapability, SignRequest, VerifiedHeightContext,
+        PersistedWalFrameLocatorV1, RecoveredDecisionApplyCandidateProjectionPermit,
+        RecoveredWalFrameIdentity, RegisteredPrepareInvalidBodyReportCapability, SignRequest,
+        VerifiedHeightContext,
     },
     v2_body_store::{DurableBodyReceipt, DurableCertifiedFetchBodyReceipt, ValidatedBodyReceipt},
     v2_certified_serve_payload_store::{
@@ -27,33 +28,46 @@ use crate::sumeragi::{
     v2_core::EventTag,
     v2_runtime::{
         LocalBodyReplayMintPermit, LocalProposalReadyCommandIdentity, PendingRuntimeEffectBinding,
-        RecoveredWalCandidateProjectionPermit, RemoteProposalReplayMintPermit,
-        RuntimeEffectOwnership, RuntimeIngressOwnershipEvidence,
+        RecoveredWalCandidateProjectionPermit, RecoveredWalDecisionFetchPendingMintPermit,
+        RemoteProposalReplayMintPermit, RuntimeEffectOwnership, RuntimeIngressOwnershipEvidence,
     },
     v2_transport::AuthenticatedCertifiedBodyRequest,
 };
 
+use super::ledger::{
+    DurableCertifiedFetchLedgerCensusPermit, DurableCertifiedFetchLedgerJoinPermit,
+    LifecycleLedgerRecordV1,
+};
 use super::{
-    body_pipeline_transition::SealedInvalidBodyReportProjectionPermit,
+    body_pipeline_transition::{
+        SealedInvalidBodyReportProjectionPermit, SealedValidateSignProjectionPermit,
+    },
     projection::{
-        AdapterEffectAdmissionError, block_subject, certified_serve_key_subject,
+        AdapterEffectAdmissionError, AuthenticatedDurableBodyFrameRecovery,
+        DurableBodyFrameRecoveryError, block_subject, certified_serve_key_subject,
         durable_body_frame_reference, execution_commitment,
     },
     schema::{
-        CandidateAdmission, CausalRoot, DurableBodyFrameReference, DurablePayloadReference,
-        DurableRecordMetadata, DurableServeNegativeOutcome, InitialLifecycleState,
-        LifecycleContext, LifecycleDigest, LifecycleKey, LifecyclePhase, LifecycleRecord,
-        LifecycleRound, LifecycleStage, LifecycleStageKind, LifecycleWorkClass, OwnerId,
-        PhysicalGeometry, PredecessorScope, ProducerTurnAdmission, TerminalOutcome,
-        serve_and_producer_keys_match,
+        CandidateAdmission, CausalRoot, DurableBodyFrameReference,
+        DurablePayloadReference, DurableRecordMetadata, DurableServeNegativeOutcome,
+        InitialLifecycleState, LifecycleContext, LifecycleDigest, LifecycleKey, LifecyclePhase,
+        LifecycleRecord, LifecycleRound, LifecycleStage, LifecycleStageKind, LifecycleWorkClass,
+        OwnerId, PhysicalGeometry, PhysicalSlot, PhysicalSlotId, PredecessorScope,
+        ProducerTurnAdmission, TerminalOutcome, serve_and_producer_keys_match,
     },
     selector::CertifiedFetchCompletionAuthority,
-    work_registry::{InstalledBodyCandidateProjectionPermit, SealedBodySuccessorProjectionPermit},
+    work_registry::{
+        CertifiedFetchCompletion, ConcreteLifecycleWorkRegistry,
+        InstalledBodyCandidateProjectionPermit, LiveValidateSignWorkProjectionPermit,
+        PreparedLiveValidateSignRegistryWork, SealedBodySuccessorProjectionPermit,
+    },
 };
 
 const REPLAY_AUTHORITY_FORMAT_VERSION: u16 = 1;
 const MAX_REPLAY_AUTHORITY_BYTES: usize = 4 * 1024 * 1024;
 const EQUIVOCATION_SUBJECT_DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:equivocation-subject:v1";
+const PRODUCER_TURN_PHYSICAL_DOMAIN: &[u8] =
+    b"iroha:sumeragi:v2:lifecycle:producer-turn-physical:v1";
 
 /// Version-one replay envelope retained beside one lifecycle ledger row.
 ///
@@ -68,6 +82,50 @@ pub(super) struct LifecycleReplayAuthorityV1 {
 }
 
 impl LifecycleReplayAuthorityV1 {
+    /// Rebind a persisted Fetch authority only when it is the canonical
+    /// BodyFrame-backed Certified family used by the Ready completion.
+    fn recover_durable_certified_fetch(
+        &self,
+        active_context: LifecycleContext,
+        key: LifecycleKey,
+        stage: LifecycleStage,
+        payload: DurablePayloadReference,
+    ) -> Option<CertifiedFetchReplayEvidenceV1> {
+        if stage
+            != LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent)
+            || !matches!(payload, DurablePayloadReference::BodyFrame(_))
+            || self
+                .validate_record(
+                    active_context,
+                    key,
+                    LifecycleWorkClass::Fetch,
+                    stage,
+                    payload,
+                )
+                .is_err()
+        {
+            return None;
+        }
+        let (
+            LifecycleReplaySourceV1::BodyPipeline(source),
+            ReplayPayloadBindingV1::BodyFrame(body_frame),
+        ) = (&self.source, self.payload)
+        else {
+            return None;
+        };
+        let family = CertifiedBodyPipelineReplayFamilyV1 {
+            source: source.clone(),
+            body_frame,
+        };
+        (family.is_exact_for_stage(LifecycleStageKind::FetchBody)
+            && body_frame.durable_reference()
+                == match payload {
+                    DurablePayloadReference::BodyFrame(reference) => reference,
+                    _ => unreachable!("BodyFrame payload checked above"),
+                })
+        .then_some(CertifiedFetchReplayEvidenceV1 { family })
+    }
+
     /// Decode exactly one bounded canonical V1 envelope.
     fn decode_canonical(encoded: &[u8]) -> Result<Self, ReplayAuthorityCodecError> {
         if encoded.is_empty() || encoded.len() > MAX_REPLAY_AUTHORITY_BYTES {
@@ -141,7 +199,6 @@ impl LifecycleReplayAuthorityV1 {
             && self.source == other.source
     }
 
-    #[cfg(test)]
     /// Test whether this authority retains one exact Certified-Serve frame hash.
     pub(super) fn certified_serve_frame_hash_is(&self, expected: Hash) -> bool {
         matches!(
@@ -149,6 +206,46 @@ impl LifecycleReplayAuthorityV1 {
             LifecycleReplaySourceV1::CertifiedServeStorage(source)
                 if source.payload_hash == *expected.as_ref()
         )
+    }
+
+    /// Match the complete Certified-Serve storage origin against one sealed
+    /// authenticated request and admission receipt.
+    ///
+    /// This comparison deliberately binds the local retainer as well as the
+    /// request and frame identities. A valid quorum signer cannot therefore
+    /// splice its own retention receipt onto another validator's terminal
+    /// replay family.
+    pub(super) fn exactly_matches_certified_serve_publication(
+        &self,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+        receipt: DurableCertifiedServeAdmissionReceipt,
+    ) -> bool {
+        let LifecycleReplaySourceV1::CertifiedServeStorage(source) = &self.source else {
+            return false;
+        };
+        self.format_version == REPLAY_AUTHORITY_FORMAT_VERSION
+            && receipt.exactly_matches_authenticated_coordinates(authenticated)
+            && source.request == *authenticated.request()
+            && HashOf::new(&source.request) == authenticated.request_hash()
+            && source.payload_hash == *receipt.payload_hash().as_ref()
+            && source.local_retainer == receipt.local_retainer()
+    }
+
+    /// Match the signed request retained by one Certified-Serve storage
+    /// family without accepting a separately supplied payload receipt.
+    ///
+    /// Live terminal settlement uses this before writing its terminal frame,
+    /// so a foreign request fails before the payload store is mutated.
+    pub(super) fn exactly_matches_certified_serve_request(
+        &self,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+    ) -> bool {
+        let LifecycleReplaySourceV1::CertifiedServeStorage(source) = &self.source else {
+            return false;
+        };
+        self.format_version == REPLAY_AUTHORITY_FORMAT_VERSION
+            && source.request == *authenticated.request()
+            && HashOf::new(&source.request) == authenticated.request_hash()
     }
 
     #[cfg(test)]
@@ -349,6 +446,11 @@ enum WalReplayActionV1 {
         certificate: wire::TimeoutCertificate,
         protected_lock: Option<wire::QuorumCertificate>,
     },
+    #[codec(index = 5)]
+    FetchDecision {
+        certificate: wire::QuorumCertificate,
+        certified_sources: Vec<PeerId>,
+    },
 }
 
 /// Canonical structural evidence attached to one authenticated recovered WAL vote.
@@ -361,6 +463,740 @@ enum WalReplayActionV1 {
 #[must_use = "recovered WAL replay evidence must remain attached to its sealed recovery chain"]
 pub(crate) struct RecoveredWalVoteReplayEvidenceV1 {
     authority: LifecycleReplayAuthorityV1,
+}
+
+/// Canonical structural evidence for a recovered ProposalIntent or TimeoutIntent Sign.
+///
+/// This is inert, cloneable evidence; executable authority remains in the
+/// non-clone recovered-frame token. Its source, action, locator, and encoded
+/// bytes have no extraction API.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[must_use = "recovered control replay evidence must remain attached to its WAL token"]
+pub(crate) struct RecoveredWalControlReplayEvidenceV1 {
+    authority: LifecycleReplayAuthorityV1,
+}
+
+/// Canonical structural evidence for a recovered Decision-owned certified Fetch.
+///
+/// The exact CommitQC and frozen ordered archive roster are persisted in the
+/// private replay envelope. Executable authority remains in the non-clone WAL
+/// token and the runtime-private pending/candidate projection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[must_use = "recovered Decision Fetch evidence must remain attached to its WAL token"]
+pub(crate) struct RecoveredWalDecisionFetchReplayEvidenceV1 {
+    authority: LifecycleReplayAuthorityV1,
+}
+
+/// Canonical body-backed lineage for one recovered Commit Decision.
+///
+/// The original payload-free Fetch authority remains unchanged. This seal
+/// instead retains the exact WAL locator/QC-bound Store/Validate family and
+/// the final `ApplyDecision` authority, both bound to one immutable BodyFrame.
+/// It is inert evidence: only the private recovered-Decision composite may
+/// project candidates from it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[must_use = "recovered Decision body replay lineage must remain sealed through Apply recovery"]
+pub(in crate::sumeragi) struct RecoveredDecisionApplyReplayLineageV1 {
+    fetch: LifecycleReplayAuthorityV1,
+    body: RecoveredDecisionBodyPipelineReplayFamilyV1,
+    apply: LifecycleReplayAuthorityV1,
+}
+
+/// Closed logical Store/Validate/Apply lineage derived by the fixed reducer preview.
+///
+/// The three candidates and their concrete bindings remain private. Ledger,
+/// recovery, and registry code may only use the fixed record/splice/comparison
+/// oracles below; no candidate or replay-authority parts accessor exists.
+#[must_use = "recovered Decision Apply lineage must enter exact storage publication"]
+pub(in crate::sumeragi) struct RecoveredDecisionApplyCandidateLineageV1 {
+    fetch: LifecycleReplayAuthorityV1,
+    store: CandidateAdmission,
+    validate: CandidateAdmission,
+    apply: CandidateAdmission,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RecoveredDecisionBodyPipelineReplayFamilyV1 {
+    source: BodyPipelineReplaySourceV1,
+    body_frame: BodyFrameBindingV1,
+}
+
+/// One-shot candidate projection minted by consuming the runtime permit.
+///
+/// The logical admission remains opaque outside the lifecycle recovery
+/// module. In particular, this value has no candidate, key, ordinal, replay,
+/// geometry, or parts accessor.
+#[must_use = "the recovered control candidate projection must enter its sealed WAL recovery"]
+pub(in crate::sumeragi) struct RecoveredWalControlCandidateProjectionV1 {
+    candidate: CandidateAdmission,
+}
+
+/// One-shot candidate projection for an exact recovered Decision Fetch.
+///
+/// This wrapper exposes no candidate parts and can only be consumed by the
+/// dedicated recovered-WAL storage carrier.
+#[must_use = "the recovered Decision Fetch candidate must enter sealed WAL recovery"]
+pub(in crate::sumeragi) struct RecoveredWalDecisionFetchCandidateProjectionV1 {
+    candidate: CandidateAdmission,
+}
+
+impl RecoveredWalControlCandidateProjectionV1 {
+    /// Consume the opaque projection inside the sealed WAL-recovery module.
+    pub(super) fn into_candidate(self) -> CandidateAdmission {
+        self.candidate
+    }
+}
+
+impl RecoveredWalDecisionFetchCandidateProjectionV1 {
+    /// Consume the opaque projection inside the sealed WAL-recovery module.
+    pub(super) fn into_candidate(self) -> CandidateAdmission {
+        self.candidate
+    }
+}
+
+impl RecoveredWalControlReplayEvidenceV1 {
+    /// Mint the canonical V1 authority for one already-authenticated control effect.
+    pub(crate) fn from_sealed_recovered_control(
+        locator: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+    ) -> Option<Self> {
+        let authority = exact_recovered_wal_control_authority(locator, effect)?;
+        let canonical = LifecycleReplayAuthorityV1::decode_canonical(&authority.encode()).ok()?;
+        (canonical == authority).then_some(Self {
+            authority: canonical,
+        })
+    }
+
+    /// Compare the complete canonical authority with one opaque frame and effect.
+    pub(crate) fn exactly_matches_recovered_control(
+        &self,
+        locator: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+    ) -> bool {
+        exact_recovered_wal_control_authority(locator, effect)
+            .is_some_and(|expected| expected == self.authority)
+            && LifecycleReplayAuthorityV1::decode_canonical(&self.authority.encode())
+                .is_ok_and(|canonical| canonical == self.authority)
+    }
+
+    /// Consume the one-shot runtime permit into one opaque control candidate.
+    pub(in crate::sumeragi) fn project_recovered_control_candidate(
+        &self,
+        _permit: RecoveredWalCandidateProjectionPermit,
+        verified: &VerifiedHeightContext,
+        locator: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Option<RecoveredWalControlCandidateProjectionV1> {
+        self.project_candidate(verified, locator, effect, pending)
+            .map(|candidate| RecoveredWalControlCandidateProjectionV1 { candidate })
+    }
+
+    /// Recompute the admission and compare it without releasing either value.
+    pub(in crate::sumeragi) fn project_recovered_control_candidate_for_comparison(
+        &self,
+        verified: &VerifiedHeightContext,
+        locator: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        expected: &CandidateAdmission,
+    ) -> bool {
+        self.project_candidate(verified, locator, effect, pending)
+            .is_some_and(|candidate| candidate == *expected)
+    }
+
+    fn project_candidate(
+        &self,
+        verified: &VerifiedHeightContext,
+        locator: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Option<CandidateAdmission> {
+        if !self.exactly_matches_recovered_control(locator, effect) {
+            return None;
+        }
+        let active_context = super::projection::lifecycle_context(verified.context());
+        let projected = super::projection::authority_free_admission_projection(
+            active_context,
+            verified,
+            effect,
+            pending,
+        )
+        .ok()?;
+        candidate_from_authorized_projection(
+            active_context,
+            projected,
+            DurablePayloadReference::None,
+            self.authority.clone(),
+        )
+    }
+}
+
+impl RecoveredWalDecisionFetchReplayEvidenceV1 {
+    /// Mint canonical V1 evidence for one authenticated Decision Fetch.
+    pub(crate) fn from_sealed_recovered_decision_fetch(
+        verified: &VerifiedHeightContext,
+        locator: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+    ) -> Option<Self> {
+        let authority = exact_recovered_wal_decision_fetch_authority(verified, locator, effect)?;
+        let canonical = LifecycleReplayAuthorityV1::decode_canonical(&authority.encode()).ok()?;
+        (canonical == authority).then_some(Self {
+            authority: canonical,
+        })
+    }
+
+    /// Compare the complete canonical authority with one verified frame/effect pair.
+    pub(crate) fn exactly_matches_recovered_decision_fetch(
+        &self,
+        verified: &VerifiedHeightContext,
+        locator: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+    ) -> bool {
+        exact_recovered_wal_decision_fetch_authority(verified, locator, effect)
+            .is_some_and(|expected| expected == self.authority)
+            && LifecycleReplayAuthorityV1::decode_canonical(&self.authority.encode())
+                .is_ok_and(|canonical| canonical == self.authority)
+    }
+
+    /// Consume the private runtime permits into one opaque Fetch candidate.
+    pub(in crate::sumeragi) fn project_recovered_decision_fetch_candidate(
+        &self,
+        _permit: RecoveredWalCandidateProjectionPermit,
+        verified: &VerifiedHeightContext,
+        locator: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Option<RecoveredWalDecisionFetchCandidateProjectionV1> {
+        self.project_candidate(verified, locator, effect, pending)
+            .map(|candidate| RecoveredWalDecisionFetchCandidateProjectionV1 { candidate })
+    }
+
+    /// Recompute and compare the candidate without releasing either value.
+    pub(in crate::sumeragi) fn project_recovered_decision_fetch_candidate_for_comparison(
+        &self,
+        verified: &VerifiedHeightContext,
+        locator: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        expected: &CandidateAdmission,
+    ) -> bool {
+        self.project_candidate(verified, locator, effect, pending)
+            .is_some_and(|candidate| candidate == *expected)
+    }
+
+    fn project_candidate(
+        &self,
+        verified: &VerifiedHeightContext,
+        locator: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Option<CandidateAdmission> {
+        if !self.exactly_matches_recovered_decision_fetch(verified, locator, effect) {
+            return None;
+        }
+        let active_context = super::projection::lifecycle_context(verified.context());
+        let projected = super::projection::authority_free_admission_projection(
+            active_context,
+            verified,
+            effect,
+            pending,
+        )
+        .ok()?;
+        candidate_from_authorized_projection(
+            active_context,
+            projected,
+            DurablePayloadReference::None,
+            self.authority.clone(),
+        )
+    }
+
+    /// Reconstruct the pending binding only behind the private one-shot permit.
+    pub(in crate::sumeragi) fn reconstruct_pending(
+        &self,
+        permit: RecoveredWalDecisionFetchPendingMintPermit,
+        verified: &VerifiedHeightContext,
+        locator: RecoveredWalFrameIdentity,
+        effect: &AdapterEffect,
+    ) -> Option<PendingRuntimeEffectBinding> {
+        if !self.exactly_matches_recovered_decision_fetch(verified, locator, effect) {
+            return None;
+        }
+        PendingRuntimeEffectBinding::from_exact_recovered_wal_decision_fetch(
+            permit, locator, effect,
+        )
+    }
+}
+
+impl RecoveredDecisionApplyReplayLineageV1 {
+    /// Derive the closed body lineage from one exact recovered Decision Fetch.
+    ///
+    /// The caller cannot supply a role, action, locator parts, lifecycle key,
+    /// or encoded replay envelope. The already-authenticated Fetch evidence
+    /// fixes the Decision frame/QC, while the exact durable receipt and its
+    /// manifest fix the sole BodyFrame accepted by Store, Validate, and Apply.
+    pub(crate) fn from_sealed_recovered_decision(
+        fetch: &RecoveredWalDecisionFetchReplayEvidenceV1,
+        verified: &VerifiedHeightContext,
+        locator: RecoveredWalFrameIdentity,
+        fetch_effect: &AdapterEffect,
+        manifest: &wire::PayloadManifest,
+        receipt: &DurableBodyReceipt,
+    ) -> Option<Self> {
+        let expected_fetch =
+            exact_recovered_wal_decision_fetch_authority(verified, locator, fetch_effect)?;
+        if fetch.authority != expected_fetch
+            || LifecycleReplayAuthorityV1::decode_canonical(&fetch.authority.encode()).ok()?
+                != fetch.authority
+        {
+            return None;
+        }
+        let AdapterEffect::FetchBody {
+            tag,
+            round,
+            subject,
+            certificate: Some(certificate),
+            ..
+        } = fetch_effect
+        else {
+            return None;
+        };
+        let context = super::projection::lifecycle_context(verified.context());
+        if certificate.phase != wire::GlobalPhase::Commit
+            || certificate.proposal_round != *round
+            || certificate.subject != *subject
+            || manifest.round != *round
+            || manifest.subject != *subject
+            || receipt.context_id() != round.context_id
+            || receipt.round() != *round
+            || receipt.subject() != *subject
+            || receipt.manifest_hash() != HashOf::new(manifest)
+        {
+            return None;
+        }
+        let frame = durable_body_frame_reference(context, receipt)?;
+        let ReplayPayloadBindingV1::BodyFrame(body_frame) =
+            ReplayPayloadBindingV1::from_payload(DurablePayloadReference::BodyFrame(frame))
+        else {
+            unreachable!("one durable body receipt projects one BodyFrame binding")
+        };
+        let body = RecoveredDecisionBodyPipelineReplayFamilyV1 {
+            source: BodyPipelineReplaySourceV1 {
+                tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
+                origin: BodyPipelineOriginV1::RecoveredDecision {
+                    locator: locator.persisted_locator(),
+                    certificate: certificate.clone(),
+                    manifest: manifest.clone(),
+                },
+            },
+            body_frame,
+        };
+        body.authority_for(context, LifecycleStageKind::StoreBody)?;
+        body.authority_for(context, LifecycleStageKind::ValidateBody)?;
+
+        let apply_source = LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+            locator: locator.persisted_locator(),
+            role: ReplayWalRoleV1::DECISION,
+            tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
+            action: WalReplayActionV1::ApplyDecision(certificate.clone()),
+        });
+        let apply = canonical_replay_authority(
+            context,
+            apply_source,
+            LifecycleStageKind::ApplyDecision,
+            ReplayPayloadBindingV1::BodyFrame(body_frame),
+        )?;
+        let lineage = Self {
+            fetch: fetch.authority.clone(),
+            body,
+            apply,
+        };
+        lineage.is_stage_closed(context).then_some(lineage)
+    }
+
+    fn is_stage_closed(&self, context: LifecycleContext) -> bool {
+        let Some(store) = self
+            .body
+            .authority_for(context, LifecycleStageKind::StoreBody)
+        else {
+            return false;
+        };
+        let Some(validate) = self
+            .body
+            .authority_for(context, LifecycleStageKind::ValidateBody)
+        else {
+            return false;
+        };
+        let Some(fetch_shape) = self
+            .fetch
+            .source
+            .project(context, LifecycleStageKind::FetchBody, &self.fetch.payload)
+            .ok()
+        else {
+            return false;
+        };
+        let Some(apply_shape) = self
+            .apply
+            .source
+            .project(
+                context,
+                LifecycleStageKind::ApplyDecision,
+                &self.apply.payload,
+            )
+            .ok()
+        else {
+            return false;
+        };
+        let Some(store_payload) = store.payload.durable_payload() else {
+            return false;
+        };
+        let Some(validate_payload) = validate.payload.durable_payload() else {
+            return false;
+        };
+        let Some(apply_payload) = self.apply.payload.durable_payload() else {
+            return false;
+        };
+        fetch_shape.work_class == LifecycleWorkClass::Fetch
+            && apply_shape.work_class == LifecycleWorkClass::Apply
+            && recovered_decision_body_continuation_is_exact(
+                super::schema::DurableContinuationEdge::FetchToStore,
+                &self.fetch,
+                DurablePayloadReference::None,
+                &store,
+                store_payload,
+            ) == Some(true)
+            && recovered_decision_body_continuation_is_exact(
+                super::schema::DurableContinuationEdge::StoreToValidate,
+                &store,
+                store_payload,
+                &validate,
+                validate_payload,
+            ) == Some(true)
+            && recovered_decision_body_continuation_is_exact(
+                super::schema::DurableContinuationEdge::ValidateToApply,
+                &validate,
+                validate_payload,
+                &self.apply,
+                apply_payload,
+            ) == Some(true)
+    }
+
+    /// Consume the inert replay family into the sole fixed reducer-derived
+    /// Store/Validate/Apply logical lineage.
+    ///
+    /// The one-shot permit is minted only while the staged adapter still owns
+    /// all three exact effects and predecessor-derived bindings. The returned
+    /// value exposes only fixed ledger/recovery/registry oracles.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn project_candidate_lineage(
+        &self,
+        _permit: RecoveredDecisionApplyCandidateProjectionPermit,
+        verified: &VerifiedHeightContext,
+        receipt: &DurableBodyReceipt,
+        store_effect: &AdapterEffect,
+        store_pending: &PendingRuntimeEffectBinding,
+        validate_effect: &AdapterEffect,
+        validate_pending: &PendingRuntimeEffectBinding,
+        apply_effect: &AdapterEffect,
+        apply_pending: &PendingRuntimeEffectBinding,
+    ) -> Option<RecoveredDecisionApplyCandidateLineageV1> {
+        let context = super::projection::lifecycle_context(verified.context());
+        if receipt.context_id() != verified.context().id() || !self.is_stage_closed(context) {
+            return None;
+        }
+        let payload =
+            DurablePayloadReference::BodyFrame(durable_body_frame_reference(context, receipt)?);
+        let store_authority = self
+            .body
+            .authority_for(context, LifecycleStageKind::StoreBody)?;
+        let validate_authority = self
+            .body
+            .authority_for(context, LifecycleStageKind::ValidateBody)?;
+        let store = candidate_from_authorized_projection(
+            context,
+            super::projection::authority_free_admission_projection(
+                context,
+                verified,
+                store_effect,
+                store_pending,
+            )
+            .ok()?,
+            payload,
+            store_authority,
+        )?;
+        let validate = candidate_from_authorized_projection(
+            context,
+            super::projection::authority_free_admission_projection(
+                context,
+                verified,
+                validate_effect,
+                validate_pending,
+            )
+            .ok()?,
+            payload,
+            validate_authority,
+        )?;
+        let apply = candidate_from_authorized_projection(
+            context,
+            super::projection::authority_free_admission_projection(
+                context,
+                verified,
+                apply_effect,
+                apply_pending,
+            )
+            .ok()?,
+            payload,
+            self.apply,
+        )?;
+        let lineage = RecoveredDecisionApplyCandidateLineageV1 {
+            fetch: self.fetch.clone(),
+            store,
+            validate,
+            apply,
+        };
+        lineage.is_exact(context).then_some(lineage)
+    }
+}
+
+impl RecoveredDecisionApplyCandidateLineageV1 {
+    fn candidate_matches_record(
+        candidate: &CandidateAdmission,
+        record: &LifecycleLedgerRecordV1,
+        owner: OwnerId,
+        terminal: Option<TerminalOutcome>,
+        continuation: super::schema::DurableContinuation,
+    ) -> bool {
+        record.key() == Some(candidate.key)
+            && record.owner() == owner
+            && record.work_class() == Some(candidate.work_class)
+            && record.stage() == Some(candidate.stage)
+            && record.terminal() == Some(terminal)
+            && record.reconstruction_source() == candidate.reconstruction_source
+            && record.durable_payload() == Some(candidate.payload)
+            && record.continuation() == Some(continuation)
+            && record.replay_matches_candidate(candidate)
+    }
+
+    /// Recheck the complete fixed body lineage without releasing a candidate.
+    pub(super) fn is_exact(&self, context: LifecycleContext) -> bool {
+        let candidates = [&self.store, &self.validate, &self.apply];
+        let owner = self.store.causal_root;
+        let payload = self.store.payload;
+        candidates.iter().all(|candidate| {
+            candidate.causal_root == owner
+                && candidate.reconstruction_source == owner.digest()
+                && candidate.initial_state == InitialLifecycleState::Ready
+                && candidate.payload == payload
+                && candidate.producer_turn.is_none()
+                && candidate.replay_authority_is_exact(context)
+        }) && self.store.work_class == LifecycleWorkClass::Store
+            && self.store.stage.kind() == LifecycleStageKind::StoreBody
+            && self.validate.work_class == LifecycleWorkClass::Validate
+            && self.validate.stage.kind() == LifecycleStageKind::ValidateBody
+            && self.apply.work_class == LifecycleWorkClass::Apply
+            && self.apply.stage.kind() == LifecycleStageKind::ApplyDecision
+            && matches!(payload, DurablePayloadReference::BodyFrame(_))
+            && super::body_pipeline_transition::durable_continuation_successor_is_exact(
+                super::schema::DurableContinuationEdge::StoreToValidate,
+                self.store.work_class,
+                self.store.key,
+                self.store.stage,
+                self.validate.work_class,
+                self.validate.key,
+                self.validate.stage,
+            )
+            && super::body_pipeline_transition::durable_continuation_successor_is_exact(
+                super::schema::DurableContinuationEdge::ValidateToApply,
+                self.validate.work_class,
+                self.validate.key,
+                self.validate.stage,
+                self.apply.work_class,
+                self.apply.key,
+                self.apply.stage,
+            )
+            && recovered_decision_body_continuation_is_exact(
+                super::schema::DurableContinuationEdge::StoreToValidate,
+                &self.store.replay_authority,
+                payload,
+                &self.validate.replay_authority,
+                payload,
+            ) == Some(true)
+            && recovered_decision_body_continuation_is_exact(
+                super::schema::DurableContinuationEdge::ValidateToApply,
+                &self.validate.replay_authority,
+                payload,
+                &self.apply.replay_authority,
+                payload,
+            ) == Some(true)
+    }
+
+    /// Bind the original payload-free Decision Fetch authority to the first
+    /// body-backed Store successor without releasing either candidate.
+    pub(super) fn exactly_follows_fetch_candidate(&self, fetch: &CandidateAdmission) -> bool {
+        fetch.replay_authority == self.fetch
+            && fetch.work_class == LifecycleWorkClass::Fetch
+            && fetch.stage.kind() == LifecycleStageKind::FetchBody
+            && fetch.payload == DurablePayloadReference::None
+            && fetch.causal_root == self.store.causal_root
+            && fetch.reconstruction_source == self.store.reconstruction_source
+            && super::body_pipeline_transition::durable_continuation_successor_is_exact(
+                super::schema::DurableContinuationEdge::FetchToStore,
+                fetch.work_class,
+                fetch.key,
+                fetch.stage,
+                self.store.work_class,
+                self.store.key,
+                self.store.stage,
+            )
+            && recovered_decision_body_continuation_is_exact(
+                super::schema::DurableContinuationEdge::FetchToStore,
+                &fetch.replay_authority,
+                fetch.payload,
+                &self.store.replay_authority,
+                self.store.payload,
+            ) == Some(true)
+    }
+
+    /// Build the only three durable successors permitted after the exact
+    /// payload-free recovered Decision Fetch row.
+    pub(super) fn successor_records(
+        &self,
+        owner: OwnerId,
+        store_ordinal: u128,
+        validate_ordinal: u128,
+        apply_ordinal: u128,
+    ) -> Option<[LifecycleLedgerRecordV1; 3]> {
+        if owner.causal_root() != self.store.causal_root
+            || store_ordinal.checked_add(1) != Some(validate_ordinal)
+            || validate_ordinal.checked_add(1) != Some(apply_ordinal)
+        {
+            return None;
+        }
+        let store = LifecycleLedgerRecordV1::new(
+            self.store.key,
+            owner,
+            store_ordinal,
+            self.store.work_class,
+            self.store.stage,
+            Some(TerminalOutcome::Advanced),
+            self.store.reconstruction_source,
+            self.store.payload,
+            self.store.replay_authority.clone(),
+            super::schema::DurableContinuation::successor(
+                super::schema::DurableContinuationEdge::StoreToValidate,
+                validate_ordinal,
+            ),
+        )
+        .ok()?;
+        let validate = LifecycleLedgerRecordV1::new(
+            self.validate.key,
+            owner,
+            validate_ordinal,
+            self.validate.work_class,
+            self.validate.stage,
+            Some(TerminalOutcome::Advanced),
+            self.validate.reconstruction_source,
+            self.validate.payload,
+            self.validate.replay_authority.clone(),
+            super::schema::DurableContinuation::successor(
+                super::schema::DurableContinuationEdge::ValidateToApply,
+                apply_ordinal,
+            ),
+        )
+        .ok()?;
+        let apply = LifecycleLedgerRecordV1::new(
+            self.apply.key,
+            owner,
+            apply_ordinal,
+            self.apply.work_class,
+            self.apply.stage,
+            None,
+            self.apply.reconstruction_source,
+            self.apply.payload,
+            self.apply.replay_authority.clone(),
+            super::schema::DurableContinuation::None,
+        )
+        .ok()?;
+        Some([store, validate, apply])
+    }
+
+    /// Compare all three successor rows, including the final live Apply.
+    pub(super) fn exactly_matches_successor_records(
+        &self,
+        owner: OwnerId,
+        store: &LifecycleLedgerRecordV1,
+        validate: &LifecycleLedgerRecordV1,
+        apply: &LifecycleLedgerRecordV1,
+    ) -> bool {
+        store.ordinal().checked_add(1) == Some(validate.ordinal())
+            && validate.ordinal().checked_add(1) == Some(apply.ordinal())
+            && Self::candidate_matches_record(
+                &self.store,
+                store,
+                owner,
+                Some(TerminalOutcome::Advanced),
+                super::schema::DurableContinuation::successor(
+                    super::schema::DurableContinuationEdge::StoreToValidate,
+                    validate.ordinal(),
+                ),
+            )
+            && Self::candidate_matches_record(
+                &self.validate,
+                validate,
+                owner,
+                Some(TerminalOutcome::Advanced),
+                super::schema::DurableContinuation::successor(
+                    super::schema::DurableContinuationEdge::ValidateToApply,
+                    apply.ordinal(),
+                ),
+            )
+            && Self::candidate_matches_record(
+                &self.apply,
+                apply,
+                owner,
+                None,
+                super::schema::DurableContinuation::None,
+            )
+    }
+
+    /// Insert the final Apply candidate only when its exact live row owns it.
+    pub(super) fn splice_apply_candidate(
+        &self,
+        record: &LifecycleLedgerRecordV1,
+        candidates: &mut std::collections::BTreeMap<LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        Self::candidate_matches_record(
+            &self.apply,
+            record,
+            record.owner(),
+            None,
+            super::schema::DurableContinuation::None,
+        ) && candidates
+            .insert(self.apply.key, self.apply.clone())
+            .is_none()
+    }
+
+}
+
+impl RecoveredDecisionBodyPipelineReplayFamilyV1 {
+    fn authority_for(
+        &self,
+        context: LifecycleContext,
+        stage: LifecycleStageKind,
+    ) -> Option<LifecycleReplayAuthorityV1> {
+        if !matches!(
+            stage,
+            LifecycleStageKind::StoreBody | LifecycleStageKind::ValidateBody
+        ) {
+            return None;
+        }
+        canonical_replay_authority(
+            context,
+            LifecycleReplaySourceV1::BodyPipeline(self.source.clone()),
+            stage,
+            ReplayPayloadBindingV1::BodyFrame(self.body_frame),
+        )
+    }
 }
 
 impl RecoveredWalVoteReplayEvidenceV1 {
@@ -493,6 +1329,7 @@ pub(in crate::sumeragi) struct SealedLiveWalPersistedEffectV1 {
 #[derive(PartialEq, Eq)]
 enum LiveWalPersistedPendingV1 {
     PayloadFree(PendingRuntimeEffectBinding),
+    ValidateSignBound(PendingRuntimeEffectBinding),
     ApplyPending,
     ApplyBound(PendingRuntimeEffectBinding),
 }
@@ -540,6 +1377,151 @@ impl SealedLiveWalPersistedEffectV1 {
         ) && self
             .replay
             .exactly_matches_payload_free_effect(&self.effect)
+    }
+
+    /// Replace the frame-derived placeholder owner of one exact vote-sign
+    /// continuation with the predecessor-derived binding sealed by the Ready
+    /// Validate adapter preflight.
+    ///
+    /// The caller cannot provide a WAL identity or effect. Failure returns both
+    /// move-only inputs intact; success keeps the bound pending value nested in
+    /// this replay envelope.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn bind_exact_validate_sign_pending(
+        self,
+        pending: PendingRuntimeEffectBinding,
+    ) -> Result<Self, (Self, PendingRuntimeEffectBinding)> {
+        if !matches!(&self.pending, LiveWalPersistedPendingV1::PayloadFree(_))
+            || !matches!(
+                &self.effect,
+                AdapterEffect::Sign {
+                    request: SignRequest::Vote(vote),
+                    ..
+                } if matches!(vote.phase, wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit)
+            )
+            || !pending.exactly_binds_adapter_effect(&self.effect)
+            || !self
+                .replay
+                .exactly_matches_payload_free_effect(&self.effect)
+        {
+            return Err((self, pending));
+        }
+        let Self { effect, replay, .. } = self;
+        Ok(Self {
+            effect,
+            replay,
+            pending: LiveWalPersistedPendingV1::ValidateSignBound(pending),
+        })
+    }
+
+    /// Recheck the sealed post-append Validate-to-Sign binding without
+    /// releasing its effect or pending owner.
+    pub(super) fn exactly_binds_validate_sign_pending(&self) -> bool {
+        matches!(
+            &self.pending,
+            LiveWalPersistedPendingV1::ValidateSignBound(pending)
+                if pending.exactly_binds_adapter_effect(&self.effect)
+        ) && matches!(
+            &self.effect,
+            AdapterEffect::Sign {
+                request: SignRequest::Vote(vote),
+                ..
+            } if matches!(vote.phase, wire::GlobalPhase::Prepare | wire::GlobalPhase::Commit)
+        ) && self
+            .replay
+            .exactly_matches_payload_free_effect(&self.effect)
+    }
+
+    /// Project the exact replay-authorized Sign child without releasing its
+    /// nested effect or predecessor-derived pending owner.
+    ///
+    /// Only the body-transition module can mint `permit`. In particular this
+    /// path does not repeat ordinary-to-Commit refinement after the opaque
+    /// registered-Prepare capability was consumed before WAL append.
+    pub(in crate::sumeragi) fn project_sealed_validate_sign_candidate(
+        &self,
+        _permit: &SealedValidateSignProjectionPermit,
+        verified: &VerifiedHeightContext,
+    ) -> Result<CandidateAdmission, AdapterEffectAdmissionError> {
+        if !self.exactly_binds_validate_sign_pending() {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        }
+        let LiveWalPersistedPendingV1::ValidateSignBound(pending) = &self.pending else {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        };
+        let LiveWalPersistedReplayStateV1::Canonical { authority, stage } = &self.replay.state
+        else {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        };
+        if !matches!(
+            stage,
+            LifecycleStageKind::SignPrepareVote | LifecycleStageKind::SignCommitVote
+        ) {
+            return Err(AdapterEffectAdmissionError::InvalidCarrier);
+        }
+        let active_context = super::projection::lifecycle_context(verified.context());
+        let projected = super::projection::authority_free_admission_projection(
+            active_context,
+            verified,
+            &self.effect,
+            pending,
+        )?;
+        candidate_from_authorized_projection(
+            active_context,
+            projected,
+            DurablePayloadReference::None,
+            authority.clone(),
+        )
+        .ok_or(AdapterEffectAdmissionError::InvalidCarrier)
+    }
+
+    /// Consume the exact nested Validate-to-Sign continuation into one closed
+    /// ordinary registry carrier.
+    ///
+    /// The caller receives neither effect nor pending parts. The one-shot
+    /// permit is minted only after the fixed transaction has staged the exact
+    /// child and is ready to reserve its concrete address.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_live_validate_sign_work(
+        self,
+        permit: LiveValidateSignWorkProjectionPermit,
+    ) -> Result<PreparedLiveValidateSignRegistryWork, Self> {
+        if !self.exactly_binds_validate_sign_pending() {
+            return Err(self);
+        }
+        let Self {
+            effect,
+            replay,
+            pending,
+        } = self;
+        let LiveWalPersistedPendingV1::ValidateSignBound(pending) = pending else {
+            unreachable!("exact live Validate-to-Sign seal retains its bound pending owner")
+        };
+        match PreparedLiveValidateSignRegistryWork::from_exact(permit, effect, pending) {
+            Ok(work) => Ok(work),
+            Err((_error, effect, pending)) => Err(Self {
+                effect,
+                replay,
+                pending: LiveWalPersistedPendingV1::ValidateSignBound(pending),
+            }),
+        }
+    }
+
+    /// Compare the complete test effect and expected inherited causal key
+    /// without releasing either sealed value.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn exactly_matches_validate_sign_for_test(
+        &self,
+        effect: &AdapterEffect,
+        causal_key: &iroha_crypto::Hash,
+    ) -> bool {
+        self.effect == *effect
+            && matches!(
+                &self.pending,
+                LiveWalPersistedPendingV1::ValidateSignBound(pending)
+                    if pending.causal_lifecycle_key() == causal_key
+            )
+            && self.exactly_binds_validate_sign_pending()
     }
 
     /// Complete `Apply` only from the exact retained Validate causal owner.
@@ -609,6 +1591,12 @@ impl SealedLiveWalPersistedEffectV1 {
     fn exactly_matches_effect(&self) -> bool {
         match &self.pending {
             LiveWalPersistedPendingV1::PayloadFree(pending) => {
+                pending.exactly_binds_adapter_effect(&self.effect)
+                    && self
+                        .replay
+                        .exactly_matches_payload_free_effect(&self.effect)
+            }
+            LiveWalPersistedPendingV1::ValidateSignBound(pending) => {
                 pending.exactly_binds_adapter_effect(&self.effect)
                     && self
                         .replay
@@ -2281,6 +3269,302 @@ pub(super) struct CertifiedFetchReplayEvidenceV1 {
     family: CertifiedBodyPipelineReplayFamilyV1,
 }
 
+/// Opaque restart-stable projection of one body-fsynced Certified Fetch.
+///
+/// The canonical digest binds the complete Fetch effect identity, its causal
+/// key, and the canonical frame-bound replay envelope. Transport occurrence
+/// hashes and fair-ingress ordinals never enter this value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[must_use = "a durable Certified Fetch projection must remain with its exact completion"]
+pub(super) struct DurableCertifiedFetchReplayProjectionV1 {
+    payload: DurablePayloadReference,
+    authority: LifecycleReplayAuthorityV1,
+    causal_key: Hash,
+    effect_identity: Hash,
+    completion_digest: LifecycleDigest,
+    expected_manifest_hash: HashOf<wire::PayloadManifest>,
+}
+
+/// Opaque result of the consuming LedgerV1/body-store Certified-Fetch join.
+#[must_use = "recovered durable Fetch authority must enter coordinator and registry recovery"]
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredDurableCertifiedFetchV1
+{
+    completion: CertifiedFetchCompletion,
+    candidate: CandidateAdmission,
+}
+
+/// Aggregate opaque recovery cut for every live BodyFrame-backed Fetch row.
+///
+/// No row, candidate, effect, pending binding, or registry material can be
+/// extracted independently. Startup must eventually consume the whole cut at
+/// one coordinator-open/registry-install boundary.
+#[must_use = "the complete durable Fetch census must be consumed atomically"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(in crate::sumeragi::v2_lifecycle_coordinator) struct AuthenticatedRecoveredDurableCertifiedFetchCensusV1
+{
+    ledger_frame_identity: LifecycleDigest,
+    entries: Vec<AuthenticatedRecoveredDurableCertifiedFetchV1>,
+}
+
+/// One consuming startup phase for the complete recovered Ready-Fetch census.
+///
+/// Candidate projection is moved into the logical recovery cut exactly once.
+/// The remaining closed completions can then enter only an initially empty
+/// concrete registry. Neither side has a row or parts accessor.
+#[must_use = "prepared durable Fetch startup authority must be installed atomically"]
+pub(super) struct PreparedDurableCertifiedFetchStartupV1 {
+    ledger_frame_identity: LifecycleDigest,
+    entries: Vec<PreparedDurableCertifiedFetchStartupEntryV1>,
+}
+
+struct PreparedDurableCertifiedFetchStartupEntryV1 {
+    candidate: Option<CandidateAdmission>,
+    completion: CertifiedFetchCompletion,
+}
+
+impl AuthenticatedRecoveredDurableCertifiedFetchV1 {
+    fn is_exact(&self) -> bool {
+        self.completion.matches_recovered_candidate(&self.candidate)
+    }
+}
+
+impl AuthenticatedRecoveredDurableCertifiedFetchCensusV1 {
+    fn from_exact_ledger_census(
+        _permit: DurableCertifiedFetchLedgerCensusPermit,
+        entries: Vec<AuthenticatedRecoveredDurableCertifiedFetchV1>,
+    ) -> Option<Self> {
+        let mut addresses = std::collections::BTreeSet::new();
+        let mut owners = std::collections::BTreeSet::new();
+        let mut digests = std::collections::BTreeSet::new();
+        let mut body_frames = std::collections::BTreeSet::new();
+        for entry in &entries {
+            let DurablePayloadReference::BodyFrame(body_frame) = entry.candidate.payload else {
+                return None;
+            };
+            if !entry.is_exact()
+                || !addresses.insert(entry.completion.address())
+                || !owners.insert(entry.completion.owner())
+                || !entry
+                    .completion
+                    .ready_digest()
+                    .is_some_and(|digest| digests.insert(digest))
+                || !body_frames.insert(body_frame)
+            {
+                return None;
+            }
+        }
+        Some(Self {
+            ledger_frame_identity: _permit.into_frame_identity(),
+            entries,
+        })
+    }
+
+    fn is_exact(&self) -> bool {
+        self.entries
+            .iter()
+            .all(AuthenticatedRecoveredDurableCertifiedFetchV1::is_exact)
+    }
+
+    /// Compare against the exact opened frame and its complete live-Fetch count.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exactly_matches_opened_ledger(
+        &self,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        live_body_fetch_count: usize,
+    ) -> bool {
+        self.ledger_frame_identity == ledger.frame_identity()
+            && self.entries.len() == live_body_fetch_count
+    }
+
+    /// Consume the authenticated census into its single startup phase.
+    pub(super) fn into_startup(
+        self,
+        ledger: &super::ledger::LifecycleLedgerV1,
+    ) -> Option<PreparedDurableCertifiedFetchStartupV1> {
+        let live_body_fetch_count = ledger
+            .records()
+            .iter()
+            .filter(|record| {
+                record.work_class() == Some(LifecycleWorkClass::Fetch)
+                    && record.terminal() == Some(None)
+                    && matches!(
+                        record.durable_payload(),
+                        Some(DurablePayloadReference::BodyFrame(_))
+                    )
+            })
+            .count();
+        if !self.exactly_matches_opened_ledger(ledger, live_body_fetch_count) || !self.is_exact() {
+            return None;
+        }
+        Some(PreparedDurableCertifiedFetchStartupV1 {
+            ledger_frame_identity: self.ledger_frame_identity,
+            entries: self
+                .entries
+                .into_iter()
+                .map(|entry| PreparedDurableCertifiedFetchStartupEntryV1 {
+                    candidate: Some(entry.candidate),
+                    completion: entry.completion,
+                })
+                .collect(),
+        })
+    }
+
+    #[cfg(test)]
+    pub(super) fn corrupt_first_completion_for_test(&mut self) {
+        if let Some(entry) = self.entries.first_mut() {
+            entry.completion.corrupt_for_startup_test();
+        }
+    }
+}
+
+impl PreparedDurableCertifiedFetchStartupV1 {
+    /// Verify the complete phase against one still-empty concrete registry.
+    pub(super) fn preflights_empty_registry(
+        &self,
+        registry: &ConcreteLifecycleWorkRegistry,
+    ) -> bool {
+        let mut addresses = std::collections::BTreeSet::new();
+        let mut digests = std::collections::BTreeSet::new();
+        registry.is_empty()
+            && self.entries.iter().all(|entry| {
+                entry.candidate.as_ref().is_some_and(|candidate| {
+                    entry.completion.matches_recovered_candidate(candidate)
+                        && addresses.insert(entry.completion.address())
+                        && entry
+                            .completion
+                            .ready_digest()
+                            .is_some_and(|digest| digests.insert(digest))
+                })
+            })
+    }
+
+    /// Move every exact logical candidate into one recovery map.
+    ///
+    /// Complete validation precedes mutation, and a second call is rejected.
+    pub(super) fn splice_candidates(
+        &mut self,
+        ledger: &super::ledger::LifecycleLedgerV1,
+        candidates: &mut std::collections::BTreeMap<LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        if self.ledger_frame_identity != ledger.frame_identity()
+            || self.entries.iter().any(|entry| {
+                entry.candidate.as_ref().is_none_or(|candidate| {
+                    !entry.completion.matches_recovered_candidate(candidate)
+                        || candidates.contains_key(&candidate.key)
+                })
+            })
+        {
+            return false;
+        }
+        for entry in &mut self.entries {
+            let candidate = entry
+                .candidate
+                .take()
+                .expect("whole-census preflight retained every Fetch candidate");
+            assert!(candidates.insert(candidate.key, candidate).is_none());
+        }
+        true
+    }
+
+    /// Install all retained concrete completions into one empty registry.
+    ///
+    /// The complete no-collision and carrier-integrity preflight precedes the
+    /// first insertion. The mutation tail is therefore assertion-only.
+    pub(super) fn install_into_empty_registry(
+        self,
+        registry: &mut ConcreteLifecycleWorkRegistry,
+    ) -> Result<(), Self> {
+        let mut addresses = std::collections::BTreeSet::new();
+        if !registry.is_empty()
+            || self.entries.iter().any(|entry| {
+                entry.candidate.is_some()
+                    || !addresses.insert(entry.completion.address())
+                    || entry.completion.ready_digest().is_none()
+                    || !entry.completion.validates(
+                        entry
+                            .completion
+                            .ready_digest()
+                            .expect("guard retained a Ready digest"),
+                    )
+            })
+        {
+            return Err(self);
+        }
+        for entry in self.entries {
+            assert!(
+                registry
+                    .install_recovered_durable_fetch(entry.completion)
+                    .is_ok(),
+                "preflighted empty-registry Fetch installation is infallible"
+            );
+        }
+        Ok(())
+    }
+
+    /// Install the final-frame Fetch census beside one exact recovered-WAL
+    /// authority carrier.
+    ///
+    /// Logical candidates must already have been spliced into the same
+    /// authenticated recovery cut. The complete collision and owner preflight
+    /// precedes mutation, so the insertion tail is infallible and cannot leave
+    /// a partial recovered registry.
+    pub(super) fn install_alongside_recovered_wal_authority(
+        self,
+        registry: &mut ConcreteLifecycleWorkRegistry,
+    ) -> Result<(), Self> {
+        let completions = self
+            .entries
+            .iter()
+            .map(|entry| &entry.completion)
+            .collect::<Vec<_>>();
+        if self.entries.iter().any(|entry| entry.candidate.is_some())
+            || !registry.preflights_recovered_fetches_alongside_wal_authority(&completions)
+        {
+            return Err(self);
+        }
+        for entry in self.entries {
+            assert!(
+                registry
+                    .install_recovered_durable_fetch(entry.completion)
+                    .is_ok(),
+                "preflighted recovered Sign-plus-Fetch installation is infallible"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Seal the complete opened-ledger Fetch census without releasing row parts.
+pub(in crate::sumeragi::v2_lifecycle_coordinator) fn seal_recovered_durable_certified_fetch_census(
+    permit: DurableCertifiedFetchLedgerCensusPermit,
+    entries: Vec<AuthenticatedRecoveredDurableCertifiedFetchV1>,
+) -> Option<AuthenticatedRecoveredDurableCertifiedFetchCensusV1> {
+    let census = AuthenticatedRecoveredDurableCertifiedFetchCensusV1::from_exact_ledger_census(
+        permit, entries,
+    )?;
+    census.is_exact().then_some(census)
+}
+
+/// One-shot proof that a pending Fetch binding is reconstructed only while an
+/// exact frame-bound Certified replay family is still sealed.
+pub(in crate::sumeragi) struct DurableCertifiedFetchPendingMintPermit {
+    _linearity: DurableCertifiedFetchPendingMintLinearity,
+}
+
+struct DurableCertifiedFetchPendingMintLinearity;
+
+impl Drop for DurableCertifiedFetchPendingMintLinearity {
+    fn drop(&mut self) {}
+}
+
+impl DurableCertifiedFetchPendingMintPermit {
+    fn new() -> Self {
+        Self {
+            _linearity: DurableCertifiedFetchPendingMintLinearity,
+        }
+    }
+}
+
 /// Canonical inert replay evidence projected for the certified Store stage.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[must_use = "certified Store replay evidence must remain attached to its closed carrier"]
@@ -2334,24 +3618,24 @@ struct CertifiedServeStorageReplayFamilyV1 {
 }
 
 /// Opaque replay evidence for one exact post-fsync Certified-Serve record.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[must_use = "Certified-Serve replay evidence must remain with its reserved producer turn"]
-pub(super) struct CertifiedServeReplayEvidenceV1 {
+struct CertifiedServeReplayEvidenceV1 {
     family: Arc<CertifiedServeStorageReplayFamilyV1>,
     payload: ReplayPayloadBindingV1,
 }
 
 /// Opaque replay evidence for the dormant ProducerTurn reserved beside one
 /// exact Certified-Serve request.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[must_use = "ProducerTurn replay evidence must remain with its Certified-Serve origin"]
-pub(super) struct CertifiedServeProducerTurnReplayEvidenceV1 {
+struct CertifiedServeProducerTurnReplayEvidenceV1 {
     family: Arc<CertifiedServeStorageReplayFamilyV1>,
 }
 
 /// Closed pair preserving one common post-fsync storage origin across the
 /// Certified-Serve record and its reserved ProducerTurn.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 #[must_use = "the Certified-Serve replay pair has not entered durable admission"]
 pub(super) struct CertifiedServeReplayEvidencePairV1 {
     serve: CertifiedServeReplayEvidenceV1,
@@ -2377,6 +3661,32 @@ impl CertifiedServeTerminalReplayAuthorityPairV1 {
     /// Return the terminal tombstone bound by this sealed pair.
     pub(super) const fn terminal_outcome(&self) -> TerminalOutcome {
         self.terminal_outcome
+    }
+
+    /// Clone this still-sealed terminal family into one whole concrete-carrier
+    /// proof. No serve/producer authority or raw frame hash leaves the replay
+    /// module; the registry may install the returned pair only through its
+    /// typed terminal transition.
+    pub(super) fn terminal_carrier_replay_evidence(
+        &self,
+    ) -> Option<CertifiedServeReplayEvidencePairV1> {
+        let LifecycleReplaySourceV1::CertifiedServeStorage(source) = &self.serve.source else {
+            return None;
+        };
+        let family = Arc::new(CertifiedServeStorageReplayFamilyV1 {
+            source: source.clone(),
+        });
+        let evidence = CertifiedServeReplayEvidencePairV1 {
+            serve: CertifiedServeReplayEvidenceV1 {
+                family: Arc::clone(&family),
+                payload: ReplayPayloadBindingV1::from_payload(self.terminal_payload),
+            },
+            producer: CertifiedServeProducerTurnReplayEvidenceV1 { family },
+        };
+        (evidence.shares_exact_storage_origin()
+            && evidence.serve.exactly_matches_authority(&self.serve)
+            && evidence.producer.exactly_matches_authority(&self.producer))
+        .then_some(evidence)
     }
 
     /// Rebind one live Pending pair from an exact post-fsync completion
@@ -2906,17 +4216,17 @@ impl CertifiedServeReplayEvidencePairV1 {
             .then_some(evidence)
     }
 
-    /// Consume one exact shared storage family into the adjacent durable
-    /// admission pair. Semantic keys, stages, payloads, and authorities are
-    /// derived here; callers supply only already-checked physical geometry.
-    pub(super) fn into_admission(
-        self,
+    /// Project one exact shared storage family into the adjacent durable
+    /// admission pair without consuming the runtime-only family. Semantic keys,
+    /// stages, payloads, authorities, slots, and physical digests are all
+    /// derived here. The same pair can then move, whole, into the two concrete
+    /// registry carriers.
+    pub(super) fn admission_candidate(
+        &self,
         active_context: LifecycleContext,
-        serve_geometry: PhysicalGeometry,
-        producer_geometry: PhysicalGeometry,
-        storage_payload_hash: Hash,
     ) -> Option<CandidateAdmission> {
         let storage_payload = self.serve.payload.durable_payload()?;
+        let storage_payload_hash = Hash::prehashed(self.serve.family.source.payload_hash);
         let serve_stage = LifecycleStage::new(
             LifecycleStageKind::CertifiedServe,
             PredecessorScope::ReadyOrdinalPrefix,
@@ -2981,6 +4291,10 @@ impl CertifiedServeReplayEvidencePairV1 {
         )
         .ok()?;
         let reconstruction_source = request;
+        let serve_slot =
+            PhysicalSlotId::for_capacity(LifecycleWorkClass::CertifiedServe.capacity_class(), 0);
+        let producer_slot =
+            PhysicalSlotId::for_capacity(LifecycleWorkClass::ProducerTurn.capacity_class(), 0);
         Some(CandidateAdmission::new(
             serve_shape.key,
             CausalRoot::new(reconstruction_source),
@@ -2990,13 +4304,25 @@ impl CertifiedServeReplayEvidencePairV1 {
             reconstruction_source,
             serve_payload,
             serve_authority,
-            serve_geometry,
+            PhysicalGeometry::new(
+                [PhysicalSlot::new(
+                    serve_slot,
+                    digest_from_hash(&storage_payload_hash),
+                )],
+                [serve_slot],
+            ),
             Some(ProducerTurnAdmission::new(
                 producer_shape.key,
                 producer_stage,
                 reconstruction_source,
                 producer_authority,
-                producer_geometry,
+                PhysicalGeometry::new(
+                    [PhysicalSlot::new(
+                        producer_slot,
+                        self.producer_physical_digest(),
+                    )],
+                    [producer_slot],
+                ),
             )),
         ))
     }
@@ -3021,6 +4347,39 @@ impl CertifiedServeReplayEvidencePairV1 {
             )
     }
 
+    /// Match one exact terminal Serve row without inventing an executable
+    /// physical carrier. Steady terminal Ledger rows reopen with empty geometry,
+    /// while payload-store-ahead reconciliation may retain the former Pending
+    /// geometry in its reconciled tombstone. Neither shape is executable: the
+    /// retained storage family derives its own frame hash and must still match
+    /// the complete logical/durable authority.
+    pub(super) fn exactly_matches_terminal_serve_record(
+        &self,
+        active_context: LifecycleContext,
+        record: &LifecycleRecord,
+        metadata: &DurableRecordMetadata,
+    ) -> bool {
+        let super::LifecycleState::Terminal(outcome) = record.state else {
+            return false;
+        };
+        let storage_payload_hash = Hash::prehashed(self.serve.family.source.payload_hash);
+        record.work_class == LifecycleWorkClass::CertifiedServe
+            && record.owner.causal_root().digest() == metadata.reconstruction_source
+            && metadata
+                .payload
+                .matches_terminal(LifecycleWorkClass::CertifiedServe, Some(outcome))
+            && self.exactly_matches_serve_record(
+                active_context,
+                record.key,
+                record.stage,
+                metadata.payload,
+                storage_payload_hash,
+            )
+            && self
+                .serve
+                .exactly_matches_authority(&metadata.replay_authority)
+    }
+
     /// Compare the retained ProducerTurn evidence with one exact dormant
     /// logical record while retaining the same payload-store origin.
     pub(super) fn exactly_matches_producer_record(
@@ -3043,6 +4402,56 @@ impl CertifiedServeReplayEvidencePairV1 {
 
     fn shares_exact_storage_origin(&self) -> bool {
         Arc::ptr_eq(&self.serve.family, &self.producer.family)
+    }
+
+    /// Match the exact one-slot Serve carrier without exposing the payload-store
+    /// frame hash retained by this family.
+    pub(super) fn exactly_matches_serve_carrier(
+        &self,
+        active_context: LifecycleContext,
+        key: LifecycleKey,
+        stage: LifecycleStage,
+        payload: DurablePayloadReference,
+        physical_digest: LifecycleDigest,
+        replay_authority: &LifecycleReplayAuthorityV1,
+    ) -> bool {
+        let storage_payload_hash = Hash::prehashed(self.serve.family.source.payload_hash);
+        physical_digest == digest_from_hash(&storage_payload_hash)
+            && self.exactly_matches_serve_record(
+                active_context,
+                key,
+                stage,
+                payload,
+                storage_payload_hash,
+            )
+            && self.serve.exactly_matches_authority(replay_authority)
+    }
+
+    /// Match the exact one-slot ProducerTurn carrier while retaining the same
+    /// opaque payload-store family as its Serve origin.
+    pub(super) fn exactly_matches_producer_carrier(
+        &self,
+        active_context: LifecycleContext,
+        key: LifecycleKey,
+        stage: LifecycleStage,
+        payload: DurablePayloadReference,
+        physical_digest: LifecycleDigest,
+        replay_authority: &LifecycleReplayAuthorityV1,
+    ) -> bool {
+        let storage_payload_hash = Hash::prehashed(self.serve.family.source.payload_hash);
+        physical_digest == self.producer_physical_digest()
+            && self.exactly_matches_producer_record(
+                active_context,
+                key,
+                stage,
+                payload,
+                storage_payload_hash,
+            )
+            && self.producer.exactly_matches_authority(replay_authority)
+    }
+
+    fn producer_physical_digest(&self) -> LifecycleDigest {
+        certified_serve_producer_physical_digest(&self.serve.family.source)
     }
 
     fn exactly_matches_post_fsync_pending(
@@ -3112,11 +4521,6 @@ impl CertifiedServeReplayEvidencePairV1 {
 }
 
 impl CertifiedServeReplayEvidenceV1 {
-    /// Compare two opaque Serve evidence values without exposing their origin.
-    pub(super) fn exactly_matches(&self, other: &Self) -> bool {
-        self == other
-    }
-
     fn exactly_matches_record(
         &self,
         active_context: LifecycleContext,
@@ -3157,11 +4561,6 @@ impl CertifiedServeReplayEvidenceV1 {
 }
 
 impl CertifiedServeProducerTurnReplayEvidenceV1 {
-    /// Compare two opaque ProducerTurn values without exposing their origin.
-    pub(super) fn exactly_matches(&self, other: &Self) -> bool {
-        self == other
-    }
-
     fn exactly_matches_record(
         &self,
         active_context: LifecycleContext,
@@ -3199,6 +4598,17 @@ impl CertifiedServeProducerTurnReplayEvidenceV1 {
                 source: LifecycleReplaySourceV1::CertifiedServeStorage(self.family.source.clone()),
             }
     }
+}
+
+fn certified_serve_producer_physical_digest(
+    source: &CertifiedServeStorageSourceV1,
+) -> LifecycleDigest {
+    let request_hash = HashOf::new(&source.request);
+    let mut projection =
+        Vec::with_capacity(PRODUCER_TURN_PHYSICAL_DOMAIN.len() + size_of::<u64>() + Hash::LENGTH);
+    projection.extend_from_slice(PRODUCER_TURN_PHYSICAL_DOMAIN);
+    append_field(&mut projection, request_hash.as_ref());
+    digest_from_hash(&Hash::new(projection))
 }
 
 fn exact_certified_serve_storage_replay_family(
@@ -3321,6 +4731,8 @@ struct CertifiedBodyPipelineCoordinatesV1 {
     tag: ReplayEventTagV1,
     certificate: wire::QuorumCertificate,
     manifest: wire::PayloadManifest,
+    fetch_manifest_present: bool,
+    certified_sources: Vec<PeerId>,
 }
 
 impl AuthenticatedCertifiedFetchReplayOriginV1 {
@@ -3365,6 +4777,29 @@ impl AuthenticatedCertifiedFetchReplayOriginV1 {
 }
 
 impl CertifiedFetchReplayEvidenceV1 {
+    /// Reauthenticate the persisted certificate and exact archive-source order
+    /// against the immutable height context before restart authority is minted.
+    fn authenticated_by_verified_height(&self, verified: &VerifiedHeightContext) -> bool {
+        let BodyPipelineOriginV1::Certified {
+            certificate,
+            certified_sources,
+            ..
+        } = &self.family.source.origin
+        else {
+            return false;
+        };
+        let expected_sources = verified
+            .context()
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        replay_context(certificate.round)
+            == super::projection::lifecycle_context(verified.context())
+            && certified_sources == &expected_sources
+            && verified.verify_quorum_certificate(certificate).is_ok()
+    }
+
     /// Compare this complete canonical family with the exact installed Fetch.
     pub(super) fn exactly_matches_fetch(
         &self,
@@ -3396,6 +4831,84 @@ impl CertifiedFetchReplayEvidenceV1 {
             })
     }
 
+    /// Close this family over the exact incumbent runtime binding and durable frame.
+    pub(super) fn project_durable_ready_fetch(
+        &self,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+    ) -> Option<DurableCertifiedFetchReplayProjectionV1> {
+        if exact_certified_fetch_effect(&self.family).as_ref() != Some(effect)
+            || !pending.exactly_binds_adapter_effect(effect)
+            || !certified_body_pipeline_family(&exact_family_coordinates(&self.family)?, receipt)
+                .is_some_and(|expected| expected == self.family)
+        {
+            return None;
+        }
+        durable_certified_fetch_projection(&self.family, effect, pending, receipt)
+    }
+
+    /// Reconstruct the exact Fetch effect and pending binding from a durable owner.
+    ///
+    /// Decoded replay data alone cannot invoke the pending constructor: the
+    /// one-shot permit is minted only while this frame-bound evidence remains
+    /// intact.
+    fn reconstruct_exact_fetch(
+        &self,
+        causal_root: CausalRoot,
+    ) -> Option<(AdapterEffect, PendingRuntimeEffectBinding)> {
+        let effect = exact_certified_fetch_effect(&self.family)?;
+        let pending = PendingRuntimeEffectBinding::from_durable_certified_fetch(
+            DurableCertifiedFetchPendingMintPermit::new(),
+            Hash::prehashed(*causal_root.digest().as_bytes()),
+            &effect,
+        )?;
+        (digest_from_hash(pending.causal_lifecycle_key()) == causal_root.digest()
+            && self
+                .family
+                .is_exact_for_stage(LifecycleStageKind::FetchBody))
+        .then_some((effect, pending))
+    }
+
+    /// Authenticate one opened body-store seal against this exact replay family.
+    pub(super) fn exactly_matches_recovered_body_frame(
+        &self,
+        reference: &DurableBodyFrameReference,
+        manifest: &wire::PayloadManifest,
+        receipt: &DurableBodyReceipt,
+    ) -> bool {
+        let Some(coordinates) = exact_family_coordinates(&self.family) else {
+            return false;
+        };
+        coordinates.manifest == *manifest
+            && self.family.body_frame.durable_reference() == *reference
+            && durable_body_frame_reference(replay_context(receipt.round()), receipt)
+                == Some(*reference)
+            && certified_body_pipeline_family(&coordinates, receipt)
+                .is_some_and(|expected| expected == self.family)
+    }
+
+    /// Derive the direct adapter preview inputs from the sealed durable family.
+    pub(super) fn adapter_preview_inputs<'a>(
+        &'a self,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+    ) -> Option<(EventTag, &'a wire::PayloadManifest)> {
+        self.project_durable_ready_fetch(effect, pending, receipt)?;
+        let BodyPipelineOriginV1::Certified { manifest, .. } = &self.family.source.origin else {
+            return None;
+        };
+        Some((
+            EventTag::new(
+                self.family.source.tag.height,
+                self.family.source.tag.view,
+                crate::sumeragi::v2_core::Generation::new(self.family.source.tag.generation),
+            ),
+            manifest,
+        ))
+    }
+
     #[cfg(test)]
     fn exactly_matches_signed_response_for_test(
         &self,
@@ -3411,15 +4924,17 @@ impl CertifiedFetchReplayEvidenceV1 {
     pub(super) fn project_store(
         &self,
         fetch_effect: &AdapterEffect,
-        response: &wire::CertifiedBodyResponse,
-        receipt: &DurableCertifiedFetchBodyReceipt,
+        fetch_pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
         store_effect: &AdapterEffect,
     ) -> Option<CertifiedStoreReplayEvidenceV1> {
-        (self.exactly_matches_fetch(fetch_effect, response, receipt)
+        (self
+            .project_durable_ready_fetch(fetch_effect, fetch_pending, receipt)
+            .is_some()
             && certified_body_stage_matches(
                 &self.family,
                 store_effect,
-                receipt.durable_body(),
+                receipt,
                 LifecycleStageKind::StoreBody,
             ))
         .then(|| CertifiedStoreReplayEvidenceV1 {
@@ -3460,6 +4975,248 @@ impl CertifiedFetchReplayEvidenceV1 {
             family: self.family.clone(),
         })
     }
+}
+
+impl DurableCertifiedFetchReplayProjectionV1 {
+    /// Compare the complete frame-bound projection with one logical restart row.
+    pub(super) fn exactly_matches_recovered_candidate(
+        &self,
+        candidate: &CandidateAdmission,
+        owner: OwnerId,
+    ) -> bool {
+        let slot = PhysicalSlotId::for_capacity(LifecycleWorkClass::Fetch.capacity_class(), 0);
+        candidate.key.phase() == LifecyclePhase::Fetch
+            && candidate.causal_root == owner.causal_root()
+            && candidate.work_class == LifecycleWorkClass::Fetch
+            && candidate.stage
+                == LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent)
+            && candidate.initial_state == InitialLifecycleState::Ready
+            && candidate.reconstruction_source == owner.causal_root().digest()
+            && candidate.payload == self.payload
+            && candidate.replay_authority == self.authority
+            && candidate.producer_turn.is_none()
+            && self.causal_key == Hash::prehashed(*owner.causal_root().digest().as_bytes())
+            && self.authority.structurally_matches_record(
+                LifecycleContext::new(candidate.key.context(), candidate.key.round().height()),
+                candidate.key,
+                candidate.work_class,
+                candidate.stage,
+                candidate.payload,
+            )
+            && candidate.physical_geometry.normalized().is_ok_and(
+                |(physical, universe, consumed)| {
+                    physical.len() == 1
+                        && physical.get(&slot) == Some(&self.completion_digest)
+                        && universe == std::collections::BTreeSet::from([slot])
+                        && consumed == universe
+                },
+            )
+    }
+
+    /// Canonical physical identity of the body-fsynced completion.
+    pub(super) const fn completion_digest(&self) -> LifecycleDigest {
+        self.completion_digest
+    }
+
+    /// Exact manifest hash retained independently by the body-store receipt.
+    pub(super) const fn expected_manifest_hash(&self) -> HashOf<wire::PayloadManifest> {
+        self.expected_manifest_hash
+    }
+
+    /// Recheck the exact runtime binding and durable body without exposing fields.
+    pub(super) fn exactly_matches_runtime(
+        &self,
+        effect: &AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+    ) -> bool {
+        pending.exactly_binds_adapter_effect(effect)
+            && pending.causal_lifecycle_key() == &self.causal_key
+            && pending.exact_effect_identity() == &self.effect_identity
+            && receipt.manifest_hash() == self.expected_manifest_hash
+            && durable_body_frame_reference(replay_context(receipt.round()), receipt)
+                .map(DurablePayloadReference::BodyFrame)
+                == Some(self.payload)
+            && canonical_replay_authority(
+                replay_context(receipt.round()),
+                self.authority.source.clone(),
+                LifecycleStageKind::FetchBody,
+                ReplayPayloadBindingV1::from_payload(self.payload),
+            ) == Some(self.authority.clone())
+    }
+
+    /// Project the exact Ready recovery candidate named by one durable row.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn project_recovered_candidate(
+        &self,
+        active_context: LifecycleContext,
+        key: LifecycleKey,
+        owner: OwnerId,
+        stage: LifecycleStage,
+        reconstruction_source: LifecycleDigest,
+        payload: DurablePayloadReference,
+        persisted_authority: &LifecycleReplayAuthorityV1,
+    ) -> Option<CandidateAdmission> {
+        if stage
+            != LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent)
+            || !self.exactly_matches_durable_record(
+                active_context,
+                key,
+                owner.causal_root(),
+                payload,
+                reconstruction_source,
+                persisted_authority,
+            )
+        {
+            return None;
+        }
+        let slot = PhysicalSlotId::for_capacity(LifecycleWorkClass::Fetch.capacity_class(), 0);
+        let candidate = CandidateAdmission::new(
+            key,
+            owner.causal_root(),
+            LifecycleWorkClass::Fetch,
+            stage,
+            InitialLifecycleState::Ready,
+            reconstruction_source,
+            self.payload,
+            self.authority.clone(),
+            PhysicalGeometry::new([PhysicalSlot::new(slot, self.completion_digest)], [slot]),
+            None,
+        );
+        candidate
+            .replay_authority_is_exact(active_context)
+            .then_some(candidate)
+    }
+
+    /// Rebind only the durable fields of an exact Waiting Fetch row.
+    pub(super) fn rebind_waiting_fetch_metadata(
+        &self,
+        active_context: LifecycleContext,
+        key: LifecycleKey,
+        metadata: &mut DurableRecordMetadata,
+    ) -> bool {
+        if key.phase() != LifecyclePhase::Fetch
+            || metadata.payload != DurablePayloadReference::None
+            || metadata.reconstruction_source != digest_from_hash(&self.causal_key)
+            || metadata.continuation != super::schema::DurableContinuation::None
+            || !metadata
+                .replay_authority
+                .same_persisted_family(&self.authority)
+            || !self.authority.structurally_matches_record(
+                active_context,
+                key,
+                LifecycleWorkClass::Fetch,
+                LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent),
+                self.payload,
+            )
+        {
+            return false;
+        }
+        metadata.payload = self.payload;
+        metadata.replay_authority = self.authority.clone();
+        true
+    }
+
+    /// Compare a recovered ledger row without exposing authority parts.
+    pub(super) fn exactly_matches_durable_record(
+        &self,
+        active_context: LifecycleContext,
+        key: LifecycleKey,
+        causal_root: CausalRoot,
+        metadata_payload: DurablePayloadReference,
+        reconstruction_source: LifecycleDigest,
+        authority: &LifecycleReplayAuthorityV1,
+    ) -> bool {
+        self.payload == metadata_payload
+            && self.authority == *authority
+            && reconstruction_source == causal_root.digest()
+            && self.causal_key == Hash::prehashed(*causal_root.digest().as_bytes())
+            && self.authority.structurally_matches_record(
+                active_context,
+                key,
+                LifecycleWorkClass::Fetch,
+                LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent),
+                self.payload,
+            )
+    }
+}
+
+/// Consume the sole opened-ledger/body-store join into restart authority.
+#[allow(clippy::too_many_arguments)]
+pub(in crate::sumeragi::v2_lifecycle_coordinator) fn authenticate_recovered_durable_certified_fetch<
+    F,
+>(
+    _permit: DurableCertifiedFetchLedgerJoinPermit,
+    verified: &VerifiedHeightContext,
+    key: LifecycleKey,
+    owner: OwnerId,
+    ordinal: u128,
+    stage: LifecycleStage,
+    reconstruction_source: LifecycleDigest,
+    payload: DurablePayloadReference,
+    authority: &LifecycleReplayAuthorityV1,
+    authenticate_body: F,
+) -> Result<Option<AuthenticatedRecoveredDurableCertifiedFetchV1>, DurableBodyFrameRecoveryError>
+where
+    F: FnOnce() -> Result<AuthenticatedDurableBodyFrameRecovery, DurableBodyFrameRecoveryError>,
+{
+    let active_context = super::projection::lifecycle_context(verified.context());
+    if ordinal == 0
+        || owner.first_admission_ordinal() == 0
+        || owner.first_admission_ordinal() > ordinal
+        || reconstruction_source != owner.causal_root().digest()
+    {
+        return Ok(None);
+    }
+    let Some(evidence) =
+        authority.recover_durable_certified_fetch(active_context, key, stage, payload)
+    else {
+        return Ok(None);
+    };
+    if !evidence.authenticated_by_verified_height(verified) {
+        return Ok(None);
+    }
+    // The body-store seal is minted only after the retained source list and QC
+    // have been authenticated by the immutable verified height context.
+    let body = authenticate_body()?;
+    let Some(durable_receipt) = body.into_certified_fetch_body(&evidence) else {
+        return Ok(None);
+    };
+    let Some((effect, pending)) = evidence.reconstruct_exact_fetch(owner.causal_root()) else {
+        return Ok(None);
+    };
+    let Some(ready_projection) =
+        evidence.project_durable_ready_fetch(&effect, &pending, &durable_receipt)
+    else {
+        return Ok(None);
+    };
+    let Some(candidate) = ready_projection.project_recovered_candidate(
+        active_context,
+        key,
+        owner,
+        stage,
+        reconstruction_source,
+        payload,
+        authority,
+    ) else {
+        return Ok(None);
+    };
+    let Ok(completion) = CertifiedFetchCompletion::from_recovered_durable_fetch(
+        owner,
+        ordinal,
+        effect,
+        pending,
+        durable_receipt,
+        evidence,
+        &ready_projection,
+    ) else {
+        return Ok(None);
+    };
+    let recovered = AuthenticatedRecoveredDurableCertifiedFetchV1 {
+        completion,
+        candidate,
+    };
+    Ok(recovered.is_exact().then_some(recovered))
 }
 
 impl CertifiedStoreReplayEvidenceV1 {
@@ -4028,6 +5785,13 @@ fn exact_certified_fetch_coordinates(
         tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
         certificate: certificate.clone(),
         manifest: response.manifest.clone(),
+        fetch_manifest_present: manifest.is_some(),
+        certified_sources: match effect {
+            AdapterEffect::FetchBody {
+                certified_sources, ..
+            } => certified_sources.clone(),
+            _ => unreachable!("Fetch shape was checked above"),
+        },
     })
 }
 
@@ -4061,7 +5825,9 @@ fn certified_body_pipeline_family(
         tag: coordinates.tag,
         origin: BodyPipelineOriginV1::Certified {
             certificate: certificate.clone(),
-            manifest: Some(manifest.clone()),
+            manifest: manifest.clone(),
+            fetch_manifest_present: coordinates.fetch_manifest_present,
+            certified_sources: coordinates.certified_sources.clone(),
         },
     };
     let ReplayPayloadBindingV1::BodyFrame(body_frame) =
@@ -4105,6 +5871,189 @@ fn canonical_replay_authority(
     (canonical == authority).then_some(canonical)
 }
 
+/// Classify the private recovered-Decision body continuation family.
+///
+/// `None` means neither side belongs to this family and the ordinary body-edge
+/// rules apply. `Some(false)` is a hard mismatch: once the payload-free
+/// `FetchDecision` or a recovered-Decision body source appears, it cannot be
+/// spliced to a generic body family or skip an intermediate stage.
+pub(super) fn recovered_decision_body_continuation_is_exact(
+    edge: super::schema::DurableContinuationEdge,
+    parent: &LifecycleReplayAuthorityV1,
+    parent_payload: DurablePayloadReference,
+    child: &LifecycleReplayAuthorityV1,
+    child_payload: DurablePayloadReference,
+) -> Option<bool> {
+    let fetch = recovered_decision_fetch_parts(parent);
+    let parent_body = recovered_decision_body_parts(parent);
+    let child_body = recovered_decision_body_parts(child);
+    let family_present = fetch.is_some() || parent_body.is_some() || child_body.is_some();
+    if !family_present {
+        return None;
+    }
+    let canonical = |authority: &LifecycleReplayAuthorityV1, payload: DurablePayloadReference| {
+        authority.payload.matches(payload)
+            && LifecycleReplayAuthorityV1::decode_canonical(&authority.encode())
+                .is_ok_and(|decoded| decoded == *authority)
+    };
+    if !canonical(parent, parent_payload) || !canonical(child, child_payload) {
+        return Some(false);
+    }
+    Some(match edge {
+        super::schema::DurableContinuationEdge::FetchToStore => {
+            let (fetch_locator, fetch_tag, fetch_certificate) = match fetch {
+                Some(parts) => parts,
+                None => return Some(false),
+            };
+            let (body_source, body_frame) = match child_body {
+                Some(parts) => parts,
+                None => return Some(false),
+            };
+            parent_payload == DurablePayloadReference::None
+                && child_payload
+                    == DurablePayloadReference::BodyFrame(body_frame.durable_reference())
+                && body_source.locator == fetch_locator
+                && body_source.tag == fetch_tag
+                && body_source.certificate == &fetch_certificate
+        }
+        super::schema::DurableContinuationEdge::StoreToValidate => {
+            parent_body.is_some()
+                && child_body.is_some()
+                && parent == child
+                && parent_payload == child_payload
+                && matches!(parent_payload, DurablePayloadReference::BodyFrame(_))
+        }
+        super::schema::DurableContinuationEdge::ValidateToApply => {
+            let (body_source, body_frame) = match parent_body {
+                Some(parts) => parts,
+                None => return Some(false),
+            };
+            let (apply_locator, apply_tag, apply_certificate, apply_frame) =
+                match recovered_decision_apply_parts(child) {
+                    Some(parts) => parts,
+                    None => return Some(false),
+                };
+            parent_payload == DurablePayloadReference::BodyFrame(body_frame.durable_reference())
+                && child_payload
+                    == DurablePayloadReference::BodyFrame(apply_frame.durable_reference())
+                && body_frame == apply_frame
+                && body_source.locator == apply_locator
+                && body_source.tag == apply_tag
+                && body_source.certificate == apply_certificate
+        }
+        super::schema::DurableContinuationEdge::ValidateToInvalidBodyReport
+        | super::schema::DurableContinuationEdge::ValidateToSignPrepare
+        | super::schema::DurableContinuationEdge::ValidateToSignCommit => false,
+    })
+}
+
+fn recovered_decision_fetch_parts(
+    authority: &LifecycleReplayAuthorityV1,
+) -> Option<(
+    PersistedWalFrameLocatorV1,
+    ReplayEventTagV1,
+    wire::QuorumCertificate,
+)> {
+    let (
+        ReplayPayloadBindingV1::None,
+        LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+            locator,
+            role,
+            tag,
+            action:
+                WalReplayActionV1::FetchDecision {
+                    certificate,
+                    certified_sources,
+                },
+        }),
+    ) = (&authority.payload, &authority.source)
+    else {
+        return None;
+    };
+    (authority.format_version == REPLAY_AUTHORITY_FORMAT_VERSION
+        && locator.is_exact()
+        && role.matches(ReplayWalRoleV1::DECISION)
+        && certificate.phase == wire::GlobalPhase::Commit
+        && certified_sources_are_bounded_unique(certified_sources)
+        && !certified_sources.is_empty())
+    .then_some((*locator, *tag, certificate.clone()))
+}
+
+struct RecoveredDecisionBodyReplayParts<'authority> {
+    locator: PersistedWalFrameLocatorV1,
+    tag: ReplayEventTagV1,
+    certificate: &'authority wire::QuorumCertificate,
+}
+
+fn recovered_decision_body_parts(
+    authority: &LifecycleReplayAuthorityV1,
+) -> Option<(RecoveredDecisionBodyReplayParts<'_>, BodyFrameBindingV1)> {
+    let (
+        ReplayPayloadBindingV1::BodyFrame(body_frame),
+        LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {
+            tag,
+            origin:
+                BodyPipelineOriginV1::RecoveredDecision {
+                    locator,
+                    certificate,
+                    manifest,
+                },
+        }),
+    ) = (&authority.payload, &authority.source)
+    else {
+        return None;
+    };
+    (authority.format_version == REPLAY_AUTHORITY_FORMAT_VERSION
+        && locator.is_exact()
+        && certificate.phase == wire::GlobalPhase::Commit
+        && body_frame.matches_origin(
+            replay_context(certificate.round),
+            certificate.proposal_round,
+            certificate.subject,
+        )
+        && body_frame.manifest == *HashOf::new(manifest).as_ref())
+    .then_some((
+        RecoveredDecisionBodyReplayParts {
+            locator: *locator,
+            tag: *tag,
+            certificate,
+        },
+        *body_frame,
+    ))
+}
+
+fn recovered_decision_apply_parts(
+    authority: &LifecycleReplayAuthorityV1,
+) -> Option<(
+    PersistedWalFrameLocatorV1,
+    ReplayEventTagV1,
+    &wire::QuorumCertificate,
+    BodyFrameBindingV1,
+)> {
+    let (
+        ReplayPayloadBindingV1::BodyFrame(body_frame),
+        LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+            locator,
+            role,
+            tag,
+            action: WalReplayActionV1::ApplyDecision(certificate),
+        }),
+    ) = (&authority.payload, &authority.source)
+    else {
+        return None;
+    };
+    (authority.format_version == REPLAY_AUTHORITY_FORMAT_VERSION
+        && locator.is_exact()
+        && role.matches(ReplayWalRoleV1::DECISION)
+        && certificate.phase == wire::GlobalPhase::Commit
+        && body_frame.matches_origin(
+            replay_context(certificate.round),
+            certificate.proposal_round,
+            certificate.subject,
+        ))
+    .then_some((*locator, *tag, certificate, *body_frame))
+}
+
 impl CertifiedBodyPipelineReplayFamilyV1 {
     fn is_exact_all_stages(&self) -> bool {
         self.is_exact_for_stage(LifecycleStageKind::FetchBody)
@@ -4122,8 +6071,9 @@ impl CertifiedBodyPipelineReplayFamilyV1 {
         );
         let source = LifecycleReplaySourceV1::BodyPipeline(self.source.clone());
         let payload = match stage {
-            LifecycleStageKind::FetchBody => ReplayPayloadBindingV1::None,
-            LifecycleStageKind::StoreBody | LifecycleStageKind::ValidateBody => {
+            LifecycleStageKind::FetchBody
+            | LifecycleStageKind::StoreBody
+            | LifecycleStageKind::ValidateBody => {
                 ReplayPayloadBindingV1::BodyFrame(self.body_frame)
             }
             _ => return false,
@@ -4137,7 +6087,9 @@ fn exact_family_coordinates(
 ) -> Option<CertifiedBodyPipelineCoordinatesV1> {
     let BodyPipelineOriginV1::Certified {
         certificate,
-        manifest: Some(manifest),
+        manifest,
+        fetch_manifest_present,
+        certified_sources,
     } = &family.source.origin
     else {
         return None;
@@ -4146,7 +6098,90 @@ fn exact_family_coordinates(
         tag: family.source.tag,
         certificate: certificate.clone(),
         manifest: manifest.clone(),
+        fetch_manifest_present: *fetch_manifest_present,
+        certified_sources: certified_sources.clone(),
     })
+}
+
+fn exact_certified_fetch_effect(
+    family: &CertifiedBodyPipelineReplayFamilyV1,
+) -> Option<AdapterEffect> {
+    let coordinates = exact_family_coordinates(family)?;
+    Some(AdapterEffect::FetchBody {
+        tag: EventTag::new(
+            coordinates.tag.height,
+            coordinates.tag.view,
+            crate::sumeragi::v2_core::Generation::new(coordinates.tag.generation),
+        ),
+        round: coordinates.certificate.proposal_round,
+        subject: coordinates.certificate.subject,
+        manifest: coordinates
+            .fetch_manifest_present
+            .then_some(coordinates.manifest),
+        certified_sources: coordinates.certified_sources,
+        certificate: Some(coordinates.certificate),
+    })
+}
+
+fn durable_certified_fetch_projection(
+    family: &CertifiedBodyPipelineReplayFamilyV1,
+    effect: &AdapterEffect,
+    pending: &PendingRuntimeEffectBinding,
+    receipt: &DurableBodyReceipt,
+) -> Option<DurableCertifiedFetchReplayProjectionV1> {
+    if exact_certified_fetch_effect(family).as_ref() != Some(effect)
+        || !pending.exactly_binds_adapter_effect(effect)
+        || certified_body_pipeline_family(&exact_family_coordinates(family)?, receipt).as_ref()
+            != Some(family)
+    {
+        return None;
+    }
+    let context = replay_context(receipt.round());
+    let payload =
+        DurablePayloadReference::BodyFrame(durable_body_frame_reference(context, receipt)?);
+    let authority = canonical_replay_authority(
+        context,
+        LifecycleReplaySourceV1::BodyPipeline(family.source.clone()),
+        LifecycleStageKind::FetchBody,
+        ReplayPayloadBindingV1::from_payload(payload),
+    )?;
+    let causal_key = *pending.causal_lifecycle_key();
+    let effect_identity = *pending.exact_effect_identity();
+    let completion_digest = canonical_durable_certified_fetch_completion_digest(
+        causal_key,
+        effect_identity,
+        &authority,
+    );
+    Some(DurableCertifiedFetchReplayProjectionV1 {
+        payload,
+        authority,
+        causal_key,
+        effect_identity,
+        completion_digest,
+        expected_manifest_hash: receipt.manifest_hash(),
+    })
+}
+
+fn canonical_durable_certified_fetch_completion_digest(
+    causal_key: Hash,
+    effect_identity: Hash,
+    authority: &LifecycleReplayAuthorityV1,
+) -> LifecycleDigest {
+    const DOMAIN: &[u8] = b"iroha:sumeragi:v2:lifecycle:durable-certified-fetch:v1";
+    let encoded_authority = authority.encode();
+    let mut preimage =
+        Vec::with_capacity(DOMAIN.len() + 1 + Hash::LENGTH * 2 + 8 + encoded_authority.len());
+    preimage.extend_from_slice(DOMAIN);
+    preimage.push(0);
+    preimage.extend_from_slice(causal_key.as_ref());
+    preimage.extend_from_slice(effect_identity.as_ref());
+    preimage.extend_from_slice(
+        &u64::try_from(encoded_authority.len())
+            .expect("bounded replay authority encoding fits u64")
+            .to_le_bytes(),
+    );
+    preimage.extend_from_slice(&encoded_authority);
+    digest_from_hash(&Hash::new(preimage))
 }
 
 fn certified_body_stage_matches(
@@ -4306,12 +6341,201 @@ fn canonical_wal_source(source: &WalReplaySourceV1) -> bool {
     })
 }
 
+fn exact_recovered_wal_control_authority(
+    locator: RecoveredWalFrameIdentity,
+    effect: &AdapterEffect,
+) -> Option<LifecycleReplayAuthorityV1> {
+    if !locator.is_exact() {
+        return None;
+    }
+    let (
+        tag,
+        round,
+        role,
+        work_class,
+        phase,
+        stage_kind,
+        action,
+        proposal_round,
+        subject,
+        execution,
+    ) = match effect {
+        AdapterEffect::Sign {
+            tag,
+            request: SignRequest::Proposal(proposal),
+        } => (
+            *tag,
+            proposal.round,
+            ReplayWalRoleV1::PROPOSAL_INTENT,
+            LifecycleWorkClass::SignProposal,
+            LifecyclePhase::Proposal,
+            LifecycleStageKind::SignProposal,
+            WalReplayActionV1::SignProposal(proposal.clone()),
+            Some(proposal.round),
+            Some(block_subject(proposal.subject)),
+            None,
+        ),
+        AdapterEffect::Sign {
+            tag,
+            request: SignRequest::TimeoutVote(vote),
+        } => (
+            *tag,
+            vote.round,
+            ReplayWalRoleV1::TIMEOUT_INTENT,
+            LifecycleWorkClass::SignTimeout,
+            LifecyclePhase::Timeout,
+            LifecycleStageKind::SignTimeoutVote,
+            WalReplayActionV1::SignTimeoutVote(vote.clone()),
+            vote.highest_prepare_qc
+                .as_ref()
+                .map(|certificate| certificate.proposal_round),
+            vote.highest_prepare_qc
+                .as_ref()
+                .map(|certificate| block_subject(certificate.subject)),
+            vote.highest_prepare_qc
+                .as_ref()
+                .map(|certificate| execution_commitment(certificate.execution_commitment)),
+        ),
+        AdapterEffect::Sign {
+            request: SignRequest::Vote(_),
+            ..
+        }
+        | AdapterEffect::Broadcast(_)
+        | AdapterEffect::FetchBody { .. }
+        | AdapterEffect::StoreBody { .. }
+        | AdapterEffect::ValidateBody { .. }
+        | AdapterEffect::Apply { .. }
+        | AdapterEffect::EnterView { .. }
+        | AdapterEffect::ReportEquivocation { .. }
+        | AdapterEffect::ReportInvalidCertifiedBody { .. } => return None,
+    };
+    if tag.height() != round.height || tag.view() != round.view {
+        return None;
+    }
+    let context =
+        LifecycleContext::new(digest_from_bytes(round.context_id.0.as_ref()), round.height);
+    let source = LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+        locator: locator.persisted_locator(),
+        role,
+        tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
+        action,
+    });
+    let payload = ReplayPayloadBindingV1::None;
+    let shape = source.project(context, stage_kind, &payload).ok()?;
+    if shape.work_class != work_class
+        || shape.stage_kind != stage_kind
+        || shape.key != lifecycle_key(context, round, proposal_round, subject, phase, execution)
+    {
+        return None;
+    }
+    let authority = LifecycleReplayAuthorityV1 {
+        format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
+        payload,
+        source,
+    };
+    authority
+        .validate_record(
+            context,
+            shape.key,
+            work_class,
+            LifecycleStage::new(stage_kind, PredecessorScope::Independent),
+            DurablePayloadReference::None,
+        )
+        .ok()
+        .map(|_| authority)
+}
+
+fn exact_recovered_wal_decision_fetch_authority(
+    verified: &VerifiedHeightContext,
+    locator: RecoveredWalFrameIdentity,
+    effect: &AdapterEffect,
+) -> Option<LifecycleReplayAuthorityV1> {
+    if !locator.is_exact() {
+        return None;
+    }
+    let AdapterEffect::FetchBody {
+        tag,
+        round,
+        subject,
+        manifest: None,
+        certified_sources,
+        certificate: Some(certificate),
+    } = effect
+    else {
+        return None;
+    };
+    let expected_sources = verified
+        .context()
+        .roster
+        .iter()
+        .map(|entry| entry.validator.clone())
+        .collect::<Vec<_>>();
+    if certificate.phase != wire::GlobalPhase::Commit
+        || certificate.proposal_round != *round
+        || certificate.subject != *subject
+        || certified_sources != &expected_sources
+        || tag.height() != certificate.round.height
+        || tag.view() < certificate.round.view
+        || verified.verify_quorum_certificate(certificate).is_err()
+    {
+        return None;
+    }
+    let context = super::projection::lifecycle_context(verified.context());
+    let source = LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+        locator: locator.persisted_locator(),
+        role: ReplayWalRoleV1::DECISION,
+        tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
+        action: WalReplayActionV1::FetchDecision {
+            certificate: certificate.clone(),
+            certified_sources: certified_sources.clone(),
+        },
+    });
+    let payload = ReplayPayloadBindingV1::None;
+    let shape = source
+        .project(context, LifecycleStageKind::FetchBody, &payload)
+        .ok()?;
+    if shape.work_class != LifecycleWorkClass::Fetch
+        || shape.stage_kind != LifecycleStageKind::FetchBody
+        || shape.key
+            != lifecycle_key(
+                context,
+                certificate.round,
+                Some(certificate.proposal_round),
+                Some(block_subject(certificate.subject)),
+                LifecyclePhase::Fetch,
+                Some(execution_commitment(certificate.execution_commitment)),
+            )
+    {
+        return None;
+    }
+    let authority = LifecycleReplayAuthorityV1 {
+        format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
+        payload,
+        source,
+    };
+    authority
+        .validate_record(
+            context,
+            shape.key,
+            LifecycleWorkClass::Fetch,
+            LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent),
+            DurablePayloadReference::None,
+        )
+        .ok()?;
+    Some(authority)
+}
+
 fn exact_recovered_wal_vote_authority(
     locator: RecoveredWalFrameIdentity,
     tag: EventTag,
     vote: &wire::Vote,
 ) -> Option<LifecycleReplayAuthorityV1> {
-    if !locator.is_exact() || tag.height() != vote.round.height || tag.view() != vote.round.view {
+    let tag_matches_vote = tag.height() == vote.round.height
+        && match vote.phase {
+            wire::GlobalPhase::Prepare => tag.view() == vote.round.view,
+            wire::GlobalPhase::Commit => tag.view() >= vote.round.view,
+        };
+    if !locator.is_exact() || !tag_matches_vote {
         return None;
     }
     let (role, phase, stage_kind) = match vote.phase {
@@ -4384,6 +6608,7 @@ impl WalReplaySourceV1 {
                 if !self.role.matches(ReplayWalRoleV1::PROPOSAL_INTENT)
                     || !proposal_shape(context, proposal, false)
                     || !self.tag.matches_round(context, proposal.round)
+                    || self.tag.view != proposal.round.view
                     || !payload.is_none()
                 {
                     return Err(ReplayAuthorityValidationError::InvalidSource);
@@ -4414,9 +6639,14 @@ impl WalReplaySourceV1 {
                         LifecycleStageKind::SignCommitVote,
                     ),
                 };
+                let tag_matches_vote = self.tag.matches_round(context, vote.round)
+                    && match vote.phase {
+                        wire::GlobalPhase::Prepare => self.tag.view == vote.round.view,
+                        wire::GlobalPhase::Commit => true,
+                    };
                 if !self.role.matches(role)
                     || !vote_shape(context, vote, false)
-                    || !self.tag.matches_round(context, vote.round)
+                    || !tag_matches_vote
                     || !payload.is_none()
                 {
                     return Err(ReplayAuthorityValidationError::InvalidSource);
@@ -4438,6 +6668,7 @@ impl WalReplaySourceV1 {
                 if !self.role.matches(ReplayWalRoleV1::TIMEOUT_INTENT)
                     || !timeout_vote_shape(context, vote, false)
                     || !self.tag.matches_round(context, vote.round)
+                    || self.tag.view != vote.round.view
                     || !payload.is_none()
                 {
                     return Err(ReplayAuthorityValidationError::InvalidSource);
@@ -4480,6 +6711,37 @@ impl WalReplaySourceV1 {
                     ),
                     LifecycleWorkClass::Apply,
                     LifecycleStageKind::ApplyDecision,
+                )
+            }
+            WalReplayActionV1::FetchDecision {
+                certificate,
+                certified_sources,
+            } => {
+                if !self.role.matches(ReplayWalRoleV1::DECISION)
+                    || !qc_shape(context, certificate)
+                    || certificate.phase != wire::GlobalPhase::Commit
+                    || !self.tag.matches_round(context, certificate.round)
+                    || certified_sources.is_empty()
+                    || certified_sources.len() > wire::MAX_VALIDATORS_PER_HEIGHT
+                    || certified_sources
+                        .iter()
+                        .enumerate()
+                        .any(|(index, source)| certified_sources[..index].contains(source))
+                    || !payload.is_none()
+                {
+                    return Err(ReplayAuthorityValidationError::InvalidSource);
+                }
+                ReplayShape::new(
+                    lifecycle_key(
+                        context,
+                        certificate.round,
+                        Some(certificate.proposal_round),
+                        Some(block_subject(certificate.subject)),
+                        LifecyclePhase::Fetch,
+                        Some(execution_commitment(certificate.execution_commitment)),
+                    ),
+                    LifecycleWorkClass::Fetch,
+                    LifecycleStageKind::FetchBody,
                 )
             }
             WalReplayActionV1::EnterView {
@@ -4537,10 +6799,18 @@ enum BodyPipelineOriginV1 {
     #[codec(index = 1)]
     Certified {
         certificate: wire::QuorumCertificate,
-        manifest: Option<wire::PayloadManifest>,
+        manifest: wire::PayloadManifest,
+        fetch_manifest_present: bool,
+        certified_sources: Vec<PeerId>,
     },
     #[codec(index = 2)]
     LocalBody(wire::PayloadManifest),
+    #[codec(index = 3)]
+    RecoveredDecision {
+        locator: PersistedWalFrameLocatorV1,
+        certificate: wire::QuorumCertificate,
+        manifest: wire::PayloadManifest,
+    },
 }
 
 impl BodyPipelineReplaySourceV1 {
@@ -4550,65 +6820,98 @@ impl BodyPipelineReplaySourceV1 {
         requested_stage: LifecycleStageKind,
         payload: &ReplayPayloadBindingV1,
     ) -> Result<ReplayShape, ReplayAuthorityValidationError> {
-        let (round, proposal_round, subject, commitment, manifest, local_body) = match &self.origin
-        {
-            BodyPipelineOriginV1::Proposal(proposal) => {
-                if !proposal_shape(context, proposal, true) {
-                    return Err(ReplayAuthorityValidationError::InvalidSource);
+        let (round, proposal_round, subject, commitment, manifest, local_body, recovered_decision) =
+            match &self.origin {
+                BodyPipelineOriginV1::Proposal(proposal) => {
+                    if !proposal_shape(context, proposal, true) {
+                        return Err(ReplayAuthorityValidationError::InvalidSource);
+                    }
+                    (
+                        proposal.round,
+                        proposal.round,
+                        proposal.subject,
+                        None,
+                        Some(&proposal.manifest),
+                        false,
+                        false,
+                    )
                 }
-                (
-                    proposal.round,
-                    proposal.round,
-                    proposal.subject,
-                    None,
-                    Some(&proposal.manifest),
-                    false,
-                )
-            }
-            BodyPipelineOriginV1::Certified {
-                certificate,
-                manifest,
-            } => {
-                if !qc_shape(context, certificate)
-                    || manifest.as_ref().is_some_and(|manifest| {
-                        !manifest_matches_origin(
+                BodyPipelineOriginV1::Certified {
+                    certificate,
+                    manifest,
+                    fetch_manifest_present: _,
+                    certified_sources,
+                } => {
+                    if !qc_shape(context, certificate)
+                        || !manifest_matches_origin(
                             context,
                             manifest,
                             certificate.proposal_round,
                             certificate.subject,
                         )
-                    })
-                {
-                    return Err(ReplayAuthorityValidationError::InvalidSource);
+                        || !certified_sources_are_bounded_unique(certified_sources)
+                    {
+                        return Err(ReplayAuthorityValidationError::InvalidSource);
+                    }
+                    (
+                        certificate.round,
+                        certificate.proposal_round,
+                        certificate.subject,
+                        Some(execution_commitment(certificate.execution_commitment)),
+                        Some(manifest),
+                        false,
+                        false,
+                    )
                 }
-                (
-                    certificate.round,
-                    certificate.proposal_round,
-                    certificate.subject,
-                    Some(execution_commitment(certificate.execution_commitment)),
-                    manifest.as_ref(),
-                    false,
-                )
-            }
-            BodyPipelineOriginV1::LocalBody(manifest) => {
-                if !round_matches_context(context, manifest.round) {
-                    return Err(ReplayAuthorityValidationError::InvalidSource);
+                BodyPipelineOriginV1::LocalBody(manifest) => {
+                    if !round_matches_context(context, manifest.round) {
+                        return Err(ReplayAuthorityValidationError::InvalidSource);
+                    }
+                    (
+                        manifest.round,
+                        manifest.round,
+                        manifest.subject,
+                        None,
+                        Some(manifest),
+                        true,
+                        false,
+                    )
                 }
-                (
-                    manifest.round,
-                    manifest.round,
-                    manifest.subject,
-                    None,
-                    Some(manifest),
-                    true,
-                )
-            }
-        };
+                BodyPipelineOriginV1::RecoveredDecision {
+                    locator,
+                    certificate,
+                    manifest,
+                } => {
+                    if !locator.is_exact()
+                        || !qc_shape(context, certificate)
+                        || certificate.phase != wire::GlobalPhase::Commit
+                        || !manifest_matches_origin(
+                            context,
+                            manifest,
+                            certificate.proposal_round,
+                            certificate.subject,
+                        )
+                    {
+                        return Err(ReplayAuthorityValidationError::InvalidSource);
+                    }
+                    (
+                        certificate.round,
+                        certificate.proposal_round,
+                        certificate.subject,
+                        Some(execution_commitment(certificate.execution_commitment)),
+                        Some(manifest),
+                        false,
+                        true,
+                    )
+                }
+            };
         if !self.tag.matches_round(context, round) {
             return Err(ReplayAuthorityValidationError::InvalidSource);
         }
         let (phase, work_class) = match requested_stage {
-            LifecycleStageKind::FetchBody => (LifecyclePhase::Fetch, LifecycleWorkClass::Fetch),
+            LifecycleStageKind::FetchBody if !recovered_decision => {
+                (LifecyclePhase::Fetch, LifecycleWorkClass::Fetch)
+            }
             LifecycleStageKind::StoreBody => (LifecyclePhase::Store, LifecycleWorkClass::Store),
             LifecycleStageKind::ValidateBody => {
                 (LifecyclePhase::Validate, LifecycleWorkClass::Validate)
@@ -4627,7 +6930,12 @@ impl BodyPipelineReplaySourceV1 {
             commitment,
         );
         match requested_stage {
-            LifecycleStageKind::FetchBody if payload.is_none() => {}
+            LifecycleStageKind::FetchBody
+                if payload.is_none()
+                    || (!local_body
+                        && manifest.is_some_and(|manifest| {
+                            payload.matches_exact_body(context, proposal_round, subject, manifest)
+                        })) => {}
             LifecycleStageKind::StoreBody | LifecycleStageKind::ValidateBody
                 if manifest.is_some_and(|manifest| {
                     payload.matches_exact_body(context, proposal_round, subject, manifest)
@@ -4636,6 +6944,15 @@ impl BodyPipelineReplaySourceV1 {
         }
         Ok(ReplayShape::new(key, work_class, requested_stage))
     }
+}
+
+fn certified_sources_are_bounded_unique(certified_sources: &[PeerId]) -> bool {
+    certified_sources.len() <= wire::MAX_VALIDATORS_PER_HEIGHT
+        && certified_sources
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == certified_sources.len()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
@@ -4696,11 +7013,13 @@ impl InvalidBodyReplaySourceV1 {
                     && proposal.manifest == self.outcome.manifest => {}
             BodyPipelineOriginV1::Certified {
                 certificate,
-                manifest: Some(manifest),
+                manifest,
+                ..
             } if certificate == &self.certificate && manifest == &self.outcome.manifest => {}
             BodyPipelineOriginV1::Proposal(_)
             | BodyPipelineOriginV1::Certified { .. }
-            | BodyPipelineOriginV1::LocalBody(_) => {
+            | BodyPipelineOriginV1::LocalBody(_)
+            | BodyPipelineOriginV1::RecoveredDecision { .. } => {
                 return Err(ReplayAuthorityValidationError::InvalidSource);
             }
         }
@@ -5428,6 +7747,7 @@ mod tests {
     use iroha_data_model::peer::PeerId;
     use tempfile::TempDir;
 
+    use super::super::schema::DurableContinuationEdge;
     use super::*;
     use crate::sumeragi::{
         v2::AdapterEquivocationEvidence,
@@ -5684,7 +8004,9 @@ mod tests {
                         tag: self.tag,
                         origin: BodyPipelineOriginV1::Certified {
                             certificate: self.prepare_qc.clone(),
-                            manifest: Some(self.proposal.manifest.clone()),
+                            manifest: self.proposal.manifest.clone(),
+                            fetch_manifest_present: true,
+                            certified_sources: Vec::new(),
                         },
                     }),
                     LifecycleStageKind::FetchBody,
@@ -5695,7 +8017,9 @@ mod tests {
                         tag: self.tag,
                         origin: BodyPipelineOriginV1::Certified {
                             certificate: self.prepare_qc.clone(),
-                            manifest: Some(self.proposal.manifest.clone()),
+                            manifest: self.proposal.manifest.clone(),
+                            fetch_manifest_present: true,
+                            certified_sources: Vec::new(),
                         },
                     }),
                     LifecycleStageKind::StoreBody,
@@ -5706,7 +8030,9 @@ mod tests {
                         tag: self.tag,
                         origin: BodyPipelineOriginV1::Certified {
                             certificate: self.prepare_qc.clone(),
-                            manifest: Some(self.proposal.manifest.clone()),
+                            manifest: self.proposal.manifest.clone(),
+                            fetch_manifest_present: true,
+                            certified_sources: Vec::new(),
                         },
                     }),
                     LifecycleStageKind::ValidateBody,
@@ -5844,6 +8170,22 @@ mod tests {
             .expect("the canonical V1 fixture covers every lifecycle stage")
     }
 
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_replay_authority_for_payload_fixture(
+        context: LifecycleContext,
+        stage: LifecycleStageKind,
+        seed: u8,
+        payload: DurablePayloadReference,
+    ) -> LifecycleReplayAuthorityV1 {
+        let case = exact_record_fixture(context, stage, seed);
+        canonical_replay_authority(
+            context,
+            case.authority.source.clone(),
+            stage,
+            ReplayPayloadBindingV1::from_payload(payload),
+        )
+        .unwrap_or(case.authority)
+    }
+
     pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_body_record_fixture(
         context: LifecycleContext,
         stage: LifecycleStageKind,
@@ -5859,23 +8201,77 @@ mod tests {
         (case, receipt)
     }
 
-    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_certified_fetch_record_fixture(
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn durable_certified_fetch_projection_fixture(
+        context: LifecycleContext,
+        causal_root: CausalRoot,
+        seed: u8,
+    ) -> DurableCertifiedFetchReplayProjectionV1 {
+        let fixture = Fixture::for_record(context, seed);
+        let coordinates = CertifiedBodyPipelineCoordinatesV1 {
+            tag: fixture.tag,
+            certificate: fixture.prepare_qc,
+            manifest: fixture.proposal.manifest,
+            fetch_manifest_present: true,
+            certified_sources: Vec::new(),
+        };
+        let family = exact_certified_body_pipeline_family(&coordinates, &fixture.body_receipt)
+            .expect("canonical fixture binds one body-fsynced Certified Fetch family");
+        let effect = exact_certified_fetch_effect(&family)
+            .expect("canonical fixture reconstructs one exact Fetch effect");
+        let payload = DurablePayloadReference::BodyFrame(
+            durable_body_frame_reference(context, &fixture.body_receipt)
+                .expect("canonical fixture body belongs to its lifecycle context"),
+        );
+        let authority = canonical_replay_authority(
+            context,
+            LifecycleReplaySourceV1::BodyPipeline(family.source),
+            LifecycleStageKind::FetchBody,
+            ReplayPayloadBindingV1::from_payload(payload),
+        )
+        .expect("canonical fixture projects one frame-bound Fetch authority");
+        let causal_key = Hash::prehashed(*causal_root.digest().as_bytes());
+        let effect_identity =
+            crate::sumeragi::v2_runtime::adapter_effect_identity_for_test(&effect);
+        let completion_digest = canonical_durable_certified_fetch_completion_digest(
+            causal_key,
+            effect_identity,
+            &authority,
+        );
+        DurableCertifiedFetchReplayProjectionV1 {
+            payload,
+            authority,
+            causal_key,
+            effect_identity,
+            completion_digest,
+            expected_manifest_hash: fixture.body_receipt.manifest_hash(),
+        }
+    }
+
+    pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_durable_certified_fetch_record_fixture(
         context: LifecycleContext,
         tag: EventTag,
         certificate: wire::QuorumCertificate,
         manifest: wire::PayloadManifest,
+        certified_sources: Vec<PeerId>,
+        receipt: &DurableBodyReceipt,
     ) -> ReplayCase {
+        let payload = DurablePayloadReference::BodyFrame(
+            durable_body_frame_reference(context, receipt)
+                .expect("durable Certified Fetch fixture body belongs to its context"),
+        );
         replay_case(
             context,
             LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {
                 tag: ReplayEventTagV1::new(tag.height(), tag.view(), tag.generation().get()),
                 origin: BodyPipelineOriginV1::Certified {
                     certificate,
-                    manifest: Some(manifest),
+                    manifest,
+                    fetch_manifest_present: true,
+                    certified_sources,
                 },
             }),
             LifecycleStageKind::FetchBody,
-            DurablePayloadReference::None,
+            payload,
         )
     }
 
@@ -6468,6 +8864,199 @@ mod tests {
     }
 
     #[test]
+    fn decoded_decision_fetch_rejects_duplicate_certified_sources() {
+        let fixture = Fixture::new();
+        let first_key = KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::Ed25519)
+            .expect("deterministic first Decision Fetch source");
+        let second_key = KeyPair::try_from_seed(vec![0xD2; 32], Algorithm::Ed25519)
+            .expect("deterministic second Decision Fetch source");
+        let first = PeerId::new(first_key.public_key().clone());
+        let second = PeerId::new(second_key.public_key().clone());
+        let payload = ReplayPayloadBindingV1::None;
+        let source = WalReplaySourceV1 {
+            locator: RecoveredWalFrameIdentity::for_test(8, 9, [0xD3; 32]).persisted_locator(),
+            role: ReplayWalRoleV1::DECISION,
+            tag: fixture.tag,
+            action: WalReplayActionV1::FetchDecision {
+                certificate: fixture.commit_qc.clone(),
+                certified_sources: vec![first.clone(), second],
+            },
+        };
+        let shape = source
+            .project(fixture.context, LifecycleStageKind::FetchBody, &payload)
+            .expect("unique Decision Fetch source roster is structurally valid");
+        let authority = LifecycleReplayAuthorityV1 {
+            format_version: REPLAY_AUTHORITY_FORMAT_VERSION,
+            payload: payload.clone(),
+            source: LifecycleReplaySourceV1::Wal(source),
+        };
+        let mut decoded = LifecycleReplayAuthorityV1::decode_canonical(&authority.encode())
+            .expect("unique Decision Fetch source decodes canonically");
+        decoded
+            .validate_record(
+                fixture.context,
+                shape.key,
+                LifecycleWorkClass::Fetch,
+                LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent),
+                DurablePayloadReference::None,
+            )
+            .expect("unique Decision Fetch source projects exactly");
+
+        let LifecycleReplaySourceV1::Wal(source) = &mut decoded.source else {
+            unreachable!("Decision Fetch retains its WAL replay source")
+        };
+        let WalReplayActionV1::FetchDecision {
+            certified_sources, ..
+        } = &mut source.action
+        else {
+            unreachable!("Decision Fetch retains its exact replay action")
+        };
+        *certified_sources = vec![first.clone(), first];
+        let duplicate = LifecycleReplayAuthorityV1::decode_canonical(&decoded.encode())
+            .expect("duplicate source bytes remain canonically decodable");
+        assert_eq!(
+            duplicate.validate_record(
+                fixture.context,
+                shape.key,
+                LifecycleWorkClass::Fetch,
+                LifecycleStage::new(LifecycleStageKind::FetchBody, PredecessorScope::Independent,),
+                DurablePayloadReference::None,
+            ),
+            Err(ReplayAuthorityValidationError::InvalidSource)
+        );
+    }
+
+    #[test]
+    fn recovered_decision_body_lineage_is_stage_closed_and_predecessor_bound() {
+        let fixture = Fixture::new();
+        let source_key = KeyPair::try_from_seed(vec![0xD4; 32], Algorithm::Ed25519)
+            .expect("deterministic recovered Decision source");
+        let locator = RecoveredWalFrameIdentity::for_test(21, 22, [0xD5; 32]).persisted_locator();
+        let fetch = replay_case(
+            fixture.context,
+            LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+                locator,
+                role: ReplayWalRoleV1::DECISION,
+                tag: fixture.tag,
+                action: WalReplayActionV1::FetchDecision {
+                    certificate: fixture.commit_qc.clone(),
+                    certified_sources: vec![PeerId::new(source_key.public_key().clone())],
+                },
+            }),
+            LifecycleStageKind::FetchBody,
+            DurablePayloadReference::None,
+        );
+        let body_source = LifecycleReplaySourceV1::BodyPipeline(BodyPipelineReplaySourceV1 {
+            tag: fixture.tag,
+            origin: BodyPipelineOriginV1::RecoveredDecision {
+                locator,
+                certificate: fixture.commit_qc.clone(),
+                manifest: fixture.proposal.manifest.clone(),
+            },
+        });
+        assert!(matches!(
+            body_source.project(
+                fixture.context,
+                LifecycleStageKind::FetchBody,
+                &ReplayPayloadBindingV1::from_payload(fixture.body_payload),
+            ),
+            Err(ReplayAuthorityValidationError::RecordMismatch)
+        ));
+        assert!(matches!(
+            body_source.project(
+                fixture.context,
+                LifecycleStageKind::ApplyDecision,
+                &ReplayPayloadBindingV1::from_payload(fixture.body_payload),
+            ),
+            Err(ReplayAuthorityValidationError::RecordMismatch)
+        ));
+        let store = replay_case(
+            fixture.context,
+            body_source.clone(),
+            LifecycleStageKind::StoreBody,
+            fixture.body_payload,
+        );
+        let validate = replay_case(
+            fixture.context,
+            body_source,
+            LifecycleStageKind::ValidateBody,
+            fixture.body_payload,
+        );
+        let apply = replay_case(
+            fixture.context,
+            LifecycleReplaySourceV1::Wal(WalReplaySourceV1 {
+                locator,
+                role: ReplayWalRoleV1::DECISION,
+                tag: fixture.tag,
+                action: WalReplayActionV1::ApplyDecision(fixture.commit_qc.clone()),
+            }),
+            LifecycleStageKind::ApplyDecision,
+            fixture.body_payload,
+        );
+        assert_eq!(
+            recovered_decision_body_continuation_is_exact(
+                DurableContinuationEdge::FetchToStore,
+                &fetch.authority,
+                fetch.payload,
+                &store.authority,
+                store.payload,
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            recovered_decision_body_continuation_is_exact(
+                DurableContinuationEdge::StoreToValidate,
+                &store.authority,
+                store.payload,
+                &validate.authority,
+                validate.payload,
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            recovered_decision_body_continuation_is_exact(
+                DurableContinuationEdge::ValidateToApply,
+                &validate.authority,
+                validate.payload,
+                &apply.authority,
+                apply.payload,
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            recovered_decision_body_continuation_is_exact(
+                DurableContinuationEdge::FetchToStore,
+                &fetch.authority,
+                fetch.payload,
+                &validate.authority,
+                validate.payload,
+            ),
+            Some(false),
+            "the recovered lineage cannot skip Store"
+        );
+
+        let mut foreign_store = store.authority.clone();
+        let LifecycleReplaySourceV1::BodyPipeline(source) = &mut foreign_store.source else {
+            unreachable!("recovered Store retains one body-pipeline source")
+        };
+        let BodyPipelineOriginV1::RecoveredDecision { locator, .. } = &mut source.origin else {
+            unreachable!("recovered Store retains one Decision origin")
+        };
+        *locator = RecoveredWalFrameIdentity::for_test(22, 23, [0xD6; 32]).persisted_locator();
+        assert_eq!(
+            recovered_decision_body_continuation_is_exact(
+                DurableContinuationEdge::FetchToStore,
+                &fetch.authority,
+                fetch.payload,
+                &foreign_store,
+                store.payload,
+            ),
+            Some(false),
+            "a foreign exact locator cannot enter the body lineage"
+        );
+    }
+
+    #[test]
     fn nested_record_validation_rejects_oversized_canonical_authority() {
         let fixture = Fixture::new();
         let case = fixture.cases().remove(8);
@@ -6563,16 +9152,22 @@ mod tests {
             receipt.payload_hash(),
         ));
 
-        let cloned = pair.clone();
-        assert!(cloned.shares_exact_storage_origin());
-        assert!(pair.serve.exactly_matches(&cloned.serve));
-        assert!(pair.producer.exactly_matches(&cloned.producer));
-        drop(cloned);
-        assert!(pair.exactly_matches_serve_record(
+        let shared = Arc::new(pair);
+        let adjacent = Arc::clone(&shared);
+        assert!(Arc::ptr_eq(&shared, &adjacent));
+        assert!(shared.shares_exact_storage_origin());
+        assert!(shared.exactly_matches_serve_record(
             fixture.active_context,
             serve_shape.key,
             serve_stage,
             fixture.pending_payload(),
+            receipt.payload_hash(),
+        ));
+        assert!(adjacent.exactly_matches_producer_record(
+            fixture.active_context,
+            producer_shape.key,
+            producer_stage,
+            DurablePayloadReference::None,
             receipt.payload_hash(),
         ));
 
@@ -6929,6 +9524,172 @@ mod tests {
         assert_eq!(validate, validate.clone());
         assert_eq!(fetch.family, store.family);
         assert_eq!(store.family, validate.family);
+    }
+
+    #[test]
+    fn durable_ready_fetch_digest_ignores_transport_retransmission_but_binds_replay_identity() {
+        fn projection(
+            effect: &AdapterEffect,
+            response: &wire::CertifiedBodyResponse,
+            receipt: &DurableBodyReceipt,
+            causal_root: CausalRoot,
+        ) -> DurableCertifiedFetchReplayProjectionV1 {
+            let evidence = CertifiedFetchReplayEvidenceV1::from_signed_response_for_test(
+                effect, response, receipt,
+            )
+            .expect("structurally signed response projects one exact durable family");
+            let pending = PendingRuntimeEffectBinding::from_durable_certified_fetch(
+                DurableCertifiedFetchPendingMintPermit::new(),
+                Hash::prehashed(*causal_root.digest().as_bytes()),
+                effect,
+            )
+            .expect("exact certified Fetch effect mints one frame-bound pending binding");
+            evidence
+                .project_durable_ready_fetch(effect, &pending, receipt)
+                .expect("exact family, pending binding, and receipt project Ready Fetch")
+        }
+
+        let fixture = Fixture::new();
+        let tag = fixture.recovered_tag();
+        let manifest = fixture.proposal.manifest.clone();
+        let effect = AdapterEffect::FetchBody {
+            tag,
+            round: manifest.round,
+            subject: manifest.subject,
+            manifest: Some(manifest.clone()),
+            certified_sources: Vec::new(),
+            certificate: Some(fixture.prepare_qc.clone()),
+        };
+        let receipt = DurableBodyReceipt::for_test(
+            manifest.round.context_id,
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let first_response = wire::CertifiedBodyResponse {
+            request_hash: HashOf::from_untyped_unchecked(Hash::new(b"first request occurrence")),
+            manifest: manifest.clone(),
+            body: vec![0xD1, 0xD2],
+            responder: 0,
+            signature: vec![0xD3],
+        };
+        let retransmitted_response = wire::CertifiedBodyResponse {
+            request_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"different request occurrence",
+            )),
+            responder: 3,
+            signature: vec![0xD4, 0xD5],
+            ..first_response.clone()
+        };
+        assert_ne!(
+            HashOf::new(&first_response),
+            HashOf::new(&retransmitted_response)
+        );
+        let causal_root = CausalRoot::new(digest_from_hash(&Hash::new(b"ready Fetch causal root")));
+        let first = projection(&effect, &first_response, &receipt, causal_root);
+        let retransmitted = projection(&effect, &retransmitted_response, &receipt, causal_root);
+        let first_queue_identity =
+            super::super::ingress_position::PendingFairIngressIdentity::for_test(
+                fixture.context,
+                digest_from_hash(&Hash::new(b"first queue occurrence")),
+                11,
+            );
+        let retransmitted_queue_identity =
+            super::super::ingress_position::PendingFairIngressIdentity::for_test(
+                fixture.context,
+                digest_from_hash(&Hash::new(b"second queue occurrence")),
+                12,
+            );
+        assert_ne!(first_queue_identity, retransmitted_queue_identity);
+        assert_eq!(
+            first.completion_digest(),
+            retransmitted.completion_digest(),
+            "request, response, responder, signature, and physical queue occurrence are not restart identity",
+        );
+
+        let foreign_causal = projection(
+            &effect,
+            &first_response,
+            &receipt,
+            CausalRoot::new(digest_from_hash(&Hash::new(b"foreign Fetch causal root"))),
+        );
+        assert_ne!(
+            first.completion_digest(),
+            foreign_causal.completion_digest()
+        );
+
+        let foreign_effect_identity = Hash::new(b"foreign exact Fetch effect identity");
+        assert_ne!(
+            first.completion_digest(),
+            canonical_durable_certified_fetch_completion_digest(
+                first.causal_key,
+                foreign_effect_identity,
+                &first.authority,
+            )
+        );
+
+        let mut foreign_qc_authority = first.authority.clone();
+        let LifecycleReplaySourceV1::BodyPipeline(source) = &mut foreign_qc_authority.source else {
+            panic!("durable Ready Fetch authority is body-pipeline backed")
+        };
+        let BodyPipelineOriginV1::Certified { certificate, .. } = &mut source.origin else {
+            panic!("durable Ready Fetch authority is certified")
+        };
+        certificate.aggregate_signature[0] ^= 1;
+        assert_ne!(
+            first.completion_digest(),
+            canonical_durable_certified_fetch_completion_digest(
+                first.causal_key,
+                first.effect_identity,
+                &foreign_qc_authority,
+            )
+        );
+
+        let manifest_absent_effect = AdapterEffect::FetchBody {
+            manifest: None,
+            ..effect.clone()
+        };
+        let manifest_absent = projection(
+            &manifest_absent_effect,
+            &first_response,
+            &receipt,
+            causal_root,
+        );
+        assert_ne!(
+            first.completion_digest(),
+            manifest_absent.completion_digest()
+        );
+
+        let source_key = KeyPair::try_from_seed(vec![0xD6; 32], Algorithm::Ed25519)
+            .expect("deterministic certified-source identity");
+        let foreign_sources_effect = AdapterEffect::FetchBody {
+            certified_sources: vec![PeerId::new(source_key.public_key().clone())],
+            ..effect.clone()
+        };
+        let foreign_sources = projection(
+            &foreign_sources_effect,
+            &first_response,
+            &receipt,
+            causal_root,
+        );
+        assert_ne!(
+            first.completion_digest(),
+            foreign_sources.completion_digest()
+        );
+
+        let mut foreign_frame_authority = first.authority.clone();
+        let ReplayPayloadBindingV1::BodyFrame(frame) = &mut foreign_frame_authority.payload else {
+            panic!("durable Ready Fetch authority is frame-bound")
+        };
+        frame.frame[0] ^= 1;
+        assert_ne!(
+            first.completion_digest(),
+            canonical_durable_certified_fetch_completion_digest(
+                first.causal_key,
+                first.effect_identity,
+                &foreign_frame_authority,
+            )
+        );
     }
 
     #[test]
@@ -7307,8 +10068,8 @@ mod tests {
             .expect("certified body replay family follows Serve evidence");
         for required in [
             "source: CertifiedServeStorageSourceV1",
-            "pub(super) struct CertifiedServeReplayEvidenceV1",
-            "pub(super) struct CertifiedServeProducerTurnReplayEvidenceV1",
+            "struct CertifiedServeReplayEvidenceV1",
+            "struct CertifiedServeProducerTurnReplayEvidenceV1",
             "pub(super) struct CertifiedServeReplayEvidencePairV1",
             "family: Arc<CertifiedServeStorageReplayFamilyV1>",
             "pub(super) fn from_post_fsync_pending(",
@@ -7318,8 +10079,11 @@ mod tests {
             "recovered.local_retainer()",
             "binary_search(&local_retainer)",
             "pub(super) fn exactly_matches_serve_record(",
+            "pub(super) fn exactly_matches_terminal_serve_record(",
             "pub(super) fn exactly_matches_producer_record(",
-            "pub(super) fn into_admission(",
+            "pub(super) fn admission_candidate(",
+            "pub(super) fn exactly_matches_serve_carrier(",
+            "pub(super) fn exactly_matches_producer_carrier(",
             "Some(CandidateAdmission::new(",
             "Arc::ptr_eq(&self.serve.family, &self.producer.family)",
             "LifecycleStageKind::CertifiedServe",
@@ -7364,6 +10128,8 @@ mod tests {
             "pub(super) fn authority(",
             "pub(super) fn serve(",
             "pub(super) fn producer(",
+            "into_concrete_evidence",
+            "pub(super) fn into_admission(",
             "impl Drop for CertifiedServe",
         ] {
             assert!(
@@ -7409,7 +10175,6 @@ mod tests {
 
         for outside in [
             include_str!("v2_lifecycle_coordinator.rs"),
-            include_str!("v2_lifecycle_work_registry.rs"),
             include_str!("v2_lifecycle_ledger.rs"),
             include_str!("v2.rs"),
             include_str!("v2_runtime.rs"),
@@ -7424,6 +10189,33 @@ mod tests {
             assert!(!outside.contains("CertifiedServeReplayEvidenceV1"));
             assert!(!outside.contains("CertifiedServeProducerTurnReplayEvidenceV1"));
         }
+        let registry = include_str!("v2_lifecycle_work_registry.rs")
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("registry production prefix is bounded");
+        for required in [
+            "CertifiedServeReplayEvidencePairV1",
+            "Arc<CertifiedServeReplayEvidencePairV1>",
+            "Arc::clone(&replay_evidence)",
+            "exactly_matches_serve_carrier(",
+            "exactly_matches_terminal_serve_record(",
+            "exactly_matches_producer_carrier(",
+        ] {
+            assert!(
+                registry.contains(required),
+                "whole-pair registry ownership omitted {required}"
+            );
+        }
+        for forbidden in [
+            "CertifiedServeReplayEvidenceV1,",
+            "CertifiedServeProducerTurnReplayEvidenceV1,",
+            "into_concrete_evidence",
+        ] {
+            assert!(
+                !registry.contains(forbidden),
+                "registry decomposed Certified-Serve replay authority through {forbidden}"
+            );
+        }
         let projection = include_str!("v2_lifecycle_projection.rs")
             .split("\n#[cfg(test)]\nmod wait_source_tests {")
             .next()
@@ -7431,11 +10223,211 @@ mod tests {
         for required in [
             "CertifiedServeReplayEvidencePairV1::from_post_fsync_pending(",
             "CertifiedServeReplayEvidencePairV1::from_authenticated_recovery(",
-            "replay\n        .into_admission(",
+            "replay\n        .admission_candidate(active_context)",
+            "impl super::ProductionLifecycleOwnerV1",
+            "fn admit_selected_certified_serve(",
+            "target: super::LifecycleIngressIoTargetSeal",
+            "target.matches_certified_serve_request(authenticated.request_hash())",
+            "prepare_certified_serve_admission(",
+            ".install_certified_serve_fresh_batch_before_publication(",
+            "|| self.coordinator.persist_exact_staged_successor(&staged)",
+            "fn certified_serve_terminal_replay_decision(",
+            ".exactly_matches_certified_serve_publication(authenticated, publication.receipt())",
+            "CertifiedServeConcreteAdmissionV1::restart_required(",
+            "fn into_safe_continuation(",
+            "fn settle_certified_serve_completed(",
+            "fn settle_certified_serve_negative(",
+            ".persist_completed_with_exact_body(",
+            ".persist_negative_for_authenticated_request(authenticated, outcome)",
+            "fn preflight_certified_serve_terminal(",
+            "fn publish_certified_serve_terminal(",
+            "CertifiedServeTerminalReplayAuthorityPairV1::from_completed_receipt(",
+            "CertifiedServeTerminalReplayAuthorityPairV1::from_negative_receipt(",
+            ".prepare_certified_serve_terminal_transition(",
+            ".publish_certified_serve_terminal_transition(",
         ] {
             assert!(
                 projection.contains(required),
                 "fixed Certified-Serve admission omitted {required}"
+            );
+        }
+        for cfg_test_only in [
+            "#[cfg(test)]\n    pub(crate) fn persist_and_admit_certified_serve(",
+            "#[cfg(test)]\npub(super) fn certified_serve_admission_request(",
+        ] {
+            assert!(
+                projection.contains(cfg_test_only),
+                "raw Certified-Serve surface escaped its fixture gate: {cfg_test_only}"
+            );
+        }
+        let settlement = include_str!("v2_lifecycle_settlement.rs");
+        assert!(
+            settlement.contains(
+                "#[cfg(test)]\n    pub(super) fn settle_turn_with_durable_serve_terminal("
+            )
+        );
+        assert_eq!(
+            settlement
+                .matches("fn settle_turn_with_durable_serve_terminal(")
+                .count(),
+            1,
+            "the raw terminal reducer wrapper must remain a single test fixture"
+        );
+        for outside in [
+            include_str!("v2.rs"),
+            include_str!("v2_lifecycle_coordinator.rs"),
+            include_str!("v2_lifecycle_ledger.rs"),
+            include_str!("v2_lifecycle_open.rs"),
+            include_str!("v2_lifecycle_settlement.rs"),
+            include_str!("v2_effects.rs"),
+            include_str!("v2_worker.rs"),
+            include_str!("v2_runner.rs"),
+        ] {
+            let outside = outside
+                .split("\n#[cfg(test)]\nmod tests {")
+                .next()
+                .expect("outside terminal production prefix is bounded");
+            assert!(!outside.contains(".persist_completed_with_exact_body("));
+            assert!(!outside.contains(".publish_certified_serve_terminal_transition("));
+        }
+        let coordinator = include_str!("v2_lifecycle_coordinator.rs");
+        assert!(coordinator.contains("#[cfg(test)]\n    pub(super) fn admit_certified_serve("));
+        assert!(coordinator.contains(
+            "CertifiedServeTerminalSettlementErrorV1, CertifiedServeTerminalSettlementFailureV1,"
+        ));
+        assert!(!projection.contains("CertifiedServeSettlementError"));
+        assert_eq!(
+            projection
+                .matches("fn settle_certified_serve_completed(")
+                .count(),
+            1,
+            "only the production owner may expose completed Serve settlement"
+        );
+        assert_eq!(
+            projection
+                .matches("fn settle_certified_serve_negative(")
+                .count(),
+            1,
+            "only the production owner may expose negative Serve settlement"
+        );
+        for terminal_method in [
+            "settle_certified_serve_completed",
+            "settle_certified_serve_negative",
+        ] {
+            let signature_marker = format!("fn {terminal_method}(");
+            let signature = projection
+                .split(signature_marker.as_str())
+                .nth(1)
+                .expect("terminal owner transaction has one signature")
+                .split(") -> Result<(), CertifiedServeTerminalSettlementErrorV1>")
+                .next()
+                .expect("terminal owner signature is bounded");
+            for forbidden in [
+                "receipt:",
+                "payload_id",
+                "CandidateAdmission",
+                "ordinal:",
+                "digest:",
+                "ReplayEvidence",
+                "parts",
+                "route",
+                "effect",
+                "pending",
+            ] {
+                assert!(
+                    !signature.contains(forbidden),
+                    "terminal owner transaction accepted raw {forbidden}"
+                );
+            }
+        }
+        let fresh_signature = projection
+            .split("fn admit_selected_certified_serve(")
+            .nth(1)
+            .expect("fresh Serve owner transaction has one signature")
+            .split(") -> CertifiedServeConcreteAdmissionV1")
+            .next()
+            .expect("fresh Serve owner signature is bounded");
+        for forbidden in [
+            "CandidateAdmission",
+            "AdapterEffect",
+            "PendingRuntimeEffectBinding",
+            "ReplayEvidence",
+            "ordinal:",
+            "digest:",
+            "route",
+            "queue",
+        ] {
+            assert!(
+                !fresh_signature.contains(forbidden),
+                "fresh Serve owner transaction accepted raw {forbidden}"
+            );
+        }
+        assert!(projection.contains("struct CertifiedServeConcreteAdmissionV1 {"));
+        assert!(!projection.contains("pub(crate) enum CertifiedServeConcreteAdmissionV1"));
+        let opaque_result = projection
+            .split("impl CertifiedServeConcreteAdmissionV1 {")
+            .nth(1)
+            .expect("opaque Serve outcome has one implementation")
+            .split("impl CertifiedServeConcreteAdmissionContinuationV1 {")
+            .next()
+            .expect("safe continuation follows opaque Serve outcome");
+        assert!(!opaque_result.contains("fn into_target("));
+
+        for required in [
+            "impl Drop for DurableCertifiedServeAdmissionPublication",
+            "fresh_pending: bool",
+            "fn can_abort_fresh_pending(&self)",
+            "fn exactly_matches_authenticated_request(",
+            "enum CertifiedServePayloadRetentionError",
+            "PublicationAmbiguous(CertifiedServePayloadStoreError)",
+            "PublishedButUnsynchronized(CertifiedServePayloadStoreError)",
+            "fn persist_completed_with_exact_body(",
+            "body_store.owns_receipt(durable_body)",
+            "fn persist_negative_for_authenticated_request(",
+            "#[cfg(test)]\n    pub(crate) fn persist_negative(",
+        ] {
+            assert!(
+                payload_store.contains(required),
+                "payload-first Serve ownership omitted {required}"
+            );
+        }
+        for required in [
+            "fn exactly_matches_fresh_staged_append(",
+            "exactly_covers_recovered_ready_work(current)",
+            "exactly_covers_recovered_ready_work_and_wal_authority(current)",
+            "carrier.matches_record(record, metadata, work.digest)",
+            "fn matches_current_ready_record(",
+            "fn exact_optional_recovered_wal_authority(",
+            "fn preflight_certified_serve_terminal_owner_state(",
+            "fn preflights_exact_staged_successor(",
+            "staged.high_water == current.high_water",
+            "staged.producer_debts == expected_debts",
+            "staged.capacity_used == expected_capacity_used",
+            "fn publish_certified_serve_terminal_transition",
+        ] {
+            assert!(
+                registry.contains(required),
+                "fresh Serve whole-census preflight omitted {required}"
+            );
+        }
+
+        let authority = include_str!("v2_lifecycle_authority.rs");
+        assert!(authority.contains(
+            "#[cfg(test)]\n#[derive(Clone, Debug, PartialEq, Eq)]\npub(crate) struct RolloverSnapshot"
+        ));
+        assert!(!authority.contains("fn verified_successor("));
+        assert!(coordinator.contains("#[cfg(test)]\npub(crate) use authority::RolloverSnapshot;"));
+        let lifecycle_open = include_str!("v2_lifecycle_open.rs");
+        for test_only_rollover in [
+            "#[cfg(test)]\n    pub(crate) fn rollover(",
+            "#[cfg(test)]\n    pub(crate) fn rollover_with_payload_store(",
+            "#[cfg(test)]\n    fn rollover_inner(",
+            "#[cfg(test)]\n    fn serve_cancellation_receipts_are_exact(",
+            "#[cfg(test)]\n    fn retire_for_rollover(",
+        ] {
+            assert!(
+                lifecycle_open.contains(test_only_rollover),
+                "raw terminal-receipt rollover escaped its test gate: {test_only_rollover}"
             );
         }
     }
@@ -7467,8 +10459,8 @@ mod tests {
             "validate_pending: &PendingRuntimeEffectBinding",
             "fn exactly_matches_validate_pending(",
             "fn is_exact_for_stage(&self, stage: LifecycleStageKind)",
-            "LifecycleStageKind::FetchBody => ReplayPayloadBindingV1::None",
-            "LifecycleStageKind::StoreBody | LifecycleStageKind::ValidateBody",
+            "LifecycleStageKind::FetchBody\n            | LifecycleStageKind::StoreBody",
+            "ReplayPayloadBindingV1::BodyFrame(self.body_frame)",
             "family.is_exact_for_stage(stage)",
         ] {
             assert!(
@@ -8065,7 +11057,8 @@ mod tests {
     }
 
     #[test]
-    fn live_wal_replay_seal_is_linear_nondecodable_and_has_one_production_mint() {
+    #[allow(clippy::too_many_lines)]
+    fn live_wal_replay_seal_is_linear_nondecodable_and_has_two_closed_production_mints() {
         let source = include_str!("v2_lifecycle_replay_authority.rs");
         let production = source
             .split("\n#[cfg(test)]\nmod tests {")
@@ -8081,10 +11074,13 @@ mod tests {
         for required in [
             "LiveWalPersistedReplayStateV1::ApplyPending",
             "LiveWalPersistedPendingV1::PayloadFree",
+            "LiveWalPersistedPendingV1::ValidateSignBound",
             "LiveWalPersistedPendingV1::ApplyPending",
             "LiveWalPersistedPendingV1::ApplyBound",
             "from_exact_live_append(\n        cause: ExactLiveWalPersistedContinuationCause",
             "exactly_binds_payload_free_pending(&self)",
+            "bind_exact_validate_sign_pending(",
+            "exactly_binds_validate_sign_pending(&self)",
             "project_validate_apply_successor(predecessor_effect, &self.effect)",
             "exactly_matches_apply_effect(&self.effect, receipt)",
             "ReplayWalRoleV1::PROPOSAL_INTENT",
@@ -8133,15 +11129,55 @@ mod tests {
             adapter
                 .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
                 .count(),
-            1,
-            "one record-checked adapter cut mints live replay authority"
+            2,
+            "only the generic persisted cut and sealed Ready-Sign cut mint live replay authority"
         );
         assert_eq!(
             adapter
                 .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
                 .count(),
-            1,
-            "one post-fsync conversion derives payload-free pending authority"
+            2,
+            "the same two closed post-fsync cuts derive frame-bound placeholder owners"
+        );
+        let ready_sign = adapter
+            .split("// READY_DURABLE_VALIDATE_LIVE_SIGN_BEGIN")
+            .nth(1)
+            .expect("sealed Ready-Sign segment exists")
+            .split("// READY_DURABLE_VALIDATE_LIVE_SIGN_END")
+            .next()
+            .expect("sealed Ready-Sign segment is bounded");
+        assert_eq!(
+            ready_sign
+                .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            ready_sign
+                .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
+                .count(),
+            1
+        );
+        assert!(ready_sign.contains("LiveWalFrameIdentity::from_append_receipt("));
+        assert!(ready_sign.contains("bind_exact_validate_sign_pending(child_pending)"));
+        let generic = adapter
+            .split("fn drive_exact_persisted_continuation(")
+            .nth(1)
+            .expect("generic exact persisted cut exists")
+            .split("fn live_wal_record_exactly_owns_effect(")
+            .next()
+            .expect("generic exact persisted cut is bounded");
+        assert_eq!(
+            generic
+                .matches("SealedLiveWalPersistedEffectV1::from_exact_live_append(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            generic
+                .matches("PendingRuntimeEffectBinding::from_exact_live_wal_append(")
+                .count(),
+            1
         );
         assert_eq!(
             adapter
@@ -8387,7 +11423,9 @@ mod tests {
         };
         source.validation_origin.origin = BodyPipelineOriginV1::Certified {
             certificate: fixture.prepare_qc.clone(),
-            manifest: Some(source.outcome.manifest.clone()),
+            manifest: source.outcome.manifest.clone(),
+            fetch_manifest_present: true,
+            certified_sources: Vec::new(),
         };
         assert!(
             certified_origin

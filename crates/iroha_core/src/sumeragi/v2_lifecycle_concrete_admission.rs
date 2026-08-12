@@ -39,6 +39,11 @@ impl LifecycleWorkRegistryHolder {
         }
     }
 
+    /// Borrow the concrete map only for one coordinator-owned composite transaction.
+    pub(super) fn registry_mut(&mut self) -> &mut ConcreteLifecycleWorkRegistry {
+        &mut self.registry
+    }
+
     /// Reconstruct one storage-authenticated recovered Validate parent without a scheduler lease.
     ///
     /// The concrete registry never leaves this holder. Success returns only

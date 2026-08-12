@@ -30,6 +30,10 @@ mod projection;
 #[path = "v2_lifecycle_replay_authority.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
 mod replay_authority;
+/// Sealed production planner-input authentication.
+#[path = "v2_lifecycle_scheduler_inputs.rs"]
+#[cfg_attr(not(test), allow(dead_code))]
+mod scheduler_inputs;
 /// Pure lifecycle schema and value definitions.
 #[path = "v2_lifecycle_schema.rs"]
 mod schema;
@@ -51,31 +55,55 @@ mod wal_recovery;
 mod work_registry;
 
 use authority::AuthenticatedEpisodeAuthority;
+#[cfg(test)]
 pub(crate) use authority::RolloverSnapshot;
-pub(in crate::sumeragi) use body_pipeline_transition::SealedInvalidBodyReportProjectionPermit;
+pub(in crate::sumeragi) use body_pipeline_transition::{
+    SealedInvalidBodyReportProjectionPermit, SealedValidateSignProjectionPermit,
+};
 use body_pipeline_transition::{
     durable_continuation_payload_is_exact, durable_continuation_successor_is_exact,
     durable_validate_payload_is_exact,
 };
 pub(crate) use concrete_admission::LifecycleWorkRegistryHolder;
 pub(crate) use ledger::AuthenticatedRecoveredWalValidateLedgerParent;
+pub(crate) use ledger::ProductionLifecycleStartupErrorV1;
 #[cfg(test)]
 #[allow(unused_imports)]
 pub(crate) use ledger::WalVoteLedgerRepairTestSummary;
+#[cfg(test)]
+pub(crate) use ledger::{
+    append_same_owner_foreign_terminal_for_test,
+    substitute_recovered_control_replay_authority_for_test,
+    substitute_recovered_decision_fetch_owner_for_test,
+    substitute_recovered_decision_fetch_replay_authority_for_test,
+};
 pub(super) use open::TerminalValidateNoSuccessorClaim;
 pub(crate) use open::{AuthenticatedLifecycleRecoveryCut, LifecycleOpenError};
+#[cfg(test)]
+pub(crate) use projection::CertifiedServeAdmissionBoundaryError;
 pub(crate) use projection::{
-    AdapterEffectAdmissionError, CertifiedServeAdmissionBoundaryError,
-    CertifiedServeAdmissionError, CertifiedServeSettlementError,
+    AdapterEffectAdmissionError, CertifiedServeAdmissionError,
+    CertifiedServeTerminalSettlementErrorV1, CertifiedServeTerminalSettlementFailureV1,
 };
-pub(crate) use replay_authority::RecoveredWalVoteReplayEvidenceV1;
+pub(in crate::sumeragi) use replay_authority::RecoveredDecisionApplyCandidateLineageV1;
 pub(super) use replay_authority::SealedLiveWalPersistedEffectV1;
 pub(in crate::sumeragi) use replay_authority::{
-    DurableValidateReplayEvidenceV1, InvalidBodyReportReplayEvidenceV1,
-    LocalBodyPreIntentReplaySealV1, LocalProposalIntentReplayEvidenceV1,
-    LocalProposalReadyReplayEvidenceV1, LocalValidateReplayEvidenceV1,
+    DurableCertifiedFetchPendingMintPermit, DurableValidateReplayEvidenceV1,
+    InvalidBodyReportReplayEvidenceV1, LocalBodyPreIntentReplaySealV1,
+    LocalProposalIntentReplayEvidenceV1, LocalProposalReadyReplayEvidenceV1,
+    LocalValidateReplayEvidenceV1, RecoveredDecisionApplyReplayLineageV1,
     RemoteProposalFetchReplayEvidenceV1, RemoteProposalStoreReplayEvidenceV1,
     RemoteProposalStoredReplayEvidenceV1, RemoteProposalValidateReplayEvidenceV1,
+};
+pub(crate) use replay_authority::{
+    RecoveredWalControlReplayEvidenceV1, RecoveredWalDecisionFetchReplayEvidenceV1,
+    RecoveredWalVoteReplayEvidenceV1,
+};
+#[cfg_attr(not(test), allow(unused_imports))]
+pub(crate) use scheduler_inputs::{
+    AuthenticatedSchedulerInputsFactory, PreparedProductionIngressCapacityWait,
+    ProductionIngressCapacityStatus, ProductionIngressSchedulerInputsError,
+    ProductionIngressTurnPreparation, ProductionSchedulerInputsError, QueuedProductionIngressFetch,
 };
 pub(crate) use schema::{
     AdmissionDecision, AdmissionRejection, AdmissionRequest, CandidateAdmission, CapacityClass,
@@ -96,17 +124,37 @@ use schema::{
 };
 #[cfg(test)]
 pub(crate) use selector::CertifiedFetchReadyPublicationError;
-pub(crate) use selector::{LifecycleIngressSelectorError, PreparedLifecycleIngressSelector};
-pub(in crate::sumeragi) use wal_recovery::AuthenticatedRecoveredWalVoteProjection;
+pub(crate) use selector::{
+    CertifiedFetchBodyPersistenceCompletion, CertifiedFetchBodyPersistenceCompletionError,
+    CertifiedFetchBodyPersistencePreparationError, CertifiedFetchBodyPersistencePreparationFailure,
+    CertifiedFetchBodyPersistenceRestartError, CertifiedFetchBodyPersistenceRetryError,
+    LifecycleIngressIoTargetKind, LifecycleIngressIoTargetSeal, LifecycleIngressSelectorError,
+    PreparedLifecycleIngressSelector,
+};
+pub(in crate::sumeragi) use selector::{
+    CertifiedFetchBodyPersistenceId, CertifiedFetchBodyPersistenceTask,
+};
+pub(in crate::sumeragi) use wal_recovery::{
+    AuthenticatedRecoveredWalControlProjection, AuthenticatedRecoveredWalDecisionFetchProjection,
+    AuthenticatedRecoveredWalVoteProjection, RecoveredDecisionApplyPendingLineageV1,
+};
+pub(in crate::sumeragi) use work_registry::ReadyValidateSignPredecessorAuthority;
 pub(crate) use work_registry::{
     AuthenticatedRecoveredWalValidateLifecycleRepair,
-    DurableAuthenticatedRecoveredWalValidateLifecycleRepair, InstalledRecoveredWalSignRegistryCut,
-    OpenedRecoveredWalSignLifecycleCut, OpenedRecoveredWalValidateLedger,
-    PreparedReadyDurableValidateExecution, ReadyDurableValidateOutcomeKind,
+    DurableAuthenticatedRecoveredWalValidateLifecycleRepair, ExactStoreRecoveredWalPersistError,
+    ExactStoreRecoveredWalSignInstallError, InstalledRecoveredWalSignRegistryCut,
+    InstalledRecoveredWalSignStorage, OpenedRecoveredWalSignLifecycleCut,
+    OpenedRecoveredWalValidateLedger, PersistedRecoveredWalValidateLedger,
+    PreparedReadyDurableValidateExecution, ProductionOpenedRecoveredWalSignLifecycleCut,
+    ProductionRecoveredWalStorageError, ReadyDurableValidateOutcomeKind,
     ReadyRejectedAdapterAuthority, ReadyValidatedAdapterAuthority, RecoveredWalParentFactoryError,
-    RecoveredWalSignInstallError, RecoveredWalSignLifecycleOpenError,
-    RecoveredWalValidateLedgerPersistError, RecoveredWalValidateRegistryCut,
-    RecoveredWalValidateRegistryJoinError,
+    RecoveredWalProductionOwnerOpenV1, RecoveredWalSignInstallError,
+    RecoveredWalSignLifecycleOpenError, RecoveredWalValidateLedgerPersistError,
+    RecoveredWalValidateRegistryCut, RecoveredWalValidateRegistryJoinError,
+};
+pub(in crate::sumeragi) use work_registry::{
+    LiveValidateSignRegistryReservation, LiveValidateSignWorkProjectionPermit,
+    PreparedLiveValidateSignRegistryWork,
 };
 
 const MAX_PENDING_ADMISSION_WAITS: usize = 64;
@@ -134,6 +182,65 @@ pub(crate) struct LifecycleCoordinator {
     ledger_store: Option<ledger::LifecycleLedgerStoreV1>,
     fault: Option<CoordinatorFault>,
 }
+
+// PRODUCTION_LIFECYCLE_OWNER_DECLARATION_BEGIN
+/// Sole process owner of recovered V1 lifecycle execution state.
+///
+/// Construction consumes one authenticated recovered-adapter startup and
+/// privately selects its storage-only or recovered-WAL repair branch. Before
+/// live planning, a second consuming launch transition must move the exact
+/// body store into the I/O worker and leave its instance seal in this owner.
+/// None of the adapter, coordinator, registry, or payload store can be
+/// detached, cloned, or separately installed through this API.
+#[must_use = "the production lifecycle owner must remain alive for its height"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct ProductionLifecycleOwnerV1 {
+    verified: crate::sumeragi::v2::VerifiedHeightContext,
+    coordinator: LifecycleCoordinator,
+    registry: LifecycleWorkRegistryHolder,
+    payload_store: crate::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadStoreV1,
+    body_store: Option<crate::sumeragi::v2_body_store::V2BodyStore>,
+    body_store_identity: Option<crate::sumeragi::v2_body_store::V2BodyStoreInstanceIdentity>,
+    adapter_startup: crate::sumeragi::v2::ProductionLifecycleAdapterStartupV1,
+}
+// PRODUCTION_LIFECYCLE_OWNER_DECLARATION_END
+
+/// Fail-stop status-publication error retaining the complete lifecycle owner.
+#[must_use = "failed owner publication requires process restart"]
+pub(in crate::sumeragi) struct ProductionLifecycleOwnerStatusErrorV1 {
+    _owner: ProductionLifecycleOwnerV1,
+    error: crate::sumeragi::v2::AdapterError,
+}
+
+impl ProductionLifecycleOwnerStatusErrorV1 {
+    /// Return a stable diagnostic without releasing any retained authority.
+    pub(in crate::sumeragi) fn reason(&self) -> &'static str {
+        match &self.error {
+            crate::sumeragi::v2::AdapterError::FailClosed => {
+                "adapter status publication is fail-closed"
+            }
+            _ => "adapter status publication failed after exact lifecycle open",
+        }
+    }
+}
+
+impl ProductionLifecycleOwnerV1 {
+    /// Publish startup status only after all storage and registry joins succeed.
+    pub(in crate::sumeragi) fn publish_recovered_adapter_status(
+        mut self,
+    ) -> Result<Self, ProductionLifecycleOwnerStatusErrorV1> {
+        if let Err(error) = self.adapter_startup.publish_status() {
+            return Err(ProductionLifecycleOwnerStatusErrorV1 {
+                _owner: self,
+                error,
+            });
+        }
+        Ok(self)
+    }
+}
+// TODO: Replace the runner's independent `ProductionV2Services::start` body
+// store argument with a consuming launch from this owner, then retain only the
+// exact instance identity here before enabling production planner calls.
 
 impl LifecycleCoordinator {
     #[cfg(test)]
@@ -1648,6 +1755,164 @@ mod tests {
     }
 
     #[test]
+    fn direct_registry_factory_authenticates_empty_census_as_idle() {
+        let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
+        let registry = LifecycleWorkRegistryHolder::empty();
+
+        let inputs = coordinator
+            .direct_registry_scheduler_inputs_for_test(&registry)
+            .expect("an empty directly-owned Ready census is complete");
+        assert_eq!(coordinator.plan_turn(inputs), TurnPlan::Idle);
+    }
+
+    #[test]
+    fn direct_registry_factory_rejects_unsupported_ready_work_without_mutation() {
+        let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
+        let registry = LifecycleWorkRegistryHolder::empty();
+        let (_, ordinal, _) = admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
+            1,
+            LifecycleWorkClass::Fetch,
+            LifecyclePhase::Fetch,
+            InitialLifecycleState::Ready,
+            PredecessorScope::Independent,
+        ))));
+        let before = format!("{coordinator:?}");
+
+        assert_eq!(
+            coordinator.direct_registry_scheduler_inputs_for_test(&registry),
+            Err(ProductionSchedulerInputsError::UnsupportedReadyCarrier {
+                ordinal,
+                work_class: LifecycleWorkClass::Fetch,
+            })
+        );
+        assert_eq!(format!("{coordinator:?}"), before);
+    }
+
+    #[test]
+    fn direct_registry_factory_rejects_corrupt_ready_index_without_mutation() {
+        let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
+        let registry = LifecycleWorkRegistryHolder::empty();
+        let (_, ordinal, _) = admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
+            2,
+            LifecycleWorkClass::Fetch,
+            LifecyclePhase::Fetch,
+            InitialLifecycleState::Ready,
+            PredecessorScope::Independent,
+        ))));
+        assert!(coordinator.ready_index.remove(&ordinal));
+        let before = format!("{coordinator:?}");
+
+        assert_eq!(
+            coordinator.direct_registry_scheduler_inputs_for_test(&registry),
+            Err(ProductionSchedulerInputsError::InvalidReadyCensus)
+        );
+        assert_eq!(format!("{coordinator:?}"), before);
+    }
+
+    #[test]
+    fn production_scheduler_factory_has_no_raw_rank_mint() {
+        let schema = include_str!("v2_lifecycle_schema.rs");
+        let scheduler = include_str!("v2_lifecycle_scheduler_inputs.rs");
+        let registry = include_str!("v2_lifecycle_work_registry.rs");
+        let concrete = include_str!("v2_lifecycle_concrete_admission.rs");
+        let selector = include_str!("v2_lifecycle_selector.rs");
+        let worker = include_str!("v2_worker.rs");
+        let body_store = include_str!("v2_body_store.rs");
+        let effects = include_str!("v2_effects.rs");
+        let runner = include_str!("v2_runner.rs");
+
+        assert_eq!(
+            scheduler
+                .matches("fn direct_registry_scheduler_inputs(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            scheduler
+                .matches("SchedulerReadyInputs::from_authenticated(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            scheduler
+                .matches("SchedulerInputs::from_authenticated(")
+                .count(),
+            1
+        );
+        assert_eq!(
+            scheduler
+                .matches("AuthenticatedSchedulerInputsFactory::new()")
+                .count(),
+            2
+        );
+        assert!(schema.contains("_factory: &AuthenticatedSchedulerInputsFactory"));
+        assert!(schema.contains("_factory: AuthenticatedSchedulerInputsFactory"));
+        assert!(schema.contains(
+            "/// Construct one test row without exposing a production rank mint.\n    #[cfg(test)]\n    pub(super) fn new("
+        ));
+        assert!(schema.contains(
+            "/// Construct one unique test snapshot without exposing a production mint.\n    #[cfg(test)]\n    pub(super) fn new("
+        ));
+        assert!(!scheduler.contains("pub fn direct_registry_scheduler_inputs("));
+        assert!(!scheduler.contains("\n    SchedulerInputs {"));
+        assert!(scheduler.contains("pub(crate) fn plan_ingress_turn"));
+        assert!(scheduler.contains("runner: LifecycleCurrentRunnerTurn<'_>"));
+        assert!(runner.contains("while let Some(current_turn) = outer_turns.next_current()"));
+        assert!(runner.contains("pub(crate) struct LifecycleCurrentRunnerTurn<'cursor>"));
+        assert!(scheduler.contains("attest_scheduler_fetch_carrier"));
+        assert!(scheduler.contains("mode != executor.lifecycle_mode_rank_snapshot()"));
+        assert!(scheduler.contains("services.matches_lifecycle_executor_output_guard(executor)"));
+        assert!(scheduler.contains("ProductionIngressSchedulerInputsError::BodyStoreNotBound"));
+        assert!(scheduler.contains("services.matches_lifecycle_body_store(body_store_identity)"));
+        assert!(effects.contains("owner.plan_ingress_turn("));
+        assert!(worker.contains("struct LifecycleIoCapacityReservation<'a>"));
+        assert!(worker.contains("MutexGuard<'a, V2IoCommandQueueState>"));
+        assert!(worker.contains("operation: Option<ConsensusFailStopOperation<'a>>"));
+        assert!(worker.contains("begin_fail_stop_operation()"));
+        assert!(worker.contains("lifecycle_capacity_generation_exhausted"));
+        assert!(worker.contains("target.matches_certified_fetch_work_id(task.work_id())"));
+        assert!(worker.contains("enum LifecycleIoCapacityWaitStatus"));
+        assert!(worker.contains("LifecycleIoCapacityWaitStatus::ForeignOrDisconnected"));
+        assert!(worker.contains("Arc::ptr_eq(&self.output_guard, &services.output_guard)"));
+        assert!(worker.contains("services.output_guard.restart_required()"));
+        assert!(!worker.contains("submit_certified_fetch_body_persistence"));
+        assert!(!worker.contains("retry_certified_fetch_body_persistence"));
+        assert!(!worker.contains("CertifiedFetchBodyPersistenceSubmissionError"));
+        assert!(!worker.contains("fn release_advanced("));
+        assert!(!worker.contains("fn generation_exhausted("));
+        assert!(selector.contains("_linearity: LifecycleIngressIoTargetSealLinearity"));
+        assert!(selector.contains(".filter(|next| *next != u64::MAX)"));
+        assert!(body_store.contains("Arc::ptr_eq(&self.0, &other.0)"));
+        assert!(!worker.contains("fn lifecycle_capacity_queue_depth"));
+        let ingress_plan = scheduler
+            .split_once("fn plan_ingress_turn_with_runner_debt(")
+            .expect("one owner-only ingress factory")
+            .1
+            .split_once("\n    }\n}")
+            .expect("ingress factory remains one bounded owner method")
+            .0;
+        let ordered = [
+            "preflight_selected_target_work_absent()",
+            "prepare_certified_fetch_body_persistence(prepared)",
+            "preflight_certified_fetch_body_persistence(&task)",
+            "coordinator.plan_turn(inputs)",
+            "settle_turn(lease, super::TurnOutcome::Blocked(post_submit_wait))",
+            "commit_certified_fetch_body_persistence(task)",
+        ];
+        let mut cursor = 0;
+        for required in ordered {
+            let relative = ingress_plan[cursor..]
+                .find(required)
+                .unwrap_or_else(|| panic!("ingress transaction omitted {required}"));
+            cursor += relative + required.len();
+        }
+        for source in [registry, concrete, selector] {
+            assert!(!source.contains("SchedulerReadyInputs::from_authenticated("));
+            assert!(!source.contains("SchedulerInputs {"));
+        }
+    }
+
+    #[test]
     fn planning_requires_a_fresh_rank_for_every_ready_ordinal() {
         let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
         admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
@@ -3101,6 +3366,38 @@ mod tests {
             digest(100)
         );
         assert_eq!(execute(plan_turn(&mut coordinator, [])).ordinal, ordinal);
+    }
+
+    #[test]
+    fn reserved_fetch_uses_one_generation_to_reblock_and_the_next_to_publish_ready() {
+        let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
+        let source = WaitSource::External(digest(0xD1));
+        let initial_wait = WaitToken::new(source, 4);
+        let (owner, ordinal, _) =
+            admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
+                0xD2,
+                LifecycleWorkClass::Fetch,
+                LifecyclePhase::Fetch,
+                InitialLifecycleState::Waiting(initial_wait),
+                PredecessorScope::Independent,
+            ))));
+
+        let inputs = scheduler_inputs(&coordinator, [(source, 5)]);
+        let lease = execute(coordinator.plan_turn(inputs));
+        assert_eq!(lease.ordinal(), ordinal);
+        let submitted_wait = WaitToken::new(source, 5);
+        coordinator.settle_turn(lease, TurnOutcome::Blocked(submitted_wait));
+        assert_eq!(coordinator.fault, None);
+        assert_eq!(
+            coordinator.records[&ordinal].state,
+            LifecycleState::Waiting(submitted_wait)
+        );
+        assert_eq!(coordinator.observed_generation.get(&source), Some(&5));
+
+        coordinator.publish_ready(ReadyEvent::new(ordinal, owner, submitted_wait, None));
+        assert_eq!(coordinator.fault, None);
+        assert_eq!(coordinator.records[&ordinal].state, LifecycleState::Ready);
+        assert_eq!(coordinator.observed_generation.get(&source), Some(&6));
     }
 
     #[test]

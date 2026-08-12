@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-08-09
+Last updated: 2026-08-12
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -40,6 +40,70 @@ regressions, generated-artifact determinism, exact profile-config admission,
 and public consensus wire roundtrips are complete. The outstanding revision-4
 work is limited to:
 
+- Wire the unified consuming V1 lifecycle-owner factory into the serialized
+  runner so the retained verified context, coordinator, concrete registry,
+  Certified-Serve payload store, and body store become the sole production
+  execution owner. Startup now privately selects exactly one of no WAL
+  authority, recovered phase-vote repair, recovered control-Sign repair, or
+  recovered Decision-Fetch repair.
+  Exact `ProposalIntent -> SignProposal` and
+  `TimeoutIntent -> SignTimeoutVote` restart paths authenticate the terminal
+  WAL frontier independently, then retain the latest exact frame owning the
+  reducer's current signature through checked LedgerV1 admission, concrete
+  carrier installation, and the final Fetch/Serve/Producer open. Identical
+  repeated intents select the later match, and terminal frames may instead own
+  queued Prepare/Commit signatures. A historical Commit remains eligible under
+  the current later-view tag only with its exact active-lock `LockAndCommit`
+  PrepareQC lineage. The runner's already-open body store must first consume
+  semantic marker replay into the sole move-only startup cut; the production
+  factory has no root-reopen alternative. Residual and WAL-projection
+  mismatches fail before that cut is unsealed and before Serve or Ledger opens,
+  and status follows the opaque owner.
+  No caller-supplied branch or recovery cut remains. The owner now has a
+  sealed scheduler-input factory for the complete directly owned Ready subset:
+  closed Validate completions reattest
+  through the registry and raw rank construction is unavailable. Certified
+  Fetch now also has a consuming locked I/O-capacity transaction joining the
+  live executor mode, ingress selector/lane/source, concrete registry carrier,
+  and runner-reach observation, followed by the exact `n + 1` Blocked command
+  fence and existing `n + 2` durable completion. It currently rejects
+  production use because the runner independently gives its body store to
+  `ProductionV2Services`; next replace that construction with a consuming
+  owner-to-I/O-worker transfer which leaves the running owner an exact instance
+  seal, and call the method only from the runner's live current-Ingress cursor.
+  Certified-Serve startup now installs exact shared-family Serve and
+  ProducerTurn carriers, and an unwired selector-bound fresh transaction
+  fsyncs its payload before atomically staging LedgerV1 plus both carriers.
+  That fresh transaction deliberately accepts only the startup-derived exact
+  Fetch/Serve/Producer census, optionally beside one exclusive phase-vote,
+  control-Sign, or Decision-Fetch WAL carrier. During runner cutover, replace
+  this bounded census
+  with the exhaustive all-kind
+  coordinator/registry oracle and wire the sealed selector target into the
+  owner. The receipt-free terminal owner transaction now closes payload store,
+  coordinator, registry, and LedgerV1 ownership and performs the exact
+  Serve/Producer carrier replacement or removal; runner cutover must transfer
+  body-store completion authority to the worker without exposing a receipt or
+  raw parts API. ExecuteBody Validate remains typed unsupported. Then delete the
+  selected-Serve episode/witness/latch and runtime lifecycle-ordinal machinery.
+  Run the phase-vote/control-Sign/Decision-Fetch end-to-end owner factory and
+  the existing
+  empty/two-Fetch/terminal-Validate-plus-Serve startup regressions, including
+  steady and payload-store-ahead terminal Serve, once the active formal
+  validation process releases the build lane. Decision Fetch now has an exact
+  certificate-only V1 origin for its absent manifest and enters the complete
+  Ledger/registry/coordinator startup census with exact no-rewrite coalescing;
+  quarantined markers cannot cross the revalidated-store seal. A matching
+  promoted success detaches into an opaque same-store/full-context cut and is
+  restored without rewriting while Apply remains unavailable; promoted or
+  quarantined deterministic rejection cannot be treated as refetch or Apply
+  authority.
+  TODO: Decision Apply must consume the sealed Decision-Fetch authority, exact
+  semantically revalidated BodyFrame cut, and any exact LedgerV1 Validate
+  parent in one fixed reducer transaction without exposing intermediate work.
+  It is not available until the transaction publishes the complete successor,
+  installs the final live Apply carrier, and storage-only restart reconstructs
+  that carrier after a Ledger-fsync/volatile-publication crash cut.
 - Close the autonomous carrier terminal-gating, signed-bootstrap roll-forward,
   and lifecycle-retention release gate from one final source seal. Run the
   focused Kura and Sumeragi regressions, build the optimized `irohad` and

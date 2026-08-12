@@ -3,7 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
-    replay_authority::LifecycleReplayAuthorityV1, work_registry::ReadyValidateCarrierSeal,
+    replay_authority::LifecycleReplayAuthorityV1,
+    scheduler_inputs::AuthenticatedSchedulerInputsFactory, work_registry::ReadyValidateCarrierSeal,
 };
 
 pub(super) const MAX_PHYSICAL_SLOTS_PER_RECORD: usize = 64;
@@ -922,7 +923,10 @@ impl DurableBodyFrameReference {
             && Some(self.subject) == key.subject
             && matches!(
                 key.phase,
-                LifecyclePhase::Store | LifecyclePhase::Validate | LifecyclePhase::Apply
+                LifecyclePhase::Fetch
+                    | LifecyclePhase::Store
+                    | LifecyclePhase::Validate
+                    | LifecyclePhase::Apply
             )
     }
 }
@@ -1083,6 +1087,17 @@ impl DurablePayloadReference {
                 Self::CertifiedServeNegative { outcome, .. },
                 Some(terminal),
             ) => outcome.terminal() == terminal,
+            (
+                LifecycleWorkClass::Fetch,
+                Self::BodyFrame(_),
+                None
+                | Some(
+                    TerminalOutcome::Advanced
+                    | TerminalOutcome::Cancelled
+                    | TerminalOutcome::Rejected(_)
+                    | TerminalOutcome::Failed(_),
+                ),
+            ) => true,
             (LifecycleWorkClass::Store | LifecycleWorkClass::Apply, Self::BodyFrame(_), _) => true,
             (LifecycleWorkClass::Validate, Self::BodyFrame(_), terminal) => {
                 matches!(
@@ -1090,6 +1105,17 @@ impl DurablePayloadReference {
                     None | Some(TerminalOutcome::Advanced | TerminalOutcome::Cancelled)
                 )
             }
+            (
+                LifecycleWorkClass::Fetch,
+                Self::None,
+                None
+                | Some(
+                    TerminalOutcome::Cancelled
+                    | TerminalOutcome::Rejected(_)
+                    | TerminalOutcome::Failed(_),
+                ),
+            ) => true,
+            (LifecycleWorkClass::Fetch, Self::None, _) => false,
             (class, Self::None, _) => !matches!(
                 class,
                 LifecycleWorkClass::Store
@@ -1369,9 +1395,24 @@ impl CandidateAdmission {
             self.stage,
             self.payload,
         );
+        let fetch_state_is_exact = match (self.work_class, self.payload, self.initial_state) {
+            (
+                LifecycleWorkClass::Fetch,
+                DurablePayloadReference::None,
+                InitialLifecycleState::Ready,
+            )
+            | (
+                LifecycleWorkClass::Fetch,
+                DurablePayloadReference::BodyFrame(_),
+                InitialLifecycleState::Ready,
+            ) => true,
+            (LifecycleWorkClass::Fetch, _, _) => false,
+            _ => true,
+        };
         match (self.work_class, self.producer_turn.as_ref()) {
             (LifecycleWorkClass::CertifiedServe, Some(producer)) => {
                 primary_is_exact
+                    && fetch_state_is_exact
                     && serve_and_producer_keys_match(self.key, producer.key)
                     && producer.reconstruction_source == self.reconstruction_source
                     && self
@@ -1385,7 +1426,7 @@ impl CandidateAdmission {
                         DurablePayloadReference::None,
                     )
             }
-            _ => primary_is_exact,
+            _ => primary_is_exact && fetch_state_is_exact,
         }
     }
 }
@@ -1515,6 +1556,7 @@ pub(super) struct AttestedReadyValidateDemand {
     slot: PhysicalSlotId,
     digest: LifecycleDigest,
     capacity_class: Option<CapacityClass>,
+    requires_io_dispatch: bool,
 }
 
 impl AttestedReadyValidateDemand {
@@ -1545,6 +1587,7 @@ impl AttestedReadyValidateDemand {
             capacity_class: seal
                 .requires_consensus_capacity()
                 .then_some(CapacityClass::Consensus),
+            requires_io_dispatch: seal.requires_io_dispatch(),
         })
     }
 
@@ -1567,6 +1610,7 @@ impl AttestedReadyValidateDemand {
             slot,
             digest,
             capacity_class: rejected.then_some(CapacityClass::Consensus),
+            requires_io_dispatch: false,
         })
     }
 
@@ -1586,6 +1630,11 @@ impl AttestedReadyValidateDemand {
     /// Return the sole extra output class demanded by this carrier, if any.
     pub(super) const fn capacity_class(self) -> Option<CapacityClass> {
         self.capacity_class
+    }
+
+    /// Return whether this carrier must first enter the bounded I/O service.
+    pub(super) const fn requires_io_dispatch(self) -> bool {
+        self.requires_io_dispatch
     }
 }
 
@@ -1609,8 +1658,8 @@ impl SchedulerReadyInputs {
     ///
     /// Validate work requires the registry-derived attestation; every other
     /// work class forbids one. Missing or foreign authority returns `None`.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(super) fn from_authenticated(
+        _factory: &AuthenticatedSchedulerInputsFactory,
         record: &LifecycleRecord,
         validate_attestation: Option<AttestedReadyValidateDemand>,
         live_debts: [u64; 6],
@@ -1705,9 +1754,10 @@ impl SchedulerReadyInputs {
 }
 
 /// Authenticated generation and ready-row snapshot supplied to one planning turn.
-// TODO: Add the composite runtime attestation factory that joins every sealed
-// Validate demand with mode/capacity/selector/lane/source/runner observations;
-// the raw whole-snapshot mint remains test-only.
+// The sealed production factory constructs this value without accepting raw
+// rows. It covers direct completion rows and the exact reserved certified-Fetch
+// ingress cut; other I/O-bearing carriers remain typed fail-closed. The raw
+// whole-snapshot mint remains test-only.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct SchedulerInputs {
     generations: BTreeMap<WaitSource, u64>,
@@ -1715,6 +1765,15 @@ pub(crate) struct SchedulerInputs {
 }
 
 impl SchedulerInputs {
+    /// Construct a production snapshot only for the sealed factory capability.
+    pub(super) fn from_authenticated(
+        _factory: AuthenticatedSchedulerInputsFactory,
+        generations: BTreeMap<WaitSource, u64>,
+        ready: BTreeMap<u128, SchedulerReadyInputs>,
+    ) -> Self {
+        Self { generations, ready }
+    }
+
     /// Construct one unique test snapshot without exposing a production mint.
     #[cfg(test)]
     pub(super) fn new(
@@ -2083,7 +2142,33 @@ mod tests {
         assert!(!payload.same_admission_material(DurablePayloadReference::None));
         assert!(payload.matches_terminal(LifecycleWorkClass::Store, None));
         assert!(payload.matches_terminal(LifecycleWorkClass::Apply, None));
-        assert!(!payload.matches_terminal(LifecycleWorkClass::Fetch, None));
+        assert!(payload.matches_terminal(LifecycleWorkClass::Fetch, None));
+        for terminal in [
+            TerminalOutcome::Advanced,
+            TerminalOutcome::Cancelled,
+            TerminalOutcome::Rejected(7),
+            TerminalOutcome::Failed(9),
+        ] {
+            assert!(payload.matches_terminal(LifecycleWorkClass::Fetch, Some(terminal)));
+        }
+        assert!(!payload.matches_terminal(
+            LifecycleWorkClass::Fetch,
+            Some(TerminalOutcome::Completed(None))
+        ));
+        assert!(
+            !DurablePayloadReference::None
+                .matches_terminal(LifecycleWorkClass::Fetch, Some(TerminalOutcome::Advanced))
+        );
+        for terminal in [
+            None,
+            Some(TerminalOutcome::Cancelled),
+            Some(TerminalOutcome::Rejected(7)),
+            Some(TerminalOutcome::Failed(9)),
+        ] {
+            assert!(
+                DurablePayloadReference::None.matches_terminal(LifecycleWorkClass::Fetch, terminal)
+            );
+        }
         assert!(!DurablePayloadReference::None.matches_terminal(LifecycleWorkClass::Store, None));
         assert!(!DurablePayloadReference::None.matches_terminal(LifecycleWorkClass::Apply, None));
     }

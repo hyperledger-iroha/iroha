@@ -12,6 +12,7 @@ use std::{
     io::{ErrorKind, Read, Write},
     mem::size_of,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
@@ -19,11 +20,9 @@ use iroha_data_model::block::consensus_v2 as wire;
 use norito::codec::{Decode, DecodeAll as _, Encode};
 use thiserror::Error;
 
-#[cfg(any(not(test), feature = "bls"))]
-use super::v2_body_store::DurableBodyReceipt;
 use super::{
     v2::VerifiedHeightContext,
-    v2_body_store::V2BodyStore,
+    v2_body_store::{DurableBodyReceipt, V2BodyStore},
     v2_transport::{
         AuthenticatedCertifiedBodyRequest, authenticate_certified_body_request_identity,
         authenticate_certified_body_request_with_verified_height,
@@ -156,6 +155,23 @@ impl DurableCertifiedServeAdmissionReceipt {
         self.local_retainer
     }
 
+    /// Recheck the authenticated request and the complete receipt-coordinate
+    /// binding without assuming a Pending or terminal frame shape.
+    pub(super) fn exactly_matches_authenticated_coordinates(
+        self,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+    ) -> bool {
+        self.id.request_hash() == authenticated.request_hash()
+            && self.certificate_hash == HashOf::new(&authenticated.request().certificate)
+            && self.coordinate_binding
+                == admission_receipt_coordinate_binding(
+                    self.id,
+                    self.certificate_hash,
+                    self.payload_hash,
+                    self.local_retainer,
+                )
+    }
+
     /// Recompute the canonical Pending frame and compare every receipt
     /// coordinate with one exact authenticated request.
     pub(crate) fn exactly_matches_pending(
@@ -226,21 +242,59 @@ impl DurableCertifiedServeAdmissionReceipt {
 /// A pending publication may be compensated after a conclusive rejection. A
 /// terminal publication is valid only when the coordinator already owns the
 /// matching durable row and can replay its tombstone.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub(super) struct DurableCertifiedServeAdmissionPublication {
     receipt: DurableCertifiedServeAdmissionReceipt,
-    pending: bool,
+    state: DurableCertifiedServeAdmissionStateV1,
+    fresh_pending: bool,
+}
+
+impl Drop for DurableCertifiedServeAdmissionPublication {
+    fn drop(&mut self) {}
+}
+
+/// Store-derived state needed to distinguish fresh admission from exact
+/// tombstone replay without reopening or reconstructing payload bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DurableCertifiedServeAdmissionStateV1 {
+    /// The exact request still owns a Pending frame.
+    Pending,
+    /// The exact request already owns this completed-response tombstone.
+    Completed(HashOf<wire::CertifiedBodyResponse>),
+    /// The exact request already owns this typed negative tombstone.
+    Negative(CertifiedServePayloadNegativeOutcome),
 }
 
 impl DurableCertifiedServeAdmissionPublication {
     /// Exact durable request material used to project the lifecycle candidate.
-    pub(super) const fn receipt(self) -> DurableCertifiedServeAdmissionReceipt {
+    pub(super) const fn receipt(&self) -> DurableCertifiedServeAdmissionReceipt {
         self.receipt
     }
 
     /// Whether this publication may be removed as an unadmitted Pending frame.
-    pub(super) const fn is_pending(self) -> bool {
-        self.pending
+    pub(super) const fn is_pending(&self) -> bool {
+        matches!(self.state, DurableCertifiedServeAdmissionStateV1::Pending)
+    }
+
+    /// Whether this exact call created the Pending frame and therefore owns
+    /// the sole authenticated pre-ledger abort right.
+    pub(super) const fn can_abort_fresh_pending(&self) -> bool {
+        self.is_pending() && self.fresh_pending
+    }
+
+    /// Return the exact state read or created by this store transaction.
+    pub(super) const fn state(&self) -> DurableCertifiedServeAdmissionStateV1 {
+        self.state
+    }
+
+    /// Recheck the request, certificate, and receipt coordinates sealed by the
+    /// store before a terminal lifecycle row may stutter or replay.
+    pub(super) fn exactly_matches_authenticated_request(
+        &self,
+        authenticated: &AuthenticatedCertifiedBodyRequest,
+    ) -> bool {
+        self.receipt
+            .exactly_matches_authenticated_coordinates(authenticated)
     }
 }
 
@@ -883,17 +937,115 @@ pub(crate) enum CertifiedServePayloadStoreError {
     },
 }
 
+/// Admission-only classification of a failed payload retention attempt.
+///
+/// `PublicationAmbiguous` means the canonical file rename completed but the
+/// containing-directory fsync did not. The caller must retain all ownership
+/// and restart so startup recovery can decide whether the frame is present.
+#[derive(Debug)]
+pub(super) enum CertifiedServePayloadRetentionError {
+    /// The canonical final path was not changed by this attempt.
+    Unchanged(CertifiedServePayloadStoreError),
+    /// The final path was published but its directory sync did not complete.
+    PublicationAmbiguous(CertifiedServePayloadStoreError),
+}
+
+/// Terminal-write classification preserving whether the canonical payload
+/// path may already contain the new tombstone.
+#[derive(Debug)]
+pub(super) enum CertifiedServeTerminalPersistenceError {
+    /// Caller-supplied request/body/response material was rejected before the
+    /// retained payload frame was opened or changed.
+    InputRejected(CertifiedServePayloadStoreError),
+    /// The retained payload/body-store authority was missing, corrupt, or in
+    /// conflict before this attempt changed the final payload path.
+    StoreInvariant(CertifiedServePayloadStoreError),
+    /// Rename completed but the containing-directory fsync did not.
+    PublicationAmbiguous(CertifiedServePayloadStoreError),
+}
+
+impl CertifiedServeTerminalPersistenceError {
+    #[cfg(test)]
+    fn into_store_error(self) -> CertifiedServePayloadStoreError {
+        match self {
+            Self::InputRejected(error)
+            | Self::StoreInvariant(error)
+            | Self::PublicationAmbiguous(error) => error,
+        }
+    }
+}
+
+impl CertifiedServePayloadRetentionError {
+    #[cfg(test)]
+    fn into_store_error(self) -> CertifiedServePayloadStoreError {
+        match self {
+            Self::Unchanged(error) | Self::PublicationAmbiguous(error) => error,
+        }
+    }
+}
+
+enum PersistPayloadError {
+    Unpublished(CertifiedServePayloadStoreError),
+    PublishedButUnsynchronized(CertifiedServePayloadStoreError),
+}
+
+impl PersistPayloadError {
+    fn into_retention_error(self) -> CertifiedServePayloadRetentionError {
+        match self {
+            Self::Unpublished(error) => CertifiedServePayloadRetentionError::Unchanged(error),
+            Self::PublishedButUnsynchronized(error) => {
+                CertifiedServePayloadRetentionError::PublicationAmbiguous(error)
+            }
+        }
+    }
+
+    fn into_terminal_error(self) -> CertifiedServeTerminalPersistenceError {
+        match self {
+            Self::Unpublished(error) => {
+                CertifiedServeTerminalPersistenceError::StoreInvariant(error)
+            }
+            Self::PublishedButUnsynchronized(error) => {
+                CertifiedServeTerminalPersistenceError::PublicationAmbiguous(error)
+            }
+        }
+    }
+}
+
 /// Crash-safe owner of all exact Certified-Serve payload files for one height.
 #[derive(Debug)]
 pub(crate) struct CertifiedServePayloadStoreV1 {
+    identity: Arc<CertifiedServePayloadStoreInstanceIdentityMarker>,
     directory: PathBuf,
     context: wire::HeightContext,
     max_entries: usize,
     max_entry_bytes: u64,
     indexed: BTreeSet<CertifiedServePayloadId>,
+    #[cfg(test)]
+    fail_next_publish_directory_sync: bool,
+}
+
+#[derive(Debug)]
+struct CertifiedServePayloadStoreInstanceIdentityMarker;
+
+/// Comparison-only identity for one exact open Serve-payload store instance.
+#[derive(Clone, Debug)]
+pub(crate) struct CertifiedServePayloadStoreInstanceIdentity(
+    Arc<CertifiedServePayloadStoreInstanceIdentityMarker>,
+);
+
+impl CertifiedServePayloadStoreInstanceIdentity {
+    /// Return whether both seals came from the same open store owner.
+    pub(crate) fn same_instance(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 impl CertifiedServePayloadStoreV1 {
+    /// Project a comparison-only seal before moving this exact store.
+    pub(crate) fn instance_identity(&self) -> CertifiedServePayloadStoreInstanceIdentity {
+        CertifiedServePayloadStoreInstanceIdentity(Arc::clone(&self.identity))
+    }
+
     /// Open one immutable height store and return its move-only recovery cut.
     ///
     /// Regular interrupted temporary files are discarded before the cut is
@@ -932,11 +1084,14 @@ impl CertifiedServePayloadStoreV1 {
         ensure_durable_directory(&directory)?;
 
         let mut store = Self {
+            identity: Arc::new(CertifiedServePayloadStoreInstanceIdentityMarker),
             directory,
             context: context.clone(),
             max_entries,
             max_entry_bytes,
             indexed: BTreeSet::new(),
+            #[cfg(test)]
+            fail_next_publish_directory_sync: false,
         };
         let traversal_capacity =
             max_entries
@@ -1026,11 +1181,9 @@ impl CertifiedServePayloadStoreV1 {
         local_signer: &KeyPair,
         authenticated: &AuthenticatedCertifiedBodyRequest,
     ) -> Result<DurableCertifiedServeAdmissionReceipt, CertifiedServePayloadStoreError> {
-        let publication = self.retain_for_admission_with_verified_retention(
-            verified,
-            local_signer,
-            authenticated,
-        )?;
+        let publication = self
+            .retain_for_admission_with_verified_retention(verified, local_signer, authenticated)
+            .map_err(CertifiedServePayloadRetentionError::into_store_error)?;
         publication
             .is_pending()
             .then_some(publication.receipt())
@@ -1047,9 +1200,11 @@ impl CertifiedServePayloadStoreV1 {
         verified: &VerifiedHeightContext,
         local_signer: &KeyPair,
         authenticated: &AuthenticatedCertifiedBodyRequest,
-    ) -> Result<DurableCertifiedServeAdmissionPublication, CertifiedServePayloadStoreError> {
-        let local_validator =
-            self.verified_local_retainer(verified, local_signer, authenticated)?;
+    ) -> Result<DurableCertifiedServeAdmissionPublication, CertifiedServePayloadRetentionError>
+    {
+        let local_validator = self
+            .verified_local_retainer(verified, local_signer, authenticated)
+            .map_err(CertifiedServePayloadRetentionError::Unchanged)?;
         self.retain_for_admission_inner(authenticated, local_validator)
     }
 
@@ -1107,7 +1262,9 @@ impl CertifiedServePayloadStoreV1 {
             .first()
             .copied()
             .unwrap_or(0);
-        let publication = self.retain_for_admission_inner(authenticated, local_retainer)?;
+        let publication = self
+            .retain_for_admission_inner(authenticated, local_retainer)
+            .map_err(CertifiedServePayloadRetentionError::into_store_error)?;
         publication
             .is_pending()
             .then_some(publication.receipt())
@@ -1118,30 +1275,49 @@ impl CertifiedServePayloadStoreV1 {
         &mut self,
         authenticated: &AuthenticatedCertifiedBodyRequest,
         local_retainer: wire::ValidatorIndex,
-    ) -> Result<DurableCertifiedServeAdmissionPublication, CertifiedServePayloadStoreError> {
+    ) -> Result<DurableCertifiedServeAdmissionPublication, CertifiedServePayloadRetentionError>
+    {
         let request = authenticated.request();
         let id = CertifiedServePayloadId::from_request(request);
         if id.request_hash() != authenticated.request_hash() {
-            return Err(CertifiedServePayloadStoreError::AuthenticatedRequestHashMismatch);
+            return Err(CertifiedServePayloadRetentionError::Unchanged(
+                CertifiedServePayloadStoreError::AuthenticatedRequestHashMismatch,
+            ));
         }
-        self.validate_request(request, &self.directory)?;
+        self.validate_request(request, &self.directory)
+            .map_err(CertifiedServePayloadRetentionError::Unchanged)?;
         if self.indexed.contains(&id) {
-            let existing = self.load_id(id)?;
+            let existing = self
+                .load_id(id)
+                .map_err(CertifiedServePayloadRetentionError::Unchanged)?;
             if existing.request != *request {
-                return Err(CertifiedServePayloadStoreError::RequestHashCollision);
+                return Err(CertifiedServePayloadRetentionError::Unchanged(
+                    CertifiedServePayloadStoreError::RequestHashCollision,
+                ));
             }
+            let state = match &existing.state {
+                PersistedCertifiedServePayloadStateV1::Pending => {
+                    DurableCertifiedServeAdmissionStateV1::Pending
+                }
+                PersistedCertifiedServePayloadStateV1::Completed { response_hash, .. } => {
+                    DurableCertifiedServeAdmissionStateV1::Completed(*response_hash)
+                }
+                PersistedCertifiedServePayloadStateV1::Negative { outcome } => {
+                    DurableCertifiedServeAdmissionStateV1::Negative(*outcome)
+                }
+            };
             return Ok(DurableCertifiedServeAdmissionPublication {
                 receipt: admission_receipt(&existing, local_retainer),
-                pending: matches!(
-                    existing.state,
-                    PersistedCertifiedServePayloadStateV1::Pending
-                ),
+                state,
+                fresh_pending: false,
             });
         }
         if self.indexed.len() >= self.max_entries {
-            return Err(CertifiedServePayloadStoreError::PayloadCapacityExceeded {
-                capacity: self.max_entries,
-            });
+            return Err(CertifiedServePayloadRetentionError::Unchanged(
+                CertifiedServePayloadStoreError::PayloadCapacityExceeded {
+                    capacity: self.max_entries,
+                },
+            ));
         }
         let payload = PersistedCertifiedServePayloadV1 {
             format_version: FORMAT_VERSION,
@@ -1152,11 +1328,13 @@ impl CertifiedServePayloadStoreV1 {
             state: PersistedCertifiedServePayloadStateV1::Pending,
         };
         let receipt = admission_receipt(&payload, local_retainer);
-        self.persist_payload(&payload)?;
+        self.persist_payload(&payload)
+            .map_err(PersistPayloadError::into_retention_error)?;
         self.indexed.insert(id);
         Ok(DurableCertifiedServeAdmissionPublication {
             receipt,
-            pending: true,
+            state: DurableCertifiedServeAdmissionStateV1::Pending,
+            fresh_pending: true,
         })
     }
 
@@ -1294,38 +1472,9 @@ impl CertifiedServePayloadStoreV1 {
         Ok(())
     }
 
-    /// Persist terminal metadata from one locally authenticated response.
-    ///
-    /// The exact response body must already be durable in `body_store` under
-    /// `durable_body`. This store deliberately persists no body bytes. Exact
-    /// terminal repeats are idempotent.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the authenticated request is unknown, the response
-    /// changes its request binding or certified local retention authority, its
-    /// responder signature is invalid, the receipt/store cannot reproduce the
-    /// exact response body, another terminal result already exists, or
-    /// persistence fails.
-    #[cfg(not(test))]
-    pub(crate) fn persist_completed(
-        &mut self,
-        authenticated_request: &AuthenticatedCertifiedBodyRequest,
-        durable_body: &DurableBodyReceipt,
-        body_store: &V2BodyStore,
-        response: &wire::CertifiedBodyResponse,
-    ) -> Result<DurableCertifiedServeCompletedReceipt, CertifiedServePayloadStoreError> {
-        self.persist_completed_with_durable_body(
-            authenticated_request,
-            durable_body,
-            body_store,
-            response,
-        )
-    }
-
     /// Test-only convenience for synthetic responses that have no canonical
-    /// `SignedBlockWire` body. Production completion must provide the exact
-    /// body-store receipt through the signature above.
+    /// `SignedBlockWire` body. Production completion uses only
+    /// [`Self::persist_completed_with_exact_body`].
     #[cfg(test)]
     pub(crate) fn persist_completed(
         &mut self,
@@ -1335,26 +1484,49 @@ impl CertifiedServePayloadStoreV1 {
         if authenticated_request.request_hash() != response.request_hash {
             return Err(CertifiedServePayloadStoreError::AuthenticatedRequestHashMismatch);
         }
+        self.validate_completed_response(authenticated_request.request(), response)?;
         self.persist_completed_response(authenticated_request.request(), response)
+            .map_err(CertifiedServeTerminalPersistenceError::into_store_error)
     }
 
+    /// Persist completion through one caller-retained exact body-store owner.
+    ///
+    /// This is the sole production completion writer. It reloads canonical
+    /// bytes through the caller-retained exact body-store owner; the synthetic
+    /// two-argument test helper never crosses the lifecycle-owner boundary.
     #[cfg(any(not(test), feature = "bls"))]
-    fn persist_completed_with_durable_body(
+    pub(super) fn persist_completed_with_exact_body(
         &mut self,
         authenticated_request: &AuthenticatedCertifiedBodyRequest,
         durable_body: &DurableBodyReceipt,
         body_store: &V2BodyStore,
         response: &wire::CertifiedBodyResponse,
-    ) -> Result<DurableCertifiedServeCompletedReceipt, CertifiedServePayloadStoreError> {
+    ) -> Result<DurableCertifiedServeCompletedReceipt, CertifiedServeTerminalPersistenceError> {
         if authenticated_request.request_hash() != response.request_hash {
-            return Err(CertifiedServePayloadStoreError::AuthenticatedRequestHashMismatch);
+            return Err(CertifiedServeTerminalPersistenceError::InputRejected(
+                CertifiedServePayloadStoreError::AuthenticatedRequestHashMismatch,
+            ));
         }
-        self.validate_durable_response_body(
+        if let Err(error) = self.validate_durable_response_body(
             authenticated_request.request(),
             durable_body,
             body_store,
             response,
-        )?;
+        ) {
+            return Err(
+                if matches!(
+                    &error,
+                    CertifiedServePayloadStoreError::DurableBodyReceiptMismatch
+                        | CertifiedServePayloadStoreError::DurableResponseBodyMismatch
+                ) {
+                    CertifiedServeTerminalPersistenceError::InputRejected(error)
+                } else {
+                    CertifiedServeTerminalPersistenceError::StoreInvariant(error)
+                },
+            );
+        }
+        self.validate_completed_response(authenticated_request.request(), response)
+            .map_err(CertifiedServeTerminalPersistenceError::InputRejected)?;
         self.persist_completed_response(authenticated_request.request(), response)
     }
 
@@ -1362,16 +1534,21 @@ impl CertifiedServePayloadStoreV1 {
         &mut self,
         authenticated_request: &wire::CertifiedBodyRequest,
         response: &wire::CertifiedBodyResponse,
-    ) -> Result<DurableCertifiedServeCompletedReceipt, CertifiedServePayloadStoreError> {
+    ) -> Result<DurableCertifiedServeCompletedReceipt, CertifiedServeTerminalPersistenceError> {
         let id = CertifiedServePayloadId(response.request_hash);
         if !self.indexed.contains(&id) {
-            return Err(CertifiedServePayloadStoreError::UnknownPayload);
+            return Err(CertifiedServeTerminalPersistenceError::StoreInvariant(
+                CertifiedServePayloadStoreError::UnknownPayload,
+            ));
         }
-        let mut payload = self.load_id(id)?;
+        let mut payload = self
+            .load_id(id)
+            .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant)?;
         if payload.request != *authenticated_request {
-            return Err(CertifiedServePayloadStoreError::AuthenticatedRequestHashMismatch);
+            return Err(CertifiedServeTerminalPersistenceError::StoreInvariant(
+                CertifiedServePayloadStoreError::AuthenticatedRequestHashMismatch,
+            ));
         }
-        self.validate_completed_response(&payload.request, response)?;
         let completed = PersistedCertifiedServePayloadStateV1::Completed {
             response_hash: HashOf::new(response),
             manifest: response.manifest.clone(),
@@ -1383,20 +1560,26 @@ impl CertifiedServePayloadStoreV1 {
             existing @ PersistedCertifiedServePayloadStateV1::Completed { .. }
                 if existing == &completed =>
             {
-                return completed_receipt(&payload);
+                return completed_receipt(&payload)
+                    .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant);
             }
             PersistedCertifiedServePayloadStateV1::Completed { .. }
             | PersistedCertifiedServePayloadStateV1::Negative { .. } => {
-                return Err(CertifiedServePayloadStoreError::TerminalConflict);
+                return Err(CertifiedServeTerminalPersistenceError::StoreInvariant(
+                    CertifiedServePayloadStoreError::TerminalConflict,
+                ));
             }
         }
         payload.state = completed;
-        let receipt = completed_receipt(&payload)?;
-        self.persist_payload(&payload)?;
+        let receipt = completed_receipt(&payload)
+            .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant)?;
+        self.persist_payload(&payload)
+            .map_err(PersistPayloadError::into_terminal_error)?;
         Ok(receipt)
     }
 
-    /// Persist one deterministic negative terminal result.
+    /// Test one deterministic negative terminal result from a synthetic
+    /// request-id fixture.
     ///
     /// Exact repeats are idempotent; neither a different negative tag nor a
     /// completed response can replace a durable terminal result.
@@ -1405,32 +1588,83 @@ impl CertifiedServePayloadStoreV1 {
     ///
     /// Returns an error when `id` is unknown, a conflicting terminal result
     /// exists, or persistence fails.
+    #[cfg(test)]
     pub(crate) fn persist_negative(
         &mut self,
         id: CertifiedServePayloadId,
         outcome: CertifiedServePayloadNegativeOutcome,
     ) -> Result<DurableCertifiedServeNegativeReceipt, CertifiedServePayloadStoreError> {
+        self.persist_negative_inner(id, outcome)
+            .map_err(CertifiedServeTerminalPersistenceError::into_store_error)
+    }
+
+    fn persist_negative_inner(
+        &mut self,
+        id: CertifiedServePayloadId,
+        outcome: CertifiedServePayloadNegativeOutcome,
+    ) -> Result<DurableCertifiedServeNegativeReceipt, CertifiedServeTerminalPersistenceError> {
         if !self.indexed.contains(&id) {
-            return Err(CertifiedServePayloadStoreError::UnknownPayload);
+            return Err(CertifiedServeTerminalPersistenceError::StoreInvariant(
+                CertifiedServePayloadStoreError::UnknownPayload,
+            ));
         }
-        let mut payload = self.load_id(id)?;
+        let mut payload = self
+            .load_id(id)
+            .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant)?;
         let negative = PersistedCertifiedServePayloadStateV1::Negative { outcome };
         match &payload.state {
             PersistedCertifiedServePayloadStateV1::Pending => {}
             existing @ PersistedCertifiedServePayloadStateV1::Negative { .. }
                 if existing == &negative =>
             {
-                return negative_receipt(&payload);
+                return negative_receipt(&payload)
+                    .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant);
             }
             PersistedCertifiedServePayloadStateV1::Completed { .. }
             | PersistedCertifiedServePayloadStateV1::Negative { .. } => {
-                return Err(CertifiedServePayloadStoreError::TerminalConflict);
+                return Err(CertifiedServeTerminalPersistenceError::StoreInvariant(
+                    CertifiedServePayloadStoreError::TerminalConflict,
+                ));
             }
         }
         payload.state = negative;
-        let receipt = negative_receipt(&payload)?;
-        self.persist_payload(&payload)?;
+        let receipt = negative_receipt(&payload)
+            .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant)?;
+        self.persist_payload(&payload)
+            .map_err(PersistPayloadError::into_terminal_error)?;
         Ok(receipt)
+    }
+
+    /// Persist a negative result for the exact authenticated request.
+    ///
+    /// The opaque payload id is derived inside this store. Callers cannot
+    /// splice an authenticated request onto a separately supplied id.
+    pub(super) fn persist_negative_for_authenticated_request(
+        &mut self,
+        authenticated_request: &AuthenticatedCertifiedBodyRequest,
+        outcome: CertifiedServePayloadNegativeOutcome,
+    ) -> Result<DurableCertifiedServeNegativeReceipt, CertifiedServeTerminalPersistenceError> {
+        let request = authenticated_request.request();
+        if authenticated_request.request_hash() != HashOf::new(request) {
+            return Err(CertifiedServeTerminalPersistenceError::StoreInvariant(
+                CertifiedServePayloadStoreError::AuthenticatedRequestHashMismatch,
+            ));
+        }
+        let id = CertifiedServePayloadId::from_request(request);
+        if !self.indexed.contains(&id) {
+            return Err(CertifiedServeTerminalPersistenceError::StoreInvariant(
+                CertifiedServePayloadStoreError::UnknownPayload,
+            ));
+        }
+        let payload = self
+            .load_id(id)
+            .map_err(CertifiedServeTerminalPersistenceError::StoreInvariant)?;
+        if payload.request != *request {
+            return Err(CertifiedServeTerminalPersistenceError::StoreInvariant(
+                CertifiedServePayloadStoreError::AuthenticatedRequestHashMismatch,
+            ));
+        }
+        self.persist_negative_inner(id, outcome)
     }
 
     fn validate_request(
@@ -1465,6 +1699,9 @@ impl CertifiedServePayloadStoreV1 {
             || response.manifest.subject != request.subject
             || durable_body.manifest_hash() != HashOf::new(&response.manifest)
         {
+            return Err(CertifiedServePayloadStoreError::DurableBodyReceiptMismatch);
+        }
+        if !body_store.owns_receipt(durable_body) {
             return Err(CertifiedServePayloadStoreError::DurableBodyReceiptMismatch);
         }
         let canonical_body = body_store
@@ -1650,38 +1887,68 @@ impl CertifiedServePayloadStoreV1 {
     }
 
     fn persist_payload(
-        &self,
+        &mut self,
         payload: &PersistedCertifiedServePayloadV1,
-    ) -> Result<(), CertifiedServePayloadStoreError> {
+    ) -> Result<(), PersistPayloadError> {
         let path = self.path_for(payload.id());
-        self.validate_recovered_payload(payload, &path)?;
-        let (frame, _) = encode_frame(payload, self.max_entry_bytes)?;
+        self.validate_recovered_payload(payload, &path)
+            .map_err(PersistPayloadError::Unpublished)?;
+        let (frame, _) = encode_frame(payload, self.max_entry_bytes)
+            .map_err(PersistPayloadError::Unpublished)?;
         let temporary = self.temporary_path(payload.id());
         match fs::symlink_metadata(&temporary) {
             Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-                return Err(CertifiedServePayloadStoreError::NonRegularEntry(temporary));
+                return Err(PersistPayloadError::Unpublished(
+                    CertifiedServePayloadStoreError::NonRegularEntry(temporary),
+                ));
             }
             Ok(_) => {
                 fs::remove_file(&temporary)
-                    .map_err(|source| io_error("discard interrupted file", &temporary, source))?;
-                sync_directory(&self.directory)?;
+                    .map_err(|source| io_error("discard interrupted file", &temporary, source))
+                    .map_err(PersistPayloadError::Unpublished)?;
+                sync_directory(&self.directory).map_err(PersistPayloadError::Unpublished)?;
             }
             Err(error) if error.kind() == ErrorKind::NotFound => {}
-            Err(source) => return Err(io_error("inspect temporary file", &temporary, source)),
+            Err(source) => {
+                return Err(PersistPayloadError::Unpublished(io_error(
+                    "inspect temporary file",
+                    &temporary,
+                    source,
+                )));
+            }
         }
         let mut file = OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(&temporary)
-            .map_err(|source| io_error("create temporary file", &temporary, source))?;
+            .map_err(|source| io_error("create temporary file", &temporary, source))
+            .map_err(PersistPayloadError::Unpublished)?;
         file.write_all(&frame)
             .and_then(|()| file.flush())
             .and_then(|()| file.sync_all())
-            .map_err(|source| io_error("synchronise temporary file", &temporary, source))?;
+            .map_err(|source| io_error("synchronise temporary file", &temporary, source))
+            .map_err(PersistPayloadError::Unpublished)?;
         drop(file);
-        fs::rename(&temporary, &path).map_err(|source| io_error("publish file", &path, source))?;
-        sync_directory(&self.directory)?;
+        fs::rename(&temporary, &path)
+            .map_err(|source| io_error("publish file", &path, source))
+            .map_err(PersistPayloadError::Unpublished)?;
+        #[cfg(test)]
+        if std::mem::take(&mut self.fail_next_publish_directory_sync) {
+            return Err(PersistPayloadError::PublishedButUnsynchronized(io_error(
+                "synchronise directory after published file",
+                &self.directory,
+                std::io::Error::other("injected post-rename directory sync failure"),
+            )));
+        }
+        sync_directory(&self.directory).map_err(PersistPayloadError::PublishedButUnsynchronized)?;
         Ok(())
+    }
+
+    /// Inject one admission publication failure after rename and before the
+    /// final directory fsync.
+    #[cfg(test)]
+    pub(crate) fn fail_next_publish_directory_sync_for_test(&mut self) {
+        self.fail_next_publish_directory_sync = true;
     }
 
     fn path_for(&self, id: CertifiedServePayloadId) -> PathBuf {
@@ -2337,6 +2604,23 @@ mod tests {
     }
 
     #[test]
+    fn payload_store_instance_identity_distinguishes_same_path_reopen() {
+        let temporary = TempDir::new().expect("temporary identity payload store");
+        let (context, _) = context_and_keys();
+        let (store, _) = CertifiedServePayloadStoreV1::open(temporary.path(), &context)
+            .expect("open first payload-store instance");
+        let first = store.instance_identity();
+        assert!(first.same_instance(&store.instance_identity()));
+
+        let (reopened, _) = CertifiedServePayloadStoreV1::open(temporary.path(), &context)
+            .expect("reopen the same payload-store path independently");
+        assert!(
+            !first.same_instance(&reopened.instance_identity()),
+            "path and context equality cannot substitute for exact Serve-store ownership"
+        );
+    }
+
+    #[test]
     fn pending_and_completed_payload_round_trip_by_signed_request_hash() {
         let temporary = TempDir::new().expect("temporary directory");
         let (context, keys) = context_and_keys();
@@ -2480,6 +2764,34 @@ mod tests {
 
     #[cfg(feature = "bls")]
     #[test]
+    fn only_the_call_that_created_pending_owns_preledger_abort_authority() {
+        let temporary = TempDir::new().expect("temporary fresh Pending authority store");
+        let (verified, keys) = verified_bls_context_and_keys();
+        let request = bls_request(&verified, &keys, true);
+        let (mut store, _) =
+            CertifiedServePayloadStoreV1::open(temporary.path(), verified.context())
+                .expect("open fresh Pending authority store");
+
+        let fresh = store
+            .retain_for_admission_with_verified_retention(&verified, &keys[0], &request)
+            .expect("create exact Pending frame");
+        assert!(fresh.can_abort_fresh_pending());
+        assert_eq!(
+            fresh.state(),
+            DurableCertifiedServeAdmissionStateV1::Pending
+        );
+        let receipt = fresh.receipt();
+        drop(fresh);
+
+        let repeated = store
+            .retain_for_admission_with_verified_retention(&verified, &keys[0], &request)
+            .expect("reuse exact Pending frame");
+        assert!(!repeated.can_abort_fresh_pending());
+        assert_eq!(repeated.receipt(), receipt);
+    }
+
+    #[cfg(feature = "bls")]
+    #[test]
     fn recovery_cut_reauthenticates_request_qc_and_typed_negative() {
         let temporary = TempDir::new().expect("temporary directory");
         let (verified, keys) = verified_bls_context_and_keys();
@@ -2591,22 +2903,26 @@ mod tests {
         let foreign_body_store =
             V2BodyStore::open(temporary.path(), foreign_context).expect("open foreign body store");
         assert!(matches!(
-            payload_store.persist_completed_with_durable_body(
+            payload_store.persist_completed_with_exact_body(
                 &request,
                 &durable_body,
                 &foreign_body_store,
                 &response,
             ),
-            Err(CertifiedServePayloadStoreError::ForeignBodyStore)
+            Err(CertifiedServeTerminalPersistenceError::StoreInvariant(
+                CertifiedServePayloadStoreError::ForeignBodyStore
+            ))
         ));
         assert!(matches!(
-            payload_store.persist_completed_with_durable_body(
+            payload_store.persist_completed_with_exact_body(
                 &request,
                 &other_durable_body,
                 &body_store,
                 &response,
             ),
-            Err(CertifiedServePayloadStoreError::DurableBodyReceiptMismatch)
+            Err(CertifiedServeTerminalPersistenceError::InputRejected(
+                CertifiedServePayloadStoreError::DurableBodyReceiptMismatch
+            ))
         ));
 
         let mut changed_manifest = manifest.clone();
@@ -2614,13 +2930,15 @@ mod tests {
         let response_with_changed_manifest =
             signed_certified_response(&request, changed_manifest, body.clone(), 0, &keys);
         assert!(matches!(
-            payload_store.persist_completed_with_durable_body(
+            payload_store.persist_completed_with_exact_body(
                 &request,
                 &durable_body,
                 &body_store,
                 &response_with_changed_manifest,
             ),
-            Err(CertifiedServePayloadStoreError::DurableBodyReceiptMismatch)
+            Err(CertifiedServeTerminalPersistenceError::InputRejected(
+                CertifiedServePayloadStoreError::DurableBodyReceiptMismatch
+            ))
         ));
 
         let mut changed_body = body;
@@ -2628,28 +2946,25 @@ mod tests {
         let response_with_changed_body =
             signed_certified_response(&request, manifest, changed_body, 0, &keys);
         assert!(matches!(
-            payload_store.persist_completed_with_durable_body(
+            payload_store.persist_completed_with_exact_body(
                 &request,
                 &durable_body,
                 &body_store,
                 &response_with_changed_body,
             ),
-            Err(CertifiedServePayloadStoreError::DurableResponseBodyMismatch)
+            Err(CertifiedServeTerminalPersistenceError::InputRejected(
+                CertifiedServePayloadStoreError::DurableResponseBodyMismatch
+            ))
         ));
 
         let completed = payload_store
-            .persist_completed_with_durable_body(&request, &durable_body, &body_store, &response)
+            .persist_completed_with_exact_body(&request, &durable_body, &body_store, &response)
             .expect("persist receipt-backed completed response");
         assert_eq!(completed.id(), pending.id());
         assert_eq!(completed.response_hash(), HashOf::new(&response));
         assert_eq!(
             payload_store
-                .persist_completed_with_durable_body(
-                    &request,
-                    &durable_body,
-                    &body_store,
-                    &response,
-                )
+                .persist_completed_with_exact_body(&request, &durable_body, &body_store, &response,)
                 .expect("exact receipt-backed completion is idempotent"),
             completed
         );
@@ -2678,7 +2993,7 @@ mod tests {
         let responder = 1;
         let response = signed_certified_response(&request, manifest, body, responder, &keys);
         payload_store
-            .persist_completed_with_durable_body(&request, &durable_body, &body_store, &response)
+            .persist_completed_with_exact_body(&request, &durable_body, &body_store, &response)
             .expect("persist completed response");
         drop(payload_store);
 

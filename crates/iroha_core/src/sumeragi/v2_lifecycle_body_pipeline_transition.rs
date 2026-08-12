@@ -7,9 +7,11 @@ use super::{
     PredecessorScope, TerminalOutcome, TurnLease,
     schema::{DurableContinuation, DurableContinuationEdge, DurablePayloadReference},
     work_registry::{
-        PreparedCertifiedFetchStoreSuccessor, PreparedDurableStoreValidateSuccessor,
-        PreparedInvalidBodyReportReplayPreAdmission, PreparedReadyDurableValidateAdapterPreview,
-        SealedBodySuccessorProjectionError, SealedValidateTerminalProjectionError,
+        LiveValidateSignRegistryPublicationError, PreparedCertifiedFetchStoreSuccessor,
+        PreparedDurableStoreValidateSuccessor, PreparedInvalidBodyReportReplayPreAdmission,
+        PreparedLiveValidateSignRegistryPublication, PreparedReadyDurableValidateAdapterPreview,
+        PreparedReadyDurableValidatePersistedSignPreAdmission, SealedBodySuccessorProjectionError,
+        SealedValidateTerminalProjectionError,
     },
 };
 use crate::sumeragi::v2::VerifiedHeightContext;
@@ -142,30 +144,26 @@ pub(super) fn durable_continuation_successor_is_exact(
 
 /// Return whether one durable continuation preserves its exact body frame.
 ///
-/// Fetch has no durable body before its completion. Its Store successor must
-/// install the exact fsynced frame, Store→Validate and Validate→Apply retain
-/// that frame byte-for-byte, and a mixed or substituted pair is never
-/// recoverable. Sign and diagnostic successors own separate replay authority
-/// and therefore retain no body-frame payload themselves.
+/// A Ready Fetch and its Store successor retain the exact same fsynced frame.
+/// Store→Validate and Validate→Apply likewise preserve that frame byte-for-byte,
+/// and a payload-free, mixed, or substituted pair is never recoverable. Sign
+/// and diagnostic successors own separate replay authority and therefore
+/// retain no body-frame payload themselves.
 pub(super) fn durable_continuation_payload_is_exact(
     edge: DurableContinuationEdge,
     parent: DurablePayloadReference,
     child: DurablePayloadReference,
 ) -> bool {
     match edge {
-        DurableContinuationEdge::FetchToStore => {
-            parent == DurablePayloadReference::None
-                && matches!(child, DurablePayloadReference::BodyFrame(_))
-        }
-        DurableContinuationEdge::StoreToValidate | DurableContinuationEdge::ValidateToApply => {
-            match (parent, child) {
-                (
-                    DurablePayloadReference::BodyFrame(parent),
-                    DurablePayloadReference::BodyFrame(child),
-                ) => parent == child,
-                _ => false,
-            }
-        }
+        DurableContinuationEdge::FetchToStore
+        | DurableContinuationEdge::StoreToValidate
+        | DurableContinuationEdge::ValidateToApply => match (parent, child) {
+            (
+                DurablePayloadReference::BodyFrame(parent),
+                DurablePayloadReference::BodyFrame(child),
+            ) => parent == child,
+            _ => false,
+        },
         DurableContinuationEdge::ValidateToInvalidBodyReport
         | DurableContinuationEdge::ValidateToSignPrepare
         | DurableContinuationEdge::ValidateToSignCommit => {
@@ -198,6 +196,7 @@ pub(super) enum BodyStageTransitionError {
     /// The child effect and sealed binding did not project in this height.
     Projection(AdapterEffectAdmissionError),
     /// The durable validation receipt does not bind the Apply certificate.
+    #[cfg(test)]
     InvalidValidationReceipt,
     /// The durable body receipt does not reproduce this row's exact frame.
     InvalidBodyFrameReference,
@@ -288,6 +287,30 @@ impl SealedInvalidBodyReportProjectionPermit {
     }
 }
 
+/// One-shot authority for projecting the already-bound post-WAL Sign child.
+///
+/// The pre-WAL ordinary-to-Commit refinement has already consumed its opaque
+/// registered-Prepare capability. This permit lets the fixed transition read
+/// only the resulting nested replay authority; it cannot ask the runtime to
+/// derive another pending owner.
+pub(in crate::sumeragi) struct SealedValidateSignProjectionPermit {
+    _linearity: SealedValidateSignProjectionLinearity,
+}
+
+struct SealedValidateSignProjectionLinearity;
+
+impl Drop for SealedValidateSignProjectionLinearity {
+    fn drop(&mut self) {}
+}
+
+impl SealedValidateSignProjectionPermit {
+    fn new() -> Self {
+        Self {
+            _linearity: SealedValidateSignProjectionLinearity,
+        }
+    }
+}
+
 /// Opaque registry-derived inputs for one no-successor Validate cut.
 ///
 /// Fields are private to this module. The registry can construct the value
@@ -331,6 +354,35 @@ impl SealedInvalidBodyReportProjection {
     /// Close registry/adapter-derived coordinates under the transition permit.
     pub(super) fn from_registry(
         _permit: SealedInvalidBodyReportProjectionPermit,
+        lease: TurnLease,
+        candidate: CandidateAdmission,
+        parent_payload: DurablePayloadReference,
+    ) -> Self {
+        Self {
+            lease,
+            candidate,
+            parent_payload,
+        }
+    }
+}
+
+/// Opaque registry/adapter projection of one exact post-WAL Sign successor.
+///
+/// Candidate and BodyFrame authority are visible only inside this transition
+/// module. The owning pre-admission remains intact beside the staged
+/// coordinator until the registry reservation and LedgerV1 transaction take
+/// over.
+#[must_use = "a sealed Validate Sign projection has not entered coordinator staging"]
+pub(super) struct SealedValidateSignProjection {
+    lease: TurnLease,
+    candidate: CandidateAdmission,
+    parent_payload: DurablePayloadReference,
+}
+
+impl SealedValidateSignProjection {
+    /// Close registry-derived coordinates under the transition permit.
+    pub(super) fn from_registry(
+        _permit: SealedValidateSignProjectionPermit,
         lease: TurnLease,
         candidate: CandidateAdmission,
         parent_payload: DurablePayloadReference,
@@ -966,6 +1018,64 @@ pub(super) struct PreparedSealedValidateReportTransition<'coordinator, 'registry
     child_digest: super::LifecycleDigest,
 }
 
+/// Fully staged live Validate-to-Sign transaction retaining every authority
+/// provider until LedgerV1 and in-memory publication commit as one cut.
+///
+/// The child candidate came only from the nested post-WAL replay/pending seal.
+/// No registry address is detached and no live coordinator state is changed
+/// during preparation.
+#[must_use = "a sealed live Validate-to-Sign transition has not been published"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) struct PreparedSealedValidateSignTransition<'coordinator, 'registry, 'adapter> {
+    coordinator: &'coordinator mut LifecycleCoordinator,
+    publication: PreparedReadyDurableValidatePersistedSignPreAdmission<'registry, 'adapter>,
+    staged: LifecycleCoordinator,
+    lease: TurnLease,
+    edge: DurableContinuationEdge,
+    parent_ordinal: u128,
+    child_ordinal: u128,
+    child_slot: PhysicalSlotId,
+    child_digest: super::LifecycleDigest,
+}
+
+#[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
+enum SealedValidateSignTransitionFailure {
+    MissingLedgerStore,
+    Projection(SealedValidateTerminalProjectionError),
+    Stage(BodyStageTransitionError),
+}
+
+/// Pre-publication error retaining the complete post-WAL fixed join.
+#[must_use = "failed Validate-to-Sign staging still owns post-WAL authority"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) struct SealedValidateSignTransitionError<'registry, 'adapter> {
+    _publication: PreparedReadyDurableValidatePersistedSignPreAdmission<'registry, 'adapter>,
+    _failure: SealedValidateSignTransitionFailure,
+}
+
+#[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
+enum LiveValidateSignPublicationFailure<'registry, 'adapter> {
+    Registry(LiveValidateSignRegistryPublicationError<'registry, 'adapter>),
+    Ledger {
+        _error: super::ledger::LifecycleLedgerError,
+        _publication: PreparedLiveValidateSignRegistryPublication<'registry, 'adapter>,
+    },
+}
+
+/// Restart-only publication error retaining the staged coordinator and every
+/// detached registry/adapter authority.
+///
+/// If LedgerV1 persistence was ambiguous, the detached parent remains
+/// non-restoring and adapter Drop latches fail-closed. Recovery must reopen the
+/// WAL and LedgerV1 instead of reconstructing the old volatile parent.
+#[must_use = "failed live Validate-to-Sign publication requires restart"]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) struct LiveValidateSignPublicationError<'coordinator, 'registry, 'adapter> {
+    _coordinator: &'coordinator mut LifecycleCoordinator,
+    _staged: LifecycleCoordinator,
+    _failure: LiveValidateSignPublicationFailure<'registry, 'adapter>,
+}
+
 #[allow(dead_code, variant_size_differences, clippy::large_enum_variant)]
 enum SealedValidateReportTransitionFailure {
     Projection(SealedValidateTerminalProjectionError),
@@ -981,6 +1091,87 @@ pub(super) struct SealedValidateReportTransitionError<'registry, 'adapter> {
 }
 
 impl LifecycleCoordinator {
+    /// Stage the sole live post-WAL Validate-to-Sign transaction.
+    ///
+    /// A first-release node must have an attached LedgerV1 store. The child is
+    /// projected from the already-bound replay seal under a one-shot permit,
+    /// then the existing adjacent-body reducer stages the typed parent
+    /// `Advanced` tombstone and exact Prepare/Commit Sign child.
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(clippy::result_large_err)]
+    pub(super) fn prepare_sealed_validate_sign_transition<'coordinator, 'registry, 'adapter>(
+        &'coordinator mut self,
+        lease: &TurnLease,
+        verified: &VerifiedHeightContext,
+        publication: PreparedReadyDurableValidatePersistedSignPreAdmission<'registry, 'adapter>,
+    ) -> Result<
+        PreparedSealedValidateSignTransition<'coordinator, 'registry, 'adapter>,
+        SealedValidateSignTransitionError<'registry, 'adapter>,
+    > {
+        if self.ledger_store.is_none() {
+            return Err(SealedValidateSignTransitionError {
+                _publication: publication,
+                _failure: SealedValidateSignTransitionFailure::MissingLedgerStore,
+            });
+        }
+        let projection = match publication.project_for_body_transition(
+            SealedValidateSignProjectionPermit::new(),
+            lease,
+            verified,
+        ) {
+            Ok(projection) => projection,
+            Err(error) => {
+                return Err(SealedValidateSignTransitionError {
+                    _publication: publication,
+                    _failure: SealedValidateSignTransitionFailure::Projection(error),
+                });
+            }
+        };
+        let SealedValidateSignProjection {
+            lease: projected_lease,
+            candidate,
+            parent_payload,
+        } = projection;
+        let edge = match candidate.key.phase() {
+            LifecyclePhase::Prepare => DurableContinuationEdge::ValidateToSignPrepare,
+            LifecyclePhase::Commit => DurableContinuationEdge::ValidateToSignCommit,
+            _ => {
+                return Err(SealedValidateSignTransitionError {
+                    _publication: publication,
+                    _failure: SealedValidateSignTransitionFailure::Projection(
+                        SealedValidateTerminalProjectionError::InvalidCarrier,
+                    ),
+                });
+            }
+        };
+        let transition = match stage_body_stage_transition(
+            self,
+            &projected_lease,
+            candidate,
+            parent_payload,
+            edge,
+        ) {
+            Ok(transition) => transition,
+            Err(error) => {
+                return Err(SealedValidateSignTransitionError {
+                    _publication: publication,
+                    _failure: SealedValidateSignTransitionFailure::Stage(error),
+                });
+            }
+        };
+        Ok(PreparedSealedValidateSignTransition {
+            coordinator: self,
+            publication,
+            staged: transition.staged,
+            lease: projected_lease,
+            edge,
+            parent_ordinal: transition.parent_ordinal,
+            child_ordinal: transition.child_ordinal,
+            child_slot: transition.child_slot,
+            child_digest: transition.child_digest,
+        })
+    }
+
     /// Consume one sealed inactive or no-effect Validate preview into an inert
     /// no-successor coordinator cut.
     ///
@@ -1052,11 +1243,12 @@ impl LifecycleCoordinator {
         let candidate = successor
             .project_for_body_transition(lease, verified)
             .map_err(map_sealed_successor_projection_error)?;
+        let parent_payload = candidate.payload;
         let transition = stage_body_stage_transition(
             self,
             lease,
             candidate,
-            DurablePayloadReference::None,
+            parent_payload,
             DurableContinuationEdge::FetchToStore,
         )?;
         Ok(PreparedSealedBodyStageTransition {
@@ -1165,6 +1357,65 @@ impl LifecycleCoordinator {
             child_slot: transition.child_slot,
             child_digest: transition.child_digest,
         })
+    }
+}
+
+impl<'coordinator, 'registry, 'adapter>
+    PreparedSealedValidateSignTransition<'coordinator, 'registry, 'adapter>
+{
+    /// Reserve the exact concrete replacement, fsync the matching LedgerV1
+    /// successor, then publish only infallible in-memory swaps.
+    ///
+    /// Registry preparation converts the existing recovered-WAL restorable cut
+    /// into its non-restoring live form before storage I/O. Thus every error
+    /// returned here owns restart-only authority and can never put the volatile
+    /// Validate parent back beside an advanced durable ledger.
+    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(clippy::result_large_err)]
+    pub(super) fn persist_and_publish(
+        self,
+    ) -> Result<(), LiveValidateSignPublicationError<'coordinator, 'registry, 'adapter>> {
+        let Self {
+            coordinator,
+            publication,
+            staged,
+            lease,
+            edge: _,
+            parent_ordinal,
+            child_ordinal,
+            child_slot,
+            child_digest,
+        } = self;
+        let registry = match publication.prepare_registry_publication(
+            &lease,
+            child_ordinal,
+            child_slot,
+            child_digest,
+        ) {
+            Ok(registry) => registry,
+            Err(error) => {
+                return Err(LiveValidateSignPublicationError {
+                    _coordinator: coordinator,
+                    _staged: staged,
+                    _failure: LiveValidateSignPublicationFailure::Registry(error),
+                });
+            }
+        };
+        debug_assert_eq!(lease.ordinal(), parent_ordinal);
+        if let Err(error) = coordinator.persist_exact_staged_successor(&staged) {
+            return Err(LiveValidateSignPublicationError {
+                _coordinator: coordinator,
+                _staged: staged,
+                _failure: LiveValidateSignPublicationFailure::Ledger {
+                    _error: error,
+                    _publication: registry,
+                },
+            });
+        }
+
+        *coordinator = staged;
+        registry.publish_after_ledger_fsync();
+        Ok(())
     }
 }
 
@@ -1359,6 +1610,11 @@ mod static_tests {
         );
         assert!(durable_continuation_payload_is_exact(
             DurableContinuationEdge::FetchToStore,
+            frame,
+            frame,
+        ));
+        assert!(!durable_continuation_payload_is_exact(
+            DurableContinuationEdge::FetchToStore,
             DurablePayloadReference::None,
             frame,
         ));
@@ -1487,6 +1743,15 @@ mod static_tests {
             .nth(1)
             .and_then(|suffix| suffix.split("#[cfg(test)]\nfn digest_from_hash").next())
             .expect("sealed Validate report entrypoint has one bounded body");
+        let sealed_sign = production
+            .split("pub(super) fn prepare_sealed_validate_sign_transition")
+            .nth(1)
+            .and_then(|suffix| {
+                suffix
+                    .split("/// Consume one sealed inactive or no-effect Validate preview")
+                    .next()
+            })
+            .expect("sealed Validate-to-Sign entrypoint has one bounded body");
         assert!(sealed_fetch.contains("PreparedCertifiedFetchStoreSuccessor<'registry>"));
         assert!(sealed_store.contains("PreparedDurableStoreValidateSuccessor<'registry>"));
         for sealed in [sealed_fetch, sealed_store] {
@@ -1521,6 +1786,32 @@ mod static_tests {
         );
         assert!(sealed_report.contains("SealedInvalidBodyReportProjectionPermit::new()"));
         assert!(sealed_report.contains("_report: report"));
+        for required in [
+            "self.ledger_store.is_none()",
+            "publication.project_for_body_transition(",
+            "SealedValidateSignProjectionPermit::new()",
+            "DurableContinuationEdge::ValidateToSignPrepare",
+            "DurableContinuationEdge::ValidateToSignCommit",
+            "stage_body_stage_transition(",
+            "PreparedSealedValidateSignTransition",
+        ] {
+            assert!(
+                sealed_sign.contains(required),
+                "sealed Validate-to-Sign entrypoint omitted {required}"
+            );
+        }
+        for forbidden in [
+            "&AdapterEffect",
+            "&PendingRuntimeEffectBinding",
+            "&DurableBodyReceipt",
+            "projection::admission_request",
+            "persist_durable_projection",
+        ] {
+            assert!(
+                !sealed_sign.contains(forbidden),
+                "sealed Validate-to-Sign entrypoint exposes {forbidden}"
+            );
+        }
         for sealed in [sealed_no_successor, sealed_report] {
             for forbidden in [
                 "&DurableBodyReceipt",
@@ -1589,6 +1880,11 @@ mod static_tests {
                 "impl Drop for SealedInvalidBodyReportProjectionLinearity",
                 "SealedInvalidBodyReportProjectionPermit::new()",
             ),
+            (
+                "pub(in crate::sumeragi) struct SealedValidateSignProjectionPermit",
+                "impl Drop for SealedValidateSignProjectionLinearity",
+                "SealedValidateSignProjectionPermit::new()",
+            ),
         ] {
             assert!(production.contains(permit));
             assert!(production.contains(linearity));
@@ -1632,6 +1928,77 @@ mod static_tests {
                 );
             }
         }
+
+        let publication = production
+            .split("pub(super) fn persist_and_publish(")
+            .nth(1)
+            .and_then(|suffix| suffix.split("\n}\n\n#[cfg(test)]").next())
+            .expect("live Validate-to-Sign publication has one bounded body");
+        let registry_preflight = publication
+            .find("prepare_registry_publication(")
+            .expect("registry reservation precedes fsync");
+        let ledger_fsync = publication
+            .find("persist_exact_staged_successor(&staged)")
+            .expect("exact LedgerV1 fsync is mandatory");
+        let coordinator_swap = publication
+            .find("*coordinator = staged")
+            .expect("coordinator swap follows fsync");
+        let adapter_swap = publication
+            .find("registry.publish_after_ledger_fsync()")
+            .expect("registry and adapter publication follows coordinator swap");
+        assert!(registry_preflight < ledger_fsync);
+        assert!(ledger_fsync < coordinator_swap && coordinator_swap < adapter_swap);
+        let post_fsync = &publication[coordinator_swap..];
+        for forbidden in [
+            "?",
+            "return Err",
+            "publish_status",
+            "persist_durable_projection",
+            "persist_exact_staged_successor",
+        ] {
+            assert!(
+                !post_fsync.contains(forbidden),
+                "post-fsync publication acquired fallible work through {forbidden}"
+            );
+        }
+
+        let exact_fsync_callers = production
+            .matches(".persist_exact_staged_successor(")
+            .count()
+            + [
+                include_str!("v2.rs"),
+                include_str!("v2_effects.rs"),
+                include_str!("v2_runner.rs"),
+                include_str!("v2_worker.rs"),
+                include_str!("v2_runtime.rs"),
+                include_str!("v2_lifecycle_concrete_admission.rs"),
+                include_str!("v2_lifecycle_work_registry.rs"),
+            ]
+            .iter()
+            .map(|source| {
+                source
+                    .split("\n#[cfg(test)]\nmod tests {")
+                    .next()
+                    .expect("caller source has a production prefix")
+                    .matches(".persist_exact_staged_successor(")
+                    .count()
+            })
+            .sum::<usize>();
+        assert_eq!(
+            exact_fsync_callers, 1,
+            "the sealed live Validate-to-Sign transaction must be the sole exact-fsync caller"
+        );
+        let ledger_production = include_str!("v2_lifecycle_ledger.rs")
+            .split("\n#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("ledger source has one production prefix");
+        assert_eq!(
+            ledger_production
+                .matches(".persist_exact_successor(")
+                .count(),
+            1,
+            "the same staged transaction helper must be the sole exact-store successor caller"
+        );
     }
 }
 
@@ -1883,16 +2250,17 @@ mod tests {
             aggregate_signature: vec![0x51],
         };
         let manifest = body_manifest(&verified, round, subject);
+        let certified_sources = context
+            .roster
+            .iter()
+            .map(|validator| validator.validator.clone())
+            .collect::<Vec<_>>();
         let fetch_effect = AdapterEffect::FetchBody {
             tag,
             round,
             subject,
             manifest: Some(manifest.clone()),
-            certified_sources: context
-                .roster
-                .iter()
-                .map(|validator| validator.validator.clone())
-                .collect(),
+            certified_sources: certified_sources.clone(),
             certificate: Some(certificate.clone()),
         };
         let store_effect = AdapterEffect::StoreBody {
@@ -1936,11 +2304,13 @@ mod tests {
         let store_candidate = store_replay
             .project_candidate_for_test(&verified, &store_effect, &durable_receipt, &store_pending)
             .expect("canonical V1 evidence projects the Store candidate fixture");
-        let replay = super::super::replay_authority::exact_certified_fetch_record_fixture(
+        let replay = super::super::replay_authority::exact_durable_certified_fetch_record_fixture(
             lifecycle_context(&context),
             tag,
             certificate,
             manifest,
+            certified_sources,
+            &durable_receipt,
         );
         let fetch_slot = PhysicalSlotId::for_capacity(CapacityClass::Effect, 0);
         let parent = super::super::CandidateAdmission::new(
@@ -2285,14 +2655,6 @@ mod tests {
         } = fetch_store_fixture(1);
         assert_eq!(coordinator.capacity_used[&CapacityClass::Effect], 1);
         let before = format!("{coordinator:#?}");
-        let prepared = prepare_authorized_body_transition(
-            &mut coordinator,
-            &lease,
-            store_candidate,
-            DurablePayloadReference::None,
-            DurableContinuationEdge::FetchToStore,
-        )
-        .expect("Fetch release makes room for exact Store at full capacity");
         let expected_frame = DurablePayloadReference::BodyFrame(
             projection::durable_body_frame_reference(
                 lifecycle_context(verified.context()),
@@ -2300,6 +2662,14 @@ mod tests {
             )
             .expect("durable Fetch completion projects one body frame"),
         );
+        let prepared = prepare_authorized_body_transition(
+            &mut coordinator,
+            &lease,
+            store_candidate,
+            expected_frame,
+            DurableContinuationEdge::FetchToStore,
+        )
+        .expect("Fetch release makes room for exact Store at full capacity");
         assert!(matches!(
             prepared.edge,
             DurableContinuationEdge::FetchToStore
@@ -2344,7 +2714,7 @@ mod tests {
         );
         assert_eq!(
             prepared.staged.durable_records[&prepared.parent_ordinal].payload,
-            DurablePayloadReference::None
+            expected_frame
         );
         assert_eq!(
             prepared.staged.durable_records[&prepared.child_ordinal].payload,
@@ -2370,7 +2740,7 @@ mod tests {
                 &mut coordinator,
                 &wrong,
                 store_candidate.clone(),
-                DurablePayloadReference::None,
+                store_candidate.payload,
                 DurableContinuationEdge::FetchToStore,
             ),
             Err(BodyStageTransitionError::WrongParentShape)
@@ -2379,12 +2749,13 @@ mod tests {
 
         let mut stale = lease.clone();
         stale.id = super::super::LeaseId(lease.id().0 + 1);
+        let parent_payload = store_candidate.payload;
         assert!(matches!(
             prepare_authorized_body_transition(
                 &mut coordinator,
                 &stale,
                 store_candidate,
-                DurablePayloadReference::None,
+                parent_payload,
                 DurableContinuationEdge::FetchToStore,
             ),
             Err(BodyStageTransitionError::StaleLease)
@@ -2468,29 +2839,26 @@ mod tests {
     }
 
     #[test]
-    fn fetch_store_rejects_a_parent_that_already_claims_a_body_frame() {
+    fn fetch_store_rejects_a_payload_free_parent_after_body_completion() {
         let FetchStoreFixture {
             mut coordinator,
             lease,
-            durable_receipt,
             store_candidate,
             ..
         } = fetch_store_fixture(1);
-        let body_frame =
-            projection::durable_body_frame_reference(coordinator.active_context, &durable_receipt)
-                .expect("exact receipt projects a body frame");
         coordinator
             .durable_records
             .get_mut(&lease.ordinal())
             .expect("claimed Fetch retains durable metadata")
-            .payload = DurablePayloadReference::BodyFrame(body_frame);
+            .payload = DurablePayloadReference::None;
         let before = format!("{coordinator:#?}");
+        let parent_payload = store_candidate.payload;
         assert!(matches!(
             prepare_authorized_body_transition(
                 &mut coordinator,
                 &lease,
                 store_candidate,
-                DurablePayloadReference::None,
+                parent_payload,
                 DurableContinuationEdge::FetchToStore,
             ),
             Err(BodyStageTransitionError::InvalidBodyFrameReference)
@@ -2511,12 +2879,13 @@ mod tests {
             .limits
             .insert(CapacityClass::Effect, 0);
         let before_capacity = format!("{coordinator:#?}");
+        let parent_payload = store_candidate.payload;
         assert!(matches!(
             prepare_authorized_body_transition(
                 &mut coordinator,
                 &lease,
                 store_candidate,
-                DurablePayloadReference::None,
+                parent_payload,
                 DurableContinuationEdge::FetchToStore,
             ),
             Err(BodyStageTransitionError::ChildAdmission(decision))
@@ -2536,12 +2905,13 @@ mod tests {
         } = fetch_store_fixture(1);
         coordinator.high_water = u128::MAX;
         let before_ordinal = format!("{coordinator:#?}");
+        let parent_payload = store_candidate.payload;
         assert!(matches!(
             prepare_authorized_body_transition(
                 &mut coordinator,
                 &lease,
                 store_candidate,
-                DurablePayloadReference::None,
+                parent_payload,
                 DurableContinuationEdge::FetchToStore,
             ),
             Err(BodyStageTransitionError::OrdinalExhausted)
